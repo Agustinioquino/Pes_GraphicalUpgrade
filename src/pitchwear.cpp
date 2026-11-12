@@ -639,6 +639,10 @@ static void BallDrawPresent() {
         for (const BootDirt& b : s_bd) if (tn - b.seen < 2.0) { sumD += b.dirt; sumG += b.grass; nAct++; }
         const float wet = WetNow();
         s_bootAvgV[0] = 2.f; s_bootAvgV[1] = nAct ? sumD / nAct : 0.f; s_bootAvgV[2] = nAct ? sumG / nAct : 0.f; s_bootAvgV[3] = wet;
+        // (12/11, Agustin: "un slider que suba este valor de suciedad en el momento para ver como se ve") fila 434: x tierra, y pasto forzados
+        // (como minimo) en todos los botines; 0 = lo que junto cada jugador
+        const float tryD = std::clamp(g_cfg.live[434][0], 0.f, 1.f), tryG = std::clamp(g_cfg.live[434][1], 0.f, 1.f);
+        s_bootAvgV[1] = std::max(s_bootAvgV[1], tryD); s_bootAvgV[2] = std::max(s_bootAvgV[2], tryG);
         for (int i = 0; i < kBallSlots; i++) { s_bootKey[i] = 0; if (!s_bdIdx[rd][i] || s_bdIdx[rd][i] == found) continue; const float* r = q + i * 32;
             const float cand[4][3] = { { r[12], r[13], r[14] }, { r[28], r[29], r[30] }, { r[3], r[7], r[11] }, { r[19], r[23], r[27] } };
             int kc = -1; for (int k = 0; k < 4 && kc < 0; k++) if (fabsf(cand[k][0]) < 80.f && fabsf(cand[k][2]) < 50.f && cand[k][1] > -0.3f && cand[k][1] < 1.2f && fabsf(cand[k][0]) + fabsf(cand[k][2]) > 0.02f) kc = k;
@@ -646,7 +650,7 @@ static void BallDrawPresent() {
             float bestD = 1.5f * 1.5f; int bj = -1;
             for (size_t j = 0; j < s_bd.size(); j++) { if (tn - s_bd[j].seen > 2.0) continue; float dx = s_bd[j].x - cand[kc][0], dz = s_bd[j].z - cand[kc][2]; float d2 = dx * dx + dz * dz; if (d2 < bestD) { bestD = d2; bj = (int)j; } }
             if (bj < 0) continue;
-            s_bootKey[i] = s_bdKey[rd][i]; s_bootVal[i][0] = 2.f; s_bootVal[i][1] = s_bd[bj].dirt; s_bootVal[i][2] = s_bd[bj].grass; s_bootVal[i][3] = wet; s_bootAssigned++;
+            s_bootKey[i] = s_bdKey[rd][i]; s_bootVal[i][0] = 2.f; s_bootVal[i][1] = std::max(s_bd[bj].dirt, tryD); s_bootVal[i][2] = std::max(s_bd[bj].grass, tryG); s_bootVal[i][3] = wet; s_bootAssigned++;
             if (!s_bootCb[i]) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; g_dev.dev->CreateBuffer(&d, nullptr, &s_bootCb[i]); }
             if (s_bootCb[i]) g_dev.imm->UpdateSubresource(s_bootCb[i], 0, nullptr, s_bootVal[i], 0, 0); else s_bootKey[i] = 0; }
         if (s_bootAvgCb) g_dev.imm->UpdateSubresource(s_bootAvgCb, 0, nullptr, s_bootAvgV, 0, 0);
