@@ -205,6 +205,13 @@ void main(
       if (pesNar) cid ^= 0x3C6EF372u;
       uint bi = (uint)pesCard, tl = bi / 3u, tk = bi - tl * 3u;
       uint sT = PESBh(tl * 2654435761u ^ cid), sB = PESBh(bi * 2246822519u ^ cid ^ 0x68BC21EBu);
+      // (12/11, Agustin: "que se combinen de cerca las hojas viejas mas anchas un poco en los primeros planos con un ancho similar a las matas
+      // de cerca") y438: parte de las hojas del escalon angosto (x432) que salen como hojas COMUNES (forma, ancho y textura de las de mas
+      // atras): mezcla de anchos en el primerisimo plano y sin corte con las matas de alrededor. z438 su ancho (x la hoja comun; 0 = 1).
+      // 0 = todas angostas, como antes. Por hoja, fijo (no cambia al mover la camara)
+      bool pesWideMix = false;
+      if (pesNar && pesNatV0) { float wMix = clamp(IniParams.Load(int2(438, 0)).y, 0.0, 0.8);
+        if (wMix > 0.001 && PESBu(sB, 46u) < wMix) { pesNar = false; pesNarV = false; pesWideMix = true; } }
       float offR2 = (float)(PESBh(cid ^ 0x5BD1E995u) & 4095u);
       float2 r2 = frac(0.5 + ((float)tl + offR2) * float2(0.7548776662, 0.5698402910));
       // (12/11, Agustin: franjas oscuras finas y paralelas en el pasto de cerca, "es notorio en las hojas achicadas las mas cercanas") la
@@ -259,6 +266,7 @@ void main(
       if (!pesNar && PESBu(sB, 6u) < saturate(IniParams.Load(int2(412, 0)).x)) wB *= 1.55;   // x412: parte de hojas anchas
       float4 P432 = IniParams.Load(int2(432, 0));
       if (pesNar) wB *= (P432.y > 0.05 ? clamp(P432.y, 0.2, 1.0) : 0.45) * (0.8 + 0.4 * PESBu(sB, 6u));   // (12/11) y432 ancho de la hoja angosta
+      if (pesWideMix) { float zW = IniParams.Load(int2(438, 0)).z; wB *= zW > 0.05 ? clamp(zW, 0.5, 2.0) : 1.0; }   // (12/11) z438 ancho de las anchas mezcladas
       float bnd = PESBu(sB, 7u) < lerp(0.12, 0.03, kEvB) ? 0.55 + 0.35 * PESBu(sB, 8u) : 0.06 + 0.30 * PESBu(sB, 8u);   // curva (fraccion del alto); 12 % dobladas por el peso (3 % con w108 = 1)
       float tilt = lerp(0.14, 0.09, kEvB) * PESBu(sB, 9u);
       float twist = (PESBu(sB, 10u) - 0.5) * 0.9;
