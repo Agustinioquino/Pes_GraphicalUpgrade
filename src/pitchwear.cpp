@@ -73,8 +73,10 @@ static void SimClockPoll() { int tk = g_simTick.load(std::memory_order_relaxed);
 // el reloj: promedio (~60 s) de 'el tick avanzo hace < 0.25 s' medido solo con el juego andando (reloj del juego) y jugadores corriendo.
 // Con el gancho bueno queda ~1 (las repeticiones lo bajan poco); si el tick no acompana (< 0.15) se suma con el reloj del juego, como sin
 // gancho (la pausa igual frena: sin tiempo de juego no hay posiciones nuevas)
+// (12/11 16:45) y la REPETICION se toma del visor de repeticiones (rastro.cpp hk_rpl, 0x14217c0b0 con el objeto reproduciendo): no depende del tick
 static float s_tkTrust = 0.5f;
-static inline float SimGate() { if (!WearReal() || !s_tkSeen || s_tkTrust < 0.15f) return 1.f; return (Now() - s_tkChangeT) < 0.25 ? 1.f : 0.f; }
+static inline bool InReplay() { const unsigned long long r = g_replayMs.load(std::memory_order_relaxed); return r != 0 && GetTickCount64() - r < 300; }
+static inline float SimGate() { if (!WearReal()) return 1.f; if (InReplay()) return 0.f; if (!s_tkSeen || s_tkTrust < 0.15f) return 1.f; return (Now() - s_tkChangeT) < 0.25 ? 1.f : 0.f; }
 static void WearCpuAdd(float u, float v, float k, float radM);
 // pincel de desgaste por una accion (cola: lo dibuja PitchWearPresent en este mismo cuadro)
 static void WearStamp(float x, float z, float k, float rad) {
@@ -758,7 +760,7 @@ void PitchWearPresent() {
           memset(s_wearCpu, 0, sizeof s_wearCpu); s_stain[0] = s_stain[1] = s_stain[2] = 0.f; s_tkMax = 0; Log("desgaste real: mapa borrado (%s)", why); }
       if (s_tkLast > s_tkMax) s_tkMax = s_tkLast;
       { static double nextL = 0.0; if (Now() >= nextL) { nextL = Now() + 30.0;
-          Log("desgaste real (30 s): reloj del partido %s (tick %d, confianza %.2f%s), se suma %s, accion x%.2f, acelerar x%.1f", s_tkSeen ? "enganchado" : "SIN gancho (se suma con el reloj del juego)", s_tkLast, s_tkTrust, (s_tkSeen && s_tkTrust < 0.15f) ? ": el tick no acompana, se suma con el reloj del juego" : "", SimGate() > 0.5f ? "si" : "no (partido detenido / repeticion)", WearActK(), WearBoost()); } }
+          Log("desgaste real (30 s): reloj del partido %s (tick %d, confianza %.2f%s), repeticiones %s (%d llamadas, %d reproduciendo), se suma %s, accion x%.2f, acelerar x%.1f", s_tkSeen ? "enganchado" : "SIN gancho (se suma con el reloj del juego)", s_tkLast, s_tkTrust, (s_tkSeen && s_tkTrust < 0.15f) ? ": el tick no acompana, se suma con el reloj del juego" : "", g_replayHook.load() ? "enganchadas" : "sin gancho", g_replayCalls.exchange(0), g_replayPlay.exchange(0), SimGate() > 0.5f ? "si" : InReplay() ? "no (repeticion)" : "no (partido detenido)", WearActK(), WearBoost()); } }
     }
     // anillo de 3: este cuadro escribio en w; el siguiente escribe en (w+1); se lee el de hace 2 cuadros = (w+1) (la GPU ya lo termino)
     int w = s_stageW.load(); int n = std::min(s_count.exchange(0), kMaxPlayers);
@@ -768,7 +770,7 @@ void PitchWearPresent() {
     static double s_wG = -1e9, s_wR = -1.0; const float gdt = GameStep(s_wG, s_wR);   // (11/11) reloj del juego (pausa: 0; camara lenta: menos)
     { static double s_trT = 0.0; const float dtR = (float)std::clamp(t - s_trT, 0.0, 0.1); s_trT = t;   // (12/11 16:15) confianza en el tick
       bool mov = false; for (const PlayerPrev& p : s_pl) if (p.trk >= 4 && p.svx * p.svx + p.svz * p.svz > 1.5f) { mov = true; break; }
-      if (s_tkSeen && gdt > 0.f && mov) { const float adv = (t - s_tkChangeT) < 0.25 ? 1.f : 0.f; s_tkTrust += (adv - s_tkTrust) * (1.f - expf(-dtR / 60.f)); } }
+      if (s_tkSeen && gdt > 0.f && mov && !InReplay()) { const float adv = (t - s_tkChangeT) < 0.25 ? 1.f : 0.f; s_tkTrust += (adv - s_tkTrust) * (1.f - expf(-dtR / 60.f)); } }
     static float s_plAcc = 0.f; s_plAcc += gdt;   // tiempo de juego desde la ultima lectura de posiciones
     ClipSimAndUpload(gdt);
     int pending = s_stageFrame[rd]; s_stageFrame[rd] = -1; s_stageW = rd;

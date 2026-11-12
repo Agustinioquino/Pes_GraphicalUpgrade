@@ -33,6 +33,8 @@
 namespace fx {
 
 std::atomic<int> g_simTick{-1};   // (12/11) tick del partido para el desgaste real (pitchwear.cpp), lo escribe hk_rel al final de cada tick
+std::atomic<unsigned long long> g_replayMs{0};   // (12/11 16:45) visor de repeticiones reproduciendo (ver hk_rpl)
+std::atomic<int> g_replayHook{0}, g_replayCalls{0}, g_replayPlay{0};
 
 std::string ModOff(void* p);
 
@@ -45,6 +47,20 @@ const unsigned char kRelSig[10] = { 0x80,0xb9,0xb0,0x04,0x00,0x00,0x00,0x4c,0x8b
 const uintptr_t kTickEndLo = 0x1404279c0ull, kTickEndHi = 0x140427a80ull;   // final del tick (EndListener)
 const uintptr_t kRegGlobal = 0x143702208ull;         // puntero al registro del partido (0 fuera del partido)
 const uintptr_t kRdLo = 0x142538000ull, kRdHi = 0x143a00000ull;            // cadenas del exe (.idata/.rdata del volcado)
+// (12/11 16:45, Agustin: "en la repeticion?, tenemos el slowmoprobe en lua modulos") REPETICION: FUN_14217c0b0 = control de la repeticion con
+// el mando (avance / retroceso / palanca, velocidad en +0x1c). La llama FUN_14217ea90 (actualizacion del objeto de repeticion, al lado de
+// match::ReplayObjectListener) en cada cuadro del visor, antes de FUN_14217bf20 (que solo avanza con el estado [0] == 5 = reproduciendo).
+// Devuelve dos floats en RAX (CONCAT44). SlowMoServer.lua le parchea los mulss de +0x83 / +0xa4 / +0xd2, no el prologo (bytes del exe
+// 1.07.02 leidos de su disco: mov [rsp+8],rbx / mov [rsp+18],rsi / push rdi / sub rsp,40 / mov rdi,rcx)
+const uintptr_t kReplayCtl = 0x14217c0b0ull;
+const unsigned char kReplaySig[18] = { 0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x18,0x57,0x48,0x83,0xec,0x40,0x48,0x8b,0xf9 };
+using RplFn = uint64_t(*)(void*, unsigned, unsigned char);
+RplFn o_rpl = nullptr;
+uint64_t hk_rpl(void* obj, unsigned pad, unsigned char p3) {
+    g_replayCalls.fetch_add(1, std::memory_order_relaxed);
+    __try { if (obj && *(const int*)obj == 5) { g_replayMs.store(GetTickCount64(), std::memory_order_relaxed); g_replayPlay.fetch_add(1, std::memory_order_relaxed); } } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    return o_rpl(obj, pad, p3);
+}
 
 using LogFn = void(*)(void*, const char*, ...);
 using RelFn = void(*)(void*);
@@ -398,6 +414,11 @@ void RastroEventosPresent() {
     if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("publico: exe distinto (sello %08X): sin eventos del partido", (unsigned)nt->FileHeader.TimeDateStamp); return; }
     if (!s_relHooked.load() && SigAt(kRegRelease, kRelSig, sizeof kRelSig) && MH_CreateHook((void*)kRegRelease, (void*)&hk_rel, (void**)&o_rel) == MH_OK && MH_EnableHook((void*)kRegRelease) == MH_OK) s_relHooked = true;
     s_ev = s_relHooked.load();
+    if (g_cfg.live[431][0] > 0.5f && !g_replayHook.load()) {   // (12/11 16:45) visor de repeticiones para el desgaste real
+        const bool sig = SigAt(kReplayCtl, kReplaySig, sizeof kReplaySig);
+        if (sig && MH_CreateHook((void*)kReplayCtl, (void*)&hk_rpl, (void**)&o_rpl) == MH_OK && MH_EnableHook((void*)kReplayCtl) == MH_OK) g_replayHook = 1;
+        Log("desgaste real: visor de repeticiones %s", g_replayHook.load() ? "enganchado (0x14217c0b0)" : sig ? "NO (MinHook)" : "NO (firma distinta)");
+    }
     Log("publico: eventos del partido (gol, falta, offside, corner) %s", s_ev.load() ? "enganchados al final del tick" : "NO (firma distinta)");
 }
 

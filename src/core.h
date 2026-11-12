@@ -367,6 +367,8 @@ void NamedSetSRV(const std::string& name, ID3D11ShaderResourceView* v);
 std::string DescribeInputLayout(ID3D11InputLayout* il);   // elementos de un input layout anotado al crearse   // publica un SRV como recurso con nombre (srv = N nombre en las reglas)
 extern std::atomic<int> g_matchGen;                                        // sube en cada partido nuevo (reloj del cesped)
 extern std::atomic<int> g_simTick;                                         // (12/11) tick del partido (MatchInfo+0x1198) al final de cada tick; -1 = sin gancho / fuera del partido
+extern std::atomic<unsigned long long> g_replayMs;                        // (12/11) GetTickCount64 de la ultima llamada del visor de repeticiones reproduciendo (0 = nunca)
+extern std::atomic<int> g_replayHook, g_replayCalls, g_replayPlay;       // (12/11) gancho puesto / llamadas / llamadas reproduciendo (log del desgaste)
 extern std::atomic<int> g_matchIniGen;                                     // (12/11) sube cada vez que Sider reescribe match.ini (partido nuevo)
 void PublicoPresent(); ID3D11ShaderResourceView* PublicoSRVFor(uint64_t vsHash); void PublicoMatchTick(int tick, int phase, int type, int restart, int foul);   // (08/11 b) eventos del partido (rastro.cpp, final del tick)   // (08/11) gestos del publico: hilo de la CPU + buffer pes_crowdface (publico.cpp, fila 394)
 void PitchWearNotePlayer(ID3D11DeviceContext* c); void PitchWearPresent(); void PitchWearReloadShaders();   // desgaste de la cancha en vivo
