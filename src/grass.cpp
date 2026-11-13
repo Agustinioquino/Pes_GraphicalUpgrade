@@ -25,6 +25,7 @@
 #include <map>
 
 namespace fx {
+std::atomic<int> g_grassSeenFrame{-1000000};   // (13/11 sk9ema) ultimo cuadro con el pasto de la cancha (wind.cpp: bajo techo)
 
 static const uint64_t kGrassVS = 0x498b30bad256e8edULL;
 static const uint64_t kGrassPS = 0x18afff0f79d9aaa5ULL;   // PS de las hojas (G-buffer): solo desde ese dibujo se guarda estado y se emite
@@ -1545,7 +1546,7 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntr
     // target del mismo tamano): si se emitiera ahi, las hojas del mod saldrian sin color (invisibles) y el estado guardado
     // para la base tendria un PS nulo. Solo cuenta el dibujo con el PS de hojas del G-buffer.
     if (!ps || (ps->hash != kGrassPS && RtvCount(c) < 2)) { s_skipNoPs++; if (extraOn) Why("dibujo del pasto del juego sin el PS de hojas / sin G-buffer (prepasada): se espera al del G-buffer"); return; }
-    if (ps->hash == kGrassPS) t_gameGB = true;   // (26/10 g) dibujo del pasto del juego en el G-buffer: GrassGameStates le pone los estados de las hojas
+    if (ps->hash == kGrassPS) { t_gameGB = true; g_grassSeenFrame.store(PresentNo(), std::memory_order_relaxed); }   // (13/11 sk9ema) viento bajo techo: se vio la cancha   // (26/10 g) dibujo del pasto del juego en el G-buffer: GrassGameStates le pone los estados de las hojas
     // (2/11) x178: con el mod emitiendo, el pasto del juego no se dibuja (se omite el DrawIndexed en BeforeDraw); la captura del estado,
     // la pelota, los recortes y la emision de abajo siguen igual. Se anota una vez.
     if (ps->hash == kGrassPS && g_cfg.live[178][0] > 0.5f && extraOn && !s_missing.load()) { t_skipGame = true;

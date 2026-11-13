@@ -2191,6 +2191,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     { static ULONGLONG t = 0; ULONGLONG n = GetTickCount64(); if (n - t > 10000) { t = n; RastroFlush(false); } }
     FaceInjectPresent();   // (09/11) matrices del rig: donde se arma la cara (solo mide, expr_inyeccion)
     SolEditorPresent();   // (09/11) sol real del editor: ganchos (primer Present), aplicar pendiente, log cada 10 s
+    RedesPresent();     // (13/11 sk9ema) redes de los arcos con el viento unico (ganchos en el primer Present)
     CamHookPresent();   // (23/10) camara del motor: ganchos (primer Present), cortes de camara -> 160, log
     MotorPagePresent();   // (11/11) Motor en tiempo real: filas nativas en el estudio 3D (motorpage.cpp)
     MenuMousePresent();   // (11/11 3icxbh) mouse en los menus nativos del juego: ganchos (primer Present), log

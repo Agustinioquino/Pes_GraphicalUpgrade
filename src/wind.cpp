@@ -109,13 +109,23 @@ void WindFrame(float (*p)[4], double tReal) {
     float dx = 1.0f, dz = 0.0f;
     if (u0 > 1e-4f) { const float cs = (float)cos(veer), sn = (float)sin(veer); dx = (bx * cs - bz * sn) / u0; dz = (bx * sn + bz * cs) / u0; }
     else U = 0.0f;
+    // (13/11, Agustin: "hay escenas donde el viento no esta presente, como adentro de una casa o tunel; eso deberia ser leible
+    // o adaptable") bajo techo: si en el cuadro no se dibujo el cielo del juego (w159, domo 9adf9d46) NI el pasto de la cancha
+    // (vestuario, tunel, menus, estudio), el viento baja en ~1.5 s a lo que diga y500 (0.05 = casi nada) y vuelve en ~1 s al salir.
+    // x500 = 1: siempre afuera (como antes).
+    static float expo = 1.0f; static bool wasOut = true;
+    { const bool out = c.live[500][0] > 0.5f || p[159][3] > 0.5f || PresentNo() - g_grassSeenFrame.load(std::memory_order_relaxed) < 30;
+      const float k = (float)(std::min)(1.0, dR / (out ? 1.0 : 1.5)); expo += ((out ? 1.0f : 0.0f) - expo) * k;
+      if (out != wasOut) { wasOut = out; Log("viento unico: %s (cielo %s, pasto hace %d cuadros)", out ? "afuera" : "bajo techo: el viento se calma",
+          p[159][3] > 0.5f ? "si" : "no", PresentNo() - g_grassSeenFrame.load()); } }
+    U *= std::clamp(c.live[500][1], 0.0f, 1.0f) + (1.0f - std::clamp(c.live[500][1], 0.0f, 1.0f)) * expo;
     dist += (double)U * dG; if (dist >= 8192.0) dist -= 8192.0;
     p[494][0] = dx; p[494][1] = dz; p[494][2] = u0 > 1e-4f ? (std::max)(U, 0.01f) : 0.0f; p[494][3] = (float)dist;
     p[495][0] = (float)e; p[495][1] = std::clamp(turbI * (0.5f + 0.5f * (float)e) * 2.0f, 0.0f, 1.0f); p[495][2] = (float)fmod(tG, 8192.0); p[495][3] = p[157][3];
     // (el pelo toma el rumbo de la fila 494 en sus shaders; la fila 23 x / y queda como la del ini / cloth.ini)
     if (tReal >= nextLog) { nextLog = tReal + 60.0;
-        Log("viento unico: base %.2f m/s rumbo %.0f grados | ahora %.2f m/s rumbo %.0f grados, racha %.2f, turbulencia %.2f, recorrido %.0f m, reloj %s%s | hora %.1f (x%.2f), estadio %d reparo %.2f tipico %.1f, estacion %d",
-            u0, atan2f(bz, bx) * 57.2958f, U, atan2f(dz, dx) * 57.2958f, (float)e, p[495][1], (float)dist, p[157][3] > 0.5f ? "del juego" : "real", rain ? ", lluvia" : "",
+        Log("viento unico: base %.2f m/s rumbo %.0f grados | ahora %.2f m/s rumbo %.0f grados, racha %.2f, turbulencia %.2f, recorrido %.0f m, reloj %s%s, afuera %.2f | hora %.1f (x%.2f), estadio %d reparo %.2f tipico %.1f, estacion %d",
+            u0, atan2f(bz, bx) * 57.2958f, U, atan2f(dz, dx) * 57.2958f, (float)e, p[495][1], (float)dist, p[157][3] > 0.5f ? "del juego" : "real", rain ? ", lluvia" : "", expo,
             g_solClock.valid ? g_solClock.hour : -1.0f, g_solClock.valid ? HourFactor(g_solClock.hour) : 1.0f, c.match.known ? c.match.stadium : -1, sw.shelter, sw.typical, season); }
 }
 } // namespace fx
