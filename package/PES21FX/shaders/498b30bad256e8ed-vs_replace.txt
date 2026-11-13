@@ -243,7 +243,7 @@ float2 PESBallDeform(float2 p, float hW0, float2 rootB, float3 bA, float3 bB, fl
           float onA = smoothstep(RbS + hTa + 0.05, RbS + 0.4 * hTa, yCa);        // la pelota en el pasto (en el aire nada)
           float2 dOa = dA > 1e-4 ? dRa / dA : dO, latA = float2(-dirK.y, dirK.x);
           float alA = dot(rootB - bA.xz, dirK), ltA = dot(rootB - bA.xz, latA);
-          float fA = smoothstep(rCa + wA, rCa * 0.6, dA) * (0.3 + 0.7 * kMv);   // el anillo, con la pelota
+          float fA = smoothstep(rCa + wA, rCa * 0.6, dA) * (0.15 + 0.85 * kMv);   // el anillo, con la pelota (quieta apenas: la corona queda parada)
           float2 dLa = normalize(dOa + dirK * (kMv * (alA > 0.0 ? 0.3 : 0.15)) + 1e-5);
           float spA = 0.0;
           if (kMv > 0.001 && alA < 0.0) {
