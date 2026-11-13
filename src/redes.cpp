@@ -5,8 +5,9 @@
 //    si el nodo esta cargado (+0x80 == 7), tiene simulador (+0x190) y malla (+0x198) y el simulador esta ACTIVO (+0x31),
 //    lo avanza (0x1419a4320) y copia los puntos a la malla (0x1419a4540). Si no, no hace nada.
 //  * el simulador (0x1419a4320) da pasos fijos de 1/60 s; en cada paso: 0x1419e3e60 integra cada punto suelto con
-//    0x1419e3d40:  pos += (aceleracion * dt + 0.99 * velocidad) * dt, con aceleracion = (0, -0.25, 0) ESCRITA EN EL CODIGO
-//    (x y z son ceros armados con xorps: no hay viento), y si el punto lo tiro la pelota la velocidad se multiplica por 0.3;
+//    0x1419e3d40:  pos += (aceleracion * dt + 0.95 * velocidad) * dt, con aceleracion = (0, -6.0, 0); el 0 de x / z ESTA EN EL
+//    CODIGO (ceros armados con xorps: no hay viento); si el punto lo tiro la pelota la velocidad se multiplica por 1.0 (con
+//    reactive_nets_physics.lua: 0.99, 0.25 y 0.3);
 //    piso en y = 0.03. Despues 2 pasadas (0x143524d04) de restricciones de distancia (XPBD, 0x1419e46d0) + choque con la
 //    pelota (radio 0.11) + estiramiento maximo 1.2 (0x143524d00).
 //  * se DUERME sola: si en 20 cuadros seguidos casi no se movio (0x1419e3a00), el simulador queda inactivo hasta que la
@@ -16,9 +17,9 @@
 //  1) engancha 0x1419e3d40 (cada punto suelto, cada paso): despues del juego suma el empuje del viento unico (filas 494 / 495)
 //     a la posicion: a = k * v * |v| en el rumbo, con frentes de racha que viajan con el aire (w494) y un poco de aleteo vertical.
 //  2) engancha la entrada 14 del nodo: con viento, si la red se durmio la despierta por el mismo camino del juego (+0xf0, +0x31).
-//  3) "red con mas vida en el gol" (y499): cambia en memoria 4 constantes que solo usa la red: peso (0.25 m/s2), cuanto
-//     conserva el movimiento un punto que tiro la pelota (0.3), pasadas de restricciones (2) y estiramiento maximo (1.2).
-//     Apagado = los valores del juego (se restauran).
+//  3) "red con mas vida en el gol" (y499, apagada por defecto para no pisar reactive_nets): cambia en memoria 4 constantes que
+//     solo usa la red: peso, cuanto conserva el movimiento un punto que tiro la pelota, pasadas y estiramiento maximo.
+//     Apagado = la base leida al engancharse (la del juego o la del mod de redes); si otro mod las cambia despues, se aparta.
 // Filas: 499 x viento en la red (0 = nada de esto; 1 = natural), y red con mas vida en el gol, z peso, w rebote;
 //        500 x viento bajo techo (0 auto, 1 siempre afuera), y viento que queda bajo techo, z pasadas, w estiramiento
 //        (500 x / y los usa wind.cpp: el viento bajo techo vale para todo, no solo la red).
@@ -40,11 +41,15 @@ const unsigned char kPointSig2[4] = { 0x80,0x79,0x5c,0x00 };
 // 0x141a38d60: push rbx; sub rsp,20h; cmp dword [rcx+80h],7; mov rbx,rcx
 const unsigned char kNodeSig[16] = { 0x40,0x53,0x48,0x83,0xec,0x20,0x83,0xb9,0x80,0x00,0x00,0x00,0x07,0x48,0x8b,0xd9 };
 // constantes que solo lee la red (grep del decompilado: una funcion cada una)
-const uintptr_t kGravity = 0x143525558ull;     // 0.25  (0x1419e3d40)
-const uintptr_t kHitKeep = 0x14352555cull;     // 0.3   (0x1419e3d40, punto tirado por la pelota)
+// (13/11 16:35) OJO: el juego SOLO trae 0.95 / 6.0 / 1.0 en el bloque 0x143525554; el mod reactive_nets_physics.lua de Agustin
+// (Godmode_ON / DevPlays, lo escribe una vez al iniciar) los cambia a 0.99 / 0.25 / 0.3 y ajusta la rigidez (0x143525590..5ac).
+// Por eso la DLL NO supone valores: al engancharse lee los que hay (los del juego o los de su mod) y esos son la base; apagado
+// vuelve a esa base. Pasadas y estiramiento (0x143524d00 / d04) no los toca ese mod.
+const uintptr_t kGravity = 0x143525558ull;     // juego 6.0, reactive_nets 0.25  (0x1419e3d40)
+const uintptr_t kHitKeep = 0x14352555cull;     // juego 1.0, reactive_nets 0.3   (0x1419e3d40, punto tirado por la pelota)
 const uintptr_t kIters = 0x143524d04ull;       // 2     (0x1419a4320)
 const uintptr_t kStretch = 0x143524d00ull;     // 1.2   (0x1419a2700)
-const float kGravityGame = 0.25f, kHitGame = 0.3f, kStretchGame = 1.2f; const unsigned kItersGame = 2;
+float bG = 6.0f, bH = 1.0f, bS = 1.2f; unsigned bI = 2;   // base leida al engancharse
 
 typedef void (__fastcall* PointStepFn)(void* pt, void* acc, float dt, uintptr_t a4);   // a4: 0x1419e3e60 pasa un cuarto valor en r9 (sin uso visible): se reenvia igual
 typedef void (__fastcall* NodeFn)(void* node);
@@ -120,9 +125,13 @@ void Install() {
     if (MH_CreateHook((void*)kPointStep, (void*)&hk_Point, (void**)&o_point) != MH_OK || MH_CreateHook((void*)kNodeVf14, (void*)&hk_Node, (void**)&o_node) != MH_OK) {
         Log("redes: no se pudo enganchar"); return; }
     MH_EnableHook((void*)kPointStep); MH_EnableHook((void*)kNodeVf14); s_ok = true;
-    s_constOk = Readable((void*)kGravity, 8) && Readable((void*)kStretch, 8) && *(const float*)kGravity == kGravityGame && *(const float*)kHitKeep == kHitGame
-                && *(const unsigned*)kIters == kItersGame && *(const float*)kStretch == kStretchGame;
-    Log("redes: enganchadas (viento en cada punto, despertar con viento); constantes del gol %s", s_constOk ? "encontradas (0.25 / 0.3 / 2 / 1.2)" : "NO coinciden (otro mod, p. ej. reactive_nets_physics.lua): sin red con mas vida, quedan las de ese mod");
+    if (Readable((void*)kGravity, 8) && Readable((void*)kStretch, 8)) {
+        bG = *(const float*)kGravity; bH = *(const float*)kHitKeep; bI = *(const unsigned*)kIters; bS = *(const float*)kStretch;
+        s_constOk = bG >= 0.05f && bG <= 20.0f && bH >= 0.0f && bH <= 1.5f && bI >= 1 && bI <= 8 && bS >= 1.0f && bS <= 3.0f;
+    }
+    Log("redes: enganchadas (viento en cada punto, despertar con viento); base de la red: peso %.3f, rebote %.3f, pasadas %u, estiramiento %.3f (%s)%s",
+        bG, bH, bI, bS, bG == 6.0f && bH == 1.0f ? "las del juego" : bG == 0.25f && bH == 0.3f ? "las de reactive_nets_physics.lua" : "de otro mod",
+        s_constOk ? "" : "; fuera de rango: sin red con mas vida");
 }
 } // namespace
 
@@ -134,7 +143,9 @@ void RedesPresent() {
     const float k = std::clamp(p[499][0], 0.0f, 3.0f), v = p[494][2];
     NetWind w{};
     if (k > 0.0f && v > 0.0f) {
-        const float a = 0.025f * k * v * v;   // 5 m/s -> 0.6 m/s2 (el peso del juego es 0.25), 10 m/s -> 2.5
+        // empuje en proporcion al peso BASE de la red (el del juego 6.0 o el de su mod 0.25): asi el viento la mueve igual de
+        // "en serio" con o sin reactive_nets. Red real: arrastre / peso ~ 0.015 v2 -> 5 m/s = 0.37 del peso, 10 m/s = 1.5
+        const float a = 0.015f * k * v * v * std::clamp(bG, 0.1f, 10.0f);
         w.ax = a * p[494][0]; w.az = a * p[494][1]; w.ay = 0.15f * a; w.dx = p[494][0]; w.dz = p[494][1]; w.D = p[494][3];
         w.turb = std::clamp(p[495][1], 0.0f, 1.0f); w.on = v * sqrtf(k) > 0.3f ? 1.0f : 0.0f;
     }
@@ -142,17 +153,17 @@ void RedesPresent() {
     // 2) red con mas vida en el gol
     if (s_constOk) {
         const bool on = p[499][1] > 0.5f;
-        static float mG = kGravityGame, mH = kHitGame, mS = kStretchGame; static unsigned mI = kItersGame;
-        Put<float>(kGravity, on ? std::clamp(p[499][2], 0.1f, 3.0f) : kGravityGame, kGravityGame, mG);
-        Put<float>(kHitKeep, on ? std::clamp(p[499][3], 0.05f, 1.0f) : kHitGame, kHitGame, mH);
-        Put<unsigned>(kIters, on ? (unsigned)std::clamp((int)lroundf(p[500][2]), 1, 6) : kItersGame, kItersGame, mI);
-        Put<float>(kStretch, on ? std::clamp(p[500][3], 1.05f, 1.8f) : kStretchGame, kStretchGame, mS);
+        static float mG = bG, mH = bH, mS = bS; static unsigned mI = bI;
+        Put<float>(kGravity, on ? std::clamp(p[499][2], 0.1f, 10.0f) : bG, bG, mG);
+        Put<float>(kHitKeep, on ? std::clamp(p[499][3], 0.05f, 1.0f) : bH, bH, mH);
+        Put<unsigned>(kIters, on ? (unsigned)std::clamp((int)lroundf(p[500][2]), 1, 6) : bI, bI, mI);
+        Put<float>(kStretch, on ? std::clamp(p[500][3], 1.05f, 1.8f) : bS, bS, mS);
     }
     static ULONGLONG next = 0; const ULONGLONG now = GetTickCount64();
     if (now >= next) { next = now + 60000;
         Log("redes: viento %.2f m/s, empuje %.2f m/s2 (%s); en 60 s: %d pasos de red, %d despertares, %d puntos empujados; gol %s (peso %.2f, rebote %.2f, pasadas %u, estiramiento %.2f)",
             v, sqrtf(w.ax * w.ax + w.az * w.az), w.on > 0.5f ? "prendido" : "apagado", s_nodes.exchange(0), s_wakes.exchange(0), s_pushed.exchange(0),
-            s_foreign ? "de otro mod" : s_constOk && p[499][1] > 0.5f ? "con mas vida" : "del juego", s_constOk ? *(const float*)kGravity : 0.0f, s_constOk ? *(const float*)kHitKeep : 0.0f,
+            s_foreign ? "de otro mod" : s_constOk && p[499][1] > 0.5f ? "con mas vida" : "la base", s_constOk ? *(const float*)kGravity : 0.0f, s_constOk ? *(const float*)kHitKeep : 0.0f,
             s_constOk ? *(const unsigned*)kIters : 0u, s_constOk ? *(const float*)kStretch : 0.0f); }
 }
 } // namespace fx
