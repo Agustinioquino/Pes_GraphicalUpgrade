@@ -1485,6 +1485,49 @@ void main(
     // sombra a si mismos con la luz rasante del sol. La apertura la da la oclusion ambiental; solo del lado iluminado.
     // x88 fuerza, y88 on/off, z88 apertura: 0 = oclusion de pantalla (cambia con la camara), 1 = relieve (31/10): el angulo
     // entre la normal de detalle (poros, pliegues, trama) y la geometrica de la profundidad; no depende de la camara
+    // (13/11, pedido del hilo del pasto) LA MICRO SOMBRA VIEJA SIGUE para todo lo que no es piel ni tela (tyC != 0: pasto, pelota,
+    // estadio) hasta que tengan su version v4: el pasto de cerca depende de ella para la profundidad entre hojas. z88 ahora es la
+    // suavidad de la v4: aca queda siempre el modo relieve (el que estaba por defecto)
+    { float4 MS = IniParams.Load(int2(88,0));
+      if (tyC != 0 && MS.y > 0.5 && MS.x > 0.0 && geoOk && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+        float ndlM = dot(Nsk, normalize(pLc_dir.xyz));
+        float aper = 2.0 * aoRaw * aoRaw;
+        if (true) {
+          // (01/11) relieve v2: la normal de detalle contra el PROMEDIO de las normales del G-buffer en un anillo de ~1.2 cm del
+          // mundo (no contra la normal de la profundidad). La de la profundidad salia a facetas (cuadrados de 2x2 y triangulos de
+          // mallas con pocos poligonos, como la mano) y cada faceta se leia como un pliegue hondo. El promedio de un anillo
+          // simetrico quita poros, trama y pliegues finos y deja la curvatura suave; sigue sin depender de la camara.
+          float3 Nc0 = PESDecN(uvC);
+          float pxmM = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z, 1e-5);
+          float rM = clamp(0.012 * pxmM, 1.5, 16.0);
+          float3 nAcc = 0; float nW = 0;
+          // (02/11) solo vecinos sobre el plano tangente del pixel (tolerancia 35 % del radio del anillo, ~4 mm): antes el corte era
+          // 3 % de la profundidad + 2 cm (~6 cm en un primer plano) y en el cuello entraban normales del menton y de la malla del
+          // torso -> linea dura de sombra bajando del menton y franja de borde recto en la union (Agustin: "es por las micro sombras")
+          float3 NvC = float3(Nc0.xy, -Nc0.z);
+          float tolM = 0.35 * rM / pxmM + 0.001;
+          [unroll] for (int mi = 0; mi < 8; mi++) {
+            float angM = mi * 0.78539816 + 0.3927;
+            float2 uvM = uvC + float2(cos(angM), sin(angM)) * rM * g_psSystem.m_renderBuffer.zw;
+            float zM = PESLinZ(uvM);
+            float3 Pm = float3(((uvM * float2(2, -2) + float2(-1, 1)) - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zM, zM);
+            float wM = abs(dot(Pm - Pgeo, NvC)) < tolM ? 1.0 : 0.0;
+            nAcc += PESDecN(uvM) * wM; nW += wM;
+          }
+          float sB = nW > 2.5 ? pow(saturate(dot(Nc0, normalize(nAcc + 1e-6))), 6.0) : 1.0;
+          aper = 2.0 * sB * sB;
+        }
+        float micro = saturate(abs(ndlM) + aper - 1.0);
+        float litSide = saturate(ndlM * 4.0);                         // solo donde pega el sol
+        // (01/11) piso 0.4: un pliegue nunca queda negro, y en la piel el brillo baja igual que la difusa (antes quedaba el reflejo
+        // azulado del cielo sobre poca difusa rojiza: nudillos y dedos violetas)
+        // (12/11, piel v2 w124) en la piel la micro sombra sale de poros y del normal map fino: solo mientras se resuelven (hasta
+        // 0.8 mm de piel por pixel entera, nada a 2 mm). Mas lejos comparaba normales que el mip ya no muestra bien y dejaba manchas
+        // en la franja del terminador que cambiaban con la distancia (mejillas, orejas)
+        float msFar = (skinC && IniParams.Load(int2(124,0)).w > 0.5) ? saturate((2.0 - 2000.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z) / 1.2) : 1.0;
+        float msK = lerp(1.0, max(micro, 0.4), saturate(MS.x) * litSide * msFar);
+        diffC *= msK; specC *= skinC ? msK : lerp(1.0, msK, 0.5);
+      } }
     // (13/11) MICRO SOMBRAS v4 (pes_microsh.hlsli): sombra de relieve con direccion, hacia el sol, para piel, tela y todo lo
     // que no es pasto ni pelota. x88 fuerza, y88 on/off, w88 largo (0 = 1). z88 ya no se usa. Solo sobre la parte de la luz que
     // viene del sol (su color x N.L x sombra del juego contra el total): en la sombra del estadio o de la cabeza no hace nada.
