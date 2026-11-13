@@ -1,0 +1,166 @@
+angr_brwnit_bite_soft         70 c: labios 75 gr 1.2 cm, cejas 20 gr 1.1 cm, cachetes  1.0 cm, parpados 14 gr, bajo-ojo  0.5 cm, ceno  0.3 cm, nariz  0.2 cm, mandibula 3 gr
+angr_brwnit_lorol             50 c: labios 85 gr 2.1 cm, cachetes  2.0 cm, surco  0.9 cm, cejas 3 gr 0.7 cm, parpados 8 gr, nariz  0.3 cm, mandibula 5 gr, bajo-ojo  0.1 cm
+angr_brwnit_shut_eyc_hard    109 c: labios 42 gr 2.1 cm, cachetes  2.2 cm, cejas 18 gr 1.4 cm, surco  1.2 cm, parpados 27 gr, nariz  0.9 cm, mandibula 23 gr, bajo-ojo  0.6 cm, ceno  0.5 cm
+angr_brwnit_shut_hard        330 c: labios 45 gr 1.9 cm, cejas 24 gr 1.4 cm, cachetes  2.3 cm, parpados 26 gr, bajo-ojo  0.8 cm, nariz  0.7 cm, ceno  0.7 cm, surco  0.6 cm, mandibula 14 gr
+angr_brwnit_soft             114 c: cejas 20 gr 1.2 cm, labios 23 gr 0.5 cm, parpados 17 gr, nariz  0.6 cm, bajo-ojo  0.6 cm, cachetes  0.3 cm, ceno  0.3 cm
+angr_brwnit_talk_soft        280 c: cejas 15 gr 1.3 cm, labios 18 gr 0.8 cm, parpados 20 gr, bajo-ojo  0.5 cm, cachetes  0.2 cm, mandibula 5 gr, ceno  0.2 cm, nariz  0.2 cm, surco  0.1 cm
+base_d_card_ikari            250 c: labios 11 gr 2.2 cm, cachetes  1.9 cm, surco  1.2 cm, cejas 12 gr 0.7 cm, mandibula 21 gr, nariz  0.7 cm, bajo-ojo 5 gr 0.2 cm, parpados 9 gr, ceno  0.3 cm
+base_d_card_sinken           210 c: cejas 15 gr 0.6 cm, labios 4 gr 1.0 cm, surco  1.1 cm, parpados 23 gr, cachetes  0.8 cm, ceno  0.5 cm, mandibula 7 gr
+base_d_card_warai            256 c: labios  1.5 cm, surco  1.2 cm, cachetes  1.0 cm, cejas 9 gr 0.5 cm, parpados 9 gr, bajo-ojo 2 gr 0.1 cm, nariz  0.1 cm, mandibula 2 gr
+base_d_end_banzai_hoe        150 c: labios 4 gr 1.5 cm, cachetes  1.5 cm, parpados 25 gr, mandibula 18 gr, cejas 6 gr 0.4 cm, surco  0.6 cm, ceno  0.5 cm, bajo-ojo 3 gr 0.1 cm
+base_d_end_banzai_shout       80 c: surco  1.5 cm, labios 3 gr 1.4 cm, cachetes  1.2 cm, cejas 6 gr 0.6 cm, mandibula 13 gr, parpados 12 gr, bajo-ojo 4 gr, ceno  0.1 cm
+base_d_end_banzai_warai      110 c: labios 4 gr 1.8 cm, cachetes  1.6 cm, surco  1.5 cm, mandibula 14 gr, parpados 9 gr, cejas 6 gr 0.1 cm, bajo-ojo 2 gr 0.1 cm
+base_d_end_banzai_yes        140 c: labios 4 gr 1.8 cm, surco  1.4 cm, cachetes  1.3 cm, parpados 21 gr, mandibula 15 gr, ceno  0.4 cm, cejas 6 gr, bajo-ojo 5 gr
+base_d_end_cup_emi            80 c: labios 6 gr 1.8 cm, cachetes  1.6 cm, surco  1.4 cm, mandibula 17 gr, cejas 7 gr 0.4 cm, parpados 14 gr, bajo-ojo 5 gr 0.2 cm, ceno  0.3 cm
+base_d_end_cup_hoe            80 c: labios 10 gr 1.4 cm, surco  1.5 cm, cachetes  1.2 cm, cejas 13 gr 0.4 cm, parpados 22 gr, mandibula 22 gr, bajo-ojo 5 gr 0.3 cm, nariz  0.2 cm
+base_d_end_cup_shout          70 c: cachetes  1.8 cm, labios 4 gr 1.5 cm, surco  1.4 cm, bajo-ojo 7 gr 0.7 cm, parpados 23 gr, mandibula 15 gr, nariz  0.3 cm, cejas 2 gr 0.1 cm
+base_d_end_cup_warai          90 c: labios 3 gr 1.6 cm, cachetes  1.6 cm, surco  1.6 cm, cejas 6 gr 0.7 cm, mandibula 18 gr, parpados 16 gr, bajo-ojo 6 gr, ceno  0.1 cm
+base_d_end_cup_yes            80 c: labios 6 gr 1.9 cm, cachetes  1.6 cm, surco  0.9 cm, bajo-ojo 6 gr 0.6 cm, mandibula 15 gr, parpados 11 gr, cejas 5 gr 0.1 cm, ceno  0.1 cm
+base_d_end_photo_call        190 c: labios 3 gr 1.5 cm, surco  1.5 cm, cachetes  1.4 cm, mandibula 13 gr, parpados 12 gr, cejas 6 gr 0.1 cm, bajo-ojo 3 gr, ceno  0.1 cm
+base_d_end_photo_hey         267 c: labios 10 gr 1.7 cm, cachetes  1.6 cm, surco  1.4 cm, parpados 22 gr, cejas 6 gr 0.3 cm, mandibula 12 gr, ceno  0.3 cm, bajo-ojo 6 gr
+base_d_end_photo_hoe          96 c: labios 9 gr 1.8 cm, cachetes  1.1 cm, mandibula 21 gr, surco  0.6 cm, parpados 10 gr, cejas 5 gr 0.2 cm, ceno  0.3 cm, bajo-ojo 2 gr 0.2 cm
+base_d_end_photo_talk        460 c: labios 3 gr 1.9 cm, cachetes  1.7 cm, surco  1.4 cm, cejas 6 gr 0.7 cm, parpados 21 gr, mandibula 16 gr, bajo-ojo 5 gr 0.3 cm, nariz  0.1 cm
+base_d_ent_sinken            676 c: labios 16 gr 1.3 cm, parpados 25 gr, cachetes  0.7 cm, surco  0.5 cm, mandibula 10 gr, bajo-ojo 3 gr, cejas  0.1 cm, ceno  0.1 cm, nariz  0.1 cm
+base_d_ent_warai             703 c: labios 13 gr 1.4 cm, cachetes  1.6 cm, surco  1.5 cm, parpados 26 gr, bajo-ojo 5 gr 0.4 cm, mandibula 8 gr, cejas 5 gr 0.1 cm, nariz  0.1 cm, ceno  0.1 cm
+base_d_fuan                  229 c: parpados 23 gr, cejas 10 gr 0.3 cm, labios  0.3 cm, surco  0.1 cm, ceno  0.1 cm, bajo-ojo 2 gr, mandibula 3 gr, cachetes  0.1 cm
+base_d_hekotare              285 c: cejas 17 gr 0.6 cm, parpados 25 gr, ceno  0.6 cm, labios  0.3 cm
+base_d_iki_gakkari           247 c: labios 5 gr 1.0 cm, parpados 25 gr, cejas 12 gr 0.4 cm, surco  0.3 cm, cachetes  0.2 cm, bajo-ojo 3 gr, mandibula 4 gr, nariz  0.1 cm, ceno  0.1 cm
+base_d_iki_karui             229 c: labios 3 gr 0.9 cm, cachetes  0.6 cm, surco  0.6 cm, mandibula 6 gr, cejas  0.2 cm, parpados 4 gr, ceno  0.1 cm
+base_d_itai                  328 c: cejas 19 gr 1.3 cm, labios 2 gr 1.6 cm, cachetes  1.5 cm, surco  1.4 cm, parpados 27 gr, bajo-ojo 9 gr 0.4 cm, mandibula 16 gr, ceno  0.6 cm, nariz  0.4 cm
+base_d_itai_karui            314 c: labios 2 gr 1.6 cm, bajo-ojo 8 gr 0.8 cm, surco  1.0 cm, parpados 25 gr, cachetes  0.8 cm, nariz  0.6 cm, cejas 6 gr 0.3 cm, ceno  0.4 cm, mandibula 4 gr
+base_d_kantoku_ikari         530 c: labios 8 gr 1.5 cm, cejas 14 gr 0.4 cm, parpados 24 gr, cachetes  0.9 cm, surco  0.7 cm, mandibula 13 gr, ceno  0.5 cm, bajo-ojo 3 gr 0.1 cm, nariz  0.1 cm
+base_d_kantoku_siji          767 c: cejas 25 gr 0.6 cm, labios 4 gr 1.5 cm, cachetes  1.2 cm, parpados 25 gr, surco  0.6 cm, mandibula 14 gr, ceno  0.5 cm, nariz  0.3 cm, bajo-ojo 2 gr 0.1 cm
+base_d_kantoku_warai         275 c: labios 23 gr 1.5 cm, surco  1.8 cm, cachetes  1.1 cm, parpados 25 gr, mandibula 14 gr, ceno  0.5 cm, cejas 5 gr 0.2 cm, bajo-ojo 6 gr 0.1 cm
+base_d_konwaku               197 c: cejas 26 gr 0.7 cm, labios 2 gr 1.1 cm, surco  0.6 cm, cachetes  0.6 cm, ceno  0.5 cm, parpados 8 gr, mandibula 7 gr
+base_d_nikoyaka              194 c: parpados 20 gr, cejas 4 gr 0.5 cm, bajo-ojo 6 gr 0.2 cm, labios  0.3 cm
+base_d_odoroki               123 c: cejas 11 gr 1.0 cm, parpados 16 gr, ceno  0.4 cm, labios  0.3 cm
+base_d_sinpai                164 c: cejas 19 gr 0.3 cm, parpados 11 gr, bajo-ojo 3 gr 0.2 cm, labios  0.3 cm, ceno  0.2 cm
+base_d_sinpan_ikari          742 c: labios  1.3 cm, parpados 25 gr, surco  1.0 cm, cachetes  0.8 cm, nariz  0.6 cm, cejas 7 gr 0.3 cm, mandibula 15 gr, ceno  0.5 cm, bajo-ojo 4 gr 0.1 cm
+base_d_sinpan_sinken         868 c: labios 3 gr 1.5 cm, cachetes  1.2 cm, cejas 18 gr 0.4 cm, mandibula 16 gr, ceno  0.5 cm, surco  0.3 cm, parpados 7 gr, nariz  0.1 cm
+base_d_sinpan_warai          560 c: labios 3 gr 1.8 cm, parpados 27 gr, cejas 10 gr 0.7 cm, surco  1.0 cm, cachetes  1.0 cm, ceno  0.5 cm, mandibula 11 gr, bajo-ojo 3 gr 0.2 cm, nariz  0.1 cm
+base_d_ten_aogu              197 c: cejas 34 gr 0.3 cm, labios  1.3 cm, cachetes  1.3 cm, parpados 26 gr, surco  0.8 cm, ceno  0.7 cm, mandibula 15 gr, bajo-ojo 3 gr
+base_d_tukare_karui          190 c: labios 6 gr 1.2 cm, parpados 25 gr, cejas 10 gr 0.6 cm, surco  0.4 cm, bajo-ojo 2 gr 0.1 cm, cachetes  0.2 cm, ceno  0.1 cm, mandibula 2 gr
+base_d_warai_yurui           192 c: cachetes  1.4 cm, labios  1.3 cm, surco  1.3 cm, parpados 21 gr, mandibula 10 gr, cejas 4 gr 0.2 cm, bajo-ojo  0.1 cm, ceno  0.1 cm
+base_d_yusyou_hoe            1065 c: labios 35 gr 2.1 cm, cachetes  1.7 cm, surco  1.6 cm, bajo-ojo 7 gr 0.7 cm, parpados 23 gr, mandibula 19 gr, ceno  0.7 cm, cejas 6 gr 0.2 cm, nariz  0.1 cm
+base_d_yusyou_warai          657 c: labios 17 gr 1.4 cm, bajo-ojo 9 gr 0.9 cm, surco  1.2 cm, cachetes  1.1 cm, mandibula 15 gr, cejas 8 gr 0.2 cm, parpados 11 gr
+base_g_catchs                 70 c: surco  1.2 cm, labios  1.1 cm, cachetes  0.9 cm, bajo-ojo 6 gr 0.6 cm, nariz  0.7 cm, cejas 5 gr 0.5 cm, ceno  0.5 cm, parpados 7 gr, mandibula 2 gr
+base_g_head_kutiake           48 c: cejas 18 gr 1.0 cm, labios  1.3 cm, surco  1.0 cm, parpados 25 gr, cachetes  0.7 cm, ceno  0.4 cm, mandibula 7 gr, bajo-ojo 4 gr
+base_g_kp_kuisibari           36 c: cejas 32 gr 0.9 cm, labios 17 gr 1.0 cm, bajo-ojo 7 gr 0.7 cm, surco  1.0 cm, parpados 21 gr, cachetes  0.6 cm, mandibula 8 gr
+base_g_punchs                 40 c: cejas 17 gr 0.5 cm, labios  1.1 cm, surco  0.7 cm, cachetes  0.6 cm, mandibula 8 gr, parpados 7 gr, bajo-ojo 2 gr 0.1 cm, nariz  0.1 cm
+base_g_shoot                  38 c: labios 6 gr 1.0 cm, parpados 25 gr, cachetes  0.7 cm, cejas 2 gr 0.7 cm, nariz  0.5 cm, mandibula 9 gr, ceno  0.2 cm, bajo-ojo  0.1 cm, surco  0.1 cm
+base_g_shoot_kuisibari        65 c: parpados 25 gr, labios  0.9 cm, cejas 5 gr 0.4 cm, surco  0.5 cm, ceno  0.5 cm, cachetes  0.2 cm, mandibula 4 gr
+base_g_shoot_soft             38 c: labios 9 gr 1.1 cm, surco  0.9 cm, cachetes  0.6 cm, cejas 3 gr 0.4 cm, parpados 7 gr, ceno  0.1 cm, nariz  0.1 cm, mandibula 2 gr
+base_g_sliding                75 c: labios 12 gr 1.6 cm, cejas 10 gr 1.0 cm, surco  1.1 cm, cachetes  0.9 cm, bajo-ojo 5 gr 0.5 cm, parpados 14 gr, ceno  0.3 cm, mandibula 6 gr
+base_g_tackle                 45 c: labios  1.0 cm, cachetes  0.9 cm, cejas 2 gr 0.3 cm, mandibula 7 gr, ceno  0.2 cm, surco  0.2 cm, parpados 4 gr
+base_g_trap_mune              30 c: labios 11 gr 1.0 cm, cejas 3 gr 0.8 cm, cachetes  0.4 cm, surco  0.4 cm, ceno  0.4 cm, parpados 7 gr, mandibula 5 gr, bajo-ojo  0.1 cm
+base_goal_hoe                471 c: labios 28 gr 2.3 cm, cachetes  1.8 cm, cejas 23 gr 0.9 cm, surco  1.6 cm, mandibula 24 gr, parpados 23 gr, nariz  0.9 cm, ceno  0.7 cm, bajo-ojo 4 gr 0.4 cm
+base_head_hit                 27 c: labios 17 gr 1.1 cm, parpados 25 gr, bajo-ojo 6 gr 0.6 cm, surco  0.5 cm, cejas 9 gr 0.1 cm, cachetes  0.4 cm, ceno  0.2 cm
+base_itagari_hard             50 c: labios 3 gr 1.9 cm, cejas 16 gr 0.9 cm, cachetes  1.1 cm, surco  0.9 cm, nariz  0.9 cm, parpados 20 gr, mandibula 19 gr, ceno  0.5 cm, bajo-ojo 5 gr
+base_itagari_metoji           44 c: labios 18 gr 1.0 cm, cejas 24 gr 0.7 cm, surco  1.3 cm, parpados 25 gr, cachetes  0.9 cm, nariz  0.6 cm, bajo-ojo 5 gr 0.2 cm, mandibula 3 gr, ceno  0.1 cm
+base_itagari_odoroki          56 c: labios 27 gr 1.4 cm, cejas 20 gr 0.8 cm, cachetes  1.1 cm, bajo-ojo 7 gr 0.7 cm, surco  1.0 cm, parpados 22 gr, nariz  0.8 cm, ceno  0.8 cm, mandibula 18 gr
+base_kuisibari                42 c: labios 3 gr 1.3 cm, surco  1.4 cm, bajo-ojo 9 gr 0.8 cm, cejas 8 gr 0.8 cm, cachetes  1.0 cm, nariz  1.0 cm, ceno  0.4 cm, parpados 7 gr, mandibula 3 gr
+base_kuisibari_hard           70 c: labios 3 gr 1.4 cm, surco  1.3 cm, cachetes  1.1 cm, bajo-ojo 8 gr 0.8 cm, cejas 6 gr 0.7 cm, parpados 19 gr, nariz  0.4 cm, mandibula 6 gr, ceno  0.2 cm
+base_kuisibari_hard_metoji    35 c: labios 6 gr 2.0 cm, cachetes  1.4 cm, bajo-ojo 10 gr 0.9 cm, surco  1.3 cm, cejas  1.0 cm, mandibula 21 gr, parpados 21 gr, nariz  0.6 cm, ceno  0.3 cm
+base_kutiake_dribble          32 c: labios 3 gr 0.7 cm, parpados 6 gr, cachetes  0.2 cm, ceno  0.2 cm, cejas  0.1 cm, surco  0.1 cm, mandibula 2 gr
+base_kutipaku_coach          120 c: labios 19 gr 1.6 cm, cejas 27 gr 0.3 cm, surco  1.1 cm, cachetes  0.8 cm, mandibula 11 gr, parpados 8 gr, bajo-ojo 2 gr
+base_kutipaku_coach_soft     140 c: labios 2 gr 1.0 cm, parpados 25 gr, cachetes  0.8 cm, mandibula 8 gr, surco  0.2 cm, cejas  0.1 cm, bajo-ojo 2 gr
+base_mepati                  130 c: parpados 25 gr, labios  0.6 cm, cejas 2 gr 0.1 cm, surco  0.1 cm, ceno  0.1 cm
+base_normal                    1 c: 
+base_odoroki                  46 c: labios 14 gr 2.1 cm, cejas 20 gr 1.1 cm, cachetes  1.6 cm, parpados 22 gr, mandibula 21 gr, ceno  0.7 cm, surco  0.6 cm
+base_shoot_hit                35 c: labios 3 gr 1.1 cm, parpados 25 gr, cejas 3 gr 0.4 cm, ceno  0.5 cm, cachetes  0.4 cm
+base_shoot_impact             42 c: labios 21 gr 1.0 cm, surco  1.1 cm, cachetes  1.0 cm, cejas 8 gr 0.4 cm, parpados 6 gr, ceno  0.1 cm, nariz  0.1 cm, mandibula 2 gr
+base_syucyu                  100 c: labios  0.5 cm, ceno  0.3 cm, cejas  0.2 cm, parpados 3 gr, surco  0.1 cm
+base_syucyu_iki               50 c: labios  1.3 cm, cachetes  0.7 cm, cejas 4 gr 0.5 cm, mandibula 13 gr, ceno  0.4 cm, parpados 8 gr, surco  0.1 cm
+base_syucyu_iki_soft          50 c: labios 5 gr 1.0 cm, mandibula 7 gr, parpados 4 gr, cejas 2 gr, cachetes  0.1 cm, surco  0.1 cm
+base_syucyu_kutiake           31 c: labios 3 gr 1.5 cm, cachetes  0.8 cm, surco  0.6 cm, cejas 8 gr 0.2 cm, mandibula 13 gr, parpados 8 gr, bajo-ojo  0.1 cm, nariz  0.1 cm
+base_syucyu_me_ue             60 c: cejas 12 gr 0.5 cm, labios  0.5 cm, parpados 7 gr, ceno  0.2 cm, cachetes  0.1 cm, mandibula 2 gr
+base_syucyu_nirami            70 c: labios  0.8 cm, cejas 6 gr 0.5 cm, cachetes  0.7 cm, ceno  0.5 cm, parpados 6 gr, mandibula 3 gr, surco  0.1 cm
+bitter_brwin_smirk_eyhc      121 c: labios 38 gr 1.9 cm, cachetes  2.3 cm, cejas 15 gr 0.7 cm, parpados 28 gr, surco  0.6 cm, nariz  0.4 cm, bajo-ojo  0.2 cm
+bitter_brwnit_grit_eyc_soft  149 c: labios 50 gr 1.8 cm, cachetes  1.9 cm, cejas 11 gr 0.8 cm, parpados 26 gr, bajo-ojo  0.6 cm, surco  0.6 cm, mandibula 2 gr
+bitter_brwnit_grit_eyhc       80 c: labios 49 gr 1.9 cm, cachetes  2.4 cm, surco  1.4 cm, parpados 25 gr, cejas 4 gr 0.8 cm, nariz  0.8 cm, bajo-ojo  0.2 cm
+bitter_brwnit_talk_blink     195 c: labios 46 gr 2.0 cm, cachetes  2.1 cm, parpados 30 gr, cejas 5 gr 1.0 cm, surco  1.1 cm, ceno  0.2 cm, mandibula 4 gr, bajo-ojo  0.1 cm, nariz  0.1 cm
+bitter_mho                   177 c: labios 38 gr 2.4 cm, cachetes  2.0 cm, cejas 8 gr 1.0 cm, parpados 26 gr, mandibula 9 gr, surco  0.3 cm, bajo-ojo  0.2 cm, nariz  0.1 cm
+bitter_smirk_blink_soft      123 c: labios 31 gr 1.6 cm, cachetes  2.1 cm, parpados 27 gr, surco  0.6 cm, cejas 4 gr 0.4 cm, nariz  0.5 cm, mandibula 2 gr
+dml_neut_brwtrb_talk         599 c: labios 19 gr 0.8 cm, cejas 15 gr 0.9 cm, parpados 30 gr, cachetes  0.7 cm, surco  0.2 cm, nariz  0.2 cm, ceno  0.2 cm, mandibula 3 gr, bajo-ojo  0.1 cm
+dml_smil_soft                420 c: labios 36 gr 1.9 cm, cachetes  2.1 cm, parpados 28 gr, surco  0.6 cm, nariz  0.4 cm, cejas 4 gr 0.1 cm, ceno  0.1 cm
+dml_song                     775 c: labios 35 gr 2.6 cm, cachetes  1.1 cm, parpados 25 gr, cejas 12 gr 0.2 cm, mandibula 11 gr
+dml_song_around              775 c: labios 77 gr 2.4 cm, cachetes  1.9 cm, cejas 16 gr 0.8 cm, parpados 24 gr, ceno  0.2 cm, surco  0.2 cm, mandibula 4 gr, bajo-ojo  0.2 cm
+dml_song_blink               775 c: labios 37 gr 0.8 cm, parpados 30 gr, cejas 16 gr 0.5 cm, cachetes  0.3 cm, bajo-ojo  0.3 cm, mandibula 5 gr
+dml_song_hard                775 c: labios 56 gr 1.6 cm, cachetes  2.1 cm, parpados 25 gr, cejas 13 gr 0.3 cm, surco  0.6 cm, mandibula 14 gr, bajo-ojo  0.4 cm, nariz  0.2 cm
+dml_song_soft                775 c: labios 10 gr 0.7 cm, parpados 25 gr, cejas 6 gr 0.3 cm, cachetes  0.3 cm, mandibula 3 gr
+dml_song_watch               775 c: labios 31 gr 1.6 cm, cachetes  1.4 cm, cejas 15 gr 0.7 cm, parpados 25 gr, mandibula 9 gr, ceno  0.2 cm, surco  0.2 cm, bajo-ojo  0.2 cm, nariz  0.1 cm
+gk_brwnit_shut                58 c: labios 14 gr 1.8 cm, cejas 17 gr 0.7 cm, cachetes  1.3 cm, nariz  0.6 cm, mandibula 11 gr, parpados 7 gr, surco  0.1 cm
+gk_eyc_l_hard                 57 c: labios 12 gr 1.4 cm, cejas 4 gr 1.0 cm, parpados 27 gr, cachetes  0.5 cm, ceno  0.4 cm, bajo-ojo  0.2 cm, mandibula 4 gr, nariz  0.1 cm, surco  0.1 cm
+gk_eyc_r_hard                 57 c: labios 12 gr 1.4 cm, cejas 4 gr 1.0 cm, parpados 27 gr, cachetes  0.5 cm, ceno  0.4 cm, surco  0.3 cm, bajo-ojo  0.2 cm, mandibula 4 gr, nariz  0.1 cm
+gk_mho_eyhc                   58 c: cejas 21 gr 1.0 cm, labios 25 gr 0.7 cm, parpados 28 gr, cachetes  0.4 cm, ceno  0.4 cm, mandibula 5 gr, surco  0.1 cm, nariz  0.1 cm
+gk_puck                       35 c: labios 17 gr 1.4 cm, cejas 7 gr 0.9 cm, parpados 25 gr, mandibula 7 gr, cachetes  0.2 cm, bajo-ojo  0.1 cm
+head_brwup_grit_eyc           31 c: labios 30 gr 1.5 cm, cachetes  1.9 cm, cejas 7 gr 1.0 cm, parpados 27 gr, bajo-ojo  1.0 cm, surco  0.5 cm, nariz  0.4 cm, ceno  0.4 cm, mandibula 2 gr
+head_brwup_mho_eyc            47 c: labios 16 gr 0.6 cm, cejas 3 gr 1.0 cm, parpados 25 gr, cachetes  1.0 cm, bajo-ojo  0.2 cm, surco  0.1 cm, nariz  0.1 cm
+head_brwup_mso_eyc            39 c: labios 31 gr 1.2 cm, cachetes  1.8 cm, cejas 6 gr 1.0 cm, bajo-ojo  1.0 cm, parpados 22 gr, nariz  0.4 cm, ceno  0.3 cm, surco  0.3 cm
+head_brwup_unnos_eyc          26 c: labios 39 gr 1.1 cm, cachetes  1.9 cm, cejas 5 gr 1.0 cm, bajo-ojo  0.9 cm, parpados 11 gr, nariz  0.4 cm, ceno  0.1 cm
+loss_brwtrb_bite             135 c: labios 68 gr 1.6 cm, cejas 22 gr 0.5 cm, cachetes  1.2 cm, parpados 27 gr, ceno  0.2 cm, mandibula 4 gr, bajo-ojo  0.1 cm
+loss_brwtrb_mmov_eyc         120 c: cachetes  1.8 cm, labios 14 gr 1.2 cm, cejas 25 gr 0.5 cm, bajo-ojo  0.8 cm, parpados 19 gr, surco  0.6 cm, nariz  0.2 cm
+loss_brwtrb_mmov_soft        200 c: labios 23 gr 1.0 cm, cejas 24 gr 0.6 cm, parpados 22 gr, cachetes  0.8 cm, surco  0.3 cm, bajo-ojo  0.2 cm, nariz  0.1 cm, mandibula 2 gr
+loss_brwtrb_shut_blink       190 c: labios 45 gr 1.9 cm, cachetes  2.1 cm, cejas 17 gr 1.2 cm, parpados 26 gr, nariz  0.6 cm, surco  0.5 cm, ceno  0.5 cm, bajo-ojo  0.3 cm, mandibula 7 gr
+loss_brwtrb_talk_blin        212 c: labios 41 gr 1.1 cm, cachetes  1.9 cm, cejas 14 gr 1.0 cm, parpados 27 gr, bajo-ojo  0.8 cm, ceno  0.4 cm, mandibula 7 gr, nariz  0.1 cm, surco  0.1 cm
+loss_brwtrb_talk_eyhc_soft   110 c: labios 49 gr 1.5 cm, cachetes  2.2 cm, cejas 12 gr 0.8 cm, parpados 26 gr, surco  0.6 cm, mandibula 8 gr, bajo-ojo  0.3 cm, nariz  0.1 cm
+loss_brwtrb_talk_soft        129 c: labios 19 gr 0.9 cm, cejas 21 gr 0.5 cm, cachetes  0.8 cm, parpados 17 gr, bajo-ojo  0.3 cm, mandibula 3 gr, nariz  0.1 cm
+neut                         100 c: labios 7 gr, cejas 3 gr 0.1 cm, cachetes  0.2 cm
+neut_bite                     65 c: labios 49 gr 1.8 cm, cachetes  1.7 cm, parpados 19 gr, surco  0.5 cm, cejas 8 gr 0.1 cm, bajo-ojo  0.3 cm, ceno  0.1 cm
+neut_brwnit_deep              84 c: labios 21 gr 0.9 cm, cejas 21 gr 0.7 cm, parpados 17 gr, cachetes  0.6 cm, nariz  0.6 cm, mandibula 5 gr, bajo-ojo  0.2 cm, ceno  0.1 cm
+neut_brwnit_mho              112 c: labios 20 gr 0.9 cm, parpados 25 gr, cachetes  0.8 cm, cejas 6 gr 0.4 cm, surco  0.2 cm, nariz  0.1 cm, bajo-ojo  0.1 cm
+neut_brwtrb_breth             66 c: cejas 15 gr 0.8 cm, labios 8 gr 0.4 cm, ceno  0.4 cm, parpados 8 gr, cachetes  0.1 cm, nariz  0.1 cm, mandibula 2 gr
+neut_brwtrb_lorol            100 c: labios 61 gr 1.9 cm, cachetes  1.7 cm, parpados 28 gr, cejas 9 gr 0.6 cm, surco  0.4 cm, bajo-ojo  0.2 cm, ceno  0.2 cm, mandibula 2 gr
+neut_brwtrb_mmov_in          157 c: labios 19 gr 1.0 cm, cejas 18 gr 0.4 cm, parpados 26 gr, cachetes  0.6 cm, surco  0.4 cm, nariz  0.2 cm, mandibula 4 gr
+neut_brwup_breth              68 c: labios 24 gr 1.6 cm, cejas 15 gr 0.6 cm, parpados 11 gr, ceno  0.4 cm, mandibula 8 gr, cachetes  0.3 cm, nariz  0.1 cm
+neut_brwup_mho_eyo            65 c: cejas 2 gr 1.0 cm, labios 5 gr 0.3 cm, parpados 11 gr, cachetes  0.2 cm, mandibula 3 gr, nariz  0.1 cm, bajo-ojo  0.1 cm
+neut_brwup_mho_eyo_soft_l    110 c: cejas 5 gr 0.9 cm, labios 6 gr 0.7 cm, parpados 15 gr, cachetes  0.6 cm, surco  0.2 cm, ceno  0.1 cm, mandibula 2 gr, bajo-ojo  0.1 cm
+neut_brwup_mho_in            108 c: cejas 16 gr 0.6 cm, labios 12 gr 0.6 cm, parpados 14 gr, ceno  0.5 cm, cachetes  0.3 cm, mandibula 5 gr
+neut_brwup_unnos_in           45 c: labios 25 gr 1.1 cm, cejas 5 gr 1.0 cm, cachetes  0.6 cm, parpados 8 gr, mandibula 4 gr
+neut_deep                     28 c: labios 24 gr 1.9 cm, cachetes  0.9 cm, cejas  0.7 cm, parpados 10 gr, mandibula 5 gr, nariz  0.1 cm
+neut_eyo                      50 c: labios 7 gr 0.2 cm, parpados 11 gr, cejas 2 gr 0.3 cm
+neut_mho_eyo                  50 c: cejas 3 gr 0.8 cm, labios 8 gr 0.4 cm, parpados 12 gr, cachetes  0.2 cm, mandibula 2 gr
+neut_mho_in                  136 c: labios 9 gr 0.8 cm, cejas 14 gr 0.2 cm, parpados 10 gr, cachetes  0.3 cm, mandibula 3 gr
+neut_mmov_in                 150 c: cejas 19 gr 0.8 cm, labios 9 gr 1.0 cm, parpados 10 gr, cachetes  0.4 cm, nariz  0.2 cm, mandibula 4 gr, ceno  0.2 cm
+neut_mso                     100 c: labios 3 gr 0.3 cm, parpados 4 gr, cachetes  0.1 cm, cejas 2 gr
+neut_uprol_in                 45 c: labios 29 gr 1.0 cm, cachetes  0.8 cm, cejas 8 gr 0.2 cm, parpados 10 gr, mandibula 8 gr
+pain_brwnit_grit_eyhc        200 c: labios 21 gr 1.6 cm, cejas 12 gr 1.1 cm, cachetes  1.2 cm, parpados 17 gr, bajo-ojo  0.6 cm, nariz  0.5 cm, ceno  0.3 cm
+pain_brwtrb_shut_eyc_hard    233 c: labios 52 gr 2.3 cm, cachetes  2.1 cm, cejas 18 gr 1.3 cm, parpados 28 gr, surco  1.1 cm, bajo-ojo  0.9 cm, nariz  0.8 cm, mandibula 20 gr, ceno  0.1 cm
+pain_brwtrb_shut_eyhc_hard   159 c: labios 59 gr 2.0 cm, cachetes  2.1 cm, cejas 13 gr 1.4 cm, nariz  1.0 cm, bajo-ojo  0.9 cm, surco  0.9 cm, parpados 20 gr, ceno  0.8 cm, mandibula 19 gr
+pow_brwin_puck_hard           60 c: labios 27 gr 1.6 cm, cejas 15 gr 0.9 cm, cachetes  1.3 cm, nariz  0.8 cm, parpados 16 gr, bajo-ojo  0.6 cm, mandibula 11 gr, ceno  0.1 cm
+pow_brwnit_grit_hard          42 c: labios 49 gr 1.5 cm, cachetes  1.8 cm, cejas 24 gr 0.8 cm, surco  1.1 cm, parpados 18 gr, ceno  0.6 cm, nariz  0.4 cm, bajo-ojo  0.1 cm, mandibula 2 gr
+pow_brwnit_grit_hard_l        41 c: labios 49 gr 2.5 cm, cejas 23 gr 1.0 cm, cachetes  1.7 cm, surco  1.1 cm, parpados 17 gr, nariz  0.5 cm, ceno  0.5 cm, bajo-ojo  0.2 cm, mandibula 2 gr
+pow_brwnit_puck_eyhc_hard     65 c: labios 55 gr 1.9 cm, cejas 25 gr 1.4 cm, cachetes  1.5 cm, parpados 18 gr, bajo-ojo  0.7 cm, mandibula 17 gr, ceno  0.6 cm, nariz  0.5 cm, surco  0.2 cm
+pow_brwnit_puck_hard          64 c: labios 46 gr 2.0 cm, cejas 18 gr 1.1 cm, cachetes  1.0 cm, nariz  0.7 cm, mandibula 18 gr, parpados 15 gr, bajo-ojo  0.4 cm
+pow_brwnit_puck_l             30 c: labios 26 gr 1.8 cm, cachetes  2.0 cm, cejas 2 gr 1.1 cm, nariz  0.6 cm, parpados 12 gr, surco  0.5 cm, bajo-ojo  0.2 cm, mandibula 4 gr
+pow_brwnit_shut_hard         177 c: labios 41 gr 2.1 cm, cejas 25 gr 1.4 cm, cachetes  2.3 cm, nariz  1.0 cm, mandibula 21 gr, parpados 19 gr, ceno  0.8 cm, surco  0.6 cm, bajo-ojo  0.5 cm
+pow_brwnit_unnos_hard_in     163 c: labios 52 gr 2.2 cm, cejas 13 gr 1.0 cm, parpados 29 gr, cachetes  1.1 cm, nariz  0.7 cm, surco  0.6 cm, bajo-ojo  0.6 cm, mandibula 5 gr
+pow_brwnit_wink_r             46 c: labios 36 gr 1.5 cm, cejas 23 gr 1.3 cm, cachetes  2.1 cm, bajo-ojo  1.0 cm, parpados 20 gr, ceno  0.6 cm, nariz  0.6 cm, surco  0.4 cm
+pow_brwup_grit               150 c: labios 58 gr 1.7 cm, cachetes  2.0 cm, cejas 6 gr 1.0 cm, nariz  0.7 cm, surco  0.6 cm, parpados 15 gr, bajo-ojo  0.2 cm, ceno  0.1 cm, mandibula 2 gr
+pow_brwup_grit_hard           50 c: labios 29 gr 1.8 cm, cachetes  1.8 cm, cejas 8 gr 1.0 cm, surco  0.6 cm, parpados 10 gr, nariz  0.1 cm
+pow_brwup_lorol               33 c: labios 48 gr 1.9 cm, cejas 3 gr 1.0 cm, parpados 10 gr, mandibula 6 gr, cachetes  0.2 cm, nariz  0.1 cm, surco  0.1 cm
+pow_brwup_puck_hard           55 c: labios 40 gr 2.1 cm, cejas 17 gr 1.0 cm, cachetes  1.1 cm, mandibula 18 gr, nariz  0.7 cm, parpados 14 gr, bajo-ojo  0.5 cm
+pow_brwup_puck_soft           50 c: labios 17 gr 1.7 cm, cejas 12 gr 0.8 cm, cachetes  0.8 cm, mandibula 8 gr, parpados 8 gr, nariz  0.2 cm, ceno  0.1 cm
+pow_brwup_unnos_eyo_in        45 c: labios 31 gr 1.7 cm, cejas  1.0 cm, cachetes  0.6 cm, parpados 15 gr, mandibula 4 gr
+pow_brwup_unnos_hard          50 c: labios 64 gr 1.4 cm, cejas 21 gr 1.0 cm, cachetes  0.8 cm, mandibula 8 gr, parpados 6 gr, nariz  0.2 cm
+pow_brwup_unnos_hard_in      157 c: labios 68 gr 1.8 cm, cachetes  1.4 cm, cejas 2 gr 1.0 cm, parpados 19 gr, mandibula 5 gr, ceno  0.2 cm, surco  0.1 cm, bajo-ojo  0.1 cm, nariz  0.1 cm
+pow_brwup_unnos_in            45 c: labios 40 gr 1.4 cm, cejas 3 gr 1.0 cm, cachetes  0.9 cm, parpados 15 gr, ceno  0.2 cm, mandibula 5 gr, nariz  0.1 cm
+pow_grit_in                  119 c: labios 60 gr 1.2 cm, cachetes  1.9 cm, cejas 12 gr 0.7 cm, parpados 25 gr, surco  0.6 cm, bajo-ojo  0.2 cm, mandibula 4 gr, nariz  0.1 cm
+pow_mmov_in                  132 c: labios 50 gr 1.3 cm, cejas 12 gr 1.1 cm, cachetes  1.5 cm, parpados 26 gr, surco  0.6 cm, mandibula 7 gr, bajo-ojo  0.2 cm
+smil_bite                     50 c: labios 38 gr 1.4 cm, cachetes  1.7 cm, surco  0.6 cm, nariz  0.3 cm, parpados 8 gr, cejas 2 gr 0.2 cm, bajo-ojo  0.2 cm
+smil_mho                      50 c: labios 45 gr 1.3 cm, cachetes  2.1 cm, surco  0.6 cm, parpados 11 gr, cejas  0.3 cm, bajo-ojo  0.3 cm, nariz  0.1 cm
+smil_mho_soft                 50 c: labios 33 gr 1.4 cm, cachetes  1.4 cm, parpados 7 gr, bajo-ojo  0.2 cm, surco  0.1 cm, cejas  0.1 cm, nariz  0.1 cm, mandibula 2 gr
+smil_mso_soft                 52 c: labios 18 gr 1.2 cm, cachetes  1.5 cm, surco  0.6 cm, parpados 12 gr, nariz  0.3 cm, bajo-ojo  0.2 cm
+smil_shut_eyhc                50 c: labios 42 gr 1.8 cm, cachetes  2.6 cm, surco  0.7 cm, parpados 13 gr, mandibula 10 gr, cejas  0.3 cm, nariz  0.3 cm, bajo-ojo  0.3 cm
+smil_smirk                   100 c: labios 34 gr 1.8 cm, cachetes  2.1 cm, surco  0.6 cm, nariz  0.5 cm, parpados 11 gr, bajo-ojo  0.4 cm
+smil_soft                     42 c: labios 32 gr 1.6 cm, cachetes  1.9 cm, surco  0.6 cm, parpados 6 gr, cejas  0.2 cm, nariz  0.2 cm
+smil_talk_blink_soft         207 c: labios 38 gr 1.8 cm, cachetes  2.1 cm, parpados 29 gr, cejas 5 gr 0.5 cm, surco  0.6 cm, nariz  0.4 cm, bajo-ojo  0.2 cm, mandibula 3 gr
+smug_brwup_smirk_eyo_hard    338 c: labios 42 gr 1.8 cm, cachetes  2.3 cm, cejas 18 gr 1.0 cm, parpados 18 gr, surco  0.6 cm, bajo-ojo  0.5 cm, mandibula 7 gr, nariz  0.2 cm, ceno  0.1 cm
+smug_brwup_smirk_l            32 c: labios 24 gr 1.5 cm, cejas 4 gr 1.0 cm, cachetes  0.9 cm, parpados 13 gr, ceno  0.3 cm, bajo-ojo  0.2 cm, surco  0.1 cm, nariz  0.1 cm
+smug_brwup_smirk_r            32 c: labios 19 gr 1.2 cm, cejas 5 gr 1.0 cm, cachetes  0.5 cm, parpados 10 gr, bajo-ojo  0.4 cm, ceno  0.1 cm, nariz  0.1 cm
+smug_brwup_smirk_r_hard       53 c: labios 48 gr 2.0 cm, cachetes  2.3 cm, cejas 17 gr 1.0 cm, surco  0.9 cm, parpados 17 gr, bajo-ojo  0.4 cm, nariz  0.1 cm
+spit_puck                     30 c: labios 40 gr 2.0 cm, parpados 18 gr, cejas 4 gr 0.5 cm, cachetes  0.5 cm, mandibula 5 gr, nariz  0.1 cm
+supris_brwup_mho_eyo_hard    100 c: labios 26 gr 0.6 cm, cejas 7 gr 1.0 cm, parpados 17 gr, cachetes  0.4 cm, bajo-ojo  0.4 cm, surco  0.2 cm, nariz  0.2 cm, ceno  0.1 cm, mandibula 2 gr
+supris_brwup_talk_eyo_hard   386 c: labios 30 gr 1.6 cm, cejas 2 gr 1.0 cm, parpados 27 gr, cachetes  1.0 cm, ceno  0.3 cm, mandibula 7 gr
+tire_eyhc_grit               107 c: labios 33 gr 1.3 cm, cejas 25 gr 1.1 cm, cachetes  1.6 cm, bajo-ojo  0.9 cm, parpados 16 gr, surco  0.6 cm, mandibula 4 gr
+tire_mho_soft                 80 c: labios 12 gr 0.6 cm, cejas 18 gr 0.3 cm, cachetes  0.7 cm, nariz  0.5 cm, parpados 10 gr, bajo-ojo  0.2 cm, mandibula 3 gr, surco  0.1 cm
