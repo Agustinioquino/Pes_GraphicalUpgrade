@@ -1,0 +1,191 @@
+MSBuild version 18.11.1-1.26513.3+940033be3 for .NET Framework
+
+  1>Checking Build System
+  Building Custom Rule D:/a/Pes_GraphicalUpgrade/Pes_GraphicalUpgrade/CMakeLists.txt
+  buffer.c
+  hook.c
+  trampoline.c
+  hde64.c
+  Generating Code...
+  minhook.vcxproj -> D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\Release\minhook.lib
+  Building Custom Rule D:/a/Pes_GraphicalUpgrade/Pes_GraphicalUpgrade/CMakeLists.txt
+  Assembling D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\d3d11_exports.asm...
+  main.cpp
+  d3d11_proxy.cpp
+  config.cpp
+  hooks.cpp
+  overlay.cpp
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1422,8): error C2011: 'fx::PerfStats': 'struct' type redefinition [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+      D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\core.h(654,8):
+      see declaration of 'fx::PerfStats'
+  
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1423,18): error C2027: use of undefined type 'fx::PerfStats' [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+      D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\core.h(654,8):
+      see declaration of 'fx::PerfStats'
+  
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1424,15): error C2079: 'p' uses undefined struct 'fx::PerfStats' [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1474,25): error C2079: 'p' uses undefined struct 'fx::PerfStats' [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1474,29): error C2027: use of undefined type 'fx::PerfStats' [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+      D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\core.h(654,8):
+      see declaration of 'fx::PerfStats'
+  
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1476,180): error C2672: 'std::max': no matching overloaded function found [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+      C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\utility(88,26):
+      could be '_Ty std::max(std::initializer_list<_Elem>)'
+          D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1476,180):
+          '_Ty std::max(std::initializer_list<_Elem>)': could not deduce template argument for 'std::initializer_list<_Elem>' from 'float'
+      C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\utility(85,26):
+      or       '_Ty std::max(std::initializer_list<_Elem>,_Pr)'
+          D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1476,180):
+          '_Ty std::max(std::initializer_list<_Elem>,_Pr)': expects 2 arguments - 1 provided
+      C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\utility(77,6):
+      or       'const _Ty &std::max(const _Ty &,const _Ty &) noexcept(<expr>)'
+          D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1476,180):
+          'const _Ty &std::max(const _Ty &,const _Ty &) noexcept(<expr>)': expects 2 arguments - 1 provided
+      C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\utility(67,33):
+      or       'const _Ty &std::max(const _Ty &,const _Ty &,_Pr) noexcept(<expr>)'
+          D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1476,180):
+          'const _Ty &std::max(const _Ty &,const _Ty &,_Pr) noexcept(<expr>)': expects 3 arguments - 1 provided
+  
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1477,15): error C2665: 'std::vector<fx::DiagItem,std::allocator<fx::DiagItem>>::push_back': no overloaded function could convert all the argument types [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+      C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\vector(939,23):
+      could be 'void std::vector<fx::DiagItem,std::allocator<fx::DiagItem>>::push_back(_Ty &&)'
+          with
+          [
+              _Ty=fx::DiagItem
+          ]
+          D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1477,15):
+          'void std::vector<fx::DiagItem,std::allocator<fx::DiagItem>>::push_back(_Ty &&)': cannot convert argument 1 from 'initializer list' to '_Ty &&'
+          with
+          [
+              _Ty=fx::DiagItem
+          ]
+              D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1477,25):
+              Reason: cannot convert from 'initializer list' to '_Ty'
+          with
+          [
+              _Ty=fx::DiagItem
+          ]
+              D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1477,25):
+              Invalid aggregate initialization
+                  D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1477,81):
+                  'initializing': cannot convert from 'char [512]' to 'int'
+                      D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1477,81):
+                      There is no context in which this conversion is possible
+      C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\vector(935,23):
+      or       'void std::vector<fx::DiagItem,std::allocator<fx::DiagItem>>::push_back(const _Ty &)'
+          with
+          [
+              _Ty=fx::DiagItem
+          ]
+          D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1477,15):
+          'void std::vector<fx::DiagItem,std::allocator<fx::DiagItem>>::push_back(const _Ty &)': cannot convert argument 1 from 'initializer list' to 'const _Ty &'
+          with
+          [
+              _Ty=fx::DiagItem
+          ]
+              D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1477,25):
+              Reason: cannot convert from 'initializer list' to 'const _Ty'
+          with
+          [
+              _Ty=fx::DiagItem
+          ]
+              D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1477,25):
+              Invalid aggregate initialization
+                  D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1477,81):
+                  'initializing': cannot convert from 'char [512]' to 'int'
+                      D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1477,81):
+                      There is no context in which this conversion is possible
+      D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1477,15):
+      while trying to match the argument list '(initializer list)'
+  
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1516,21): error C2079: 'p' uses undefined struct 'fx::PerfStats' [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\overlay.cpp(1516,25): error C2027: use of undefined type 'fx::PerfStats' [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+      D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\core.h(654,8):
+      see declaration of 'fx::PerfStats'
+  
+  lang.cpp
+  presets.cpp
+  catalog.cpp
+  grass.cpp
+  statecache.cpp
+  menutest.cpp
+  facegen.cpp
+  inspect.cpp
+  ssss.cpp
+  headshadow.cpp
+  pitchwear.cpp
+  wind.cpp
+  redes.cpp
+  lod.cpp
+  lightmeter.cpp
+  Generating Code...
+  Compiling...
+  gtao.cpp
+  ssgi.cpp
+  exedump.cpp
+  asyncshot.cpp
+  exepatch.cpp
+  camhook.cpp
+  soleditor.cpp
+  solibre.cpp
+  sudor.cpp
+  musculo.cpp
+  musculo_ui.cpp
+  personajes.cpp
+  fisico.cpp
+  codewatch.cpp
+  memwatch.cpp
+  skintone.cpp
+  glass.cpp
+  ring.cpp
+  cuerpo.cpp
+  manos.cpp
+  Generating Code...
+  Compiling...
+  sunwatch.cpp
+  solreloj.cpp
+  grassdist.cpp
+  brazos.cpp
+  inflate.cpp
+  keyblock.cpp
+  expr.cpp
+  exprbones.cpp
+  faceinject.cpp
+  facetess.cpp
+  arrugasjug.cpp
+  bocajug.cpp
+  tiempo.cpp
+  freecam.cpp
+  caras_hd.cpp
+  caramalla.cpp
+  mouthmask.cpp
+  gpumeter.cpp
+  gani.cpp
+  panel.cpp
+  Generating Code...
+  Compiling...
+  cmdlistguard.cpp
+  relwatch.cpp
+  cobertura.cpp
+  rastro.cpp
+  rastro_v4.cpp
+  publico.cpp
+  solluz.cpp
+  motorlink.cpp
+  menumouse.cpp
+  motorpage.cpp
+  motorgizmo.cpp
+  perfrec.cpp
+  imgui.cpp
+  imgui_draw.cpp
+  imgui_tables.cpp
+  imgui_widgets.cpp
+  imgui_impl_dx11.cpp
+  imgui_impl_win32.cpp
+  DDSTextureLoader.cpp
+  ScreenGrab.cpp
+  Generating Code...
+  Compiling...
+  WICTextureLoader.cpp
+  Generating Code...
