@@ -93,6 +93,7 @@ cbuffer PESLightCopyC : register(b13)
   float4 pLc_color;
 }
 
+#include "pes_microsh.hlsli"   // PES21 (13/11): micro sombras v4, sombra de relieve con direccion
 #include "pes_vista_motor.hlsli"   // PES21 (11/11, Motor en tiempo real): vistas del motor (fila 429)
 // PES21 (12/11 20:50, fila 445): azar y ruido fijos al mundo (sin seno: estables lejos del centro de la cancha) y luz del sol en un
 // punto del aire (espacio de vista; shadow map del sol con la misma cuenta que la luz volumetrica 335)
@@ -1484,11 +1485,14 @@ void main(
     // sombra a si mismos con la luz rasante del sol. La apertura la da la oclusion ambiental; solo del lado iluminado.
     // x88 fuerza, y88 on/off, z88 apertura: 0 = oclusion de pantalla (cambia con la camara), 1 = relieve (31/10): el angulo
     // entre la normal de detalle (poros, pliegues, trama) y la geometrica de la profundidad; no depende de la camara
+    // (13/11, pedido del hilo del pasto) LA MICRO SOMBRA VIEJA SIGUE para todo lo que no es piel ni tela (tyC != 0: pasto, pelota,
+    // estadio) hasta que tengan su version v4: el pasto de cerca depende de ella para la profundidad entre hojas. z88 ahora es la
+    // suavidad de la v4: aca queda siempre el modo relieve (el que estaba por defecto)
     { float4 MS = IniParams.Load(int2(88,0));
-      if (MS.y > 0.5 && MS.x > 0.0 && geoOk && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+      if (tyC != 0 && MS.y > 0.5 && MS.x > 0.0 && geoOk && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
         float ndlM = dot(Nsk, normalize(pLc_dir.xyz));
         float aper = 2.0 * aoRaw * aoRaw;
-        if (MS.z > 0.5) {
+        if (true) {
           // (01/11) relieve v2: la normal de detalle contra el PROMEDIO de las normales del G-buffer en un anillo de ~1.2 cm del
           // mundo (no contra la normal de la profundidad). La de la profundidad salia a facetas (cuadrados de 2x2 y triangulos de
           // mallas con pocos poligonos, como la mano) y cada faceta se leia como un pliegue hondo. El promedio de un anillo
@@ -1523,6 +1527,56 @@ void main(
         float msFar = (skinC && IniParams.Load(int2(124,0)).w > 0.5) ? saturate((2.0 - 2000.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z) / 1.2) : 1.0;
         float msK = lerp(1.0, max(micro, 0.4), saturate(MS.x) * litSide * msFar);
         diffC *= msK; specC *= skinC ? msK : lerp(1.0, msK, 0.5);
+      } }
+    // (13/11) MICRO SOMBRAS v4 (pes_microsh.hlsli): sombra de relieve con direccion, hacia el sol, para piel, tela y todo lo
+    // que no es pasto ni pelota. x88 fuerza, y88 on/off, w88 largo (0 = 1). z88 ya no se usa. Solo sobre la parte de la luz que
+    // viene del sol (su color x N.L x sombra del juego contra el total): en la sombra del estadio o de la cabeza no hace nada.
+    // Largo por material (piel 6 mm, lo demas 15 mm), nunca menos de 5 pixeles: de cerca marca poros y trama, mas lejos arrugas,
+    // pliegues y costuras, sin puntos sueltos; pasados 3 largos se apaga. Piso por material: en la piel la sombra chica nunca es
+    // negra y deja pasar rojo (la luz cruza un poro por debajo), en la tela baja pareja
+    { float4 MS = IniParams.Load(int2(88,0));
+      if (MS.y > 0.5 && MS.x > 0.0 && geoOk && tyC == 0 && zsk < 25.0 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+        float3 LdS = normalize(pLc_dir.xyz);
+        float ndlM = dot(Nsk, LdS);
+        float sunSh = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+        float3 sunD = max(pLc_color.xyz, 0.0) * saturate(ndlM) * sunSh;
+        float sunF = saturate(dot(sunD, float3(0.2126, 0.7152, 0.0722)) / max(dot(r2.xyz, float3(0.2126, 0.7152, 0.0722)), 1e-4)) * saturate(ndlM * 6.0) * sunSh;
+        if (sunF > 0.01) {
+          float pxmM = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z, 1e-5);   // pixeles por metro
+          float rBase = (skinC ? 0.006 : 0.015) * (MS.w > 0.001 ? clamp(MS.w, 0.25, 4.0) : 1.0);
+          float rM = max(rBase, 5.0 / pxmM);
+          float farK = saturate((3.0 * rBase - rM) / (1.5 * rBase) + 1.0) * saturate((25.0 - zsk) / 5.0);
+          if (farK > 0.01) {
+            // forma lisa: promedio de las normales en un anillo del largo del camino, solo vecinos sobre el plano del pixel
+            float3 Nc0 = PESDecN(uvC);
+            float3 NvC = float3(Nc0.xy, -Nc0.z);
+            float rPx = clamp(rM * pxmM, 2.0, 24.0);
+            float tolM = 0.35 * rM + 0.001;
+            float3 nAcc = 0; float nW = 0;
+            [unroll] for (int mi = 0; mi < 8; mi++) {
+              float angM = mi * 0.78539816 + 0.3927;
+              float2 uvM = uvC + float2(cos(angM), sin(angM)) * rPx * g_psSystem.m_renderBuffer.zw;
+              float zM = PESLinZ(uvM);
+              float3 Pm = float3(((uvM * float2(2, -2) + float2(-1, 1)) - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zM, zM);
+              float wM = abs(dot(Pm - Pgeo, NvC)) < tolM ? 1.0 : 0.0;
+              nAcc += PESDecN(uvM) * wM; nW += wM;
+            }
+            if (nW > 2.5) {
+              float3 NsM = normalize(nAcc + Nc0); NsM.z = -NsM.z;
+              // ESTABLE: el ruido por pixel solo con el TAA de la DLL prendido (x454), que lo promedia; sin TAA paso fijo (sin hormigueo)
+              float jitM = IniParams.Load(int2(454,0)).x > 0.5 ? frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715)))) : 0.5;
+              float softM = MS.z > 0.001 ? clamp(MS.z, 0.25, 3.0) : 1.0;   // z88 suavidad de la penumbra (0 = 1)
+              float visM = PESMicroShadowDir(uvC, Pgeo, Nsk, NsM, LdS, rM, jitM, softM);
+              float3 floorM = skinC ? float3(0.62, 0.44, 0.40) : float3(0.35, 0.35, 0.35);
+              // REACTIVO al sudor / lluvia: la pelicula de agua llena el poro y alisa la piel (la rugosidad del G-buffer baja de ~0.42
+              // seca a ~0.2 mojada): con la piel mojada la sombra del poro se acorta hasta un 60 %; arrugas y pliegues grandes quedan
+              float wetM = skinC ? saturate((0.38 - saturate(gmC.x)) / 0.18) : 0.0;
+              float kM = saturate(MS.x) * farK * sunF * (1.0 - 0.6 * wetM);
+              diffC *= lerp(1.0, lerp(floorM, 1.0, visM), kM);
+              specC *= lerp(1.0, lerp(0.25, 1.0, visM), kM);
+            }
+          }
+        }
       } }
     r0.xyw = diffC * aoD + specC * aoS;
   } else {
