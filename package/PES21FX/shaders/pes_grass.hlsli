@@ -210,10 +210,12 @@ float3 PESNatShoulder(float3 c) { return c - max(c - 0.75, 0.0) * 0.6; }
 // sombra) w447 SOMBRA REAL EN LAS PUNTAS: visibilidad del sol en este pixel (1 = al sol, 0 = sombra entera del estadio, de los jugadores o de
 // las nubes) leida en t = copia de la DLL del RT2 de la pasada del sol del cuadro anterior (.w = visibilidad limpia: e9c13 / b8a2 / 7dbbc) en
 // la posicion que este pixel tenia en ese cuadro. px = SV_Position.xy, mv = o3.xy (px de ahora - px del cuadro anterior, lo mismo que lee el
-// TAA), rb = m_renderBuffer.xy. Si el pixel cae en sombra se mira una cruz de ~1.5 px (a 1080p) y gana lo mas soleado: el atraso de un cuadro
-// y lo que destapa un jugador que se mueve quedan como antes (al sol), no con una sombra falsa. Sin la textura enlazada (DLL vieja, editor,
+// TAA), rb = m_renderBuffer.xy, pxm = px/m del punto (de la pantalla; 0 = no se sabe). Si el pixel cae en sombra se mira una cruz y gana lo
+// mas soleado: (13/11, segunda lectura) la cruz cubre ~0.21 m (lo que se mueve en un cuadro la sombra de un jugador que corre a ~9 m/s, en
+// diagonal), minimo 1.5 px a 1080p y maximo 64 px: el atraso de un cuadro y lo que destapa un jugador que se mueve quedan como antes (al
+// sol), sin una franja apagada detras de cada sombra que corre; el borde de una sombra real conserva ~0.21 m de puntas como antes. Sin la textura enlazada (DLL vieja, editor,
 // corte de camara), con w447 = 0 o de noche = 1 (como antes). Los VS que incluyen este archivo no la llaman
-float PESSunVisGate(Texture2D<float4> t, float2 px, float2 mv, float2 rb) {
+float PESSunVisGate(Texture2D<float4> t, float2 px, float2 mv, float2 rb, float pxm) {
   float k = saturate(IniParams.Load(int2(447, 0)).w);
   if (k < 0.001 || IniParams.Load(int2(114, 0)).w < 0.5) return 1.0;
   uint w = 0, h = 0; t.GetDimensions(w, h);
@@ -224,7 +226,9 @@ float PESSunVisGate(Texture2D<float4> t, float2 px, float2 mv, float2 rb) {
   if (any(p < 0.0) || any(p >= d)) return 1.0;   // fuera de la pantalla en el cuadro anterior: como antes
   float m = t.Load(int3(p, 0)).w;
   if (m < 0.999) {
-    float r = max(1.5 * d.y / 1080.0, 1.0);
+    float hb = IniParams.Load(int2(63, 0)).z;   // media altura de la pantalla (px), la de los px/m
+    float rS = 0.21 * max(pxm, 0.0) * d.y / (hb > 1.0 ? 2.0 * hb : 1080.0);   // px/m de la pantalla -> px de la copia
+    float r = clamp(max(1.5 * d.y / 1080.0, rS), 1.0, 64.0);
     float2 hi = d - 1.0;
     float mx = max(t.Load(int3(clamp(p + float2(r, 0.0), 0.0, hi), 0)).w, t.Load(int3(clamp(p - float2(r, 0.0), 0.0, hi), 0)).w);
     float my = max(t.Load(int3(clamp(p + float2(0.0, r), 0.0, hi), 0)).w, t.Load(int3(clamp(p - float2(0.0, r), 0.0, hi), 0)).w);
@@ -297,18 +301,27 @@ void PESGrassColorGrade(inout float3 c)
   if (abs(C.x) < 0.01 && abs(C.y) < 0.001 && abs(C.z) < 0.001 && C.w < 0.001 && !pre456) return;
   const float3 LW = float3(0.2126, 0.7152, 0.0722);
   float l = dot(c, LW);
+  const float3 gRef = float3(0.40, 1.0, 0.25);
+  // (13/11, segunda lectura) gCur = el verde medio del pasto tal como queda despues de x / y / w112: x456 mide su corrimiento desde aca
+  // (antes lo media desde gRef y se sumaba al "Verde natural" w112 0.5: "Verano" / "Oliva" dejaban la cancha color paja)
+  float3 gCur = gRef;
   if (abs(C.x) > 0.01) {
     float3 yiq = float3(l, dot(c, float3(0.596, -0.274, -0.322)), dot(c, float3(0.211, -0.523, 0.312)));
     float a = radians(clamp(C.x, -60.0, 60.0)); float ca = cos(a), sa = sin(a);
     float2 iq = float2(yiq.y * ca - yiq.z * sa, yiq.y * sa + yiq.z * ca);
     c = max(float3(yiq.x + 0.956 * iq.x + 0.621 * iq.y, yiq.x - 0.272 * iq.x - 0.647 * iq.y, yiq.x - 1.106 * iq.x + 1.703 * iq.y), 0.0);
+    if (pre456) {
+      float yR = dot(gCur, LW), iR = dot(gCur, float3(0.596, -0.274, -0.322)), qR = dot(gCur, float3(0.211, -0.523, 0.312));
+      float2 iqR = float2(iR * ca - qR * sa, iR * sa + qR * ca);
+      gCur = max(float3(yR + 0.956 * iqR.x + 0.621 * iqR.y, yR - 0.272 * iqR.x - 0.647 * iqR.y, yR - 1.106 * iqR.x + 1.703 * iqR.y), 1e-3);
+      gCur /= gCur.g;
+    }
   }
   // (12/11 20:50, Agustin: "la opcion de color del pasto para que funcione bien con este nuevo pasto natural") natural: "Verde" y "Verde
   // natural" ya no llevan cada pixel al MISMO color (eso borraba las hojas secas, las puntas paja, las encendidas y las mezclas de pasto:
   // con w112 0.5 perdian el 42 % de su color): se calcula el corrimiento que necesita el verde medio del pasto (r/g 0.40, b/g 0.25) y se
   // aplica igual a todos los colores, con la claridad de cada uno. El verde medio llega al mismo lugar que antes; la variedad queda
   bool natR = PESNatOn();
-  const float3 gRef = float3(0.40, 1.0, 0.25);
   // (12/11) el tono del natural solo mueve lo que tiene color: gris / blanco (lineas de cal, bordes de linea) quedan como estan
   float mxC = max(c.r, max(c.g, c.b)), mnC = min(c.r, min(c.g, c.b));
   float kS = saturate(((mxC - mnC) / max(mxC, 1e-3) - 0.12) * 5.0);
@@ -316,9 +329,11 @@ void PESGrassColorGrade(inout float3 c)
     float3 g = float3(0.19, 0.42, 0.10);
     if (natR) {
       float3 rt = max(lerp(gRef, g / g.g, clamp(C.y, -1.0, 1.0) * 0.6), 0.02) / gRef;
+      gCur *= rt;
       rt = lerp(float3(1.0, 1.0, 1.0), rt, kS);
       float3 cn = c * rt; c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
     } else {
+      { float3 gg = g * (dot(gCur, LW) / dot(g, LW)); gCur = max(lerp(gCur, gg, clamp(C.y, -1.0, 1.0) * 0.6), 1e-3); gCur /= gCur.g; }
       g *= l / dot(g, LW);
       c = max(lerp(c, g, clamp(C.y, -1.0, 1.0) * 0.6), 0.0);
     }
@@ -331,9 +346,13 @@ void PESGrassColorGrade(inout float3 c)
     float3 t = float3(0.78, 1.0, 0.42);
     if (natR) {
       float3 rt = lerp(gRef, t, clamp(C.w, 0.0, 1.0) * 0.85) / gRef;
+      gCur *= rt;
       rt = lerp(float3(1.0, 1.0, 1.0), rt, kS);
       float3 cn = c * rt; c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
-    } else { t *= l / dot(t, LW); c = max(lerp(c, t, clamp(C.w, 0.0, 1.0) * 0.85), 0.0); }
+    } else {
+      { float3 tt = t * (dot(gCur, LW) / dot(t, LW)); gCur = max(lerp(gCur, tt, clamp(C.w, 0.0, 1.0) * 0.85), 1e-3); gCur /= gCur.g; }
+      t *= l / dot(t, LW); c = max(lerp(c, t, clamp(C.w, 0.0, 1.0) * 0.85), 0.0);
+    }
   }
   // (12/11 22:56, Agustin: "con respecto al verde, podrias hacer que se pueda cambiar por distintos colores" / "pero manteniendo lo
   // demas") x456 COLOR DEL PASTO: 0 como esta, 1 natural al sol, 2 ingles (azulado profundo), 3 esmeralda, 4 oliva, 5 lima, 6 verano
@@ -363,7 +382,8 @@ void PESGrassColorGrade(inout float3 c)
     float mxP = max(c.r, max(c.g, c.b)), mnP = min(c.r, min(c.g, c.b));
     float kSP = saturate(((mxP - mnP) / max(mxP, 1e-3) - 0.12) * 5.0);
     float kG = kSP * smoothstep(1.02, 0.80, rgP) * smoothstep(1.10, 0.85, bgP) * step(mnP + 1e-4, c.g);   // verde (no paja, tierra ni gris)
-    float3 rtP = lerp(float3(1.0, 1.0, 1.0), tP / gRef, saturate(C456.y) * kG);
+    float3 rtP = lerp(float3(1.0, 1.0, 1.0), tP / gCur, saturate(C456.y) * kG);
+    rtP.r = min(rtP.r, max(max(tP.r, 0.95) * c.g / max(c.r, 1e-4), 1.0));   // (13/11) un verde nunca termina con mas rojo que verde
     float3 cP = c * rtP; c = max(cP * (lP / max(dot(cP, LW), 1e-5)), 0.0);
   }
 }

@@ -435,7 +435,7 @@ void main(
     float3 cc = o0.xyz; float spc = o2.y, rgc = o2.x;
     // (12/11 23:45) w447: en la sombra del estadio o de los jugadores (RT2.w del cuadro anterior, PESSunVisGate) la copa sin lo que es solo del sol
     float pesSvC = 1.0;
-    if (IniParams.Load(int2(433,0)).y > 0.001 && PESNatOn()) pesSvC = PESSunVisGate(PESSunVisPrev, v0.xy, o3.xy, g_psSystem.m_renderBuffer.xy);
+    if (IniParams.Load(int2(433,0)).y > 0.001 && PESNatOn()) pesSvC = PESSunVisGate(PESSunVisPrev, v0.xy, o3.xy, g_psSystem.m_renderBuffer.xy, pxc);
     PESNatCanopy(cc, spc, rgc, pesEc / pesDc, pxc, pesSvC);
     float kLc = 1.0 - saturate(pesLine);
     o0.xyz = saturate(lerp(o0.xyz, cc, kLc)); o2.y = lerp(o2.y, spc, kLc); o2.x = lerp(o2.x, rgc, kLc);

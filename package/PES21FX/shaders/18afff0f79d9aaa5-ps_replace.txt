@@ -144,8 +144,7 @@ void main(
   // el RT2.w del cuadro anterior en la posicion de este pixel de entonces (o3.xy). Apaga lo que es solo del sol en el albedo: la luz que
   // atraviesa la punta (w413), las puntas encendidas (y437), el dorado fuerte (z295 / x414) y el de z436, el lado al sol de la sombra entre
   // hojas (z413) y de z334; en la sombra quedan como en un dia nublado. Sin la copia (DLL vieja, editor, noche, corte de camara) = 1, como antes
-  float pesSunV = 1.0;
-  if (pesV3 && !pesFar && pesDayK > 0.5) pesSunV = PESSunVisGate(PESSunVisPrev, v0.xy, o3.xy, g_psSystem.m_renderBuffer.xy);
+  float pesSunV = 1.0;   // (13/11) se lee despues del descarte del alfa (abajo): los pixeles recortados de la tarjeta no la pagan
   // (27/10 p) tanda 12, fila 334: el pasto de la camara MAS cercana (>= 250-600 px/m), tanto las hojas del mod (v4.w > 0) como las parcelas
   // del juego pegadas a la camara (v4.w < 0: hasta ahora casi todo lo de "pasto v3" las saltaba y por eso se veian distintas). x334 rocio
   // fino (gotas a lo largo de la hoja), y334 cal mas densa (lo decide el VS), z334 sombra por hoja (raiz mas oscura, lado al sol / en sombra)
@@ -256,6 +255,7 @@ void main(
   r0.w = -0.300000012 + r0.w;
   r0.w = cmp(r0.w < 0);
   if (r0.w != 0) discard;
+  if (pesV3 && !pesFar && pesDayK > 0.5) pesSunV = PESSunVisGate(PESSunVisPrev, v0.xy, o3.xy, g_psSystem.m_renderBuffer.xy, abs(v4.w));   // (12/11 23:45) w447
   float pesLight = r0.x;                     // claridad (0.5 neutro) del atlas propio
   if (pesNat && pesMir) pesN.x = 1.0 - pesN.x;   // (11/11 d) tarjeta espejada: la normal a lo ancho cambia de lado
   if (pesNat && !pesFar) {   // (11/11) y412 detalle: nervio, venas, fibras y manchas de la hoja (claridad y relieve de la normal)

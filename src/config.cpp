@@ -562,7 +562,7 @@ void MatchWind(const MatchInfo& m, unsigned long long seed) {
 // (08/11) vistas de depuracion: Agustin: "opciones de diagnostico y debug de opciones avanzadas, sombras, efectos". Se juntan aca
 // para que (1) nunca se guarden ni arranquen prendidas, (2) "Apagar todo el debug" las apague de una y (3) la prueba automatica
 // fotografie cada vista. minOn = desde que valor (absoluto) es depuracion; safe = valor al apagarla (z314: 2 = depuracion, 1 = normal prendido)
-static const float kV12[] = { 2, 3, 4, 5, 6, 7, -3 }, kV380[] = { 1, 2, 3, 4, 5 }, kV107[] = { 1, 2, 3, 4 }, kV75[] = { 1, 2 }, kV27[] = { 1, 2 }, kV1[] = { 1 }, kV2[] = { 2 }, kV429[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+static const float kV12[] = { 2, 3, 4, 5, 6, 7, -3 }, kV380[] = { 1, 2, 3, 4, 5 }, kV107[] = { 1, 2, 3, 4, 5 }, kV75[] = { 1, 2 }, kV27[] = { 1, 2 }, kV1[] = { 1 }, kV2[] = { 2 }, kV429[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
 static const DebugParam kDebugParams[] = {
     { 12, 3, 0.5f, 0.0f, "Vista de diagnostico (rebote, sol y piel, contacto, nubes, cascadas, sombra, resolucion)", "Diagnostico", kV12, 7 },
     { 380, 3, 0.5f, 0.0f, "Vista de prueba de la luz del editor", "Editor", kV380, 5 },
@@ -575,7 +575,7 @@ static const DebugParam kDebugParams[] = {
     { 27, 2, 0.5f, 0.0f, "Transpiracion: zonas / UV", "Piel", kV27, 2 },
     { 80, 0, 0.5f, 0.0f, "Arrugas de la ropa: compresion", "Ropa", kV1, 1 },
     { 75, 2, 0.5f, 0.0f, "Cejas: hebras / semillas", "Cejas", kV75, 2 },
-    { 107, 3, 0.5f, 0.0f, "Cancha: UV / desgaste / normal / lejos-cerca", "Pasto", kV107, 4 },
+    { 107, 3, 0.5f, 0.0f, "Cancha: UV / desgaste / normal / lejos-cerca / sombra real", "Pasto", kV107, 5 },
     { 59, 2, 0.5f, 0.0f, "Pasto del mod en magenta", "Pasto", kV1, 1 },
     { 314, 2, 1.5f, 1.0f, "Sombra pegada al suelo: hojas / suelo", "Pasto", kV2, 1 },
     { 120, 3, 0.5f, 0.0f, "Reflejos de la cancha mojada: plano", "Pasto", kV1, 1 },
