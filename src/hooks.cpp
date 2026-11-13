@@ -532,6 +532,7 @@ static const GrassVerOv kGrassVer[] = {
     {1, 447, 1, 0.0f}, {1, 447, 2, 0.0f}, {1, 448, 0, 0.0f}, {1, 448, 1, 0.0f}, {1, 448, 2, 0.0f},   // cielo en la sombra, pisadas v2, 448
     {1, 496, 0, 0.0f}, {1, 496, 1, 0.0f}, {1, 496, 2, 0.0f}, {1, 497, 0, 0.0f}, {1, 497, 1, 0.0f},   // luz de cerca, TAA del pasto
     {1, 507, 0, 0.0f},   // (13/11 siguiente) x507 el pasto acompana a la pelota
+    {1, 506, 0, 0.0f}, {1, 506, 1, 0.0f},   // (13/11 siguiente) x506 sol en las puntas segun su altura, y506 rayos en algunas hojas
     // >= 2: 12/11 00:00 - 01:40
     {2, 432, 0, 0.0f}, {2, 432, 3, 0.0f}, {2, 433, 0, 1.0f}, {2, 433, 1, 0.0f}, {2, 433, 3, 0.0f},
     {2, 436, 0, 0.0f}, {2, 436, 1, 0.0f}, {2, 436, 2, 0.0f}, {2, 436, 3, 0.0f}, {2, 431, 0, 0.0f},
