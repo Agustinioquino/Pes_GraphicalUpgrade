@@ -576,8 +576,10 @@ void main(
             }
             if (nW > 2.5) {
               float3 NsM = normalize(nAcc + Nc0); NsM.z = -NsM.z;
-              float jitM = frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715))));
-              float visM = PESMicroShadowDir(uvC, P0, Na, NsM, LdM, rM, jitM);
+              // ESTABLE: el ruido por pixel solo con el TAA de la DLL prendido (x454), que lo promedia; sin TAA paso fijo (sin hormigueo)
+              float jitM = IniParams.Load(int2(454,0)).x > 0.5 ? frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715)))) : 0.5;
+              float softM = MS.z > 0.001 ? clamp(MS.z, 0.25, 3.0) : 1.0;   // z88 suavidad de la penumbra (0 = 1)
+              float visM = PESMicroShadowDir(uvC, P0, Na, NsM, LdM, rM, jitM, softM);
               float3 floorM = skinC ? float3(0.62, 0.44, 0.40) : float3(0.35, 0.35, 0.35);
               float kM = saturate(MS.x) * farK * sunF;
               diffC *= lerp(1.0, lerp(floorM, 1.0, visM), kM);

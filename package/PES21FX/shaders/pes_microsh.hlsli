@@ -10,9 +10,10 @@
 //   uvC      pixel (0..1)                        P0   posicion de vista del pixel (z hacia adelante)
 //   Nd       normal de detalle del pixel         Ns   normal lisa (promedio del anillo: la forma sin el detalle)
 //   L        hacia la luz (unitaria, mismo espacio que las normales con z cambiada)
-//   R        largo del camino en metros          jit  ruido 0..1 por pixel (lo limpia el TAA)
+//   R        largo del camino en metros          jit  ruido 0..1 por pixel (lo limpia el TAA; sin TAA pasar 0.5 fijo)
+//   soft     ancho de la penumbra (1 = normal)
 // Devuelve 1 = al sol, 0 = tapado por su propio relieve. Usa PESDecN / PESLinZ y g_psScene del archivo que lo incluye
-float PESMicroShadowDir(float2 uvC, float3 P0, float3 Nd, float3 Ns, float3 L, float R, float jit)
+float PESMicroShadowDir(float2 uvC, float3 P0, float3 Nd, float3 Ns, float3 L, float R, float jit, float soft)
 {
   float nsl = dot(Ns, L);
   if (nsl <= 0.02) return 1.0;                       // la forma ya mira lejos de la luz: eso lo resuelve N.L y la sombra del juego
@@ -38,5 +39,5 @@ float PESMicroShadowDir(float2 uvC, float3 P0, float3 Nd, float3 Ns, float3 L, f
     worst = max(worst, h / t - tanE);                // cuanto asoma el relieve por encima de la linea al sol
     sPrev = s; tPrev = t;
   }
-  return 1.0 - smoothstep(0.0, 0.30, worst);         // penumbra: borde suave en vez de corte
+  return 1.0 - smoothstep(0.0, 0.30 * soft, worst);         // penumbra: borde suave en vez de corte
 }
