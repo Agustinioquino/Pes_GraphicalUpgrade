@@ -46,7 +46,7 @@ const uintptr_t kIters = 0x143524d04ull;       // 2     (0x1419a4320)
 const uintptr_t kStretch = 0x143524d00ull;     // 1.2   (0x1419a2700)
 const float kGravityGame = 0.25f, kHitGame = 0.3f, kStretchGame = 1.2f; const unsigned kItersGame = 2;
 
-typedef void (__fastcall* PointStepFn)(void* pt, void* acc, float dt);
+typedef void (__fastcall* PointStepFn)(void* pt, void* acc, float dt, uintptr_t a4);   // a4: 0x1419e3e60 pasa un cuarto valor en r9 (sin uso visible): se reenvia igual
 typedef void (__fastcall* NodeFn)(void* node);
 PointStepFn o_point = nullptr; NodeFn o_node = nullptr;
 bool s_tried = false, s_ok = false, s_constOk = false;
@@ -68,8 +68,8 @@ template <class T> void Put(uintptr_t a, T v) {
 struct NetWind { float ax, az, ay, dx, dz, D, turb, on; };
 NetWind s_w{};
 
-void __fastcall hk_Point(void* pt, void* acc, float dt) {
-    o_point(pt, acc, dt);
+void __fastcall hk_Point(void* pt, void* acc, float dt, uintptr_t a4) {
+    o_point(pt, acc, dt, a4);
     const NetWind w = s_w;
     if (w.on < 0.5f || dt <= 0.0f || *((const char*)pt + 0x5c) != 0) return;   // punto fijo (atado al arco)
     const uintptr_t node = *(const uintptr_t*)pt; if (!node) return;
