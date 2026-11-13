@@ -533,6 +533,7 @@ static const GrassVerOv kGrassVer[] = {
     {1, 496, 0, 0.0f}, {1, 496, 1, 0.0f}, {1, 496, 2, 0.0f}, {1, 497, 0, 0.0f}, {1, 497, 1, 0.0f},   // luz de cerca, TAA del pasto
     {1, 507, 0, 0.0f},   // (13/11 siguiente) x507 el pasto acompana a la pelota
     {1, 506, 0, 0.0f}, {1, 506, 1, 0.0f},   // (13/11 siguiente) x506 sol en las puntas segun su altura, y506 rayos en algunas hojas
+    {1, 505, 0, 0.0f},   // (13/11) x505 botines en el pasto (como antes)
     // >= 2: 12/11 00:00 - 01:40
     {2, 432, 0, 0.0f}, {2, 432, 3, 0.0f}, {2, 433, 0, 1.0f}, {2, 433, 1, 0.0f}, {2, 433, 3, 0.0f},
     {2, 436, 0, 0.0f}, {2, 436, 1, 0.0f}, {2, 436, 2, 0.0f}, {2, 436, 3, 0.0f}, {2, 431, 0, 0.0f},
@@ -1541,6 +1542,14 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (BocaJugDraw(c, lf, t_drawVerts, t_drawStart, L, &bsm)) { d.lod = L; if (bsm) { Remember(c, d, true, true, 0); c->PSSetShaderResources(0, 1, &bsm); } }
     }
     if (vs && vs->rule) RunRule(c, vs, d);
+    // (13/11) x505 botines en el pasto: pes_feet (pies cerca de la camara, pitchwear.cpp) en t10 del VS del pasto; vacio mientras no hay
+    // compute (lo que el juego dejo en t10 no llega al pasto); se devuelve despues del dibujo. Sin x505 no se toca nada
+    if (vs && vs->repl && vs->hash == 0x498b30bad256e8edULL) { bool ftWant = false; ID3D11ShaderResourceView* fv = PitchFeetSRV(&ftWant);
+        if (ftWant) {
+            static std::atomic<bool> s_ftProbe{false};
+            if (!s_ftProbe.exchange(true)) { ID3D11ShaderResourceView* o = nullptr; c->VSGetShaderResources(10, 1, &o); D3D11_SHADER_RESOURCE_VIEW_DESC od = {}; if (o) { o->GetDesc(&od); o->Release(); }
+                Log("botines en el pasto: t10 del VS del pasto antes de enlazar %s (dimension %d); pes_feet %s", o ? "OCUPADO" : "vacio", (int)od.ViewDimension, fv ? "enlazado" : "todavia no (se enlaza vacio)"); }
+            Remember(c, d, false, true, 10); c->VSSetShaderResources(10, 1, &fv); } }
     // (20/10) reglas por pareja PS + VS: p.ej. la piel del cuerpo (aa7d1833) cuando dibuja la cabeza de una cara generica (VS faab87ee)
     if (ps && vs) if (const std::vector<const Rule*>* prs = ps->pairRules) for (const Rule* pr : *prs) if (pr->vsCond == vs->hash) RunRuleActions(c, pr, true, ps->hash, d);
     // (2/11) recortes de pasto / tierra (pitchwear.cpp): el PS de las hojas lee el atlas de PARTICULAS (textures\pes_debris.dds, mismo formato)
@@ -2380,7 +2389,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     ExeDumpPresent();
     ExePatchPresent();
     GrassDistPresent();
-    { GpuZoneScope gz_(g_dev.imm, kGzPitchWear); PitchWearPresent(); }
+    { GpuZoneScope gz_(g_dev.imm, kGzPitchWear); PitchWearPresent(flags); }
     PublicoPresent();   // (08/11) gestos del publico: sube el buffer que calcula el hilo de la CPU (fila 394)
     { GpuZoneScope gz_(g_dev.imm, kGzGrass); GrassPresent(); }
     { GpuZoneScope gz_(g_dev.imm, kGzFaceGen); FaceGenPresent(); }

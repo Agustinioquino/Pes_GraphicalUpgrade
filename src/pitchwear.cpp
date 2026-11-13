@@ -157,6 +157,25 @@ static std::atomic<UINT> s_ballIdx{0};      // indice de vertices del dibujo de 
 static std::atomic<int> s_bdCalls{0}, s_bdOffX177{0}, s_bdNoStage{0}, s_bdNoCb{0}, s_bdNoted{0};   // (2/11 b) diagnostico: por que no se anota
 static std::atomic<int> s_ballIdxVotes{0}; static int s_ballLogged = 0;
 static std::atomic<int> s_bdOverflow{0}; static int s_ballChanges = 0; static UINT s_ballHist[10] = {}; static int s_ballHp = 0;   // (2/11 paso 10) dibujos que no entraron en los slots; cambios del indice votado
+// (13/11) x505 BOTINES EN EL PASTO (Agustin 13/11 16:18: "las pisadas pueden tener una colision detectable por el pasto en los botines?",
+// "si esto no consume mucho quizas puedas hacer que a cierta distancia no haga esto", "que esta colision solo la detecte el cesped").
+// SOLO SE VE: en cada dibujo de botines (PS aadffecf) la GPU copia su b5 (m_world por columnas + m_useWeightCount) y su b6 (huesos 0..3 de
+// este cuadro y del anterior, c96) a un lugar del pozo pes_feet_raw, con el sello del cuadro (s_colGen: la copia lo toma cuando la GPU
+// ejecuta la lista, asi las listas diferidas quedan en su cuadro). En Present un compute (pes_feet_cs.hlsl) elige los pies cerca de la
+// camara (el lado de cada pie con la cadera del jugador, como las pisadas) y el VS del pasto (498b30) los lee en t10. Sin x505 no se copia nada
+static const UINT kColSlots = 256, kColF4 = 116, kColOutF4 = 160;   // lugar: 2 cabecera + 5 b5 (c4..c8) + 108 b6 (c0..c107) + 1 libre; igual a NS / SF4 del compute
+static ID3D11Device* s_colDev = nullptr;
+static ID3D11Buffer* s_colRaw = nullptr; static ID3D11ShaderResourceView* s_colRawSRV = nullptr;
+static ID3D11Buffer* s_colOut = nullptr; static ID3D11ShaderResourceView* s_colOutSRV = nullptr; static ID3D11UnorderedAccessView* s_colOutUAV = nullptr;
+static ID3D11Buffer* s_colGen = nullptr; static ID3D11Buffer* s_colCB = nullptr; static ID3D11Buffer* s_colDiag[4] = {}; static int s_colDiagF[4] = { -1, -1, -1, -1 };
+static ID3D11ComputeShader* s_colCS = nullptr; static bool s_colTried = false, s_colPendReset = false;
+static std::atomic<bool> s_colReady{false}, s_colRan{false}, s_colFar{true};
+static std::atomic<UINT> s_colAt{0};
+static std::atomic<int> s_colCalls{0}, s_colCopies{0}, s_colNoCb{0}, s_colNoPrev{0}, s_colBall{0}, s_colFarSkip{0};
+static UINT s_colGenV = 1;   // siempre igual al valor subido a s_colGen: un lugar viejo tiene sello <= s_colGenV
+static double s_plGc = 0.0;  // (x505) reloj del juego (s_gClk) de la lectura de la que salio s_pl (para adelantar las caderas)
+static float s_colFl[4] = {}, s_colD = 12.f, s_colN = 8.f;   // (x505) para el log: piso de cada hueso, distancia y pies a la vez del ultimo compute
+static inline bool BootColOn() { return GrassLive(505, 0) > 0.001f; }   // z437 (version vieja del pasto) la apaga: kGrassVer
 // (11/11 4wp0pj, Agustin: "que el pasto manche los botines con pedazos de tierra en 3d o con detalle en 3d de cesped en la parte de abajo
 // despues de un rato en partido progresivo y dependiendo si el jugador corrio mucho o el estado de la cancha" + "tiene que funcionar con las
 // mecanicas de gameplay del juego ... no solo algo visual que se activa por que si") BOTINES SUCIOS POR JUGADOR. Cada jugador que sigue el
@@ -700,13 +719,44 @@ void PitchWearNotePlayer(ID3D11DeviceContext* c) {
       else { s_boneNone++; if (s_zeroBuf) c->CopySubresourceRegion(s_stage[w], 0, (UINT)i * 192 + 128, 0, 0, s_zeroBuf, 0, &bz); } }
 }
 
+// (x505) copia del botin al pozo, en el contexto del dibujo (puede ser diferido): 3 copias en la GPU, sin leer nada en la CPU
+static void BootColCopy(ID3D11DeviceContext* c, UINT verts) {
+    s_colCalls++;
+    if (!s_colReady.load(std::memory_order_acquire) || s_colDev != g_dev.dev) return;
+    if (s_colFar.load(std::memory_order_relaxed)) { s_colFarSkip++; return; }   // nadie a menos de D + 3 m de la camara
+    const UINT bi = s_ballIdx.load(std::memory_order_relaxed);
+    if (bi != 0 && verts == bi && s_ballIdxVotes.load(std::memory_order_relaxed) >= 3) { s_colBall++; return; }   // la pelota no es un botin
+    ID3D11DeviceContext1* c1 = nullptr;
+    if (FAILED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1)) || !c1) { s_colNoCb++; return; }
+    ID3D11Buffer* b5 = nullptr; ID3D11Buffer* b6 = nullptr; UINT f5 = 0, n5 = 0, f6 = 0, n6 = 0;
+    c1->VSGetConstantBuffers1(5, 1, &b5, &f5, &n5); c1->VSGetConstantBuffers1(6, 1, &b6, &f6, &n6); c1->Release();
+    if (b5 && b6) {
+        D3D11_BUFFER_DESC d5, d6; b5->GetDesc(&d5); b6->GetDesc(&d6);
+        const UINT a5 = f5 * 16 + 64, a6 = f6 * 16;   // b5 c4..c8 (m_world + m_useWeightCount); b6 desde el primer hueso
+        const UINT room6 = d6.ByteWidth > a6 ? d6.ByteWidth - a6 : 0u, win6 = n6 ? (std::min)(n6 * 16u, room6) : room6;
+        const UINT nB = (std::min)(4u, win6 / 48u);
+        const bool prevOk = win6 >= 108u * 16u;   // g_vsPrevBone en c96: huesos 0..3 del cuadro anterior dentro de la ventana
+        if (a5 + 80 <= d5.ByteWidth && (n5 == 0 || n5 * 16 >= 144) && nB > 0) {
+            const UINT slot = s_colAt.fetch_add(1) % kColSlots, base = slot * kColF4 * 16;
+            D3D11_BOX x5 = { a5, 0, 0, a5 + 80, 1, 1 }; c->CopySubresourceRegion(s_colRaw, 0, base + 2 * 16, 0, 0, b5, 0, &x5);
+            const UINT len6 = prevOk ? 108u * 16u : nB * 48u;
+            D3D11_BOX x6 = { a6, 0, 0, a6 + len6, 1, 1 }; c->CopySubresourceRegion(s_colRaw, 0, base + 7 * 16, 0, 0, b6, 0, &x6);
+            const UINT e = (nB - 1) * 2 + (prevOk ? 1u : 0u);
+            D3D11_BOX xh = { e * 32, 0, 0, e * 32 + 32, 1, 1 }; c->CopySubresourceRegion(s_colRaw, 0, base, 0, 0, s_colGen, 0, &xh);   // sello del cuadro (al final)
+            s_colCopies++; if (!prevOk) s_colNoPrev++;
+        } else s_colNoCb++;
+    } else s_colNoCb++;
+    if (b5) b5->Release(); if (b6) b6->Release();
+}
+
 // (2/11) desde BeforeDraw, en cada dibujo del PS de botines / pelota (aadffecf): anota la traslacion de su m_world (b5 fila 3) con el
 // indice del dibujo para reconocer la pelota en Present; devuelve el b12 a enlazar si este dibujo ya es "la pelota" (con manchas) o nullptr
 ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts) {
     if (!g_dev.dev || verts == 0) return nullptr;
     const bool ballOn = g_cfg.live[177][0] >= 0.001f || g_cfg.live[443][0] >= 0.001f, bootOn = BootAmt() >= 0.001f;   // (11/11 4wp0pj) tambien se anota para los botines sucios; (12/11 20:30) y para x443 (pasto delante de la pelota: la marca RT2.w de la pelota)
     const bool footOn = FootOn();   // (12/11 16:50) y para las pisadas reales
-    s_bdCalls++; if (!ballOn && !bootOn && !footOn) { s_bdOffX177++; return nullptr; }
+    const bool colOn = BootColOn();   // (13/11) x505 botines en el pasto
+    s_bdCalls++; if (!ballOn && !bootOn && !footOn && !colOn) { s_bdOffX177++; return nullptr; }
     UINT bi = s_ballIdx.load(std::memory_order_relaxed); int slot = -1; const UINT key = bootOn ? BootKey(c, verts) : 0u;
     {   // (2/11 paso 10) se anota siempre (antes se dejaba de anotar con 3 votos y un botin votado quedaba fijo para todo el partido)
         int w = s_bdW.load(); if (!s_bdStage[w]) s_bdNoStage++; else { int i = s_bdCount.fetch_add(1);
@@ -719,7 +769,7 @@ ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts) {
                     else s_bdNoCb++;
                     cb->Release(); }
                 s_ftOk[w][i] = 0;   // (12/11 16:50) pisadas reales: los huesos del botin (s_ftOk = cuantos)
-                if (footOn && s_ftStage[w]) { ID3D11Buffer* bb = nullptr; UINT f6 = 0, n6 = 0; ID3D11DeviceContext1* c1b = nullptr;
+                if ((footOn || colOn) && s_ftStage[w]) { ID3D11Buffer* bb = nullptr; UINT f6 = 0, n6 = 0; ID3D11DeviceContext1* c1b = nullptr;
                     if (SUCCEEDED(c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1b)) && c1b) { c1b->VSGetConstantBuffers1(6, 1, &bb, &f6, &n6); c1b->Release(); } else c->VSGetConstantBuffers(6, 1, &bb);
                     if (bb) { D3D11_BUFFER_DESC d6; bb->GetDesc(&d6); const UINT o6 = f6 * 16;
                         UINT nB = d6.ByteWidth > o6 ? (std::min)(kFtBones, (d6.ByteWidth - o6) / 48u) : 0u;
@@ -728,6 +778,7 @@ ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts) {
                         bb->Release(); }
                     if (!s_ftOk[w][i]) s_ftNoB6++; } } }
     }
+    if (colOn) BootColCopy(c, verts);   // (13/11) x505 botines en el pasto (solo se ve)
     if (ballOn && bi != 0 && verts == bi && s_ballIdxVotes.load(std::memory_order_relaxed) >= 3) return s_ballCb;   // (2/11 paso 10) b12 solo con el indice confirmado
     if (!bootOn) return nullptr;
     // (11/11 4wp0pj) botin: el valor del jugador asignado a este mismo orden de dibujo hace 2 cuadros (si la clave coincide); si no, el promedio
@@ -736,7 +787,7 @@ ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts) {
 }
 // (13/11 tanda 2) z447 PISADAS v2: cada pie es una pista (id estable del jugador + hueso). gF = reloj del juego (s_gClk) del cuadro leido,
 // tf = reloj real. Pisada = en el aire -> apoyado, solo en los huesos que pasaron la autoprueba (s_ftBoneMask; hasta la primera, todos)
-static void FootTracksV2(const std::vector<FootObs>& obs, double gF, double tf) {
+static void FootTracksV2(const std::vector<FootObs>& obs, double gF, double tf, bool stamp) {   // (13/11) stamp = false: solo aprende (x505 sin pisadas)
     s_ftTrkUpd++;
     if (s_ftTestT < 0.0) s_ftTestT = tf;
     for (const FootObs& o : obs) {
@@ -758,7 +809,7 @@ static void FootTracksV2(const std::vector<FootObs>& obs, double gF, double tf) 
             const int ns = stance ? 1 : (swing ? 2 : T->st);
             if (mov) { s_ftStN[o.bone]++; if (ns == 1) s_ftStIn[o.bone]++; T->yLo = std::min(T->yLo, o.cy); T->yHi = std::max(T->yHi, o.cy); T->n++;
                 if (o.fx != 0.f || o.fz != 0.f) { const float d = (o.fx * P.svx + o.fz * P.svz) / sv; s_ftFwdAcc += (std::clamp(d, -1.f, 1.f) - s_ftFwdAcc) * 0.01f; } }
-            if (T->st == 2 && ns == 1 && ((s_ftBoneMask >> o.bone) & 1)) {
+            if (stamp && T->st == 2 && ns == 1 && ((s_ftBoneMask >> o.bone) & 1)) {
                 // el talon y la punta (otro hueso del mismo jugador) a menos de 25 cm y 0.4 s de juego son UNA pisada
                 bool dupS = false;
                 for (const FootStrike& s : s_ftStrikes) if (s.pid == P.id && s.bone != o.bone && gF - s.g < 0.4) { const float ex = s.x - o.px, ez = s.z - o.pz; if (ex * ex + ez * ez < 0.25f * 0.25f) { dupS = true; break; } }
@@ -789,7 +840,7 @@ static void FootTracksV2(const std::vector<FootObs>& obs, double gF, double tf) 
 static void BallDrawPresent() {
     if (!g_dev.dev || !g_dev.imm) return;
     for (int i = 0; i < kStages; i++) if (!s_bdStage[i]) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 128 * kBallSlots; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &s_bdStage[i]); }
-    if (FootOn()) for (int i = 0; i < kStages; i++) if (!s_ftStage[i]) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = kFtSlotB * kBallSlots; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &s_ftStage[i]); }   // (12/11 16:50)
+    if (FootOn() || BootColOn()) for (int i = 0; i < kStages; i++) if (!s_ftStage[i]) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = kFtSlotB * kBallSlots; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; g_dev.dev->CreateBuffer(&d, nullptr, &s_ftStage[i]); }   // (12/11 16:50)
     if (!s_ballCb) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; g_dev.dev->CreateBuffer(&d, nullptr, &s_ballCb); }
     if (!s_bootAvgCb) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; D3D11_SUBRESOURCE_DATA sd = { s_bootAvgV, 0, 0 }; g_dev.dev->CreateBuffer(&d, &sd, &s_bootAvgCb); }   // (11/11 4wp0pj)
     // publicar las manchas (b12: x 1 pelota, y verde, z tierra, w cal), escaladas por x177
@@ -863,10 +914,11 @@ static void BallDrawPresent() {
         static double nextL = 0.0; if (tn >= nextL && g_cfg.live[58][3] > 0.5f) { nextL = tn + 15.0; float mx = 0.f, mg = 0.f; for (const BootDirt& b : s_bd) { mx = std::max(mx, b.dirt); mg = std::max(mg, b.grass); }
             Log("botines sucios (15 s): jugadores %d (activos %d) | tierra media %.2f max %.2f, pasto medio %.2f max %.2f, mojado %.2f | barridas %.1f s, caidas de salto %d, repeticion sin sumar %.1f s, cadera de pie media %.2f m | dibujos con su jugador %d, con el promedio %d, asignados %d | x430 %.2f y430 %.2f z430 %.2f w430 %.2f",
                 (int)s_bd.size(), nAct, s_bootAvgV[1], mx, s_bootAvgV[2], mg, wet, s_bootSlideT, s_bootLandN, s_bootReplayT, s_bootYn ? s_bootYb / s_bootYn : -1.f, s_bootHit.exchange(0), s_bootAvgN.exchange(0), s_bootAssigned.exchange(0), g_cfg.live[430][0], g_cfg.live[430][1], g_cfg.live[430][2], g_cfg.live[430][3]); s_bootSlideT = 0.f; s_bootLandN = 0; s_bootReplayT = 0.f; s_bootYb = 0.f; s_bootYn = 0; } }
-    if (FootOn() && s_ftStage[rd]) { D3D11_MAPPED_SUBRESOURCE mf;   // (12/11 16:50) pisadas reales (ver s_ftStage)
+    if ((FootOn() || BootColOn()) && s_ftStage[rd]) { D3D11_MAPPED_SUBRESOURCE mf;   // (12/11 16:50) pisadas reales (ver s_ftStage)
       const bool ftV2 = GrassLive(447, 2) > 0.5f;   // (13/11 tanda 2) z447 pisadas v2 (FootTracksV2)
+      const bool learnOnly = BootColOn();   // (13/11) x505: aprende huesos que son pies, frente y piso aunque no haya pisadas (y441)
       if (SUCCEEDED(g_dev.imm->Map(s_ftStage[rd], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mf))) {
-        const float* fq = (const float*)mf.pData; std::vector<FootPt> now; now.reserve(96); std::vector<FootObs> obs; if (ftV2) obs.reserve(96);
+        const float* fq = (const float*)mf.pData; std::vector<FootPt> now; now.reserve(96); std::vector<FootObs> obs; if (ftV2 || learnOnly) obs.reserve(96);
         auto nearPlayer = [](float x, float z) { for (const PlayerPrev& p : s_pl) { const float dx = p.x - x, dz = p.z - z; if (dx * dx + dz * dz < 1.2f * 1.2f) return true; } return false; };
         auto okPt = [](float x, float y, float z) { return fabsf(x) < 80.f && fabsf(z) < 50.f && y > -0.08f && y < 0.5f && fabsf(x) + fabsf(z) > 0.02f; };
         auto hipD2 = [](float x, float z) { float b = 1e9f; for (const PlayerPrev& p : s_pl) { const float dx = p.x - x, dz = p.z - z; b = std::min(b, dx * dx + dz * dz); } return b; };
@@ -890,7 +942,7 @@ static void BallDrawPresent() {
                 s_ftBoneN[kb]++; s_ftBoneY[kb] += py; if (py < kFtDown) s_ftBoneLow[kb]++;
                 bool dup = false; for (const FootPt& f : now) if (fabsf(f.x - px) + fabsf(f.y - py) + fabsf(f.z - pz) < 0.01f) { dup = true; break; }
                 if (!dup) { now.push_back({ px, py, pz, 0 });
-                    if (ftV2) {   // (13/11 tanda 2) z447: centro (velocidad del pie), costado (huella), frente = eje z del hueso al mundo, jugador mas cercano
+                    if (ftV2 || learnOnly) {   // (13/11 tanda 2) z447: centro (velocidad del pie), costado (huella), frente = eje z del hueso al mundo, jugador mas cercano
                         const float dmx = M[2], dmy = M[6], dmz = M[10]; float fx = dmx, fz = dmz;
                         if (kc == 0) { fx = dmx * r[16] + dmy * r[20] + dmz * r[24]; fz = dmx * r[18] + dmy * r[22] + dmz * r[26]; }
                         else if (kc == 1) { fx = dmx * r[0] + dmy * r[4] + dmz * r[8]; fz = dmx * r[2] + dmy * r[6] + dmz * r[10]; }
@@ -904,8 +956,9 @@ static void BallDrawPresent() {
             s_ftGround = s_ftGroundOk ? s_ftGround + (lo2 - s_ftGround) * 0.02f : lo2; s_ftGroundOk = true; s_ftPtsT = tf; }   // (solo para el log: el suelo es y = 0)
         // con histeresis (no importa cuanto baja por cuadro: en camara lenta el pie baja de a poco); el talon y la punta del mismo pie
         // (o el mismo pie apoyando de nuevo enseguida) son UNA pisada: a menos de 25 cm y 0.4 s de otra, no cuenta
-        if (ftV2) FootTracksV2(obs, s_bdG[rd], tf);   // (13/11 tanda 2) z447: por pie y relativo a su piso, en el reloj del juego
-        else for (FootPt& f : now) { float bd = 0.35f * 0.35f; const FootPt* pv = nullptr;
+        if (!ftV2 && learnOnly) FootTracksV2(obs, s_bdG[rd], tf, false);   // (13/11) x505 sin z447: solo aprender (mascara, frente, piso), sin pisadas
+        if (ftV2) FootTracksV2(obs, s_bdG[rd], tf, FootOn());   // (13/11 tanda 2) z447: por pie y relativo a su piso, en el reloj del juego (x505 sin y441: solo aprende)
+        else if (FootOn()) for (FootPt& f : now) { float bd = 0.35f * 0.35f; const FootPt* pv = nullptr;
             for (const FootPt& g : s_ftPrev) { const float dx = g.x - f.x, dz = g.z - f.z, d2 = dx * dx + dz * dz; if (d2 < bd) { bd = d2; pv = &g; } }
             const float hgt = f.y;   // (12/11 17:30) el suelo es la cancha
             f.up = hgt > kFtUp || (pv && pv->up && hgt > kFtDown);
@@ -1039,13 +1092,160 @@ static void ReplayV2Present() {
             s_rpBroken ? "roto (se ignora)" : "ok", accIn, accClk, accHook, g_cfg.live[441][0]);
         accIn = accClk = accHook = accSlow = 0.f; }
 }
-void PitchWearPresent() {
+// (x505) recursos del pozo de botines y del compute (contexto inmediato, en Present)
+static bool EnsureCol() {
+    if (s_colDev != g_dev.dev) {
+        // dispositivo nuevo (SetActiveDevice): lo viejo era del dispositivo que el juego dejo; se suelta sin Release a proposito (un hilo
+        // del juego podria estar copiando todavia) y se crea de nuevo. Pasa una vez por sesion como mucho
+        if (s_colDev) Log("botines en el pasto (x505): dispositivo nuevo, se crean de nuevo los recursos");
+        s_colReady.store(false, std::memory_order_release); s_colRan.store(false, std::memory_order_release);
+        s_colRaw = nullptr; s_colRawSRV = nullptr; s_colOut = nullptr; s_colOutSRV = nullptr; s_colOutUAV = nullptr; s_colGen = nullptr; s_colCB = nullptr; s_colCS = nullptr;
+        for (int i = 0; i < 4; i++) { s_colDiag[i] = nullptr; s_colDiagF[i] = -1; }
+        s_colTried = false; s_colDev = g_dev.dev;
+    }
+    if (s_colTried) return s_colReady.load(std::memory_order_acquire);
+    s_colTried = true;
+    ID3D11Device* dev = g_dev.dev; if (!dev) return false;
+    bool ok = true;
+    {   // pozo: 256 lugares de 116 float4, en cero (sello 0 = nunca valido)
+        std::vector<float> z((size_t)kColSlots * kColF4 * 4, 0.f);
+        D3D11_BUFFER_DESC d = {}; d.ByteWidth = kColSlots * kColF4 * 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA sd = { z.data(), 0, 0 };
+        ok = ok && SUCCEEDED(dev->CreateBuffer(&d, &sd, &s_colRaw)) && s_colRaw;
+        if (ok) { D3D11_SHADER_RESOURCE_VIEW_DESC v = {}; v.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; v.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; v.Buffer.FirstElement = 0; v.Buffer.NumElements = kColSlots * kColF4;
+            ok = SUCCEEDED(dev->CreateShaderResourceView(s_colRaw, &v, &s_colRawSRV)) && s_colRawSRV; }
+    }
+    if (ok) {   // pes_feet: 160 float4 (StructuredBuffer), en cero (sin la marca 505 = apagado)
+        float z[kColOutF4 * 4] = {};
+        D3D11_BUFFER_DESC d = {}; d.ByteWidth = kColOutF4 * 16; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+        d.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; d.StructureByteStride = 16;
+        D3D11_SUBRESOURCE_DATA sd = { z, 0, 0 };
+        ok = SUCCEEDED(dev->CreateBuffer(&d, &sd, &s_colOut)) && s_colOut;
+        if (ok) { D3D11_SHADER_RESOURCE_VIEW_DESC v = {}; v.Format = DXGI_FORMAT_UNKNOWN; v.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; v.Buffer.FirstElement = 0; v.Buffer.NumElements = kColOutF4;
+            ok = SUCCEEDED(dev->CreateShaderResourceView(s_colOut, &v, &s_colOutSRV)) && s_colOutSRV; }
+        if (ok) { D3D11_UNORDERED_ACCESS_VIEW_DESC u = {}; u.Format = DXGI_FORMAT_UNKNOWN; u.ViewDimension = D3D11_UAV_DIMENSION_BUFFER; u.Buffer.FirstElement = 0; u.Buffer.NumElements = kColOutF4;
+            ok = SUCCEEDED(dev->CreateUnorderedAccessView(s_colOut, &u, &s_colOutUAV)) && s_colOutUAV; }
+    }
+    if (ok) {   // sello: 8 entradas de 32 B, entrada e = (huesos - 1) * 2 + hay cuadro anterior: { sello, 0, 0, 0,  huesos, anterior, 0, 0 }
+        float gb[64] = {}; for (int e = 0; e < 8; e++) { gb[e * 8] = (float)s_colGenV; gb[e * 8 + 4] = (float)(e / 2 + 1); gb[e * 8 + 5] = (float)(e & 1); }
+        D3D11_BUFFER_DESC d = {}; d.ByteWidth = 256; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA sd = { gb, 0, 0 };
+        ok = SUCCEEDED(dev->CreateBuffer(&d, &sd, &s_colGen)) && s_colGen;
+    }
+    if (ok) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 496; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; ok = SUCCEEDED(dev->CreateBuffer(&d, nullptr, &s_colCB)) && s_colCB; }
+    if (ok) for (int i = 0; i < 4; i++) { D3D11_BUFFER_DESC d = {}; d.ByteWidth = 48; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        d.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; d.StructureByteStride = 16;   // como pes_feet (copia entre buffers estructurados)
+        if (FAILED(dev->CreateBuffer(&d, nullptr, &s_colDiag[i]))) s_colDiag[i] = nullptr; }
+    if (ok) { if (ID3DBlob* b = CompileNamedShader(L"pes_feet_cs.hlsl", "cs_5_0")) { if (FAILED(dev->CreateComputeShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_colCS))) s_colCS = nullptr; b->Release(); }
+        ok = s_colCS != nullptr; }
+    if (ok) NamedSetSRV("pes_feet", s_colOutSRV);
+    Log(ok ? "botines en el pasto (x505): compute pes_feet_cs.hlsl listo (pozo de 256 lugares, 475 KB)" : "botines en el pasto (x505): compute pes_feet_cs.hlsl NO disponible (el pasto queda como antes)");
+    s_colReady.store(ok, std::memory_order_release);
+    return ok;
+}
+static const float kColSideRule = 1.f;   // (x505) +1 = el costado mas lejos de la cadera (la regla de las pisadas, kFtLat); -1 = el mas cerca
+// (x505) log cada 15 s (con w58): cada 60 Presents copia pes_feet[0] y [147..148] a un staging y lee el mas viejo listo (>= 3 cuadros)
+static void BootColDiag() {
+    static int s_n = 0; static double s_next = 0.0, a[12] = {}, ys = 0.0; static int an = 0, yn = 0;
+    if (g_cfg.live[58][3] <= 0.5f) return;
+    ID3D11DeviceContext* imm = g_dev.imm; s_n++;
+    for (int i = 0; i < 4; i++) { if (!s_colDiag[i] || s_colDiagF[i] < 0 || s_n - s_colDiagF[i] < 3) continue;
+        D3D11_MAPPED_SUBRESOURCE m;
+        if (SUCCEEDED(imm->Map(s_colDiag[i], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { const float* f = (const float*)m.pData;
+            a[0] += f[0]; a[1] += f[1]; for (int k = 0; k < 7; k++) a[2 + k] += f[4 + k]; if (f[11] >= 0.f) { ys += f[11]; yn++; } an++;
+            imm->Unmap(s_colDiag[i], 0); s_colDiagF[i] = -1; } }
+    if (s_n % 60 == 0) for (int i = 0; i < 4; i++) if (s_colDiag[i] && s_colDiagF[i] < 0) {
+        D3D11_BOX b0 = { 0, 0, 0, 16, 1, 1 }, b1 = { 147 * 16, 0, 0, 149 * 16, 1, 1 };
+        imm->CopySubresourceRegion(s_colDiag[i], 0, 0, 0, 0, s_colOut, 0, &b0); imm->CopySubresourceRegion(s_colDiag[i], 0, 16, 0, 0, s_colOut, 0, &b1);
+        s_colDiagF[i] = s_n; break; }
+    const double tn = Now(); if (tn < s_next) return;
+    if (s_next == 0.0) { s_next = tn + 15.0; return; }
+    s_next = tn + 15.0;
+    const double k = an ? 1.0 / an : 0.0;
+    auto bc = [](int b) { return ((s_ftBoneMask >> b) & 1) ? 'S' : '-'; };
+    Log("botines en el pasto (15 s): dibujos de botines %d, copiados %d (sin b5/b6 %d, sin cuadro anterior %d, pelota %d, lejos de la camara %d) | por cuadro (muestras %d): lugares de este cuadro %.1f, "
+        "pies validos %.1f, sin repetir %.1f, elegidos %.1f, huellas que se levantan %.1f, desbordes %.0f, pies sin cadera %.1f | lado: mantenido %.1f, cambiado %.1f por cuadro, regla %+.0f | "
+        "suela apoyada %.3f m (piso %+.3f %+.3f %+.3f %+.3f) | huesos que son pies %c%c%c%c, frente %+.2f | D %.0f m, pies a la vez %.0f, acostado %.2f s | x505 %.2f",
+        s_colCalls.exchange(0), s_colCopies.exchange(0), s_colNoCb.exchange(0), s_colNoPrev.exchange(0), s_colBall.exchange(0), s_colFarSkip.exchange(0), an,
+        a[2] * k, a[3] * k, a[4] * k, a[0] * k, a[1] * k, a[5] * k, a[6] * k, a[7] * k, a[8] * k, (double)kColSideRule,
+        yn ? ys / yn : -1.0, s_colFl[0], s_colFl[1], s_colFl[2], s_colFl[3], bc(0), bc(1), bc(2), bc(3), s_ftFwdAcc, s_colD, s_colN,
+        GrassLive(505, 3) > 0.01f ? std::clamp(GrassLive(505, 3), 0.15f, 3.f) : 0.75f, GrassLive(505, 0));
+    for (double& v : a) v = 0.0; an = 0; ys = 0.0; yn = 0;
+}
+static void BootColPresent(UINT flags) {
+    static int s_fr = 0, s_lastOn = -100, s_mg = -1; static double s_g0 = -1.0;
+    if (flags & DXGI_PRESENT_TEST) return;   // Present de prueba: ni compute ni sello nuevo (como GrassFrameBoundary)
+    s_fr++;
+    if (!BootColOn()) { s_colRan.store(false, std::memory_order_release); s_colFar.store(true, std::memory_order_relaxed); return; }
+    if (!EnsureCol()) return;
+    ID3D11DeviceContext* imm = g_dev.imm;
+    const float yD = GrassLive(505, 1), zN = GrassLive(505, 2), wT = GrassLive(505, 3);
+    const float D = yD > 0.5f ? std::clamp(yD, 4.f, 30.f) : 12.f;
+    // caderas de los jugadores (s_pl, w115), adelantadas por la demora de su lectura; nadie cerca de la camara = no se copia nada
+    float cb[124] = {};
+    const float lagG = (float)std::clamp(s_gClk - s_plGc, 0.0, 0.3);
+    int nH = 0; bool nearAny = false;
+    for (const PlayerPrev& p : s_pl) {
+        if (nH >= 48) break;
+        const float hx = p.x + p.svx * lagG, hz = p.z + p.svz * lagG;
+        cb[28 + nH * 2] = hx; cb[29 + nH * 2] = hz; nH++;
+        const float ex = hx - g_eyePos[0], ey = g_eyePos[1], ez = hz - g_eyePos[2];
+        if (ex * ex + ey * ey + ez * ez < (D + 3.f) * (D + 3.f)) nearAny = true;
+    }
+    s_colFar.store(!g_eyeValid || !nearAny, std::memory_order_relaxed);
+    // empezar de cero (recien prendido, partido nuevo): sello nuevo SIN compute, asi el compute siguiente solo toma lo copiado despues
+    bool reset = s_fr - s_lastOn > 2; s_lastOn = s_fr;
+    const int mg = g_matchGen.load(); if (mg != s_mg) { s_mg = mg; reset = true; }
+    float gb[64] = {};
+    auto upGen = [&]() { for (int e = 0; e < 8; e++) { gb[e * 8] = (float)s_colGenV; gb[e * 8 + 4] = (float)(e / 2 + 1); gb[e * 8 + 5] = (float)(e & 1); } imm->UpdateSubresource(s_colGen, 0, nullptr, gb, 0, 0); };
+    if (reset) { s_colGenV = s_colGenV >= (1u << 23) ? 1u : s_colGenV + 1u; upGen(); s_colPendReset = true; s_g0 = s_gClk; s_colRan.store(false, std::memory_order_release); return; }
+    const double dG = s_g0 < 0.0 ? 0.0 : std::clamp(s_gClk - s_g0, 0.0, 0.1); s_g0 = s_gClk;   // s de juego del cuadro (pausa = 0)
+    // piso de cada hueso: promedio del piso (base) de las pistas de pisadas v2 vistas hace menos de 0.5 s (lo aprende FootTracksV2)
+    float flS[4] = {}; int flN[4] = {}; const double tn = Now();
+    for (const FootTrk& t : s_ftTrk) if (t.bone >= 0 && t.bone < 4 && t.st != 0 && tn - t.seenR < 0.5) { flS[t.bone] += t.base; flN[t.bone]++; }
+    const float tauV = (wT > 0.01f ? std::clamp(wT, 0.15f, 3.f) : 0.75f) - 0.10f;   // w505 = segundos visibles: retencion 0.10 + 3 tau
+    cb[0] = (float)s_colGenV; cb[1] = (float)kColSlots; cb[2] = zN > 0.5f ? std::clamp(zN, 2.f, 16.f) : 8.f; cb[3] = D;
+    cb[4] = g_eyePos[0]; cb[5] = g_eyePos[1]; cb[6] = g_eyePos[2]; cb[7] = g_eyeValid ? 1.f : 0.f;
+    cb[8] = (float)(s_ftBoneMask ? s_ftBoneMask : 0xF);   // mascara 0 (autoprueba sin pies) = todos, como antes de aprender
+    cb[9] = fabsf(s_ftFwdAcc) > 0.3f ? (s_ftFwdAcc > 0.f ? 1.f : -1.f) : 0.f;
+    cb[10] = std::max(tauV / 3.f, 0.02f); cb[11] = (float)dG;
+    for (int k = 0; k < 4; k++) { cb[12 + k] = flN[k] ? std::clamp(flS[k] / flN[k], -0.04f, 0.04f) : 0.f; s_colFl[k] = cb[12 + k]; }
+    cb[16] = 0.05f; cb[17] = 0.15f; cb[18] = 0.045f; cb[19] = 0.07f;   // talon, punta, radio de la suela, alcance del borde (m)
+    cb[20] = s_colPendReset ? 1.f : 0.f; cb[21] = 0.10f; cb[22] = kColSideRule; cb[23] = (float)nH;
+    cb[24] = 0.03f; cb[25] = 0.8f; cb[26] = 0.04f; cb[27] = kFtLat;
+    s_colD = D; s_colN = cb[2];
+    s_colPendReset = false;
+    imm->UpdateSubresource(s_colCB, 0, nullptr, cb, 0, 0);
+    ID3D11DeviceContext1* i1 = nullptr; if (FAILED(imm->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&i1))) i1 = nullptr;
+    ID3D11ComputeShader* pcs = nullptr; imm->CSGetShader(&pcs, nullptr, nullptr);
+    ID3D11ShaderResourceView* pT0 = nullptr; imm->CSGetShaderResources(0, 1, &pT0);
+    ID3D11Buffer* pB0 = nullptr; UINT pf0 = 0, pn0 = 0; if (i1) i1->CSGetConstantBuffers1(0, 1, &pB0, &pf0, &pn0); else imm->CSGetConstantBuffers(0, 1, &pB0);
+    ID3D11UnorderedAccessView* pU0 = nullptr; imm->CSGetUnorderedAccessViews(0, 1, &pU0);
+    imm->CSSetShader(s_colCS, nullptr, 0); imm->CSSetShaderResources(0, 1, &s_colRawSRV); imm->CSSetConstantBuffers(0, 1, &s_colCB);
+    imm->CSSetUnorderedAccessViews(0, 1, &s_colOutUAV, nullptr);
+    imm->Dispatch(1, 1, 1);
+    imm->CSSetUnorderedAccessViews(0, 1, &pU0, nullptr);   // primero el u0: pes_feet se lee como SRV en el VS del pasto
+    imm->CSSetShader(pcs, nullptr, 0); imm->CSSetShaderResources(0, 1, &pT0);
+    if (i1 && pB0 && pn0) i1->CSSetConstantBuffers1(0, 1, &pB0, &pf0, &pn0); else imm->CSSetConstantBuffers(0, 1, &pB0);
+    if (pcs) pcs->Release(); if (pT0) pT0->Release(); if (pB0) pB0->Release(); if (pU0) pU0->Release(); if (i1) i1->Release();
+    // sello del cuadro siguiente: lo que la GPU copie desde ahora lleva gen + 1
+    s_colGenV = s_colGenV >= (1u << 23) ? 1u : s_colGenV + 1u; upGen();
+    s_colRan.store(true, std::memory_order_release);
+    BootColDiag();
+}
+// (x505) para BeforeDraw (hilos del juego): *want = x505 prendido; devuelve pes_feet si ya hay un compute hecho, si no nullptr (se enlaza vacio)
+ID3D11ShaderResourceView* PitchFeetSRV(bool* want) {
+    const bool on = BootColOn(); if (want) *want = on;
+    return (on && s_colRan.load(std::memory_order_acquire) && s_colDev == g_dev.dev) ? s_colOutSRV : nullptr;
+}
+void PitchWearPresent(UINT flags) {
     if (!g_dev.dev || !g_dev.imm) return;
     { static double s_cG = -1e9, s_cR = -1.0; s_gClk += GameStep(s_cG, s_cR); }   // (13/11 tanda 2) reloj del juego comun (pisadas v2)
     ReplayV2Present();    // (13/11 tanda 2) y448 detector de repeticiones v2
     EnsureRes();
     PitchFlatPresent();   // (20/10) pasto aplastado temporal (jugadores + pelota)
     BallDrawPresent();    // (2/11) reconocer el dibujo de la pelota y publicar sus manchas
+    BootColPresent(flags);   // (13/11) x505 botines en el pasto: pies cerca de la camara para el VS del pasto (t10)
     const float* P = g_cfg.live[115];
     // (08/11 z, Agustin: "no se aprecian las huellas ni el desgaste") diagnostico cada 15 s: en su partido no hubo ni una pisada en el log
     { static double nextD = 0.0; double tn = Now(); if (tn >= nextD && g_cfg.live[58][3] > 0.5f) { nextD = tn + 15.0;
@@ -1251,6 +1451,7 @@ void PitchWearPresent() {
     if (g_cfg.live[116][3] < 0.5f) s_clips.clear();
     BootDirtUpdate(plNow, dtP);   // (11/11 4wp0pj) botines sucios por jugador
     s_prev.assign(&pos[0][0], &pos[0][0] + cnt * 2); s_pl.swap(plNow); s_plGen++;
+    s_plGc = s_stageGc[rd];   // (x505) reloj del juego de esta lectura de jugadores
     // (08/11) huecos del pasto arrancado (cola de EmitStrike) y huellas en el desgaste (marcas que quedan)
     // (12/11) desgaste real: la pisada fuerte deja su marca aunque las huellas (x389) esten apagadas, mas cuanto mas fuerte
     if (real && simK > 0.5f) for (const PlayerPrev& pp : s_pl) { if (!pp.printDue || (pp.printK < 0.12f && FootEx() <= 1.f)) continue;

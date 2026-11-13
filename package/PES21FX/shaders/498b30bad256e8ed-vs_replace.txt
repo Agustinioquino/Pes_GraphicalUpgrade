@@ -39,6 +39,64 @@ float2 PESFlatAt2(float2 uv) {
   return float2(max(f.x, f.y), max(rP, f.y));
 }
 float PESFlatAt(float2 uv) { return PESFlatAt2(uv).y; }
+// (13/11) x505 BOTINES EN EL PASTO (Agustin: "las pisadas pueden tener una colision detectable por el pasto en los botines?", "que esta
+// colision solo la detecte el cesped"): SOLO SE VE. La DLL elige en compute los pies que tocan el pasto cerca de la camara (pes_feet, t10).
+// [0] x pies, y huellas que se levantan, z 505 = valido (sin enlazar, con la DLL vieja o con otra cosa en t10 no da 505: nada), w cuadro;
+// [1] x alcance del borde; [2] caja xz de todo; [3..18] / [19..34] circulo de cada pie / huella (centro xz, radio^2, radio de la suela);
+// [35 + 5 i] pie i: ahora (talon xz, punta xz), (alto de la suela, peso, rumbo xz), el del cuadro anterior (talon xz, punta xz),
+// (alto de la suela antes, m/s, lado, 1 = hay anterior), -; [115 + 2 j] huella j: (talon xz, punta xz), (alto de la suela, peso, edad, -)
+StructuredBuffer<float4> PESFeet : register(t10);
+// distancia de p al segmento talon -> punta y la direccion hacia afuera de la capsula
+float PESFootSeg(float2 p, float4 ab, out float2 dO) {
+  float2 s = ab.zw - ab.xy;
+  float l2 = dot(s, s);
+  float u = l2 > 1e-8 ? saturate(dot(p - ab.xy, s) / l2) : 0.0;
+  float2 q = p - (ab.xy + s * u);
+  float d = length(q);
+  float2 nS = l2 > 1e-8 ? float2(-s.y, s.x) * rsqrt(l2) : float2(1.0, 0.0);
+  dO = d > 1e-4 ? q / d : nS;
+  return d;
+}
+// un pie (capsula ab, suela a ys sobre su piso) en p: k = (bajo la suela, borde) * w; dK = hacia afuera (con proa si se mueve) * el mayor
+void PESFootK(float2 p, float4 ab, float ys, float rF, float reach, float hBc, float2 dir, float w, out float2 k, out float2 dK) {
+  float2 dS; float d = PESFootSeg(p, ab, dS);
+  float cY = saturate(1.0 - max(ys - 0.005, 0.0) / hBc);
+  float kIn = smoothstep(rF + 0.012, rF - 0.012, d) * cY;
+  float kRim = smoothstep(rF + reach, rF, d) * saturate(1.0 - max(ys - 0.5 * hBc, 0.0) / (0.5 * hBc));
+  k = float2(kIn, kRim) * w;
+  float m = max(k.x, k.y);
+  float ahead = saturate(dot(dS, dir) * 2.0);
+  dK = m > 1e-3 ? normalize(dS + dir * (0.6 * ahead) + 1e-5) * m : float2(0.0, 0.0);
+}
+// todos los pies en p (raiz de la hoja, alto hB), este cuadro (kN, dN) y el anterior (kP, dP, para el TAA) en una sola vuelta. k = el mayor
+// de todos los pies (no se suman); d = suma de direcciones pesadas (opuestas se cancelan: ver el uso)
+void PESFeetAt2(float2 p, float hB, int nL, int nG, out float2 kN, out float2 dN, out float2 kP, out float2 dP) {
+  kN = float2(0.0, 0.0); dN = kN; kP = kN; dP = kN;
+  float4 bb = PESFeet[2];
+  if (p.x < bb.x || p.y < bb.y || p.x > bb.z || p.y > bb.w) return;
+  float reach = PESFeet[1].x, hBc = max(hB, 0.03);
+  float2 k, dK;
+  [loop] for (int i = 0; i < nL; i++) {
+    float4 B = PESFeet[3 + i];
+    float2 e = p - B.xy;
+    if (dot(e, e) > B.z) continue;
+    float4 L1 = PESFeet[35 + 5 * i + 1], L3 = PESFeet[35 + 5 * i + 3];
+    PESFootK(p, PESFeet[35 + 5 * i], L1.x, B.w, reach, hBc, L1.zw, L1.y, k, dK);
+    kN = max(kN, k); dN += dK;
+    if (L3.w > 0.5) {
+      PESFootK(p, PESFeet[35 + 5 * i + 2], L3.x, B.w, reach, hBc, L1.zw, L1.y, k, dK);
+      kP = max(kP, k); dP += dK;
+    }
+  }
+  [loop] for (int j = 0; j < nG; j++) {
+    float4 B = PESFeet[19 + j];
+    float2 e = p - B.xy;
+    if (dot(e, e) > B.z) continue;
+    float4 G1 = PESFeet[115 + 2 * j + 1];
+    PESFootK(p, PESFeet[115 + 2 * j], G1.x, B.w, reach, hBc, float2(0.0, 0.0), G1.y, k, dK);
+    kN = max(kN, k); dN += dK; kP = max(kP, k); dP += dK;
+  }
+}
 // (11/11 o) gradiente analitico del ruido de valor de PESGnoise (las mismas 4 esquinas): para correr los macollos de las hojas 3D
 float2 PESGnGrad(float2 p) {
   float2 i = floor(p), f = frac(p), u = f * f * (3.0 - 2.0 * f), du = 6.0 * f * (1.0 - f);
@@ -390,6 +448,16 @@ void main(
   float4 P446 = IniParams.Load(int2(446, 0));
   float pesKV2 = saturate(P446.y), pesSZ = pesKV2 > 0.5 ? clamp(P446.x, 1.0, 2.0) : 1.0, pesIS = 1.0 / pesSZ;
   float2 pesDirB; float3 pesBK = PESBallKin(pesBA, pesBB, pesDtB, pesDirB);   // x recorrido del cuadro, y m/s de juego, z rodando
+  // (13/11) x505 botines en el pasto: cuantos pies trae pes_feet (0 = apagado, DLL vieja, sin enlazar u otra cosa en t10: como antes)
+  float4 P505 = IniParams.Load(int2(505, 0));
+  int pesFtNL = 0, pesFtNG = 0; float pesFtS = 0.0;
+  if (P505.x > 0.001) {
+    float4 fH0 = PESFeet[0];
+    if (abs(fH0.z - 505.0) < 0.5) { pesFtNL = (int)clamp(fH0.x + 0.5, 0.0, 16.0); pesFtNG = (int)clamp(fH0.y + 0.5, 0.0, 16.0); pesFtS = clamp(P505.x, 0.0, 2.0); }
+  }
+  bool pesFtOn = (pesFtNL + pesFtNG) > 0;
+  float2 pesFtKB = float2(0.0, 0.0), pesFtDB = float2(0.0, 0.0), pesFtKP = float2(0.0, 0.0), pesFtDP = float2(0.0, 0.0);
+  bool pesFtDone = false;
   if (pesIsExt) {
     // v2 instanciado: la parcela sale del buffer de instancias; fundido por altura en los bordes de la banda y
     // descarte exacto con la camara de este cuadro
@@ -651,8 +719,18 @@ void main(
            }
           }
         }
+        // (13/11) x505 botines en el pasto, medido en la raiz como la pelota (z446): bajo la suela la hoja se acuesta (TUMBADA, el valor llega a
+        // 1), en el borde se abre hacia afuera (BORDE, 0.30); el mapa (flB) queda para la huella que dura. Este cuadro y el anterior en una vuelta
+        float kFtB = 0.0;
+        if (pesFtOn) {
+          PESFeetAt2(rootW, h, pesFtNL, pesFtNG, pesFtKB, pesFtDB, pesFtKP, pesFtDP); pesFtDone = true;
+          kFtB = saturate(max(pesFtKB.x, 0.30 * pesFtKB.y) * pesFtS * (0.85 + 0.30 * PESBu(sB, 50u)));
+        }
         bool pesLvW = kLv > flB;   // gana la pelota en vivo
         flB = max(flB, saturate(kLv));
+        // (x505) cuanto manda el botin en la direccion: suave alrededor de donde empata con el mapa / la pelota (sin el salto de pesLvW)
+        float kFtW = kFtB > 0.001 ? saturate((kFtB - flB) / 0.1 + 0.5) : 0.0;
+        flB = max(flB, kFtB);
         if (flB > 0.02) {
           const float2 tF = float2(2.0 / 1024.0, 2.0 / 512.0);
           float2 gF = float2(PESFlatAt(uvRt + float2(tF.x, 0.0)) - PESFlatAt(uvRt - float2(tF.x, 0.0)), PESFlatAt(uvRt + float2(0.0, tF.y)) - PESFlatAt(uvRt - float2(0.0, tF.y)));
@@ -665,6 +743,13 @@ void main(
           float kComb = saturate(P442b.y) * saturate((fRG.y - fRG.x) * 6.0) * (lgF > 1e-3 ? 1.0 : 0.0);
           if (kComb > 0.001) { float2 tgC = float2(-dW.y, dW.x); tgC *= dot(tgC, float2(0.83, 0.55)) >= 0.0 ? 1.0 : -1.0; dW = normalize(lerp(dW, tgC, kComb) + 1e-5); }
           if (pesLvW && dot(dLv, dLv) > 1e-8) dW = normalize(dLv);   // (13/11 tanda 2) z446: la hoja cae segun la pelota, no segun el mapa
+          if (kFtW > 0.001) {
+            float pesFtL = length(pesFtDB);
+            if (pesFtL > 0.2 * max(max(pesFtKB.x, pesFtKB.y), 1e-3)) {
+              float2 pesFtU = pesFtDB / pesFtL, pesFtMx = lerp(dW, pesFtU, kFtW);
+              dW = dot(pesFtMx, pesFtMx) > 0.04 ? normalize(pesFtMx) : (kFtW > 0.5 ? pesFtU : dW);
+            }
+          }
           float2 dOu = float2(csR * dW.x - snR * dW.y, snR * dW.x + csR * dW.y);                          // de la cancha a la celda
           float2 dE = normalize(dOu + F0 * 0.30 + float2(-F0.y, F0.x) * (PESBu(sB, 30u) - 0.5) * 0.5);    // borde: hacia afuera, con su desvio
           float aX = (PESBu(sB, 35u) - 0.5) * 1.5 * (1.0 - 0.7 * kComb);                                  // tumbada: cruzada hasta +-43 grados (peinada: +-13)
@@ -1033,6 +1118,7 @@ void main(
   }
   // (02/11 paso 7) w177: la pelota y las pisadas HUNDEN las hojas del mod ademas de inclinarlas (con z104 1.6 la pelota quedaba tapada / flotando)
   float pesSinkF = 0.0; float4 W177 = IniParams.Load(int2(177, 0));
+  float pesMapK = 0.0;   // (13/11) x505: cuanto dobla ya el mapa a la tarjeta (el botin en vivo no empuja otra vez)
   if (pesV5 && Q39.z > 0.001) {
     // (20/10) pasto v5: pisadas y rastro de la pelota (mapa pes_flat de la DLL) solo doblan las hojas hacia afuera del
     // rastro y las agachan; la base de la cancha no cambia de color (eso daba manchones)
@@ -1050,6 +1136,7 @@ void main(
       float2 gF = float2(PESFL(float2(tx.x, 0)) - PESFL(float2(-tx.x, 0)), PESFL(float2(0, tx.y)) - PESFL(float2(0, -tx.y)));
       #undef PESFL
       float kF = saturate(flP) * clamp(Q39.z, 0.0, 2.0);
+      if (!pesBlade) pesMapK = saturate(kF);
       float lg = length(gF);
       float2 dOut = (lg > 1e-4 ? -gF / lg : float2(0.0, 0.0));
       // (08/11 aa, Agustin: "pasto saltando por la reaccion de los jugadores") REBOTE: el mapa se apaga solo (exp), asi que mientras fl0 baja la
@@ -1139,6 +1226,30 @@ void main(
       pesBallD = PESBallDeform(r1.xz, v0.y, pesRootB, pesBB, 2.0 * pesBB - pesBA, pesHref, pesBlade, pesNatV, pesIsExt, PES_NAT_CUT, pesHv, pesKV2, pesSZ, pesDtB, skP, crP) - bdN;
     }
     r1.xz += bdN;
+  }
+  // (13/11) x505 BOTINES EN EL PASTO: el botin aparta y hunde la hoja (medido en su raiz, perfil de viga como la corona de la pelota) y la
+  // diferencia con el cuadro anterior va al TAA (pesBallD, como w446), tambien en las hojas que el botin tocaba antes y ya no. Solo cerca:
+  // hojas 3D, tarjetas del mod a 40-60 px/m o mas (fundido) y el pasto natural del juego; nunca las parcelas lejanas (pesFarK) ni la raiz.
+  // La hoja 3D que ya se acosto con su modelo (pesDefK) y la tarjeta que el mapa ya dobla (pesMapK) no se empujan de nuevo; el hundimiento
+  // es el mayor (max), con tope 0.75 (el tope de costado sigue midiendo bien la hoja) y con w177 como las pisadas
+  bool pesFtHit = false;
+  if (pesFtOn && !pesKill && pesFarK <= 0.0 && v0.y > 1e-4 && (pesIsExt || pesNatV) && (!pesIsExt || pesBlade || pesPx > 40.0)) {
+    float2 pesRootF = pesIsExt ? pesCardRoot : pesRoot;
+    float hBf = max(pesHref * (pesBlade ? PES_NAT_CUT : 1.0), 0.005);
+    float2 kFn = pesFtKB, dFn = pesFtDB, kFp = pesFtKP, dFp = pesFtDP;
+    if (!pesFtDone) PESFeetAt2(pesRootF, hBf, pesFtNL, pesFtNG, kFn, dFn, kFp, dFp);
+    float mFn = max(kFn.x, kFn.y), mFp = max(kFp.x, kFp.y);
+    if (max(mFn, mFp) > 0.001) {
+      pesFtHit = true;
+      float tF = saturate(v0.y / hBf);
+      float kPx = (pesIsExt && !pesBlade) ? smoothstep(40.0, 60.0, pesPx) : 1.0;
+      float wOff = pesFtS * kPx * (1.0 - pesDefK) * (1.0 - 0.7 * pesMapK) * hBf * tF * tF * (3.0 - tF) * 0.5;
+      float2 offN = dFn / max(length(dFn), max(mFn, 1e-4)) * ((0.9 * kFn.x + 0.55 * kFn.y) * wOff);
+      float2 offP = dFp / max(length(dFp), max(mFp, 1e-4)) * ((0.9 * kFp.x + 0.55 * kFp.y) * wOff);
+      pesSinkF = max(pesSinkF, min(0.85 * kFn.x * min(pesFtS, 1.0), 0.75) * (1.0 - 0.7 * pesDefK) * kPx * saturate(W177.w));
+      r1.xz += offN;
+      pesBallD += offP - offN;
+    }
   }
   r0.yz = pesBA.xz + pesBB.xz;
   r0.yz = -r0.yz * 0.5 + (pesKV2 > 0.5 ? pesR1n : r1.xz);   // (13/11 tanda 2) y446: el empuje del juego desde la hoja sin la pelota (no se apila)
@@ -1258,7 +1369,7 @@ void main(
     // tarjetas se estiraban hasta x1.2). Corona (y446): la punta llega hasta 2/3 del alto (queda 75-100 % parada); z447: hasta 0.968 del alto.
     // Las parcelas lejanas del juego (pesFarK) no: ahi el corrimiento es la escala de la celda
     pesBendU = pesBend;
-    if ((pesCrK > 0.001 || pesZ447) && pesFarK <= 0.0) {
+    if ((pesCrK > 0.001 || pesZ447 || pesFtHit) && pesFarK <= 0.0) {
       float yyL = yy / max(1.0 - pesSinkF, 0.25);   // alto antes del hundimiento (r6.y ya trae * (1 - pesSinkF))
       float limB = lerp(0.968, 0.66, pesCrK) * yyL, bl = length(pesBend); pesLimB = limB;
       if (bl > limB && bl > 1e-6) { float2 nb = pesBend * (limB / bl); r6.xz += nb - pesBend; pesBend = nb; } }
