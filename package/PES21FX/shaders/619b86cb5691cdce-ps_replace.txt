@@ -93,6 +93,7 @@ cbuffer PESLightCopyC : register(b13)
   float4 pLc_color;
 }
 
+#include "pes_microsh.hlsli"   // PES21 (13/11): micro sombras v4, sombra de relieve con direccion
 #include "pes_vista_motor.hlsli"   // PES21 (11/11, Motor en tiempo real): vistas del motor (fila 429)
 // PES21 (12/11 20:50, fila 445): azar y ruido fijos al mundo (sin seno: estables lejos del centro de la cancha) y luz del sol en un
 // punto del aire (espacio de vista; shadow map del sol con la misma cuenta que la luz volumetrica 335)
@@ -1484,51 +1485,50 @@ void main(
     // sombra a si mismos con la luz rasante del sol. La apertura la da la oclusion ambiental; solo del lado iluminado.
     // x88 fuerza, y88 on/off, z88 apertura: 0 = oclusion de pantalla (cambia con la camara), 1 = relieve (31/10): el angulo
     // entre la normal de detalle (poros, pliegues, trama) y la geometrica de la profundidad; no depende de la camara
+    // (13/11) MICRO SOMBRAS v4 (pes_microsh.hlsli): sombra de relieve con direccion, hacia el sol, para piel, tela y todo lo
+    // que no es pasto ni pelota. x88 fuerza, y88 on/off, w88 largo (0 = 1). z88 ya no se usa. Solo sobre la parte de la luz que
+    // viene del sol (su color x N.L x sombra del juego contra el total): en la sombra del estadio o de la cabeza no hace nada.
+    // Largo por material (piel 6 mm, lo demas 15 mm), nunca menos de 5 pixeles: de cerca marca poros y trama, mas lejos arrugas,
+    // pliegues y costuras, sin puntos sueltos; pasados 3 largos se apaga. Piso por material: en la piel la sombra chica nunca es
+    // negra y deja pasar rojo (la luz cruza un poro por debajo), en la tela baja pareja
     { float4 MS = IniParams.Load(int2(88,0));
-      if (MS.y > 0.5 && MS.x > 0.0 && geoOk && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
-        float ndlM = dot(Nsk, normalize(pLc_dir.xyz));
-        float aper = 2.0 * aoRaw * aoRaw;
-        if (MS.z > 0.5) {
-          // (01/11) relieve v2: la normal de detalle contra el PROMEDIO de las normales del G-buffer en un anillo de ~1.2 cm del
-          // mundo (no contra la normal de la profundidad). La de la profundidad salia a facetas (cuadrados de 2x2 y triangulos de
-          // mallas con pocos poligonos, como la mano) y cada faceta se leia como un pliegue hondo. El promedio de un anillo
-          // simetrico quita poros, trama y pliegues finos y deja la curvatura suave; sigue sin depender de la camara.
-          float3 Nc0 = PESDecN(uvC);
-          float pxmM = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z, 1e-5);
-          float rM = clamp(0.012 * pxmM, 1.5, 16.0);
-          float3 nAcc = 0; float nW = 0;
-          // (02/11) solo vecinos sobre el plano tangente del pixel (tolerancia 35 % del radio del anillo, ~4 mm): antes el corte era
-          // 3 % de la profundidad + 2 cm (~6 cm en un primer plano) y en el cuello entraban normales del menton y de la malla del
-          // torso -> linea dura de sombra bajando del menton y franja de borde recto en la union (Agustin: "es por las micro sombras")
-          float3 NvC = float3(Nc0.xy, -Nc0.z);
-          float tolM = 0.35 * rM / pxmM + 0.001;
-          [unroll] for (int mi = 0; mi < 8; mi++) {
-            float angM = mi * 0.78539816 + 0.3927;
-            float2 uvM = uvC + float2(cos(angM), sin(angM)) * rM * g_psSystem.m_renderBuffer.zw;
-            float zM = PESLinZ(uvM);
-            float3 Pm = float3(((uvM * float2(2, -2) + float2(-1, 1)) - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zM, zM);
-            float wM = abs(dot(Pm - Pgeo, NvC)) < tolM ? 1.0 : 0.0;
-            nAcc += PESDecN(uvM) * wM; nW += wM;
+      if (MS.y > 0.5 && MS.x > 0.0 && geoOk && tyC == 0 && zsk < 25.0 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+        float3 LdS = normalize(pLc_dir.xyz);
+        float ndlM = dot(Nsk, LdS);
+        float sunSh = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+        float3 sunD = max(pLc_color.xyz, 0.0) * saturate(ndlM) * sunSh;
+        float sunF = saturate(dot(sunD, float3(0.2126, 0.7152, 0.0722)) / max(dot(r2.xyz, float3(0.2126, 0.7152, 0.0722)), 1e-4)) * saturate(ndlM * 6.0) * sunSh;
+        if (sunF > 0.01) {
+          float pxmM = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z, 1e-5);   // pixeles por metro
+          float rBase = (skinC ? 0.006 : 0.015) * (MS.w > 0.001 ? clamp(MS.w, 0.25, 4.0) : 1.0);
+          float rM = max(rBase, 5.0 / pxmM);
+          float farK = saturate((3.0 * rBase - rM) / (1.5 * rBase) + 1.0) * saturate((25.0 - zsk) / 5.0);
+          if (farK > 0.01) {
+            // forma lisa: promedio de las normales en un anillo del largo del camino, solo vecinos sobre el plano del pixel
+            float3 Nc0 = PESDecN(uvC);
+            float3 NvC = float3(Nc0.xy, -Nc0.z);
+            float rPx = clamp(rM * pxmM, 2.0, 24.0);
+            float tolM = 0.35 * rM + 0.001;
+            float3 nAcc = 0; float nW = 0;
+            [unroll] for (int mi = 0; mi < 8; mi++) {
+              float angM = mi * 0.78539816 + 0.3927;
+              float2 uvM = uvC + float2(cos(angM), sin(angM)) * rPx * g_psSystem.m_renderBuffer.zw;
+              float zM = PESLinZ(uvM);
+              float3 Pm = float3(((uvM * float2(2, -2) + float2(-1, 1)) - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zM, zM);
+              float wM = abs(dot(Pm - Pgeo, NvC)) < tolM ? 1.0 : 0.0;
+              nAcc += PESDecN(uvM) * wM; nW += wM;
+            }
+            if (nW > 2.5) {
+              float3 NsM = normalize(nAcc + Nc0); NsM.z = -NsM.z;
+              float jitM = frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715))));
+              float visM = PESMicroShadowDir(uvC, Pgeo, Nsk, NsM, LdS, rM, jitM);
+              float3 floorM = skinC ? float3(0.62, 0.44, 0.40) : float3(0.35, 0.35, 0.35);
+              float kM = saturate(MS.x) * farK * sunF;
+              diffC *= lerp(1.0, lerp(floorM, 1.0, visM), kM);
+              specC *= lerp(1.0, lerp(0.25, 1.0, visM), kM);
+            }
           }
-          // (13/11) piel: potencia 2 (antes 6 para todo): con 6 cada poro y cada texel del normal map se leia como un hueco hondo ->
-          // piel granulada; la tela y los pliegues siguen con 6
-          float sB = nW > 2.5 ? pow(saturate(dot(Nc0, normalize(nAcc + 1e-6))), skinC ? 2.0 : 6.0) : 1.0;
-          aper = 2.0 * sB * sB;
         }
-        float micro = saturate(abs(ndlM) + aper - 1.0);
-        float litSide = saturate(ndlM * 4.0);                         // solo donde pega el sol
-        // (01/11) piso 0.4: un pliegue nunca queda negro, y en la piel el brillo baja igual que la difusa (antes quedaba el reflejo
-        // azulado del cielo sobre poca difusa rojiza: nudillos y dedos violetas)
-        // (12/11, piel v2 w124) en la piel la micro sombra sale de poros y del normal map fino: solo mientras se resuelven (hasta
-        // 0.8 mm de piel por pixel entera, nada a 2 mm). Mas lejos comparaba normales que el mip ya no muestra bien y dejaba manchas
-        // en la franja del terminador que cambiaban con la distancia (mejillas, orejas)
-        float msFar = (skinC && IniParams.Load(int2(124,0)).w > 0.5) ? saturate((2.0 - 2000.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z) / 1.2) : 1.0;
-        // (13/11, Agustin: "las micro sombras estan mal") en la piel: solo donde el sol llega de verdad (mascara de sombra t14: en la
-        // sombra del estadio o de la propia cabeza no hay luz rasante que tapar, antes igual oscurecia) y con piso 0.7 (un poro nunca
-        // es un punto negro). Unica micro sombra de la piel: la de 5ce3 (pintada en el color) se quito
-        float msSun = skinC ? saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x) : 1.0;
-        float msK = lerp(1.0, max(micro, skinC ? 0.7 : 0.4), saturate(MS.x) * litSide * msFar * msSun);
-        diffC *= msK; specC *= skinC ? msK : lerp(1.0, msK, 0.5);
       } }
     r0.xyw = diffC * aoD + specC * aoS;
   } else {
