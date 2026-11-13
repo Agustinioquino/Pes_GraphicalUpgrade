@@ -37,6 +37,22 @@ Texture2D<float4> StereoParams : register(t125);
 
 
 float bh21(float2 p) { p = frac(p * float2(123.34, 456.21)); p += dot(p, p + 45.32); return frac(p.x * p.y); }
+// (13/11 tanda 2) la correccion del amarillo (x29) del natural, la misma en la hoja y en el color plano de y330: asi rel = o0 / flatC ya no
+// la lleva y la base (que ya la tuvo) no la recibe dos veces
+void PESNatX29(inout float3 c) {
+  float4 GVn = IniParams.Load(int2(29,0));
+  if (GVn.w > 0.5) {
+    const float3 LWn = float3(0.2126, 0.7152, 0.0722);
+    float lgn = dot(c, LWn);
+    float yeln = saturate((c.r / max(c.g, 1e-3) - 0.55) * 2.5);
+    yeln *= saturate(((max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b))) / max(max(c.r, max(c.g, c.b)), 1e-3) - 0.12) * 5.0);
+    float3 natn = c * float3(0.80, 1.0, 0.95);
+    natn *= lgn / max(dot(natn, LWn), 1e-4);
+    c = lerp(c, natn, saturate(GVn.x) * yeln);
+    c = lerp(dot(c, LWn).xxx, c, GVn.z > 0 ? GVn.z : 1.0);
+    c *= GVn.y > 0 ? GVn.y : 1.0;
+  }
+}
 void main(
   float4 v0 : SV_Position0,
   float4 v1 : TEXCOORD0,
@@ -108,6 +124,7 @@ void main(
   // (w296 < 60 mm): la base oscura, el tramo encendido de la punta y su color son FRACCIONES de la hoja, y con 28 mm ocupan 3.4 veces
   // menos pantalla: se pierde el degrade base oscura -> punta clara y queda una alfombra pareja. 0 desde 60 mm, 1 a 28 mm o menos
   float natMM = IniParams.Load(int2(296, 0)).w;
+  { int tyN = (int)(Q4.y + 0.5); natMM = (natMM > 1.0 ? clamp(natMM, 10.0, 90.0) : 28.0) * (tyN == 2 ? 1.45 : (tyN == 0 ? 0.9 : 1.0)); }   // (13/11 tanda 2) mismo largo que el VS 498b30 (hT, :654)
   float kShortP = pesNat ? saturate((60.0 - (natMM > 1.0 ? clamp(natMM, 10.0, 90.0) : 28.0)) / 32.0) : 0.0;
   // (11/11 o, Agustin: "con el pasto mas corto se perdieron un poco las puntas; que se noten no importa la altura") los tramos de la punta
   // que eran una fraccion de la hoja (borde del corte, punta seca) pasan a medirse en milimetros: con 28 mm ocupan 2.1 veces mas hoja
@@ -283,6 +300,11 @@ void main(
   // cubre un pixel (fwidth de relT, fuera de ramas). En las tarjetas solo lejos (de cerca el atlas tiene saltos de relT entre hojas que no son
   // la punta); en las hojas 3D siempre (relT continuo)
   float pesTipAA = saturate((fwidth(relT) - 0.12) / 0.45) * saturate(PESStableK()) * (pesBladeM ? 1.0 : 1.0 - nearF);
+  // (13/11 tanda 2) y496 PUNTAS ENCENDIDAS SOLO ARRIBA: el dorado, la luz que atraviesa la punta, las puntas encendidas al azar y la
+  // translucidez de la punta empezaban al 35 % de la hoja (con todo junto dos tercios de la hoja de cerca salian lima). capT las deja desde la
+  // mitad y enteras solo en el ultimo 15 % del alto real (relH). Con x436 la hoja de menos de un pixel toma su promedio (como PESTipS)
+  float kTop = pesNat ? saturate(IniParams.Load(int2(496, 0)).y) : 0.0;   // en las tarjetas del juego / del mod relH es otra cosa
+  float capT = lerp(1.0, PESTipS(0.55, 0.85, relH, pesTipAA), kTop);       // relH = fraccion real del alto
   // (27/10 l) tanda 9a, y299: a media distancia (30-100 px/m, camara de TV) una hoja mide 1-2 px y lo que pasa el recorte del alfa es su
   // raiz, que lleva la oclusion del atlas (G ~ 0.2): cada hoja era un punto al 50-75 % de brillo sobre el suelo ("manchas negras", lineas
   // sucias). Mientras la hoja toma el color del suelo (pesCf < 1) la oclusion se lee de un mip grueso del atlas (el promedio del manojo)
@@ -361,6 +383,7 @@ void main(
     if (pesNat) { float densR = saturate((1.0 - r0.y) * 2.0);
       float kR = (1.0 - smoothstep(0.0, 0.55, relH)) * (0.6 + 0.4 * densR) * pesCf * (1.0 - pesPaintF);
       r1.xyz *= lerp(float3(1.0, 1.0, 1.0), float3(0.60, 0.78, 0.50), kR); }
+    if (pesBladeM) r1.xyz *= lerp(1.0, lerp(0.62, 1.0, smoothstep(0.0, 0.45, relH)), saturate(IniParams.Load(int2(496,0)).z) * pesCf);   // (13/11 tanda 2) z496: raiz de la hoja 3D, neutra (sin verde azulado ni oliva)
   }
   o0.xyz = v1.zzz * r1.xyz;
   float clar = 1.0;   // (27/10 j) claridad del atlas, la usa tambien la hoja pintada despues del grade
@@ -375,18 +398,7 @@ void main(
     // final y la correccion del amarillo y el "Verde" deshacian justo las hojas secas, las puntas paja y las encendidas (todo eso es
     // "amarillo"). El contraste (z112) gira alrededor del mismo gris que en la base (antes de la ganancia x433)
     if (pesNat) {
-      float4 GVn = IniParams.Load(int2(29,0));
-      if (GVn.w > 0.5) {
-        const float3 LWn = float3(0.2126, 0.7152, 0.0722);
-        float lgn = dot(c, LWn);
-        float yeln = saturate((c.r / max(c.g, 1e-3) - 0.55) * 2.5);
-        yeln *= saturate(((max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b))) / max(max(c.r, max(c.g, c.b)), 1e-3) - 0.12) * 5.0);
-        float3 natn = c * float3(0.80, 1.0, 0.95);
-        natn *= lgn / max(dot(natn, LWn), 1e-4);
-        c = lerp(c, natn, saturate(GVn.x) * yeln);
-        c = lerp(dot(c, LWn).xxx, c, GVn.z > 0 ? GVn.z : 1.0);
-        c *= GVn.y > 0 ? GVn.y : 1.0;
-      }
+      PESNatX29(c);   // (13/11 tanda 2) la misma cuenta de antes, ahora en una funcion (tambien la usa y330)
       float3 cgn = c / max(pesNatG, 1e-3); PESGrassColorGrade(cgn); c = max(cgn, 0.0) * pesNatG;
     }
     float tipK = smoothstep(0.55, 1.0, pesN.z) * (0.08 + 0.6 * v8.x) * pesCf;   // (26/10 d) 0.18 -> 0.08: las puntas tenian un 18% de paja aun sin desgaste (r/g 0.45 -> 0.57, lima a media distancia)
@@ -418,11 +430,13 @@ void main(
         float lenT = uTs < 0.34 ? 0.10 : (uTs < 0.76 ? 0.15 : 0.24);
         bool torn = uTs >= 0.76;
         float rT = relH + (torn ? (PESGnoise(float2(saturate(v1.x) * 38.0 + pesHvR * 9.0, pesHvR * 57.0)) - 0.5) * 0.10 * pesTipSc : 0.0);
-        float cutT = smoothstep(1.0 - lenT * pesTipSc, 1.0 - 0.25 * lenT * pesTipSc, rT) * kTp;
-        float3 dryT = torn ? float3(1.22, 1.12, 0.70) * 1.16 : float3(1.12, 1.18, 0.80) * 1.30;
+        float lenS = lerp(lenT * pesTipSc, min(lenT * pesTipSc, 0.30), kTop);   // (13/11 tanda 2) y496: el tramo seco nunca pasa del 30 % del alto
+        float cutT = smoothstep(1.0 - lenS, 1.0 - 0.25 * lenS, rT) * kTp;
+        float bT = lerp(1.0, torn ? 1.16 : 1.30, pesSunV);   // (13/11 tanda 2) w447: el tono paja queda; solo se aclara al sol
+        float3 dryT = (torn ? float3(1.22, 1.12, 0.70) : float3(1.12, 1.18, 0.80)) * bT;
         c = lerp(c, dot(c, float3(0.2126, 0.7152, 0.0722)) * dryT, (torn ? 0.62 : 0.55) * cutT);
       } else {
-        float newT = smoothstep(1.0 - 0.30 * pesTipSc, 1.0, relH) * kTp;
+        float newT = smoothstep(1.0 - lerp(0.30 * pesTipSc, 0.30, kTop), 1.0, relH) * kTp;   // (13/11 tanda 2) y496: mismo tope
         c *= lerp(float3(1.0, 1.0, 1.0), float3(1.10, 1.17, 0.90), 0.8 * newT);
       }
     }
@@ -470,7 +484,7 @@ void main(
         float3 Ld = g_psSystem.m_dominantLightDir.xyz; float lv = length(Ld); Ld = lv > 1e-3 ? Ld / lv : Sd;
         float back = saturate(0.5 - 0.5 * dot(normalize(float3(pesN.x * 2.0 - 1.0, pesN.z, pesN.y * 2.0 - 1.0) + 1e-4), Ld));   // la normal de la hoja mira lejos de la luz = contraluz
         float thin = saturate(1.3 - 0.9 * pesN.w);
-        float tx = PESTipS(0.3, 1.0, relT, pesTipAA) * sunK * (pesNat ? 0.28 + 0.82 * back : 0.35 + 0.65 * back) * thin * kTx * pesCfT * (1.0 - pesPaintF) * (pesArt ? 0.35 : 1.0);   // (11/11 n) natural: mas diferencia a contraluz
+        float tx = PESTipS(0.3, 1.0, relT, pesTipAA) * capT * sunK * (pesNat ? 0.28 + 0.82 * back : 0.35 + 0.65 * back) * thin * kTx * pesCfT * (1.0 - pesPaintF) * (pesArt ? 0.35 : 1.0);   // (11/11 n) natural: mas diferencia a contraluz
         // (11/11) natural: la luz que atraviesa multiplica el color de la hoja (sin sumar una base pareja): se ve la lamina encendida y las
         // venas / el nervio (mas gruesos en el atlas nuevo) mas oscuros, en vez de un verde amarillo plano
         // (11/11 g, Agustin: "la luz se ve rara", captura 13.54: lima saturado) natural 1.30 / 1.42 / 0.78 -> 1.18 / 1.28 / 0.88
@@ -486,12 +500,13 @@ void main(
         if (kRt > 0.001) {
           float hR = frac(pesHvR * 23.17 + 0.61);
           float pick = lerp(step(0.68, hR) * (0.6 + 0.4 * frac(hR * 7.3)), 0.26, pesTipAA);   // hoja de menos de un pixel: el promedio
-          float rt = pick * PESTipS(0.55, 1.0, relT, pesTipAA) * sunK * lerp(0.15, 1.0, back) * thin * kRt * pesCfT * (1.0 - pesPaintF) * (1.0 - saturate(v8.x));
+          float rt = pick * PESTipS(0.55, 1.0, relT, pesTipAA) * capT * sunK * lerp(0.15, 1.0, back) * thin * kRt * pesCfT * (1.0 - pesPaintF) * (1.0 - saturate(v8.x));
           c = lerp(c, c * float3(1.28, 1.38, 0.78), saturate(0.55 * rt));
           pesTxGb = max(pesTxGb, saturate(0.6 * rt));
         }
       }
-      tz *= lerp(0.3, 1.0, saturate(IniParams.Load(int2(414,0)).w) * pesSunV);   // (08/11 ab) puntas doradas fuertes solo con sol fuerte y despejado; (12/11 23:45) w447: en la sombra como nublado
+      tz *= capT;   // (13/11 tanda 2) y496: solo la punta real
+      tz *= lerp(0.3 * pesSunV, 1.0, saturate(IniParams.Load(int2(414,0)).w) * pesSunV);   // (13/11 tanda 2) w447: piso 0.3 solo al sol. (08/11 ab) puntas doradas fuertes solo con sol fuerte y despejado; (12/11 23:45) w447: en la sombra como nublado
       tz = saturate(tz * (1.0 + 0.30 * kShortP) * (1.0 + 0.40 * kTpA * pesSunV));   // (11/11 n) natural bajo: punta algo mas encendida; (12/11) z436 (w447: no en la sombra)
       // (11/11 g) natural: puntas al sol menos doradas (sumadas a la transmision y a x414 salian lima / amarillas)
       c *= lerp(float3(1.0, 1.0, 1.0), pesNat ? lerp(lerp(float3(1.08, 1.09, 0.99), float3(1.20, 1.16, 0.93), tW), float3(1.22, 1.24, 0.84), saturate(0.5 * kTpA * pesSunV)) : lerp(float3(1.16, 1.15, 0.98), float3(1.34, 1.24, 0.86), tW), tz);   // (12/11 23:45) w447: sin el lima de z436 en la sombra
@@ -612,7 +627,10 @@ void main(
   { float3 dNx = ddx(r0.xyz), dNy = ddy(r0.xyz);
     float kSt = PESStableK();
     if (pesV3 && kSt > 0.001) {
-      float mvP = length(o3.xy);
+      // (13/11 tanda 2) x436: el movimiento de la CAMARA (fila 498 de la DLL, px por cuadro a 1080 lineas). o3.xy aca es solo el viento y la
+      // pelota (no hay jugadores en este shader): de cerca el viento mueve las puntas 2-5 px y parecia un paneo. Sin la fila: como antes
+      float lP = length(o3.xy); float4 T498 = IniParams.Load(int2(498,0));
+      float mvP = (T498.w > 0.5) ? T498.z * g_psSystem.m_renderBuffer.y / 1080.0 : lP;
       float sig2 = 0.15915494 * kSt * (1.0 + smoothstep(0.75, 4.0, mvP));
       float kern = min(2.0 * sig2 * (dot(dNx, dNx) + dot(dNy, dNy)), 0.18 * saturate(kSt));
       // (12/11, "le falta el brillo en las puntas") hoja 3D que ya mide 2-4 px de ancho con la camara quieta: el cambio de la normal de un borde
@@ -627,10 +645,10 @@ void main(
   if (pesNat && !pesFar) pesTr = lerp(v1.w, saturate(v1.w * lerp(1.0, 1.55 - 1.1 * pesN.w, natTr)), pesCf);   // (11/11) w409: lamina fina translucida, nervio y venas opacos
   else if (pesV3 && !pesFar) pesTr = lerp(v1.w, saturate(v1.w * (1.35 - 0.8 * pesN.w)), pesCf);   // puntas finas mas translucidas (A = grosor); lejos sin variar
   // (27/10 h) z295: la punta deja pasar mas luz a contraluz (y57 lee esto del G-buffer); la pintura tapa
-  if (pesV3) pesTr = saturate(pesTr * (1.0 + (pesNat ? 0.55 : 0.35) * PESTipS(0.45, 1.0, relT, pesTipAA) * kT * pesCfT) * (1.0 - 0.85 * pesPaintF));   // (11/11 n) natural: la punta deja pasar mas
+  if (pesV3) pesTr = saturate(pesTr * (1.0 + (pesNat ? 0.55 : 0.35) * PESTipS(0.45, 1.0, relT, pesTipAA) * capT * pesSunV * kT * pesCfT) * (1.0 - 0.85 * pesPaintF));   // (11/11 n) natural: la punta deja pasar mas; (13/11 tanda 2) y496 solo arriba, w447 nada en la sombra
   if (pesV3) pesTr = saturate(pesTr + 0.30 * pesTxGb);   // (08/11 aa) w413: la pasada del sol tambien la enciende mas a contraluz   // (27/10 i) pintura: casi opaca (salia lima a contraluz)
   // (27/10 n) tanda 11, x329: la punta deja pasar mas luz (translucidez al G-buffer, la lee la pasada del sol): hojas encendidas a contraluz
-  if (pesV3 && v4.w > 0.0) { float4 P329t = IniParams.Load(int2(329,0)); pesTr = saturate(pesTr * (1.0 + 0.6 * clamp(P329t.x, 0.0, 2.0) * PESTipS(0.3, 1.0, relT, pesTipAA) * pesCfT * (1.0 - pesPaintF))); }
+  if (pesV3 && v4.w > 0.0) { float4 P329t = IniParams.Load(int2(329,0)); pesTr = saturate(pesTr * (1.0 + 0.6 * clamp(P329t.x, 0.0, 2.0) * PESTipS(0.3, 1.0, relT, pesTipAA) * capT * pesSunV * pesCfT * (1.0 - pesPaintF))); }   // (13/11 tanda 2) y496, w447
   // (04/11) de cerca cada hoja con su translucidez (unas finas que se encienden a contraluz, otras gruesas): mismo promedio
   if (pesV3 && v4.w > 0.0) pesTr = saturate(pesTr * lerp(1.0, 0.6 + 0.8 * frac(pesHvR * 7.37 + 0.21), nearF * pesCfN * (1.0 - pesPaintF)));
   if (pesDrop > 0.001) pesTr = saturate(pesTr + 0.25 * pesDrop);   // (27/10 p) la gota se enciende a contraluz
@@ -744,7 +762,7 @@ void main(
   if (pesFB && v5.w < 0.5 && !pesFar && P330.y > 0.001) {
     float3 gnd = pesGnd;
     float3 flatC = saturate(v1.zzz * v3.xyz * pesNatG);
-    if (pesNat) { float3 cg = flatC / max(pesNatG, 1e-3); PESGrassColorGrade(cg); flatC = saturate(cg * pesNatG); }   // (12/11 20:50) como la hoja: color antes de la ganancia
+    if (pesNat) { PESNatX29(flatC); float3 cg = flatC / max(pesNatG, 1e-3); PESGrassColorGrade(cg); flatC = saturate(cg * pesNatG); }   // (12/11 20:50) como la hoja: color antes de la ganancia; (13/11 tanda 2) y x29 como la hoja
     else { float3 cg = flatC; PESGrassColorGrade(cg); flatC = saturate(cg); }
     float3 rel = clamp(o0.xyz / max(flatC, 0.02), 0.0, 1.6);
     o0.xyz = lerp(o0.xyz, saturate(gnd * rel), saturate(P330.y));

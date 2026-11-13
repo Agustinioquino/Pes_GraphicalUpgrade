@@ -311,6 +311,7 @@ static const int kClaimStages = 6;
 static ID3D11Buffer* s_claim = nullptr; static ID3D11UnorderedAccessView* s_claimUAV = nullptr;
 static ID3D11Buffer* s_claimStage[kClaimStages] = {}; static int s_claimTag[kClaimStages] = { -1, -1, -1, -1, -1, -1 };
 static std::atomic<int> s_emitBase{0}, s_emitGame{0};   // emisiones por origen (para el log)
+static std::atomic<int> s_ballStale1{0}, s_ballStaleN{0}, s_capEarly{0};   // (13/11 tanda 2) D10: emisiones desde la base con la pelota de hace 1-2 / mas Presents, capturas tempranas (log)
 // (27/10 l) tanda 9a: con que estados salieron las hojas (log cada 3 s): stencil de la base, RT4 sin escribir, color del suelo (copia de RT0),
 // sin ninguno (RT4 = 0: la hoja pierde la luz difusa del estadio); y dibujos del pasto del juego que no emitieron por no tener la base debajo (x299)
 static std::atomic<int> s_emitSt{0}, s_emitRt4{0}, s_emitSnap{0}, s_emitBare{0}, s_skipNoBase{0};
@@ -899,7 +900,7 @@ void GrassPresent() {
             Log("pasto GPU (3 s): %d emisiones medidas | compute %.2f ms (max %.2f) | nivel 0 cerca %.2f (max %.2f) | nivel 1 medio %.2f (max %.2f) | nivel 2 lejos %.2f (max %.2f) | total %.2f ms por cuadro | descartadas: reloj %d, listas sin ejecutar %d",
                 s_tmN, s_tmSum[0] / n, s_tmMax[0], s_tmSum[1] / n, s_tmMax[1], s_tmSum[2] / n, s_tmMax[2], s_tmSum[3] / n, s_tmMax[3], (s_tmSum[0] + s_tmSum[1] + s_tmSum[2] + s_tmSum[3]) / n, s_tmDisjoint, s_tmLost);
             for (int k = 0; k < 4; k++) { s_tmSum[k] = 0; s_tmMax[k] = 0; } s_tmN = 0; s_tmDisjoint = 0; s_tmLost = 0; }
-        Log("pasto v3: llamadas %d, emisiones grabadas %d (desde la base %d, desde el pasto del juego %d; en contextos diferidos %d, inmediato %d) | GPU: %d Presents, %d cuadros leidos, emisiones ejecutadas por cuadro 0:%d 1:%d 2+:%d (cuadros sin pasto del mod %d), grabacion->ejecucion 0:%d 1:%d 2+:%d Presents, x63 %s | parcelas %d (niveles %d/%d/%d, perdidas por ranura llena %d, prepasada %d niveles), malla cercana %u idx, estado: %s | v4: %d dibujos con manojos curvos | camara del compute: m11 %.2f ojo (%.1f %.1f %.1f) cb2 off %u n %u de %u B, umbrales %.0f/%.0f/%.0f px/m, dibujos del pasto sin PS de hojas %d, en pasadas de otro tamano %d (DSV %ux%u, RTVs %u) | estado guardado hace %d Presents, t5 igual %d / distinta %d | base: hasta %d dibujos por grabacion, %d despues de las hojas; emision diferida por dibujo %d / targets %d / limpieza %d / fin %d / ejecucion %d / ClearState %d, con otros targets %d, perdidas %d | estados de las hojas: stencil base %d, sin RT4 %d, color suelo %d, sin nada %d; pasto del juego sin base debajo (x299) %d",
+        Log("pasto v3: llamadas %d, emisiones grabadas %d (desde la base %d, desde el pasto del juego %d; en contextos diferidos %d, inmediato %d) | GPU: %d Presents, %d cuadros leidos, emisiones ejecutadas por cuadro 0:%d 1:%d 2+:%d (cuadros sin pasto del mod %d), grabacion->ejecucion 0:%d 1:%d 2+:%d Presents, x63 %s | parcelas %d (niveles %d/%d/%d, perdidas por ranura llena %d, prepasada %d niveles), malla cercana %u idx, estado: %s | v4: %d dibujos con manojos curvos | camara del compute: m11 %.2f ojo (%.1f %.1f %.1f) cb2 off %u n %u de %u B, umbrales %.0f/%.0f/%.0f px/m, dibujos del pasto sin PS de hojas %d, en pasadas de otro tamano %d (DSV %ux%u, RTVs %u) | estado guardado hace %d Presents, t5 igual %d / distinta %d | base: hasta %d dibujos por grabacion, %d despues de las hojas; emision diferida por dibujo %d / targets %d / limpieza %d / fin %d / ejecucion %d / ClearState %d, con otros targets %d, perdidas %d | estados de las hojas: stencil base %d, sin RT4 %d, color suelo %d, sin nada %d; pasto del juego sin base debajo (x299) %d | pelota vieja en la base: de hace 1-2 Presents %d, mas %d (capturas antes de la emision pendiente %d)",
             g_grassDbg.calls, g_grassDbg.emits, s_emitBase.exchange(0), s_emitGame.exchange(0), s_recDeferred.exchange(0), s_recImmediate.exchange(0),
             dp, fr, eh[0], eh[1], eh[2], fng, lh[0], lh[1], lh[2], s_missing.load() ? "1 (mod sin dibujar: pasto del juego entero)" : "0",
             g_grassDbg.patches, g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2], g_grassDbg.lost, s_preLast.load(), g_grassDbg.lod,
@@ -907,7 +908,8 @@ void GrassPresent() {
             s_offPass.exchange(0), s_offW, s_offH, s_offRtv, age, s_t5Same.exchange(0), s_t5Diff.exchange(0),
             s_turfMaxRec.exchange(0), s_turfAfter.exchange(0), s_flushWhy[0].exchange(0), s_flushWhy[1].exchange(0), s_flushWhy[2].exchange(0), s_flushWhy[3].exchange(0),
             s_flushWhy[4].exchange(0), s_flushWhy[5].exchange(0), s_flushOther.exchange(0), s_pendLost.exchange(0),
-            s_emitSt.exchange(0), s_emitRt4.exchange(0), s_emitSnap.exchange(0), s_emitBare.exchange(0), s_skipNoBase.exchange(0));
+            s_emitSt.exchange(0), s_emitRt4.exchange(0), s_emitSnap.exchange(0), s_emitBare.exchange(0), s_skipNoBase.exchange(0),
+            s_ballStale1.exchange(0), s_ballStaleN.exchange(0), s_capEarly.exchange(0));
         { const int cp = s_r4Copies.exchange(0), bd = s_r4Binds.exchange(0);   // (11/11 j)
           Log("pasto luz del estadio en las hojas (y290 = %.0f): copias de RT4 %d, dibujos con la copia %d%s", g_cfg.live[290][1], cp, bd, s_r4Failed ? " | NO SE PUDO CREAR LA COPIA" : ""); }
         if (s_bladeLast.load()) Log("pasto hojas 3D (z410): celdas %d, hojas por celda %d en promedio (%d hojas, %d trozos de %u), tope por celda x%.2f, umbral %.0f px/m", s_bladeCells.load(), s_bladePer.load(), s_bladeSum.load(), s_bladeChunks.load(), kBladeChunk, s_bladeScale.load(), s_bladeThrLast);
@@ -1132,6 +1134,10 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         if (!have) { Why("todavia no se vio el pasto del juego (sin estado para emitir desde la base)"); return false; }
     }
     g_grassDbg.emits++; if (bound) s_emitGame++; else s_emitBase++;
+    // (13/11 tanda 2) D10 pelota vieja: edad en Presents de la copia de b4 (pelota) que lee el VS, en cb5[14].y. Desde el pasto del juego es
+    // su b4 vivo (0); desde la base, la copia de la ultima captura (s_cpVs4; 999 = nunca). Con 1-2 el VS extrapola la pelota, con mas no la usa
+    const int ballAgeI = bound ? 0 : (s_capPres.load() >= 0 ? (std::max)(0, (std::min)(s_frame.load() - s_capPres.load(), 999)) : 999);
+    if (!bound) { if (ballAgeI >= 1 && ballAgeI <= 2) s_ballStale1++; else if (ballAgeI > 2) s_ballStaleN++; }
     bool emitted = false;
     float T[4]; Thresholds(T);
     float tall = p59[0] > 0.05f ? p59[0] : 1.3f;
@@ -1389,6 +1395,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             cbq[51] = (stRoute ? 1.0f : 0.0f) + (farBl ? 2.0f : 0.0f);
             cbq[52] = L[i].cell;   // (26/10 g) lado de la celda: el raleo por desgaste mira un punto al azar de la celda, no su esquina
             cbq[55] = t_editor ? 1.0f : 0.0f;   // (11/11 m) cb5[13].w = 1 editor: el VS no achica las tarjetas como relleno (ahi las hojas 3D van alrededor del jugador)
+            cbq[57] = (float)ballAgeI;   // (13/11 tanda 2) cb5[14].y: edad de la pelota (b4) en Presents (0 = de este cuadro)
             c->UpdateSubresource(s_cb, 0, nullptr, cbq, 0, 0);
             c->VSSetConstantBuffers(5, 1, &s_cb);
             c->DrawIndexedInstancedIndirect(s_args, (UINT)sl * 20);
@@ -1575,6 +1582,19 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntr
     if (!RecClaim(c, &GRec::emitted)) return;
     if (!GrassEmit(c, true)) { RecUnclaim(c, &GRec::emitted); return; }
     if (c == g_dev.imm) s_recImmediate++; else s_recDeferred++;
+}
+
+// (13/11 tanda 2) D10 PELOTA VIEJA (ball_synth.md C): GRASS_FLUSH corre antes que GrassOnDraw, asi que la emision pendiente de la base (w294)
+// que dispara un dibujo del pasto del juego leia la copia de b4 (pelota) de la captura anterior (otro cuadro). hk_DrawIdx llama esto ANTES de
+// GRASS_FLUSH, con un dibujo del pasto del juego en el G-buffer (PS de las hojas): guarda el estado (CaptureState) y la pelota (PitchBallNote)
+// con los mismos reclamos de la grabacion, que GrassOnDraw ya no repite. La emision sigue con el stencil y el RT4 de la base (w294) pero con la
+// pelota de este cuadro. Las demas emisiones desde la base llevan la edad de la copia en cb5[14].y (GrassEmit)
+void GrassCaptureEarly(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntry* ps) {
+    if (t_inEmit || !vs || vs->hash != kGrassVS || !vs->repl || !ps || ps->hash != kGrassPS || g_cfg.bypass || !g_dev.dev) return;
+    if (g_cfg.live[58][3] < 0.5f || !MainPass(c)) return;
+    const int f = s_frame.load();
+    if (RecClaim(c, &GRec::captured)) { CaptureState(c, vs, ps); s_capEarly++; }
+    if (RecClaim(c, &GRec::ball)) PitchBallNote(c, f);
 }
 
 // (25/10) al terminar el dibujo de la base de la cancha (PS 5e92 / c956): si en esta grabacion todavia no se emitio pasto
