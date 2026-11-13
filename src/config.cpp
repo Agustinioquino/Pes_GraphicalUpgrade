@@ -879,18 +879,23 @@ void UpdateTimeParams() {
     // reloj no se vea avanzar a ritmo normal un par de segundos se usa el reloj real. 157: x tiempo (s), y 1 = lo escribe
     // esta DLL, z ritmo medido (s de juego por s real), w 1 = siguiendo el reloj del juego.
     { static double lastR = -1.0, cloudT = 0.0, logT = 0.0, logR = 0.0; static float lastG[4] = {}, logG[4] = {}; static int good = 0; static bool have = false;
+      // (13/11) z157 suavizado: el ritmo solo se mide cuando llega una copia NUEVA de SysCB (una copia repetida daba ritmo 0
+      // un cuadro y el desenfoque de 24943e55 se cortaba); se mide sobre el tiempo real juntado desde la copia anterior.
+      static int lastFr = -1; static double dRacc = 0.0; static float rateS = 1.0f;
       double dR = lastR < 0 ? 0.0 : std::clamp(t - lastR, 0.0, 0.25); lastR = t;
-      std::vector<float> Y; bool ok = NamedCBRead("SysCB", Y) && Y.size() >= 20;
+      dRacc = (std::min)(dRacc + dR, 0.5);
+      int fr = -1; std::vector<float> Y; bool ok = NamedCBRead("SysCB", Y, &fr) && Y.size() >= 20;
       double adv = dR; float rate = 1.0f;
       if (ok) {
           float g[4] = { Y[16], Y[17], Y[18], Y[19] };
           if (have) {
               double dG = (double)g[0] - (double)lastG[0];
               if (dR > 1e-4) rate = (float)(dG / dR);
+              if (fr != lastFr) { if (dRacc > 1e-4) rateS += ((float)std::clamp(dG / dRacc, 0.0, 1.5) - rateS) * 0.3f; dRacc = 0.0; }
               if (dR > 1e-4 && dG > 0.5 * dR && dG < 2.0 * dR) good = (std::min)(good + 1, 1 << 20);
               if (good > 120) adv = std::clamp(dG, 0.0, 3.0 * dR + 0.02);
           } else { for (int k = 0; k < 4; k++) logG[k] = g[k]; logR = t; }
-          for (int k = 0; k < 4; k++) lastG[k] = g[k]; have = true;
+          for (int k = 0; k < 4; k++) lastG[k] = g[k]; have = true; lastFr = fr;
           if (t - logT >= 30.0) {   // diagnostico: que componente se comporta como reloj del juego
               double w = (std::max)(t - logR, 1e-3);
               Log("reloj: m_timeParam = (%.3f, %.3f, %.3f, %.3f), ritmo en %.0f s = (%.2f, %.2f, %.2f, %.2f), nubes %s, t nubes %.1f s",
@@ -911,7 +916,7 @@ void UpdateTimeParams() {
               Log("cielo: sol del archivo del cielo (%.3f, %.3f, %.3f) | sol de la luz (%.3f, %.3f, %.3f) | diferencia %.1f grados", ax, ay, az, bx, by, bz, ang);
           } } }
       cloudT += adv; if (cloudT > 100000.0) cloudT -= 100000.0;
-      p[157][0] = (float)cloudT; p[157][1] = 1.0f; p[157][2] = (good > 120) ? rate : 1.0f; p[157][3] = (good > 120) ? 1.0f : 0.0f; }
+      p[157][0] = (float)cloudT; p[157][1] = 1.0f; p[157][2] = (good > 120) ? rateS : 1.0f; p[157][3] = (good > 120) ? 1.0f : 0.0f; }
     { extern float g_tongueTap; p[396][2] = std::clamp(g_tongueTap, 0.0f, 1.0f); }
     { extern float g_ownSmileEng; p[391][3] = std::clamp(g_ownSmileEng, 0.0f, 1.0f); }   // (09/11 e) sonrisa medida de la cara esculpida (exprbones.cpp); w391 la escribe la DLL   // (09/11 d) lengua contra el paladar (exprbones.cpp); z396 reservada, nunca se guarda
     // 19/10: pupila reactiva: brillo de la escena por la luz del sol/focos (m_lightColor0 de cPSLight), adaptado en el tiempo

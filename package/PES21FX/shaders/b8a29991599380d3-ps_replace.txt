@@ -561,13 +561,24 @@ void main(
   float kRoof = IniParams.Load(int2(334,0)).w;
   float flR = g_psObject.m_localParam[4].x;
   if (matType == 3 && kRoof > 0.001) flR *= 1.0 - saturate(kRoof);
+  float pesRoofN = r0.y;   // (12/11 23:45) w447: el techo sin su piso (1 = al sol, 0 = sombra entera del techo)
   r1.x = 1 + -flR;
   r0.y = r0.y * r1.x + flR;
   // (02/11 b) sin el realce pow(): con w334 0.5 la sombra del techo quedaba casi negra en los primeros planos (captura 10:25 PC)
   float pesRoofT = r0.y;
+  float pesSmT = r0.x;   // (12/11 23:45) w447: shadow map (jugadores, pelota, arco) y nubes
   r0.x = min(r0.x, r0.y);
   r0.y = g_WorldShadowMask.Sample(g_samplerPoint_Clamp_s, r0.zw).x;
+  float pesWmT = r0.y;   // (12/11 23:45) w447: mascara de sombra de pantalla (t13)
   r0.xyzw = min(r0.xxxx, r0.yyyy);
+  // (12/11 23:45, Agustin: dentro de la sombra del estadio las puntas cercanas salian 1.3-4.5 veces mas claras y mas amarillas que el
+  // pasto en sombra) w447 SOMBRA REAL EN LAS PUNTAS: pesVisN = visibilidad del sol sin pisos (1 = al sol, 0 = sombra entera de cualquier
+  // fuente: shadow map, techo precalculado medido desde su piso, mascara t13). Con w447 dentro de la sombra entera x440 ya no aclara las
+  // hojas (solo el borde: desde vN 0.5 queda igual que antes) y RT2.w (t14 de la composicion; .w no lo lee nadie mas, todos leen .x) lleva
+  // esa visibilidad limpia: la DLL la copia despues de la composicion y en el cuadro siguiente las hojas y el suelo apagan con ella lo que
+  // es solo del sol (PESSunVisGate, pes_grass.hlsli). 0 = como antes
+  float kSG = saturate(IniParams.Load(int2(447,0)).w);
+  float pesVisN = min(pesSmT, min(pesRoofN, pesWmT));
   // (12/11, Agustin: con "Como el pasto del juego" las sombras sobre el pasto "se ven menos oscuras y mas naturales"; pide "una mezcla de
   // ambas") x440 SOMBRA SUAVE EN LAS HOJAS: con x290 = 1 las hojas reciben la sombra del estadio y de los jugadores como el suelo; x440
   // la aclara (0 = como el suelo, como antes; 1 = sin sombra, como el pasto del juego). En el medio la hoja a la sombra conserva parte
@@ -582,6 +593,7 @@ void main(
         float mmH = IniParams.Load(int2(296,0)).w; mmH = mmH > 1.0 ? clamp(mmH, 10.0, 90.0) : 28.0;
         float hrH = saturate(hPH / (mmH * 0.001));
         float liftH = saturate(kShH) * lerp(0.55, 1.0, hrH);
+        liftH *= lerp(1.0, smoothstep(0.0, 0.5, pesVisN), kSG);   // (12/11 23:45) w447: sin aclarar dentro de la sombra entera; x440 solo suaviza el borde
         r0.xyzw = lerp(r0.xyzw, float4(1.0, 1.0, 1.0, 1.0), liftH);
       }
     } }
@@ -1112,6 +1124,6 @@ void main(
   { float4 P89 = IniParams.Load(int2(89,0));
     if (P89.x > 0.5) { float fl = P89.y > 0.0 ? P89.y : 1.0; float3 c89 = pesLCol.xyz; float m89 = max(max(c89.x, c89.y), c89.z); if (m89 < 1e-3) m89 = 1.0;
       o0.xyz = (c89 / m89) * fl * 0.6; if (P89.z < 0.5) o1.xyz = 0; } }
-  o2.xyzw = r0.xyzw;
+  o2.xyzw = float4(r0.xyz, kSG > 0.001 ? pesVisN : r0.w);   // (12/11 23:45) w447: .w = visibilidad limpia del sol (sin pisos ni x440) para las hojas
   return;
 }

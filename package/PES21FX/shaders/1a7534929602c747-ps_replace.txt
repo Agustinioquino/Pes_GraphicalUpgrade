@@ -13,6 +13,22 @@
 //   x332 alfa minimo hacia el cuadro actual (0.10 = la historia vale ~10 cuadros, como un TAA comun),
 //   y332 ancho de la caja (1 = la del juego; 0.75 = mas angosta: menos fantasmas y menos promedio),
 //   z332 alfa extra donde el vecindario tiene mucho contraste (pasto, lineas, costuras): ahi se promedia menos todavia.
+//
+// === (12/11, Agustin: "en cuanto opciones del taa, deberia hacer que el pasto se vea mas nitido al estar quieto") fila 454 (con w332 = 1;
+// todo 454 = 0 = como antes). En el juego la camara casi nunca esta quieta del todo: panea despacio (0..0.5 px por cuadro) y ahi la historia
+// se vuelve a muestrear corrida una fraccion de pixel cada cuadro y se ablanda (el pasto queda borroso aunque "este quieto"):
+//   x454 detalle en movimiento: el realce del cuadro actual sale de cuanto ablanda ese remuestreo (fraccion de pixel y alfa de este pixel),
+//        con un margen de 0.2 x el rango del vecindario (~3 % de halo); reemplaza el realce de w440. Con el pixel quieto (< 0.15 px) nunca
+//        realza menos que antes,
+//   y454 menos titileo en los paneos: en un paneo parejo (la velocidad del tile igual a la propia) de 0.5 px por cuadro o mas baja el
+//        alfa (acumula mas cuadros; el paneo lento no se toca), solo cerca de velocidades de pixel entero (con fraccion de pixel bajar
+//        el alfa solo ablanda);
+//        detras de jugadores y pelota (el tile se mueve mas que el pixel) queda como el juego; nunca por debajo del recorte de la caja,
+//   z454 caja pareja con la camara quieta: el lado de arriba de la caja (+5.25 desvios) se acerca al de abajo (-2.25): menos rastro claro,
+//   w454 (en la pasada final 0f5c2b99): la nitidez extra de la camara quieta (x330) solo donde el pixel esta quieto o en un paneo lento
+//        (completa debajo de 0.5 px por cuadro, nada desde 1.2 px), no en los paneos rapidos.
+// Con x / y / z > 0 ademas la mezcla pesada por luminancia nunca queda por debajo del recorte de la caja (antes podia dejar fantasmas),
+// y el realce no vuelve a serruchar los bordes que el AA por bordes (y331) acaba de suavizar mientras la camara se mueve.
 cbuffer cb0 : register(b0) { float4 cb0[3]; }
 cbuffer cb5 : register(b5) { float4 cb5[13]; }
 SamplerState s9 : register(s9);
@@ -34,8 +50,9 @@ Texture1D<float4> IniParams : register(t120);
 // Fila 331 (x = SSSS de la piel, no se toca): y331 fuerza (0 = apagado, 1 = completo), z331 contraste minimo del borde (0.05..0.3).
 // Solo corre en los pixeles de borde (el resto sale por el primer if): ~8 muestras ahi.
 float PesLumaAA(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
-float3 PesEdgeAA(float2 uv, float3 c, float4 P)
+float3 PesEdgeAA(float2 uv, float3 c, float4 P, out float wE)
 {
+  wE = 0.0;   // (12/11) x454: cuanto se suavizo este pixel (el realce de abajo no lo vuelve a serruchar)
   float w, h; t0.GetDimensions(w, h);
   float2 px = 1.0 / float2(w, h);
   float3 cNW = t0.SampleLevel(s11, uv + float2(-px.x, -px.y), 0).xyz, cNE = t0.SampleLevel(s11, uv + float2(px.x, -px.y), 0).xyz;
@@ -56,6 +73,7 @@ float3 PesEdgeAA(float2 uv, float3 c, float4 P)
   float3 b = a * 0.5 + 0.25 * (t0.SampleLevel(s11, uv - dir * 0.5, 0).xyz + t0.SampleLevel(s11, uv + dir * 0.5, 0).xyz);
   float lB = PesLumaAA(b);
   float3 r = (lB < lMin || lB > lMax) ? a : b;
+  wE = saturate(P.y) * kE;
   return lerp(c, r, saturate(P.y) * kE);
 }
 
@@ -67,6 +85,10 @@ void main(
   float4 P332 = IniParams.Load(int2(332,0));
   bool pesOn = P332.w > 0.5;
   float pesCon = 0.0;
+  float4 P454 = IniParams.Load(int2(454,0));   // (12/11) x detalle en movimiento | y menos titileo en paneos | z caja pareja quieta | w (CAS)
+  bool p454 = pesOn && any(P454.xyz > 0.0);
+  float pesEdgeW = 0.0, pesLtile = 0.0, pesLown = 0.0, pesM = 0.0, pesT = 0.0, pesPanK = 1.0;
+  float2 pesF = float2(0.0, 0.0);
   float4 r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15, r16, r17, r18, r19, r20;
   r0.xy = ((v0.xyxx * cb0[2].zwzz)).xy;
   r0.xy = ((r0.xyxx * cb5[11].xxxx)).xy;
@@ -119,7 +141,7 @@ void main(
   r5.y = ((r2.wwww * cb5[9].wwww)).y;
   r6.xyzw = ((t0.Sample(s9, (r5.xyxx).xy)).xyzw).xyzw;
   r7.xyz = ((t0.Sample(s11, (r0.xyxx).xy)).xyzw).xyz;
-  { float4 P331 = IniParams.Load(int2(331,0)); if (pesOn && P331.y > 0.0) r7.xyz = PesEdgeAA(r0.xy, r7.xyz, P331); }   // PES21 (04/11) AA por bordes
+  { float4 P331 = IniParams.Load(int2(331,0)); if (pesOn && P331.y > 0.0) r7.xyz = PesEdgeAA(r0.xy, r7.xyz, P331, pesEdgeW); }   // PES21 (04/11) AA por bordes
   r4.xw = ((cb5[9].zzzw * float4(asfloat(0x3f99999aU), 0.0, 0.0, asfloat(0x3ecccccdU)))).xw;
   r5.zw = ((cb5[9].zzzw * float4(0.0, 0.0, asfloat(0x3ecccccdU), asfloat(0xbf99999aU)) + r5.xxxy)).zw;
   r8.xyz = ((t0.Sample(s11, (r5.zwzz).xy)).xyzw).xyz;
@@ -193,13 +215,18 @@ void main(
     r1.x = ((t5.Sample(s11, (r0.xyxx).xy)).xyzw).x;
     r0.xy = ((t4.Sample(s11, (r0.xyxx).xy)).xyzw).xy;
     r0.zw = ((abs(r0.zzzw) * float4(0.0, 0.0, asfloat(0x40400000U), asfloat(0x40400000U)))).zw;
+    pesLtile = length(r0.xy); pesLown = length(r0.zw);   // (12/11) y454: velocidad del tile (t4) y la propia (3 |v|)
     r0.xy = (max(r0.zwzz, r0.xyxx)).xy;
     r0.x = ((dot((r0.xyxx).xy, (r0.xyxx).xy)).xxxx).x;
     r0.x = (sqrt(r0.xxxx)).x;
     r0.y = (saturate((r0.xxxx + float4(asfloat(0xbca3d70aU), asfloat(0xbca3d70aU), asfloat(0xbca3d70aU), asfloat(0xbca3d70aU))))).y;
+    pesM = r0.y;   // (12/11) y454: cuanto se mueve (0 quieto .. 1 desde ~0.35 px)
     r0.z = (max(r1.xxxx, r0.yyyy)).z;
     r2.xw = ((-(r0.zzzz) + float4(asfloat(0x3f800000U), 0.0, 0.0, asfloat(0x40100000U)))).xw;
     r0.w = ((r2.xxxx * float4(asfloat(0x40800000U), asfloat(0x40800000U), asfloat(0x40800000U), asfloat(0x40800000U)) + float4(asfloat(0x3fa00000U), asfloat(0x3fa00000U), asfloat(0x3fa00000U), asfloat(0x3fa00000U)))).w;
+    // (12/11) z454 caja pareja con la camara quieta: el lado de arriba (r0.w = 5.25 - 4 rz desvios) baja hasta 3 desvios hacia el de abajo
+    // (r2.w = 2.25 - rz); en movimiento (rz = 1) no cambia. 0.3: +3.94 -> +3.26 desvios con y332 0.75
+    if (pesOn) r0.w -= saturate(P454.z) * 3.0 * (1.0 - r0.z);
     // PES21: contraste local = desvio / media (r8 = desvio, r9 = media de las 5 muestras actuales)
     pesCon = dot(r8.xyz, float3(0.2126, 0.7152, 0.0722)) / max(dot(r9.xyz, float3(0.2126, 0.7152, 0.0722)), 0.02);
     r10.xyz = ((-(r2.wwww) * r8.xyzx + r9.xyzx)).xyz;
@@ -213,6 +240,7 @@ void main(
     r2.xw = (floor(r2.xxxw)).xw;
     r9.xyzw = ((r2.xwxw + float4(asfloat(0x3f000000U), asfloat(0x3f000000U), asfloat(0xbf000000U), asfloat(0xbf000000U)))).xyzw;
     r4.xy = ((cb0[2].xyxx * r4.xwxx + -(r9.xyxx))).xy;
+    pesF = r4.xy;   // (12/11) x454: fraccion de pixel con que se remuestrea la historia (0 = sin ablandar)
     r4.zw = ((r4.xxxy * r4.xxxy)).zw;
     r11.xyzw = ((r4.zwzw * r4.xyxy)).xyzw;
     r15.xyzw = ((r4.zwzw * float4(asfloat(0x3fc00000U), asfloat(0x3fc00000U), asfloat(0x40100000U), asfloat(0x40100000U)))).xyzw;
@@ -331,6 +359,24 @@ void main(
     r0.x = ((r0.xxxx * float4(asfloat(0x3ee66666U), asfloat(0x3ee66666U), asfloat(0x3ee66666U), asfloat(0x3ee66666U)) + r2.xxxx)).x;
     r0.x = ((r0.xxxx * float4(asfloat(0x3f4ccccdU), asfloat(0x3f4ccccdU), asfloat(0x3f4ccccdU), asfloat(0x3f4ccccdU)))).x;
     r0.x = (saturate((r1.yyyy * r0.yyyy + r0.xxxx))).x;
+    // (12/11) y454 menos titileo en los paneos: el alfa del juego sube con la velocidad (0.255 a 1 px, 0.48 desde 2.7 px) y en un paneo
+    // parejo hace titilar el pasto y las lineas a velocidades de pixel entero. Donde el tile se mueve igual que el pixel (paneo) se baja
+    // hasta y454 (0.3 = un 30 %); donde el tile se mueve mas (al lado de jugadores y pelota) queda como el juego. Nunca por debajo del
+    // recorte de la caja (r1.y): la historia que no entra en la caja se sigue corrigiendo igual. Recien desde 0.5 px por cuadro (completo
+    // en 1 px): en el paneo lento (0..0.5 px, "quieto" para el que mira) bajar el alfa no saca titileo y solo ablanda (modelo 1D: banda de
+    // 2.5-3.6 px 0.70 -> 0.61 a 0.5 px); a 1-3 px el titileo baja 0.050-0.064 -> 0.041-0.043.
+    // (12/11) Y solo cerca de velocidades de pixel entero: con fraccion de pixel (pesF lejos de 0 / 1) la historia se remuestrea mas blanda
+    // y bajar el alfa solo ablanda sin sacar titileo (modelo 1D, banda de 2-2.5 px a 1.25 px, con 454 por defecto: antes 0.43 / titileo
+    // 0.065, sin esta compuerta 0.37 / 0.067, con ella 0.49 / 0.063). En 1, 2, 3 px la ganancia de titileo queda igual
+    pesT = r1.y;
+    if (pesOn && P454.y > 0.0) {
+      float pesAg = r0.x;
+      float pesKTr = saturate((pesLtile - pesLown) / max(pesLtile, 0.5));
+      float2 pesGw = pesF * (1.0 - pesF);   // 0 con pixel entero, 0.25 con medio pixel
+      pesPanK = 1.0 - clamp(P454.y, 0.0, 0.6) * (1.0 - pesKTr) * pesM * smoothstep(0.5, 1.0, pesVelPx)
+                    * (1.0 - smoothstep(0.03, 0.15, max(pesGw.x, pesGw.y)));
+      r0.x = max(pesAg * pesPanK, min(pesAg, pesT));
+    }
     // PES21 x332 / z332: piso del peso hacia el cuadro actual (la historia no acumula sin limite); mas donde hay contraste fino
     if (pesOn) r0.x = max(r0.x, saturate(clamp(P332.x, 0.0, 0.5) + clamp(P332.z, 0.0, 0.5) * saturate(pesCon * 2.0 - 0.1)));
     // (12/11, Agustin: "al hacer zoom parece que el taa borroneo mas el pasto") w440 NITIDEZ EN MOVIMIENTO: con la camara quieta la historia
@@ -340,7 +386,7 @@ void main(
     float pesMovK = 0.0;
     if (pesOn) { float kMv = clamp(IniParams.Load(int2(440,0)).w, 0.0, 1.0);
       if (kMv > 0.001) { pesMovK = kMv * smoothstep(0.08, 1.2, pesVelPx);
-        r0.x = max(r0.x, pesMovK * lerp(0.12, 0.30, saturate(pesCon * 2.0 - 0.1))); } }
+        r0.x = max(r0.x, pesMovK * lerp(0.12, 0.30, saturate(pesCon * 2.0 - 0.1)) * pesPanK); } }   // (12/11) y454 tambien baja este piso
     if (pesOn) {
       // PES21 (04/11) mezcla pesada por luminancia (anti-titileo, tipo Lottes/Karis): un pixel claro del cuadro actual (punta de hoja
       // con sol, brillo del pelo, borde de la cara contra el cielo) pesa menos que uno oscuro, asi el borde serruchado del cuadro
@@ -350,11 +396,37 @@ void main(
       // con un realce suave contra el promedio de su vecindario (como el filtro de reconstruccion con realce de los TAA de Unreal), recortado
       // al rango del vecindario (sin halos). Con la camara quieta la historia converge a la imagen promediada de los jitters YA realzada:
       // gana definicion sin subir el alfa (el titileo de las puntas no crece). 0 = como antes
-      { float kDef = saturate(clamp(IniParams.Load(int2(440,0)).y, 0.0, 1.0) + 0.5 * pesMovK);   // w440: mas realce en movimiento
-        if (kDef > 0.001) { float3 c0 = pesCur; pesCur = clamp(c0 + (c0 - pesMean5) * (0.6 * kDef), min(pesNMin, c0), max(pesNMax, c0)); } }
+      { float pesY440 = clamp(IniParams.Load(int2(440,0)).y, 0.0, 1.0);
+        float kDef = saturate(pesY440 + 0.5 * pesMovK);   // w440: mas realce en movimiento
+        // (12/11) x454 DETALLE EN MOVIMIENTO: lo de w440 casi no hacia nada (el recorte al rango del vecindario se comia el realce). Cada
+        // cuadro la historia se remuestrea con el filtro cubico corrida pesF: en esa fraccion la banda de 2.5-3.6 px queda en Rf = 1 - 3.5 g^2
+        // (g = f (1 - f)), y con alfa r0.x la historia en equilibrio vale alfa / (1 - (1 - alfa) Rf) de lo que trae el cuadro: kNeed es el
+        // realce del cuadro actual que lo devuelve a 1 (0.504 = ganancia del realce en esa banda). Fraccion 0 (quieto, o paneo de pixel
+        // entero) = no hace falta; 0.25-0.5 px por cuadro = el paneo lento del juego, donde el pasto se ablandaba. El realce puede pasar el
+        // rango del vecindario en 0.2 x ese rango (~3 % de halo en una linea blanca). Con el pixel quieto de verdad (< 0.15 px) nunca
+        // realza menos que antes (stillK)
+        float pesE = 0.0;
+        float xk = saturate(P454.x);
+        if (xk > 0.0) {
+          float2 pesG = pesF * (1.0 - pesF);
+          float2 pesRf = 1.0 - 3.5 * pesG * pesG;
+          float pesR2 = pesRf.x * pesRf.y;
+          float kNeed = max(0.0, ((1.0 - (1.0 - r0.x) * pesR2) / max(r0.x, 0.02) - 1.0) / 0.504);
+          float kAd = max(pesY440 * (1.0 - smoothstep(0.08, 1.2, pesVelPx)), min(kNeed, 2.0));
+          float stillK = 1.0 - smoothstep(0.15, 0.3, pesVelPx);
+          // fix E: en movimiento el realce no vuelve a serruchar lo que el AA por bordes (y331) acaba de suavizar en este pixel
+          float kNew = lerp(kDef, kAd, xk) * (1.0 - pesEdgeW * xk * (1.0 - stillK));
+          pesE = 0.2 * xk * saturate(kNeed * 0.5);
+          kDef = max(kNew, kDef * stillK);
+        }
+        if (kDef > 0.001) { float3 c0 = pesCur; float3 pesER = pesE * (pesNMax - pesNMin);
+          pesCur = clamp(c0 + (c0 - pesMean5) * (0.6 * kDef), min(pesNMin, c0) - pesER, max(pesNMax, c0) + pesER); } }
       float wc = r0.x / (1.0 + dot(pesCur, float3(0.2126, 0.7152, 0.0722)));
       float wh = (1.0 - r0.x) / (1.0 + dot(r9.xyz, float3(0.2126, 0.7152, 0.0722)));
-      r1.xyz = (pesCur * wc + r9.xyz * wh) / max(wc + wh, 1e-5);
+      // (12/11) fix D: con x / y / z454 > 0 el peso del cuadro actual nunca queda por debajo del recorte de la caja (un pixel claro del
+      // cuadro actual pesaba menos y la historia que no entraba en la caja quedaba afuera: rastro)
+      if (p454) r1.xyz = lerp(r9.xyz, pesCur, max(wc / max(wc + wh, 1e-5), min(r0.x, pesT)));
+      else r1.xyz = (pesCur * wc + r9.xyz * wh) / max(wc + wh, 1e-5);
     } else
     r1.xyz = ((r0.xxxx * r1.xzwx + r9.xyzx)).xyz;
     r7.xyz = (r17.xyzx).xyz;

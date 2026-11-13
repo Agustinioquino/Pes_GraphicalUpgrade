@@ -486,6 +486,16 @@ static DXGI_FORMAT s_r0Fmt = DXGI_FORMAT_UNKNOWN; static UINT s_r0Mip = 0; stati
 static ID3D11Texture2D* s_r4Tex = nullptr; static ID3D11ShaderResourceView* s_r4Srv = nullptr; static D3D11_TEXTURE2D_DESC s_r4Desc = {};
 static DXGI_FORMAT s_r4Fmt = DXGI_FORMAT_UNKNOWN; static UINT s_r4Mip = 0; static bool s_r4Failed = false;
 static std::atomic<int> s_r4Copies{0}, s_r4Binds{0};
+// (12/11 23:45) w447 SOMBRA REAL EN LAS PUNTAS: copia del t14 de la composicion (619b86cb) = RT2 de la pasada del sol, cuyo .w es la visibilidad
+// limpia del sol (e9c13 / b8a2 / 7dbbc con w447: sin pisos ni x440). Una por cuadro, despues de la composicion; las hojas (18afff) y la base de
+// la cancha (5e92 / c956) del cuadro siguiente la leen en t48 (PESSunVisGate, pes_grass.hlsli) y en la sombra apagan lo que es solo del sol
+static ID3D11Texture2D* s_svTex = nullptr; static ID3D11ShaderResourceView* s_svSrv = nullptr; static D3D11_TEXTURE2D_DESC s_svDesc = {};
+static DXGI_FORMAT s_svFmt = DXGI_FORMAT_UNKNOWN; static UINT s_svMip = 0; static bool s_svFailed = false;
+static std::atomic<int> s_svFrame{-100}, s_svCopies{0}, s_svBinds{0}, s_svBindsBase{0}, s_svStale{0}, s_svCut{0}, s_svSmall{0}, s_svNoT14{0}, s_svBadFmt{0}, s_svIsRt2{-1};
+static std::atomic<int> s_svNotRt2{0}, s_svNoBlend{0};   // (13/11) composiciones sin copiar: t14 distinto del RT2 del sol / el RT2 del sol no escribe su alfa tal cual
+static int s_svCutSeen = 0;   // corte de camara visto por la ultima copia (bajo s_bsMx)
+static std::atomic<void*> s_svSunRT2{nullptr};   // RT2 de la ultima pasada del sol (solo se compara con el t14 de la composicion, sin referencia; distinto = no se copia)
+static std::atomic<int> s_svBlendOk{-1};   // (13/11) mezcla del RT2 de la ultima pasada del sol: 1 = el .w queda tal cual, 0 = no (no se copia), -1 = sin ver
 // (26/10 g) emision diferida: las hojas se dibujan despues del ULTIMO dibujo de la base de la grabacion (antes: despues del primero; si la
 // cancha viene en varios dibujos, las partes dibujadas despues quedaban debajo de las hojas sin escribir RT0 / RT4 = suelo sin color ni luz).
 // Se guarda la pasada (targets, viewports, stencil de la base y una copia de la escena del VS b2) y se emite antes del siguiente dibujo que
@@ -508,6 +518,9 @@ static void HyDropLocked() {
     if (s_ggCb) s_ggCb->Release(); s_ggCb = nullptr;
     if (s_r0Srv) s_r0Srv->Release(); if (s_r0Tex) s_r0Tex->Release(); s_r0Srv = nullptr; s_r0Tex = nullptr; s_r0Failed = false;
     if (s_r4Srv) s_r4Srv->Release(); if (s_r4Tex) s_r4Tex->Release(); s_r4Srv = nullptr; s_r4Tex = nullptr; s_r4Failed = false;
+    s_r0Desc = s_r4Desc = D3D11_TEXTURE2D_DESC();   // (13/11) sin esto SnapshotRT veia la misma descripcion y no volvia a crear las copias en el dispositivo nuevo
+    if (s_svSrv) s_svSrv->Release(); if (s_svTex) s_svTex->Release(); s_svSrv = nullptr; s_svTex = nullptr; s_svFailed = false;   // (12/11 23:45) w447
+    s_svDesc = D3D11_TEXTURE2D_DESC(); s_svFmt = DXGI_FORMAT_UNKNOWN; s_svMip = 0; s_svFrame = -100;   // la proxima composicion la vuelve a crear
 }
 static D3D11_DEPTH_STENCIL_DESC DssDesc(ID3D11DepthStencilState* s) {
     D3D11_DEPTH_STENCIL_DESC d = {};
@@ -914,6 +927,119 @@ static ID3D11ShaderResourceView* BaseRT4ForBlades(ID3D11DeviceContext* c, bool b
     if (s_r4Failed || !s_r4Srv || s_hyDev != g_dev.dev) return nullptr;
     s_r4Srv->AddRef(); return s_r4Srv;
 }
+// (12/11 23:45) w447 sombra real en las puntas: formatos de RT2 con alfa suficiente (la visibilidad del sol va en .w); coarse = alfa de 2 bits
+static bool SunVisFmtOk(DXGI_FORMAT f, bool& coarse) {
+    coarse = f == DXGI_FORMAT_R10G10B10A2_UNORM;
+    switch (f) {
+    case DXGI_FORMAT_R8G8B8A8_UNORM: case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+    case DXGI_FORMAT_R16G16B16A16_FLOAT: case DXGI_FORMAT_R16G16B16A16_UNORM: case DXGI_FORMAT_R32G32B32A32_FLOAT: case DXGI_FORMAT_R10G10B10A2_UNORM:
+        return true;
+    default: return false;
+    }
+}
+// BeforeDraw de las 9 pasadas del sol: su RT2 (se compara con el t14 de la composicion; 13/11: si es otro no se copia) y su mezcla (vistas chicas no)
+void GrassSunVisNoteSunPass(ID3D11DeviceContext* c) {
+    if (g_cfg.bypass || GrassLive(447, 3) < 0.001f) return;
+    if (g_bbW) { D3D11_VIEWPORT vp[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT nv = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+        c->RSGetViewports(&nv, vp); if (nv && (UINT)vp[0].Width * 4 < g_bbW * 3) return; }
+    ID3D11RenderTargetView* rt[3] = {}; c->OMGetRenderTargets(3, rt, nullptr);
+    const bool has2 = rt[2] != nullptr;
+    if (rt[2]) { ID3D11Resource* r = nullptr; rt[2]->GetResource(&r); if (r) { s_svSunRT2.store((void*)r); r->Release(); } }
+    for (auto* v : rt) if (v) v->Release();
+    if (!has2) return;
+    // (13/11) mezcla del RT2: si el alfa no se escribe tal cual (mascara sin A, o mezcla que no lo deja pasar) el .w seria el valor de la
+    // limpieza en todos lados y las puntas al sol quedarian como en la sombra: entonces no se copia (como antes). Si el color del RT2 se
+    // mezcla con el alfa del shader, el .w nuevo de e9c13 / b8a2 / 7dbbc cambiaria tambien el .xyz (la composicion): solo se avisa
+    { ID3D11BlendState* bs = nullptr; FLOAT bf[4] = {}; UINT sm = 0; c->OMGetBlendState(&bs, bf, &sm);
+      D3D11_BLEND_DESC bd = {}; bd.RenderTarget[0].RenderTargetWriteMask = (UINT8)D3D11_COLOR_WRITE_ENABLE_ALL;   // estado por defecto de D3D11
+      if (bs) { bs->GetDesc(&bd); bs->Release(); }
+      const D3D11_RENDER_TARGET_BLEND_DESC& b = bd.RenderTarget[bd.IndependentBlendEnable ? 2 : 0];
+      auto sa = [](D3D11_BLEND f) { return f == D3D11_BLEND_SRC_ALPHA || f == D3D11_BLEND_INV_SRC_ALPHA || f == D3D11_BLEND_SRC_ALPHA_SAT || f == D3D11_BLEND_SRC1_ALPHA || f == D3D11_BLEND_INV_SRC1_ALPHA; };
+      const bool okA = (b.RenderTargetWriteMask & D3D11_COLOR_WRITE_ENABLE_ALPHA) != 0
+          && (!b.BlendEnable || (b.BlendOpAlpha == D3D11_BLEND_OP_ADD && b.SrcBlendAlpha == D3D11_BLEND_ONE) || b.BlendOpAlpha == D3D11_BLEND_OP_MAX);
+      const bool okC = !b.BlendEnable || (!sa(b.SrcBlend) && !sa(b.DestBlend));
+      const int v = okA ? 1 : 0;
+      static std::atomic<int> lines{0};
+      if (s_svBlendOk.exchange(v) != v && lines.fetch_add(1) < 8)
+          Log("pasto w447: mezcla del RT2 de la pasada del sol: on %d src %d dst %d op %d | alfa %d %d %d | mascara %x -> %s%s",
+              (int)b.BlendEnable, (int)b.SrcBlend, (int)b.DestBlend, (int)b.BlendOp, (int)b.SrcBlendAlpha, (int)b.DestBlendAlpha, (int)b.BlendOpAlpha, (unsigned)b.RenderTargetWriteMask,
+              okA ? "se copia" : "el alfa no se escribe tal cual: no se copia (las puntas quedan como antes)", okC ? "" : " | AVISO: el .w cambia el .xyz del RT2 (la composicion)"); }
+}
+// despues del dibujo de la composicion (619b86cb, FX_DRAW de hooks.cpp; puede ser un contexto diferido): copia de t14 una vez por cuadro
+void GrassSunVisAfterComposition(ID3D11DeviceContext* c) {
+    if (g_cfg.bypass || !g_dev.dev || GrassLive(447, 3) < 0.001f) return;
+    const int f = PresentNo();
+    { static std::atomic<double> next{0.0}; const double tn = Now();   // registro cada 30 s (13/11: atomico, la composicion puede grabarse en varios hilos)
+      double nx = next.load();
+      if (tn >= nx && next.compare_exchange_strong(nx, tn + 30.0)) { const bool first = nx == 0.0;
+        if (!first) { const int isRt2 = s_svIsRt2.load();
+            Log("pasto w447 sombra real en las puntas (30 s): copias de la sombra %d, emisiones / dibujos de hojas con la copia %d, dibujos de la base con la copia %d | sin copia: vieja %d, corte de camara %d | composiciones sin copiar: vista chica %d, sin t14 %d, formato %d, t14 no es el RT2 del sol %d, mezcla del RT2 %d | t14 %s%s",
+                s_svCopies.exchange(0), s_svBinds.exchange(0), s_svBindsBase.exchange(0), s_svStale.exchange(0), s_svCut.exchange(0), s_svSmall.exchange(0), s_svNoT14.exchange(0), s_svBadFmt.exchange(0), s_svNotRt2.exchange(0), s_svNoBlend.exchange(0),
+                isRt2 > 0 ? "= RT2 de la pasada del sol" : (isRt2 == 0 ? "DISTINTO del RT2 de la pasada del sol" : "sin comparar"), s_svFailed ? " | NO SE PUDO CREAR LA COPIA" : ""); } } }
+    if ((g_cfg.live[104][0] < 0.5f && g_cfg.live[139][0] < 0.5f) || g_cfg.live[114][3] < 0.5f) return;   // sin el pasto v3 (x139 lo prende en la GPU) o de noche (114.w = dia soleado) las hojas no la leen
+    if (s_svFrame.load() == f) return;   // una por cuadro
+    if (g_bbW) { D3D11_VIEWPORT vp[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]; UINT nv = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+        c->RSGetViewports(&nv, vp);
+        if (nv && (UINT)vp[0].Width * 4 < g_bbW * 3) { s_svSmall++; return; } }   // composicion de otra camara del juego (vista chica): no es la de las hojas
+    if (s_svBlendOk.load() == 0) { s_svNoBlend++; return; }   // (13/11) el RT2 del sol no guarda su .w tal cual (log de GrassSunVisNoteSunPass): como antes
+    ID3D11ShaderResourceView* sv = nullptr; c->PSGetShaderResources(14, 1, &sv);
+    if (!sv) { s_svNoT14++; return; }
+    D3D11_SHADER_RESOURCE_VIEW_DESC vd; sv->GetDesc(&vd);
+    ID3D11Resource* res = nullptr; sv->GetResource(&res); sv->Release();
+    if (!res) { s_svNoT14++; return; }
+    { void* sr = s_svSunRT2.load(); s_svIsRt2 = sr ? (sr == (void*)res ? 1 : 0) : -1; }
+    const int isRt2 = s_svIsRt2.load();
+    ID3D11Texture2D* t = nullptr; res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t); res->Release();
+    if (!t) { s_svNoT14++; return; }
+    D3D11_TEXTURE2D_DESC td; t->GetDesc(&td);
+    bool coarse = false;
+    const bool fmtOk = SunVisFmtOk(vd.Format, coarse);
+    const bool dimOk = vd.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D && td.SampleDesc.Count == 1 && td.ArraySize == 1 && !(td.MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE);
+    const bool ok = fmtOk && dimOk && isRt2 != 0;   // (13/11) t14 distinto del RT2 de la pasada del sol: no se copia (sin comparar, -1: si)
+    { static std::atomic<int> lg{0}; if (lg.fetch_add(1) == 0)
+        Log("pasto w447 sombra real en las puntas: t14 de la composicion %ux%u, formato %d (vista %d, dimension %d, muestras %u, capas %u), %s%s",
+            td.Width, td.Height, (int)td.Format, (int)vd.Format, (int)vd.ViewDimension, td.SampleDesc.Count, td.ArraySize,
+            isRt2 > 0 ? "es el RT2 de la pasada del sol" : (isRt2 == 0 ? "NO es el RT2 de la pasada del sol: no se copia (las puntas quedan como antes)" : "sin RT2 de la pasada del sol anotado para comparar"),
+            !fmtOk ? " | formato sin alfa suficiente: no se copia (las puntas quedan como antes)"
+                : (!dimOk ? " | no es una textura 2D simple: no se copia (las puntas quedan como antes)"
+                : ((ok && coarse) ? " | alfa de 2 bits (R10G10B10A2): la penumbra queda en 4 escalones" : ""))); }
+    if (!ok) { t->Release(); if (fmtOk && dimOk) s_svNotRt2++; else s_svBadFmt++; return; }
+    ID3D11Texture2D* dst = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(s_bsMx);
+        if (s_hyDev != g_dev.dev) { HyDropLocked(); s_hyDev = g_dev.dev; }
+        const bool same = s_svDesc.Width == td.Width && s_svDesc.Height == td.Height && s_svDesc.MipLevels == td.MipLevels && s_svDesc.Format == td.Format && s_svFmt == vd.Format && s_svMip == vd.Texture2D.MostDetailedMip;
+        if (!same) {   // como SnapshotRT: textura propia con la misma descripcion (solo lectura) y la vista en el formato del juego
+            if (s_svSrv) s_svSrv->Release(); if (s_svTex) s_svTex->Release(); s_svSrv = nullptr; s_svTex = nullptr; s_svFailed = false;
+            s_svDesc = td; s_svFmt = vd.Format; s_svMip = vd.Texture2D.MostDetailedMip; s_svFrame = -100;
+            D3D11_TEXTURE2D_DESC nd = td; nd.Usage = D3D11_USAGE_DEFAULT; nd.BindFlags = D3D11_BIND_SHADER_RESOURCE; nd.CPUAccessFlags = 0; nd.MiscFlags = 0;
+            if (SUCCEEDED(g_dev.dev->CreateTexture2D(&nd, nullptr, &s_svTex)) && s_svTex) {
+                D3D11_SHADER_RESOURCE_VIEW_DESC sd = {}; sd.Format = vd.Format; sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D; sd.Texture2D.MostDetailedMip = vd.Texture2D.MostDetailedMip; sd.Texture2D.MipLevels = 1;
+                if (FAILED(g_dev.dev->CreateShaderResourceView(s_svTex, &sd, &s_svSrv))) s_svSrv = nullptr;
+            } else s_svTex = nullptr;
+            if (!s_svTex || !s_svSrv) { s_svFailed = true; Log("pasto w447: no se pudo crear la copia de la sombra del sol (t14 %ux%u formato %d / vista %d): las puntas quedan como antes", td.Width, td.Height, (int)td.Format, (int)vd.Format); }
+        }
+        if (!s_svFailed && s_svTex && s_svSrv) { dst = s_svTex; dst->AddRef(); }
+    }
+    if (dst) {
+        c->CopyResource(dst, t); dst->Release(); s_svCopies++;
+        s_svFrame = f;
+        std::lock_guard<std::mutex> lk(s_bsMx);
+        CamCutSince(s_svCutSeen);   // los cortes de camara de antes de esta copia ya estan dibujados en ella
+    }
+    t->Release();
+}
+// la copia para las hojas (con referencia) o null = como antes: editor, w447 = 0, copia de hace mas de 2 cuadros (noche, sin composicion, otra
+// vista) o de antes de un corte de camara (hasta la proxima composicion), sin copia
+static ID3D11ShaderResourceView* SunVisForBlades() {
+    if (t_editor || g_cfg.bypass || !g_dev.dev || GrassLive(447, 3) < 0.001f) return nullptr;
+    const int age = PresentNo() - s_svFrame.load();
+    if (age < 0 || age > 2) { s_svStale++; return nullptr; }
+    std::lock_guard<std::mutex> lk(s_bsMx);
+    if (CamCutPeek(s_svCutSeen)) { s_svCut++; return nullptr; }
+    if (s_svFailed || !s_svSrv || s_hyDev != g_dev.dev) return nullptr;
+    s_svSrv->AddRef(); return s_svSrv;
+}
 // (08/11 d, Agustin: "no puedes cargar sin haber cargado un partido antes?") ESTADO PROPIO para el editor: sin partido visto no hay
 // estado del pasto del juego (shaders, texturas de la cancha, cbuffers), asi que se arma uno equivalente una sola vez: los shaders del
 // pasto del catalogo (los reemplazos del mod, 498b30 / 18afff: las reglas de t7 / t8 / t9 y t120 se aplican igual en BeforeDraw), un
@@ -1200,10 +1326,12 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         }
         ID3D11ShaderResourceView* snap = nullptr; ID3D11ShaderResourceView* oldT10 = nullptr; bool t10Set = false;
         ID3D11ShaderResourceView* r4 = nullptr; ID3D11ShaderResourceView* oldT44 = nullptr; bool t44Set = false;   // (11/11 j) luz del estadio (y290 = 0)
+        ID3D11ShaderResourceView* svv = nullptr; ID3D11ShaderResourceView* oldT48 = nullptr; bool t48Set = false;   // (12/11 23:45) w447: sombra del sol del cuadro anterior (t48)
         { int bm = 0; const bool baseUnder = !t_editor && (!bound || RecHas(c, &GRec::base));   // (08/11 c) editor: sin RT4 ni copia del suelo (no hay cancha)   // sin la base dibujada antes no hay suelo con que mezclar ni luz en RT4
           if (g_cfg.live[290][1] > 0.5f && baseUnder) bm |= 1;
           if (g_cfg.live[291][0] > 0.5f && baseUnder && (snap = SnapshotRT(c, 0)) != nullptr) bm |= 2;   // (26/10 g) sin la copia del suelo no hay mezcla
           if ((r4 = BaseRT4ForBlades(c, baseUnder)) != nullptr) { c->PSGetShaderResources(44, 1, &oldT44); c->PSSetShaderResources(44, 1, &r4); t44Set = true; s_r4Binds++; }
+          if ((svv = SunVisForBlades()) != nullptr) { c->PSGetShaderResources(48, 1, &oldT48); c->PSSetShaderResources(48, 1, &svv); t48Set = true; s_svBinds++; }   // (12/11 23:45) w447
           if (bm) if (ID3D11BlendState* nb = BladeBlend(svBs, bm)) { c->OMSetBlendState(nb, svBf, svBm); nb->Release(); farBl = (bm & 2) != 0; bmSet = bm; }
           if (farBl) { c->PSGetShaderResources(10, 1, &oldT10); c->PSSetShaderResources(10, 1, &snap); t10Set = true; } }
         if (stRoute) s_emitSt++; if (bmSet & 1) s_emitRt4++; if (bmSet & 2) s_emitSnap++; if (!stRoute && !bmSet) s_emitBare++;
@@ -1293,6 +1421,8 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         if (oldT10) oldT10->Release(); if (snap) snap->Release();
         if (t44Set) c->PSSetShaderResources(44, 1, &oldT44);
         if (oldT44) oldT44->Release(); if (r4) r4->Release();
+        if (t48Set) c->PSSetShaderResources(48, 1, &oldT48);
+        if (oldT48) oldT48->Release(); if (svv) svv->Release();
         emitted = true;
         Why(bound ? "emitiendo (desde el pasto del juego)" : "emitiendo (desde la base de la cancha)");
     }
@@ -1350,6 +1480,15 @@ static bool MainPass(ID3D11DeviceContext* c) {
     if (res) res->Release();
     g_grassDbg.rtW = w;
     return w == g_bbW;
+}
+// (12/11 23:45) w447: la copia de la sombra del sol del cuadro anterior para la base de la cancha (BeforeDraw de 5e92 / c956, t48: la copa
+// del suelo en la sombra sin lo que es solo del sol), solo en la pasada principal (la de las hojas) y con y433. Con referencia; null = como antes
+ID3D11ShaderResourceView* GrassSunVisSRV(ID3D11DeviceContext* c) {
+    if (g_cfg.bypass || !g_dev.dev || GrassLive(447, 3) < 0.001f || (g_cfg.live[104][0] < 0.5f && g_cfg.live[139][0] < 0.5f) || GrassLive(433, 1) < 0.001f) return nullptr;
+    if (!MainPass(c)) return nullptr;
+    ID3D11ShaderResourceView* v = SunVisForBlades();
+    if (v) s_svBindsBase++;
+    return v;
 }
 
 void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntry* ps, UINT count, UINT start, INT base) {
@@ -1551,9 +1690,11 @@ void GrassGameStates(ID3D11DeviceContext* c, GrassStScope& s) {
     const bool baseHere = RecHas(c, &GRec::base);
     const bool st = g_cfg.live[290][0] > 0.5f, rt4 = g_cfg.live[290][1] > 0.5f && baseHere;   // RT4 solo con la base ya debajo
     ID3D11ShaderResourceView* r4 = BaseRT4ForBlades(c, baseHere);   // (11/11 j) y290 = 0: la luz del estadio de la base para escribir en RT4
-    if (!st && !rt4 && !r4) return;
+    ID3D11ShaderResourceView* sv = SunVisForBlades();   // (12/11 23:45) w447: sombra del sol del cuadro anterior (t48)
+    if (!st && !rt4 && !r4 && !sv) return;
     c->OMGetDepthStencilState(&s.dss, &s.ref); c->OMGetBlendState(&s.bs, s.bf, &s.bm); s.on = true;
     if (r4) { c->PSGetShaderResources(44, 1, &s.t44); c->PSSetShaderResources(44, 1, &r4); r4->Release(); s.t44Set = true; s_r4Binds++; }
+    if (sv) { c->PSGetShaderResources(48, 1, &s.t48); c->PSSetShaderResources(48, 1, &sv); sv->Release(); s.t48Set = true; s_svBinds++; }
     bool stOk = false;
     if (st) {
         ID3D11DepthStencilState* bD = nullptr; UINT bR = 0; bool have = false;
@@ -1582,6 +1723,7 @@ void GrassGameStatesRestore(ID3D11DeviceContext* c, GrassStScope& s) {
     c->OMSetDepthStencilState(s.dss, s.ref); c->OMSetBlendState(s.bs, s.bf, s.bm);
     if (s.b12) { c->VSSetConstantBuffers(12, 1, &s.vsB12); if (s.vsB12) s.vsB12->Release(); }
     if (s.t44Set) { c->PSSetShaderResources(44, 1, &s.t44); if (s.t44) s.t44->Release(); }
+    if (s.t48Set) { c->PSSetShaderResources(48, 1, &s.t48); if (s.t48) s.t48->Release(); }   // (12/11 23:45) w447
     if (s.dss) s.dss->Release(); if (s.bs) s.bs->Release();
     s = GrassStScope();
 }

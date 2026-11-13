@@ -71,6 +71,23 @@ float3 PESSunTintFinal(float3 c, float warm, float sinElev, float kSun)
   float3 t = c * Tn * (dot(c, LW) / max(dot(c * Tn, LW), 1e-4));
   return lerp(c, t, saturate(AT.z > 0.0 ? AT.z : 1.0) * saturate(kSun));
 }
+// (12/11 23:50, Agustin: "en las sombras que no cambie el color a otro") color del sol tal como lo deja PESSunColor en las pasadas del
+// sol, solo los pasos de color (z4 realismo con el sol bajo, calidez de la curva del dia, atmosfera fisica x121; la intensidad no) y con
+// luminancia 1. c = color del archivo de luz (m_lightColor0, en la composicion pLc_color), sinE = seno de la altura del sol. Lo usa la
+// composicion (619, x447: la sombra del pasto con el mismo verde que al sol). Si cambia el color en PESSunColor, cambiarlo aca tambien
+float3 PESSunChroma(float3 c, float sinE)
+{
+  const float3 LW = float3(0.2126, 0.7152, 0.0722);
+  float4 S4c = IniParams.Load(int2(4,0));
+  float kSc = saturate((c.r / max(c.b, 1e-4) - 0.85) * 4.0);              // sol real (luz calida); de noche las torres casi no cambian
+  float lowC = 1.0 - smoothstep(0.10, 0.60, sinE);
+  float3 tintC = lerp(float3(1.0, 0.962, 0.905), float3(1.0, 0.80, 0.60), lowC);
+  float kC = (S4c.z > 0 ? saturate(S4c.z) : 0.0) * kSc;
+  float3 rC = lerp(c, dot(c, LW) * tintC / dot(tintC, LW), kC);
+  PESDay dyC = PESDayCurve(sinE, kSc);
+  rC = PESSunTintFinal(rC, dyC.warm, sinE, kSc);
+  return rC / max(dot(rC, LW), 1e-5);
+}
 // tinte azulado de la luz ambiente en la hora azul
 float3 PESBlueTint(float3 c, float blue)
 {

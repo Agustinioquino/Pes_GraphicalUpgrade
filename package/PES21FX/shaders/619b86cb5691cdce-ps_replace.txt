@@ -208,6 +208,7 @@ void main(
   r0.z = g_psScene.m_projectionParam.z / r0.z;
   r1.xyz = inLightSpecular.Sample(g_samplerPoint_Wrap_s, r0.xy).xyz;
   r2.xyz = inLightDiffuse.Sample(g_samplerPoint_Wrap_s, r0.xy).xyz;
+  float3 pesRawL = r2.xyz;   // (12/11 23:50) x447: la luz del motor tal como llega (a la sombra, solo su ambiente)
   r3.xyz = inAlbedo.SampleLevel(g_samplerPoint_Clamp_s, r0.xy, 0).xyz;
   { // PES21 tono de piel (20/10, 140): cromaticidad dentro del lugar de la piel real para su claridad (cada tono se conserva)
     float4 SK = IniParams.Load(int2(140,0));
@@ -794,6 +795,7 @@ void main(
   // luz de cielo de 314 llegaba de lleno solo a la sombra: aca un poco de luz con el COLOR DEL CIELO (cielo fisico 150 o el de la niebla)
   // tambien en lo que esta al sol, mas en lo que mira hacia arriba (las puntas ven todo el cielo; la raiz y los costados menos). Celeste con
   // cielo azul, calido al atardecer, gris nublado; de noche nada (las torres son otra luz). El brillo del cielo en la cera va mas abajo (151)
+  float3 sky436 = 0;   // (12/11 23:50) la luz de cielo de y436 (x447 la suma al color de la luz al sol)
   { float kSkG = clamp(IniParams.Load(int2(436,0)).y, 0.0, 2.0);
     if (geoOk && kSkG > 0.001 && tyC == 3 && zsk < 400.0 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
       float3 scG = max(pLc_color.xyz, 0.0);
@@ -812,7 +814,8 @@ void main(
                  if (lh > 1e-4) { skyG = hor / lh * float3(0.85, 0.95, 1.15); skyG /= max(dot(skyG, float3(0.3, 0.5, 0.2)), 1e-4); } } }
         float upF = saturate(0.5 + 0.5 * dot(Nsk, upG));
         float aoG = lerp(1.0, saturate(inOcclusion.SampleLevel(g_samplerLinear_Clamp_s, uvC, 0).x), 0.5);
-        r2.xyz += lumG * skyG * 0.045 * kSkG * upF * upF * dayG * aoG * saturate((400.0 - zsk) / 120.0) * PESAmbGain();
+        sky436 = lumG * skyG * 0.045 * kSkG * upF * upF * dayG * aoG * saturate((400.0 - zsk) / 120.0) * PESAmbGain();
+        r2.xyz += sky436;
       }
     }
   }
@@ -861,6 +864,37 @@ void main(
         float3 cool = lerp(float3(1.0, 1.0, 1.0), float3(0.90, 0.97, 1.10), saturate(GS.y));
         float deep = GS.z > 0.0 ? clamp(GS.z, 0.5, 1.0) : 0.85;
         r2.xyz *= lerp(float3(1.0, 1.0, 1.0), cool * deep, inSh);
+      }
+    }
+  }
+  // === PES21 (12/11 23:50, Agustin: "habria que darle un poco mas de verde al pasto mas natural, asi como en las sombras que no cambie el
+  // color a otro y en el sol esta bien") x447 SOMBRA CON EL MISMO VERDE. A la sombra la luz del pasto es casi toda luz de cielo (314 y 436),
+  // celeste, y encima z109 la satura y 296 la enfria: el pasto pasaba a verde azulado / gris (unos 20 a 26 grados de tono contra el lado
+  // al sol y menos saturado). Aca la luz que queda a la sombra toma el COLOR de la que tendria al sol (el sol del archivo de luz con los
+  // pasos de color de PESSunColor y su N.L, el ambiente del motor y el cielo con lo que llega al sol: y314 de 314 y 436 entero) con el
+  // MISMO BRILLO (luminancia): la hondura de la sombra (x314, z296) no cambia. Solo el cesped (tipo 3), solo de dia con sol (la misma
+  // prueba que 314; de noche con torres no) y solo lo que esta a la sombra: al sol no cambia nada. Sigue lo dinamico: hora y color del sol
+  // (x121, archivo de luz del clima), cielo 150, la sombra (estadio, jugadores, nubes) y N.L. y445 / x445 usan pesHueK (mas abajo).
+  // x447 0..1: 0 = como antes, 0.8 = natural
+  float pesHueK = 0;   // x447 de dia en este pixel, sin la sombra
+  {
+    float kH7 = saturate(IniParams.Load(int2(447,0)).x);
+    if (geoOk && kH7 > 0.001 && tyC == 3 && zsk < 400.0 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+      float3 scH = max(pLc_color.xyz, 0.0);
+      float warmH = saturate((scH.r / max(scH.b, 1e-4) - 0.85) * 4.0);   // de dia con sol (de noche las torres son frias)
+      float3 LdH = normalize(pLc_dir.xyz);
+      float3 upH = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
+      if (dot(LdH, upH) < 0) upH = -upH;
+      float sinEH = saturate(dot(LdH, upH));
+      pesHueK = kH7 * smoothstep(0.0, 0.25, sinEH) * warmH;
+      float wH = pesHueK * (1.0 - saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x));
+      if (wH > 0.001) {
+        const float3 LWh = float3(0.2126, 0.7152, 0.0722);
+        float3 tgtH = PESSunChroma(scH, sinEH) * dot(scH * g_psScene.m_exposure.zzz, LWh) * max(dot(Nsk, LdH), 0.25)
+                    + max(pesRawL, 0.0) + sky314 * saturate(IniParams.Load(int2(314,0)).y) + sky436;
+        float lH = dot(r2.xyz, LWh);
+        float lTH = dot(tgtH, LWh);   // sin luz de referencia (sol y cielo casi 0) se deja como antes: nunca mas oscuro
+        if (lTH > 1e-5) r2.xyz = lerp(r2.xyz, tgtH * (lH / lTH), wH);
       }
     }
   }
@@ -1083,7 +1117,10 @@ void main(
                     float y314 = saturate(IniParams.Load(int2(314,0)).y);
                     float3 LC5 = max(rawC + sky314 * lerp(y314, 1.0, 1.0 - shC5), 0.0);
                     float3 LQ5 = max(rawQ + sky314 * lerp(y314, 1.0, 1.0 - shQ), 0.0);
-                    r2.xyz *= lerp(float3(1.0, 1.0, 1.0), clamp(LQ5 / max(LC5, 1e-4), 0.05, 8.0), m5);
+                    // (12/11 23:50) x447: con la sombra del mismo verde basta el cociente del BRILLO (el de cada canal traia el celeste)
+                    float3 rgb5 = clamp(LQ5 / max(LC5, 1e-4), 0.05, 8.0);
+                    float lum5 = clamp(dot(LQ5, float3(0.2126, 0.7152, 0.0722)) / max(dot(LC5, float3(0.2126, 0.7152, 0.0722)), 1e-4), 0.05, 8.0);
+                    r2.xyz *= lerp(float3(1.0, 1.0, 1.0), lerp(rgb5, lum5.xxx, pesHueK), m5);
                     shEff5 = lerp(shC5, shQ, m5);
                   }
                 }
@@ -1126,7 +1163,9 @@ void main(
           float vf = 0.85 + 0.30 * dot(Vsk, Ld5);                              // mirando hacia el sol se ven los lados en sombra
           float nearK = smoothstep(0.0006, 0.0018, pxM5);                    // de muy cerca las hojas 3D ya se hacen sombra entre ellas
           float dk = saturate(kT * occF * shEff5 * 0.6 * vf * nearK);
-          r2.xyz *= (1.0 - 0.7 * dk) * lerp(float3(1.0, 1.0, 1.0), float3(0.95, 0.99, 1.06), dk);
+          float3 tnt5 = float3(0.95, 0.99, 1.06);
+          tnt5 = lerp(tnt5, dot(tnt5, float3(0.2126, 0.7152, 0.0722)).xxx, pesHueK);   // (12/11 23:50) x447: sin el tinte frio, mismo brillo
+          r2.xyz *= (1.0 - 0.7 * dk) * lerp(float3(1.0, 1.0, 1.0), tnt5, dk);
         }
         // --- z445 halo de contraluz
         float kH = clamp(P445.z, 0.0, 2.0) * ss5;

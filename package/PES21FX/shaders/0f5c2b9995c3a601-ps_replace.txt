@@ -32,6 +32,10 @@ SamplerState g_samplerPoint_Clamp_s : register(s9);
 SamplerState g_samplerLinear_Clamp_s : register(s11);
 Texture2D<float4> inColorTexture : register(t0);
 Texture2D<float4> inAlphaTexture : register(t2);
+// (12/11) w454: velocidad por pixel y cbuffer del TAA (1a753492), guardados por regla (ref_srv = 2 Velocity, copy_cb = 5 TaaCB) y
+// enlazados aca (srv = 3 Velocity, cb = 6 TaaCB). pesTaa[10].zw = cambio del jitter, pesTaa[11].x / .zw = escala y tope de la uv
+Texture2D<float4> PesVel : register(t3);
+cbuffer PesTaaCB : register(b6) { float4 pesTaa[13]; }
 
 
 // 3Dmigoto declarations
@@ -170,6 +174,18 @@ void main(
       // con el gancho del motor x161; sin gancho 160.w = 0 y no hace nada). Rampa de 8 a 45 cuadros
       float4 Q330 = IniParams.Load(int2(330,0)); float4 T160 = IniParams.Load(int2(160,0));
       float still = T160.w > 0.5 ? smoothstep(8.0, 45.0, T160.z) : 0.0;
+      // (12/11, Agustin: "que el pasto se vea mas nitido al estar quieto") w454: 160.z cuenta cuadros desde el ultimo reinicio del TAA, no
+      // si la camara se mueve: en un paneo largo x330 tambien se sumaba. Con w454 = 1 se mira la velocidad real de este pixel (la misma
+      // del TAA, sin el jitter): completa debajo de 0.5 px por cuadro (quieto o paneo lento, el "quieto" del que mira: ahi el pasto
+      // necesita la nitidez), nada desde 1.2 px (paneo rapido: el realce haria titilar el pasto). Sin la regla (nada enlazado) lee 0 =
+      // como antes. min(.., 1e4): una velocidad NaN / Inf (cbuffer viejo en b6) cuenta como rapida (sin x330) y no apaga todo el CAS
+      float4 P454 = IniParams.Load(int2(454,0));
+      if (P454.w > 0.0 && still > 0.0) {
+        float pesSc = pesTaa[11].x;
+        float2 uvV = (pesSc > 0.0) ? min(uvP * pesSc, pesTaa[11].zw) : uvP;   // la velocidad esta en el espacio del cuadro actual del TAA
+        float2 vPx = PesVel.SampleLevel(g_samplerPoint_Clamp_s, uvV, 0).xy - pesTaa[10].zw;
+        still *= 1.0 - saturate(P454.w) * smoothstep(0.5, 1.2, min(length(vPx), 1e4));
+      }
       float3 base = PESCas(uvP, g_psSystem.m_renderBuffer.zw, saturate(PP.x + clamp(Q330.x, 0.0, 1.0) * still));
       float lumB = dot(base, float3(0.2126, 0.7152, 0.0722));
       float gw = exp2(log2(max(1.0 - lumB, 1e-4)) * g_psObject.m_localParam[5].y);

@@ -206,12 +206,40 @@ float3 PESSunSky() { float4 S = IniParams.Load(int2(312, 0)); return (S.w > 0.5 
 bool PESNatOn() { return IniParams.Load(int2(104, 0)).x > 0.5 && IniParams.Load(int2(407, 0)).x < 0.5 && IniParams.Load(int2(412, 0)).z < 0.5; }
 float PESNatGain() { if (!PESNatOn()) return 1.0; float g = IniParams.Load(int2(433, 0)).x; return g > 0.05 ? clamp(g, 0.5, 2.5) : 1.6; }
 float3 PESNatShoulder(float3 c) { return c - max(c - 0.75, 0.0) * 0.6; }
+// (12/11 23:45, Agustin: dentro de la sombra del estadio las puntas cercanas salian 1.3-4.5 veces mas claras y mas amarillas que el pasto en
+// sombra) w447 SOMBRA REAL EN LAS PUNTAS: visibilidad del sol en este pixel (1 = al sol, 0 = sombra entera del estadio, de los jugadores o de
+// las nubes) leida en t = copia de la DLL del RT2 de la pasada del sol del cuadro anterior (.w = visibilidad limpia: e9c13 / b8a2 / 7dbbc) en
+// la posicion que este pixel tenia en ese cuadro. px = SV_Position.xy, mv = o3.xy (px de ahora - px del cuadro anterior, lo mismo que lee el
+// TAA), rb = m_renderBuffer.xy. Si el pixel cae en sombra se mira una cruz de ~1.5 px (a 1080p) y gana lo mas soleado: el atraso de un cuadro
+// y lo que destapa un jugador que se mueve quedan como antes (al sol), no con una sombra falsa. Sin la textura enlazada (DLL vieja, editor,
+// corte de camara), con w447 = 0 o de noche = 1 (como antes). Los VS que incluyen este archivo no la llaman
+float PESSunVisGate(Texture2D<float4> t, float2 px, float2 mv, float2 rb) {
+  float k = saturate(IniParams.Load(int2(447, 0)).w);
+  if (k < 0.001 || IniParams.Load(int2(114, 0)).w < 0.5) return 1.0;
+  uint w = 0, h = 0; t.GetDimensions(w, h);
+  if (w == 0 || h == 0) return 1.0;
+  float2 d = float2(w, h);
+  if (rb.x < 1.0 || rb.y < 1.0) rb = d;
+  float2 p = (px - mv) * (d / rb);
+  if (any(p < 0.0) || any(p >= d)) return 1.0;   // fuera de la pantalla en el cuadro anterior: como antes
+  float m = t.Load(int3(p, 0)).w;
+  if (m < 0.999) {
+    float r = max(1.5 * d.y / 1080.0, 1.0);
+    float2 hi = d - 1.0;
+    float mx = max(t.Load(int3(clamp(p + float2(r, 0.0), 0.0, hi), 0)).w, t.Load(int3(clamp(p - float2(r, 0.0), 0.0, hi), 0)).w);
+    float my = max(t.Load(int3(clamp(p + float2(0.0, r), 0.0, hi), 0)).w, t.Load(int3(clamp(p - float2(0.0, r), 0.0, hi), 0)).w);
+    m = max(m, max(mx, my));
+  }
+  return lerp(1.0, smoothstep(0.1, 0.9, saturate(m)), k);
+}
 // (12/11, Agustin: "los efectos de translucidez y de mojado en algunas puntas se mantienen hasta cierta distancia y se actualizan lo mas en
 // vivo posible") lo que las hojas de cerca suman por hoja (la luz del sol que atraviesa la lamina a contraluz, las puntas encendidas, el
 // brillo humedo de algunas puntas) el suelo lo lleva como PROMEDIO de la copa: mismo tono de cerca y de lejos, calculado en cada cuadro con
 // el sol, la camara y la humedad de ese momento. V = del punto al ojo (mundo). pxm = px/m del punto: se apaga por debajo de z433 px/m
 // (0 = 10). y433 = cuanto (0 = nada). spec / rough = o2.y / o2.x
-void PESNatCanopy(inout float3 c, inout float spec, inout float rough, float3 V, float pxm) {
+// (12/11 23:45) sunV = PESSunVisGate del suelo (w447): en la sombra del estadio o de los jugadores la copa no lleva la luz que atraviesa las
+// hojas ni las puntas al sol fuerte (como un dia nublado), igual que las hojas de cerca; 1 = como antes
+void PESNatCanopy(inout float3 c, inout float spec, inout float rough, float3 V, float pxm, float sunV) {
   float4 P = IniParams.Load(int2(433, 0));
   if (P.y < 0.001 || !PESNatOn()) return;
   float lim = P.z > 0.5 ? clamp(P.z, 2.0, 200.0) : 10.0;
@@ -219,12 +247,12 @@ void PESNatCanopy(inout float3 c, inout float spec, inout float rough, float3 V,
   if (kY < 0.001) return;
   float4 P414 = IniParams.Load(int2(414, 0)), P114 = IniParams.Load(int2(114, 0));
   float day = P114.w > 0.5 ? 1.0 : 0.0;
-  float sunK = saturate(P414.w * 1.2) * day;
+  float sunK = saturate(P414.w * 1.2) * day * sunV;
   float3 S = PESSunSky();
   float back = saturate(0.5 - 0.5 * dot(normalize(V.xz + 1e-5), normalize(S.xz + 1e-5)));   // mirando hacia el sol = contraluz
   float tx = 0.32 * sunK * (0.28 + 0.82 * back) * clamp(IniParams.Load(int2(413, 0)).w, 0.0, 2.0);   // media de la transmision a lo largo de la hoja
   c = lerp(c, c * float3(1.26, 1.36, 0.86), saturate(tx * 0.95) * kY);
-  c *= lerp(float3(1.0, 1.0, 1.0), float3(1.05, 1.06, 0.95), 0.5 * clamp(IniParams.Load(int2(295, 0)).z, 0.0, 2.0) * kY * lerp(0.3, 1.0, saturate(P414.w)));   // puntas
+  c *= lerp(float3(1.0, 1.0, 1.0), float3(1.05, 1.06, 0.95), 0.5 * clamp(IniParams.Load(int2(295, 0)).z, 0.0, 2.0) * kY * lerp(0.3, 1.0, saturate(P414.w) * sunV));   // puntas
   // puntas mojadas (x329: una de cada ~8 hojas, mas con la cancha humeda, en invierno y al amanecer): brillo promedio
   float2 g = PESGround();
   float dewK = (1.0 + 0.8 * g.x) * (1.0 - 0.85 * g.y) * (abs(P114.z - 1.0) < 0.5 ? 1.4 : 1.0);

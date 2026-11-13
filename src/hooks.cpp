@@ -524,6 +524,8 @@ static const GrassVerOv kGrassVer[] = {
     {1, 443, 0, 0.0f}, {1, 443, 1, 0.0f}, {1, 443, 2, 0.0f}, {1, 443, 3, 0.0f},
     {1, 444, 0, 0.0f}, {1, 444, 1, 0.0f},
     {1, 445, 0, 0.0f}, {1, 445, 1, 0.0f}, {1, 445, 2, 0.0f}, {1, 445, 3, 0.0f},
+    {1, 447, 3, 0.0f},   // (12/11 23:45) w447 sombra real en las puntas
+    {1, 447, 0, 0.0f}, {1, 456, 0, 0.0f},   // (13/11) x447 sombra con el mismo verde, x456 color del pasto elegido
     // >= 2: 12/11 00:00 - 01:40
     {2, 432, 0, 0.0f}, {2, 432, 3, 0.0f}, {2, 433, 0, 1.0f}, {2, 433, 1, 0.0f}, {2, 433, 3, 0.0f},
     {2, 436, 0, 0.0f}, {2, 436, 1, 0.0f}, {2, 436, 2, 0.0f}, {2, 436, 3, 0.0f}, {2, 431, 0, 0.0f},
@@ -1456,6 +1458,10 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (ps && ps->hash == 0x63fab7735eee149cULL && ps->repl && s.lastHairCB) { Remember(c, d, true, false, 11); c->PSSetConstantBuffers(11, 1, &s.lastHairCB); }
     // (27/10 c) sombra de la cabeza: el atlas propio (t30) a los 7 shaders del sol reemplazados
     if (ps && ps->repl) { int si = SunPassIndex(ps->hash); if (si >= 0 && si != 7) if (ID3D11ShaderResourceView* hs = HeadShadowSRV()) { Remember(c, d, true, true, 30); c->PSSetShaderResources(30, 1, &hs); } }
+    // (12/11 23:45) w447 sombra real en las puntas: el RT2 de las pasadas del sol (el log comprueba que es el t14 de la composicion que se copia)
+    // y, en la base de la cancha (5e92 / c956), la copia de esa sombra del cuadro anterior en t48 (la copa del suelo en la sombra, PESSunVisGate)
+    if (ps && SunPassIndex(ps->hash) >= 0) GrassSunVisNoteSunPass(c);
+    if (ps && ps->repl && (ps->hash == 0x5e92f2343848915aULL || ps->hash == 0xc9564b9b155f0a49ULL)) if (ID3D11ShaderResourceView* sv = GrassSunVisSRV(c)) { Remember(c, d, true, true, 48); c->PSSetShaderResources(48, 1, &sv); sv->Release(); }
     // (04/11 boca) d0e9 / 7dbbc: mascara del interior de la boca en t43 (donde hay boca, la contraluz de antes)
     if (ps && ps->repl && (ps->hash == 0xd0e9d81c09b3da66ULL || ps->hash == 0x7dbbc922c9ae74c5ULL || ps->hash == 0x619b86cb5691cdceULL
         /* (10/11) focos: la sombra fina sobre la cara no entra en la boca */ || ps->hash == 0x142c18270479a113ULL || ps->hash == 0x68d58aa84c0256f5ULL || ps->hash == 0x9ce9d8463800b399ULL || ps->hash == 0xc33576f12dd818bfULL || ps->hash == 0xd5037e255559ea13ULL)) if (ID3D11ShaderResourceView* mm = MouthMaskSRV())   /* (09/11 hilo boca) + 619b: sombra del volumen de la boca */ { Remember(c, d, true, true, 43); c->PSSetShaderResources(43, 1, &mm); }
@@ -1583,7 +1589,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if ((kind) == 1 && t_grassSub.count) { if (!ds.lod.count) ds.lod = t_grassSub; else t_grassSub.Release(); t_grassSub = LodIA(); } \
     if (!ds.skip) { call; } if (ds.wire) MotorWireEnd(c, ds.wireRS); if (ds.restorePS) { c->PSSetShader(ds.restorePS, nullptr, 0); ds.restorePS->Release(); } if (ds.glass.on) GlassAfterDraw(c, ds.glass); if (ds.ring.on) RingAfterDraw(c, ds.ring); \
     if (ds.ring.overlay && !ds.skip) { RingOverlayBegin(c, ds.ring); call; RingOverlayEnd(c, ds.ring); } \
-    { CtxState& cm_ = Ctx(c); if (cm_.ps && (cm_.ps->hash == 0x619b86cb5691cdceULL || cm_.ps->hash == 0xf807e74d5b900a15ULL)) { if (!ds.skip) HairFwdAfterComposition(c); if (g_meterHook) { int gz_ = GpuZoneBegin(c, kGzLightMeter); LightMeterAfterComposition(c); GpuZoneEnd(c, gz_); } } } \
+    { CtxState& cm_ = Ctx(c); if (cm_.ps && (cm_.ps->hash == 0x619b86cb5691cdceULL || cm_.ps->hash == 0xf807e74d5b900a15ULL)) { if (cm_.ps->hash == 0x619b86cb5691cdceULL && !ds.skip) GrassSunVisAfterComposition(c); /* (12/11 23:45) w447: copia de t14 para las hojas */ if (!ds.skip) HairFwdAfterComposition(c); if (g_meterHook) { int gz_ = GpuZoneBegin(c, kGzLightMeter); LightMeterAfterComposition(c); GpuZoneEnd(c, gz_); } } } \
     if (g_inspectOn) { CtxState& ci_ = Ctx(c); if (InspectBegin(c, ci_.ps, ci_.vs, kind, verts, inst)) { call; InspectEnd(c); } } \
     if (ds.mouth && !ds.skip) MouthMaskReplay<V>(c, ds); \
     if (ds.brow.browVS && !ds.skip) BrowStrands<V>(c, ds); if (ds.tess.on && !ds.skip && (kind) == 1) TessAtlas<V>(c, ds); if (ds.tess.on) FaceTessEnd(c, ds.tess); if (r) Restore(c, ds); if (ds.lod.count) ds.lod.Release();
