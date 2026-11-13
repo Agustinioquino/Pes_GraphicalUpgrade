@@ -904,7 +904,7 @@ static void DrawWindNowPanel() {
     snprintf(ov, sizeof ov, TRS("Revuelto %.0f %%"), w.turb * 100.0f); ImGui::ProgressBar(std::clamp(w.turb, 0.0f, 1.0f), ImVec2(W * 0.75f, 0), ov);
     static const char* kPre[] = { "Segun el partido", "Calmo", "Brisa", "Ventoso", "Tormenta" };
     ImGui::TextDisabled(TRS("Viene de: %s%s%s. Reparo del estadio %.2f (%s)%s."), TRS(kPre[std::clamp(w.preset, 0, 4)]),
-        w.preset == 0 ? (w.fromCloth ? TRS(", cloth.ini") : TRS(", cielo del mod")) : "", w.fixedDir ? TRS(", rumbo fijo") : "",
+        w.preset == 0 ? (w.src == 0 ? TRS(", cloth.ini") : w.src == 1 ? TRS(", partido") : TRS(", cielo del mod")) : "", w.fixedDir ? TRS(", rumbo fijo") : "",
         w.shelter, w.shelterManual ? TRS("a mano") : (w.stadium >= 0 ? TRS("tabla") : TRS("sin estadio")), w.rain ? TRS(", lluvia") : "");
     if (w.outside < 0.99f) ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.45f, 1), TRS("Bajo techo: llega el %.0f %% del viento de afuera"), 100.0f * w.outside);
 }

@@ -531,9 +531,10 @@ bool SaveCloth() {
 // [sim] wind_x / wind_y / wind_z / wind_gust a partir del viento base del usuario (el de cloth.ini al abrir el juego):
 // rumbo al azar, fuerza x de noche 0.7, lluvia 1.6, invierno 1.25, verano 0.9, y un azar de partido (y353 = cuanto, 0..1).
 // x353 escala total, w353 on. El pelo toma la misma direccion (SaveCloth). wind_response (cuanto reacciona la tela) no se toca.
+MatchWindOut g_matchWind;
 void MatchWind(const MatchInfo& m, unsigned long long seed) {
     Config& c = g_cfg;
-    if (c.live[353][3] < 0.5f || !c.clothFound) return;
+    if (c.live[353][3] < 0.5f) return;
     static bool haveBase = false; static float bx = 2.0f, by = 1.5f, bz = 0.0f, bg = 3.0f;
     if (!haveBase) {
         auto get = [&](const char* k, float d) { auto it = c.clothLoaded.find(k); return it != c.clothLoaded.end() ? it->second : d; };
@@ -548,6 +549,9 @@ void MatchWind(const MatchInfo& m, unsigned long long seed) {
     k *= (float)(1.0 + var * (r1 * 1.3 - 0.55));   // 0.45 .. 1.75 con var = 1
     k *= sc;
     const float sp = sqrtf(bx * bx + bz * bz) * k, ang = (float)(r2 * 6.283185307);
+    // (13/11 sk9ema) el viento unico usa esto aunque no haya mod de ropa o su viento base sea 0 (PC de Agustin: base 0 -> todo en 0)
+    g_matchWind.valid = true; g_matchWind.k = k; g_matchWind.ang = ang;
+    if (!c.clothFound) { Log("viento del partido (sin mod de ropa): fuerza x%.2f, rumbo %.0f grados", k, ang * 57.2958f); return; }
     const float gust = bg * (m.weather == 1 ? 1.4f : 1.0f) * (float)(1.0 + var * (r3 * 0.6 - 0.3));
     c.clothVals["sim.wind_x"] = roundf(sp * cosf(ang) * 100.0f) / 100.0f;
     c.clothVals["sim.wind_z"] = roundf(sp * sinf(ang) * 100.0f) / 100.0f;

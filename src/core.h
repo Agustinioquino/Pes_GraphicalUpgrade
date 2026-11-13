@@ -233,6 +233,8 @@ bool ReadPreset(const std::wstring& path, PresetFile& out);
 bool ApplyPresetFile(const std::string& file);
 void ClearPreset();
 void ScanPresets(std::vector<PresetFile>& out);
+struct MatchWindOut { bool valid = false; float k = 1.0f, ang = 0.0f; };   // (13/11 sk9ema) fuerza y rumbo del partido de MatchWind (para wind.cpp)
+extern MatchWindOut g_matchWind;
 void MatchWind(const MatchInfo& m, unsigned long long seed);   // (02/11) viento por partido (fila 353) -> cloth.ini, con g_cfgMutex tomado
 void PollMatch();                               // cada ~1 s: match.ini -> preset del estadio
 bool SavePresetForMatch(const std::string& name, const std::string& author, bool onlyThisTime, std::string& outFile);
@@ -436,7 +438,7 @@ void RedesPresent();   // (13/11 sk9ema) redes de los arcos: viento en cada punt
 extern std::atomic<int> g_grassSeenFrame;   // (13/11 sk9ema) ultimo cuadro con el pasto de la cancha (grass.cpp; wind.cpp lo usa para bajo techo)
 // (13/11 etapa 2b) el viento de este cuadro para el panel "Viento ahora" del menu (lo llena WindFrame)
 struct WindNow { bool on = false; float speed = 0, dirDeg = 0, gust = 0, turb = 0, outside = 1, base = 0, shelter = 0.5f, soonSpeed = 0, soonDirDeg = 0, hour = -1;
-                 int preset = 0, stadium = -1, season = -1; bool fixedDir = false, shelterManual = false, rain = false, fromCloth = false; };
+                 int preset = 0, stadium = -1, season = -1, src = 0; bool fixedDir = false, shelterManual = false, rain = false, fromCloth = false; };
 extern WindNow g_windNow;
 void WindFrame(float (*p)[4], double tReal);   // (13/11 sk9ema) viento unico: filas 494 / 495 (wind.cpp), despues de la fila 157
 void SolLibreFrame(float (*p)[4], double t);   // UpdateTimeParams

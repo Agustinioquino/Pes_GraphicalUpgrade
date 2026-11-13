@@ -74,11 +74,21 @@ void WindFrame(float (*p)[4], double tReal) {
     // z353 viento unico; w353 = el grupo "viento distinto en cada partido" prendido
     if (c.live[353][2] < 0.5f || c.live[353][3] < 0.5f) { for (int k = 0; k < 4; k++) p[494][k] = p[495][k] = p[504][k] = 0.0f; g_windNow.on = false; return; }
     // viento base de este partido
-    float tx, tz;
+    // (13/11 arreglo, primer partido de Agustin con la tanda 2: "base 0.00 m/s" todo el partido) si cloth.ini no trae viento de
+    // costado (claves ausentes o wind_x / wind_z en 0: su viento base es 0 y MatchWind lo multiplica), la base es 2 m/s con la fuerza
+    // y el rumbo del partido de MatchWind (hora, clima, estacion, azar, x353); sin partido leido, el rumbo de las nubes (z84)
+    float tx = 0.0f, tz = 0.0f; int src = 0;   // 0 cloth.ini, 1 partido sin cloth, 2 nubes
     { auto wx = c.clothVals.find("sim.wind_x"), wz = c.clothVals.find("sim.wind_z");
       if (c.clothFound && (wx != c.clothVals.end() || wz != c.clothVals.end())) {
-          tx = wx != c.clothVals.end() ? wx->second : 2.0f; tz = wz != c.clothVals.end() ? wz->second : 0.0f;
-      } else { const float a = c.live[84][2] * 0.0174533f, s = 2.0f * std::clamp(c.live[353][0], 0.0f, 3.0f); tx = cosf(a) * s; tz = sinf(a) * s; } }
+          tx = wx != c.clothVals.end() ? wx->second : 2.0f; tz = wz != c.clothVals.end() ? wz->second : 0.0f; }
+      if (!c.clothFound || tx * tx + tz * tz < 0.05f * 0.05f) {
+          if (g_matchWind.valid) { const float s = 2.0f * g_matchWind.k; tx = cosf(g_matchWind.ang) * s; tz = sinf(g_matchWind.ang) * s; src = 1; }
+          else { const float a = c.live[84][2] * 0.0174533f, s = 2.0f * std::clamp(c.live[353][0], 0.0f, 3.0f); tx = cosf(a) * s; tz = sinf(a) * s; src = 2; }
+      } }
+    { static int lastSrc = -1; if (src != lastSrc) { lastSrc = src;
+        auto wx = c.clothVals.find("sim.wind_x"), wz = c.clothVals.find("sim.wind_z");
+        Log("viento unico: base desde %s (cloth.ini wind_x %.2f wind_z %.2f%s) -> %.2f m/s", src == 0 ? "cloth.ini" : src == 1 ? "el partido (cloth.ini sin viento de costado)" : "las nubes z84 (sin partido leido)",
+            wx != c.clothVals.end() ? wx->second : 0.0f, wz != c.clothVals.end() ? wz->second : 0.0f, c.clothFound ? "" : ", sin mod de ropa", sqrtf(tx * tx + tz * tz)); } }
     // la semilla de las rachas sale del viento del partido (antes de preajustes y rumbo fijo: cambiarlos no hace saltar la racha)
     { const unsigned s = (unsigned)(int)lroundf(tx * 100.0f) * 2654435761u ^ (unsigned)(int)lroundf(tz * 100.0f) * 40503u ^ 0x5bd1e995u; if (s != seed) seed = s; }
     // (13/11 etapa 2b) menu "Viento": fila 501 x preajuste (0 segun el partido, 1 calmo, 2 brisa, 3 ventoso, 4 tormenta),
@@ -108,7 +118,7 @@ void WindFrame(float (*p)[4], double tReal) {
     if (preset > 0) {}   // preajuste: la fuerza elegida es la de la cancha (sin hora, ciudad ni reparo)
     else {
     if (g_solClock.valid) {   // MatchWind ya bajo 0.7 de noche con el dato dia / noche: se reemplaza por la curva de la hora real
-        envK *= HourFactor(g_solClock.hour) / ((c.match.known && c.match.timeofday == 1 && c.live[353][3] > 0.5f && c.clothFound) ? 0.7f : 1.0f);
+        envK *= HourFactor(g_solClock.hour) / ((c.match.known && c.match.timeofday == 1 && c.live[353][3] > 0.5f && src != 2) ? 0.7f : 1.0f);
     }
     if (sw.typical > 0.0f) envK *= std::clamp(sw.typical / 4.0f, 0.4f, 2.0f);
     envK *= 1.0f - 0.6f * sw.shelter + 0.3f;   // reparo: 0 -> 1.3, 0.5 (sin dato) -> 1.0, 1 -> 0.7
@@ -166,7 +176,7 @@ void WindFrame(float (*p)[4], double tReal) {
     { WindNow& n = g_windNow; n.on = true; n.speed = p[494][2]; n.dirDeg = atan2f(dz, dx) * 57.2958f; n.gust = (float)e; n.turb = p[495][1];
       n.outside = roofK; n.base = u0; n.preset = preset; n.fixedDir = fixedDir; n.shelter = sw.shelter; n.shelterManual = shManual;
       n.soonSpeed = p[504][2]; n.soonDirDeg = atan2f(soon.dz, soon.dx) * 57.2958f; n.stadium = c.match.known ? c.match.stadium : -1;
-      n.hour = g_solClock.valid ? g_solClock.hour : -1.0f; n.rain = rain; n.season = season; n.fromCloth = c.clothFound; }
+      n.hour = g_solClock.valid ? g_solClock.hour : -1.0f; n.rain = rain; n.season = season; n.fromCloth = src == 0; n.src = src; }
     // (el pelo toma el rumbo de la fila 494 en sus shaders; la fila 23 x / y queda como la del ini / cloth.ini)
     if (tReal >= nextLog) { nextLog = tReal + 60.0;
         Log("viento unico: base %.2f m/s rumbo %.0f grados | ahora %.2f m/s rumbo %.0f grados, racha %.2f, turbulencia %.2f, recorrido %.0f m, reloj %s%s, afuera %.2f | hora %.1f (x%.2f), estadio %d reparo %.2f tipico %.1f, estacion %d | preajuste %d, rumbo %s, en 2 s %.2f m/s",
