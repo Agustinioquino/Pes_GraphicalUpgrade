@@ -20,6 +20,8 @@
 #include "core.h"
 #include <cmath>
 #include <algorithm>
+#include <map>
+#include <cstdio>
 
 namespace fx {
 namespace {
@@ -35,6 +37,28 @@ double Noise1(double x, unsigned seed) {
     double a = Hash1(i, seed), b = Hash1(i + 1, seed);
     return (a + (b - a) * u) * 2.0 - 1.0;
 }
+// (13/11, Agustin: "el viento puede ser reactivo al estadio, la hora del dia, la estacion") tabla por estadio:
+// PES21FX\viento_estadios.txt, una linea por estadio: "id = reparo ; fuerza ; nombre". reparo 0 (cancha abierta) .. 1 (estadio
+// cerrado y techado): cuanto tapan las tribunas; fuerza = viento tipico de la ciudad en m/s a 10 m (4 = promedio; 0 = no cambia).
+// Estadio que no esta en la tabla: reparo 0.5, fuerza sin cambio. Se lee una vez.
+struct StadiumWind { float shelter = 0.5f, typical = 0.0f; };
+std::map<int, StadiumWind> s_stadiums; bool s_stadLoaded = false;
+void LoadStadiums() {
+    s_stadLoaded = true;
+    FILE* f = _wfopen((g_cfg.baseDir + L"viento_estadios.txt").c_str(), L"r");
+    if (!f) { Log("viento unico: no hay PES21FX\\viento_estadios.txt (todos los estadios con reparo medio)"); return; }
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        int id = -1; float sh = 0.5f, ty = 0.0f;
+        if (line[0] == ';' || line[0] == '#') continue;
+        if (sscanf(line, " %d = %f ; %f", &id, &sh, &ty) >= 2 && id >= 0) { StadiumWind w; w.shelter = std::clamp(sh, 0.0f, 1.0f); w.typical = std::clamp(ty, 0.0f, 15.0f); s_stadiums[id] = w; }
+    }
+    fclose(f);
+    Log("viento unico: %d estadios en viento_estadios.txt", (int)s_stadiums.size());
+}
+// hora real del partido (reloj del sol del motor): calma al amanecer, pico a media tarde, afloja de noche. 7 h 0.54, 12 h 1.03,
+// 16 h 1.29, 19 h 0.99, 22 h 0.65
+float HourFactor(float h) { const float d = (h - 15.5f) / 5.0f; return 0.5f + 0.8f * expf(-d * d); }
 }
 
 void WindFrame(float (*p)[4], double tReal) {
@@ -53,21 +77,34 @@ void WindFrame(float (*p)[4], double tReal) {
       if (c.clothFound && (wx != c.clothVals.end() || wz != c.clothVals.end())) {
           tx = wx != c.clothVals.end() ? wx->second : 2.0f; tz = wz != c.clothVals.end() ? wz->second : 0.0f;
       } else { const float a = c.live[84][2] * 0.0174533f, s = 2.0f * std::clamp(c.live[353][0], 0.0f, 3.0f); tx = cosf(a) * s; tz = sinf(a) * s; } }
+    // (13/11) hora real, estadio y estacion sobre el viento del partido
+    if (!s_stadLoaded) LoadStadiums();
+    StadiumWind sw; { auto it = c.match.known ? s_stadiums.find(c.match.stadium) : s_stadiums.end(); if (it != s_stadiums.end()) sw = it->second; }
+    float envK = 1.0f;
+    if (g_solClock.valid) {   // MatchWind ya bajo 0.7 de noche con el dato dia / noche: se reemplaza por la curva de la hora real
+        envK *= HourFactor(g_solClock.hour) / ((c.match.known && c.match.timeofday == 1 && c.live[353][3] > 0.5f && c.clothFound) ? 0.7f : 1.0f);
+    }
+    if (sw.typical > 0.0f) envK *= std::clamp(sw.typical / 4.0f, 0.4f, 2.0f);
+    envK *= 1.0f - 0.6f * sw.shelter + 0.3f;   // reparo: 0 -> 1.3, 0.5 (sin dato) -> 1.0, 1 -> 0.7
+    tx *= envK; tz *= envK;
+    const int season = c.match.known ? c.match.season : -1;   // 0 verano, 1 invierno, otro: primavera / otono o sin dato
+    const float seaGust = season == 0 ? 0.9f : season == 1 ? 1.2f : 1.0f, seaTurb = season == 1 ? 1.15f : 1.0f, seaVeer = season == 0 ? 0.8f : season == 1 ? 1.0f : 1.3f;
+    const double seaT = season == 0 ? 10.0 : season == 1 ? 18.0 : 14.0;   // largo de la racha (s): verano cortas, invierno sostenidas
     if (!haveBase) { bx = tx; bz = tz; haveBase = true; }
     else { const float k = (float)(std::min)(1.0, dR / 3.0); bx += (tx - bx) * k; bz += (tz - bz) * k; }   // cambio de partido o del menu: gira en ~3 s, sin salto
-    { const unsigned s = (unsigned)(int)lroundf(tx * 100.0f) * 2654435761u ^ (unsigned)(int)lroundf(tz * 100.0f) * 40503u ^ 0x5bd1e995u; if (s != seed) seed = s; }
+    { const float sx = tx / envK, sz = tz / envK; const unsigned s = (unsigned)(int)lroundf(sx * 100.0f) * 2654435761u ^ (unsigned)(int)lroundf(sz * 100.0f) * 40503u ^ 0x5bd1e995u; if (s != seed) seed = s; }
     const float u0 = sqrtf(bx * bx + bz * bz);
     const bool rain = c.match.known && c.match.weather == 1;
     const float var = std::clamp(c.live[353][1], 0.0f, 1.0f);   // el mismo "azar" del partido: cuanta racha
     // racha / calma: envolvente 0..1. Dos escalas (14 s y 37 s); el exponente la deja mas tiempo en calma y sube rapido
-    double e = 0.5 + 0.5 * (0.7 * Noise1(tG / 14.0, seed) + 0.3 * Noise1(tG / 37.0 + 11.3, seed + 7u));
+    double e = 0.5 + 0.5 * (0.7 * Noise1(tG / seaT, seed) + 0.3 * Noise1(tG / 37.0 + 11.3, seed + 7u));
     e = std::clamp((e - 0.30) / 0.45, 0.0, 1.0); e = e * e * (3.0 - 2.0 * e);
-    const float gustK = (rain ? 0.75f : 0.6f) * (0.5f + var);                 // cuanto mas que el promedio en la racha
-    const float turbI = (rain ? 0.40f : 0.25f) * (0.6f + 0.8f * var);        // intensidad de turbulencia
+    const float gustK = (rain ? 0.75f : 0.6f) * (0.5f + var) * seaGust;                 // cuanto mas que el promedio en la racha
+    const float turbI = (rain ? 0.40f : 0.25f) * (0.6f + 0.8f * var) * seaTurb * (1.0f + 0.4f * (sw.shelter - 0.5f));   // detras de la tribuna, mas revuelto        // intensidad de turbulencia
     const double fast = 0.6 * Noise1(tG / 2.3 + 3.1, seed + 13u) + 0.4 * Noise1(tG / 0.9 + 5.7, seed + 17u);
     float U = u0 * (float)((0.55 + (0.45 + gustK) * e) * (1.0 + 0.35 * turbI * fast));
     // rumbo: se corre lento, y un poco mas dentro de la racha
-    const double veer = (12.0 * Noise1(tG / 41.0 + 20.0, seed + 23u) + 4.0 * (0.4 + 0.6 * e) * Noise1(tG / 7.0 + 30.0, seed + 29u)) * (0.5 + var) * 0.0174533;
+    const double veer = (12.0 * Noise1(tG / 41.0 + 20.0, seed + 23u) + 4.0 * (0.4 + 0.6 * e) * Noise1(tG / 7.0 + 30.0, seed + 29u)) * (0.5 + var) * seaVeer * 0.0174533;
     float dx = 1.0f, dz = 0.0f;
     if (u0 > 1e-4f) { const float cs = (float)cos(veer), sn = (float)sin(veer); dx = (bx * cs - bz * sn) / u0; dz = (bx * sn + bz * cs) / u0; }
     else U = 0.0f;
@@ -77,7 +114,8 @@ void WindFrame(float (*p)[4], double tReal) {
     // el pelo sigue el mismo rumbo (fila 23: x, y; antes quedaba fijo todo el partido)
     if (u0 > 1e-4f) { p[23][0] = dx; p[23][1] = dz; }
     if (tReal >= nextLog) { nextLog = tReal + 60.0;
-        Log("viento unico: base %.2f m/s rumbo %.0f grados | ahora %.2f m/s rumbo %.0f grados, racha %.2f, turbulencia %.2f, recorrido %.0f m, reloj %s%s",
-            u0, atan2f(bz, bx) * 57.2958f, U, atan2f(dz, dx) * 57.2958f, (float)e, p[495][1], (float)dist, p[157][3] > 0.5f ? "del juego" : "real", rain ? ", lluvia" : ""); }
+        Log("viento unico: base %.2f m/s rumbo %.0f grados | ahora %.2f m/s rumbo %.0f grados, racha %.2f, turbulencia %.2f, recorrido %.0f m, reloj %s%s | hora %.1f (x%.2f), estadio %d reparo %.2f tipico %.1f, estacion %d",
+            u0, atan2f(bz, bx) * 57.2958f, U, atan2f(dz, dx) * 57.2958f, (float)e, p[495][1], (float)dist, p[157][3] > 0.5f ? "del juego" : "real", rain ? ", lluvia" : "",
+            g_solClock.valid ? g_solClock.hour : -1.0f, g_solClock.valid ? HourFactor(g_solClock.hour) : 1.0f, c.match.known ? c.match.stadium : -1, sw.shelter, sw.typical, season); }
 }
 } // namespace fx
