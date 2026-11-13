@@ -58,8 +58,16 @@ bool Readable(const void* p, size_t n) {
     return (const char*)p + n <= (const char*)mi.BaseAddress + mi.RegionSize;
 }
 bool SigAt(uintptr_t a, const unsigned char* s, size_t n) { return Readable((const void*)a, n) && memcmp((const void*)a, s, n) == 0; }
-template <class T> void Put(uintptr_t a, T v) {
-    if (*(volatile T*)a == v) return;
+// (13/11) otro mod puede tocar las mismas constantes (Agustin tiene reactive_nets_physics.lua, que busca y pisa un bloque de
+// floats de la fisica de la red): solo se escribe si el valor actual es el del juego o el que puso la DLL; si aparece otro
+// valor, la DLL deja de escribir esas constantes para siempre (gana su mod) y lo anota en el log.
+bool s_foreign = false;
+template <class T> void Put(uintptr_t a, T v, T game, T& mine) {
+    const T cur = *(volatile T*)a;
+    if (s_foreign) return;
+    if (cur != game && cur != mine) { s_foreign = true; Log("redes: otro mod cambio la constante %p (vale %g): la red con mas vida se apaga y quedan los valores de ese mod", (void*)a, (double)cur); return; }
+    mine = v;
+    if (cur == v) return;
     DWORD old = 0;
     if (VirtualProtect((void*)a, sizeof(T), PAGE_READWRITE, &old)) { *(volatile T*)a = v; DWORD t = 0; VirtualProtect((void*)a, sizeof(T), old, &t); }
 }
@@ -114,7 +122,7 @@ void Install() {
     MH_EnableHook((void*)kPointStep); MH_EnableHook((void*)kNodeVf14); s_ok = true;
     s_constOk = Readable((void*)kGravity, 8) && Readable((void*)kStretch, 8) && *(const float*)kGravity == kGravityGame && *(const float*)kHitKeep == kHitGame
                 && *(const unsigned*)kIters == kItersGame && *(const float*)kStretch == kStretchGame;
-    Log("redes: enganchadas (viento en cada punto, despertar con viento); constantes del gol %s", s_constOk ? "encontradas (0.25 / 0.3 / 2 / 1.2)" : "NO coinciden: sin red con mas vida");
+    Log("redes: enganchadas (viento en cada punto, despertar con viento); constantes del gol %s", s_constOk ? "encontradas (0.25 / 0.3 / 2 / 1.2)" : "NO coinciden (otro mod, p. ej. reactive_nets_physics.lua): sin red con mas vida, quedan las de ese mod");
 }
 } // namespace
 
@@ -134,16 +142,17 @@ void RedesPresent() {
     // 2) red con mas vida en el gol
     if (s_constOk) {
         const bool on = p[499][1] > 0.5f;
-        Put<float>(kGravity, on ? std::clamp(p[499][2], 0.1f, 3.0f) : kGravityGame);
-        Put<float>(kHitKeep, on ? std::clamp(p[499][3], 0.05f, 1.0f) : kHitGame);
-        Put<unsigned>(kIters, on ? (unsigned)std::clamp((int)lroundf(p[500][2]), 1, 6) : kItersGame);
-        Put<float>(kStretch, on ? std::clamp(p[500][3], 1.05f, 1.8f) : kStretchGame);
+        static float mG = kGravityGame, mH = kHitGame, mS = kStretchGame; static unsigned mI = kItersGame;
+        Put<float>(kGravity, on ? std::clamp(p[499][2], 0.1f, 3.0f) : kGravityGame, kGravityGame, mG);
+        Put<float>(kHitKeep, on ? std::clamp(p[499][3], 0.05f, 1.0f) : kHitGame, kHitGame, mH);
+        Put<unsigned>(kIters, on ? (unsigned)std::clamp((int)lroundf(p[500][2]), 1, 6) : kItersGame, kItersGame, mI);
+        Put<float>(kStretch, on ? std::clamp(p[500][3], 1.05f, 1.8f) : kStretchGame, kStretchGame, mS);
     }
     static ULONGLONG next = 0; const ULONGLONG now = GetTickCount64();
     if (now >= next) { next = now + 60000;
         Log("redes: viento %.2f m/s, empuje %.2f m/s2 (%s); en 60 s: %d pasos de red, %d despertares, %d puntos empujados; gol %s (peso %.2f, rebote %.2f, pasadas %u, estiramiento %.2f)",
             v, sqrtf(w.ax * w.ax + w.az * w.az), w.on > 0.5f ? "prendido" : "apagado", s_nodes.exchange(0), s_wakes.exchange(0), s_pushed.exchange(0),
-            s_constOk && p[499][1] > 0.5f ? "con mas vida" : "del juego", s_constOk ? *(const float*)kGravity : 0.0f, s_constOk ? *(const float*)kHitKeep : 0.0f,
+            s_foreign ? "de otro mod" : s_constOk && p[499][1] > 0.5f ? "con mas vida" : "del juego", s_constOk ? *(const float*)kGravity : 0.0f, s_constOk ? *(const float*)kHitKeep : 0.0f,
             s_constOk ? *(const unsigned*)kIters : 0u, s_constOk ? *(const float*)kStretch : 0.0f); }
 }
 } // namespace fx
