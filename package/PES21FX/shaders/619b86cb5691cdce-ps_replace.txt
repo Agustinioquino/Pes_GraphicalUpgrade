@@ -1510,7 +1510,9 @@ void main(
             float wM = abs(dot(Pm - Pgeo, NvC)) < tolM ? 1.0 : 0.0;
             nAcc += PESDecN(uvM) * wM; nW += wM;
           }
-          float sB = nW > 2.5 ? pow(saturate(dot(Nc0, normalize(nAcc + 1e-6))), 6.0) : 1.0;
+          // (13/11) piel: potencia 2 (antes 6 para todo): con 6 cada poro y cada texel del normal map se leia como un hueco hondo ->
+          // piel granulada; la tela y los pliegues siguen con 6
+          float sB = nW > 2.5 ? pow(saturate(dot(Nc0, normalize(nAcc + 1e-6))), skinC ? 2.0 : 6.0) : 1.0;
           aper = 2.0 * sB * sB;
         }
         float micro = saturate(abs(ndlM) + aper - 1.0);
@@ -1521,7 +1523,11 @@ void main(
         // 0.8 mm de piel por pixel entera, nada a 2 mm). Mas lejos comparaba normales que el mip ya no muestra bien y dejaba manchas
         // en la franja del terminador que cambiaban con la distancia (mejillas, orejas)
         float msFar = (skinC && IniParams.Load(int2(124,0)).w > 0.5) ? saturate((2.0 - 2000.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z) / 1.2) : 1.0;
-        float msK = lerp(1.0, max(micro, 0.4), saturate(MS.x) * litSide * msFar);
+        // (13/11, Agustin: "las micro sombras estan mal") en la piel: solo donde el sol llega de verdad (mascara de sombra t14: en la
+        // sombra del estadio o de la propia cabeza no hay luz rasante que tapar, antes igual oscurecia) y con piso 0.7 (un poro nunca
+        // es un punto negro). Unica micro sombra de la piel: la de 5ce3 (pintada en el color) se quito
+        float msSun = skinC ? saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x) : 1.0;
+        float msK = lerp(1.0, max(micro, skinC ? 0.7 : 0.4), saturate(MS.x) * litSide * msFar * msSun);
         diffC *= msK; specC *= skinC ? msK : lerp(1.0, msK, 0.5);
       } }
     r0.xyw = diffC * aoD + specC * aoS;
