@@ -21,6 +21,7 @@
 #include <cmath>
 #include <algorithm>
 
+namespace fx {
 namespace {
 double Hash1(long long i, unsigned seed) {
     unsigned long long h = (unsigned long long)i * 0x9E3779B97F4A7C15ull ^ ((unsigned long long)seed << 32 | seed);
@@ -79,3 +80,4 @@ void WindFrame(float (*p)[4], double tReal) {
         Log("viento unico: base %.2f m/s rumbo %.0f grados | ahora %.2f m/s rumbo %.0f grados, racha %.2f, turbulencia %.2f, recorrido %.0f m, reloj %s%s",
             u0, atan2f(bz, bx) * 57.2958f, U, atan2f(dz, dx) * 57.2958f, (float)e, p[495][1], (float)dist, p[157][3] > 0.5f ? "del juego" : "real", rain ? ", lluvia" : ""); }
 }
+} // namespace fx
