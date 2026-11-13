@@ -1,0 +1,5 @@
+// PES 2021 - Piel de cara con ANIMACION FACIAL (G-buffer, primeros planos) [hash ce188ae110354aea]
+// (12/11) Es el mismo shader que 5ce3ed8702271bc1 (version mejorada) con la firma de esta variante: dos UV en TEXCOORD0 (.xy la
+// difusa, .zw el resto) y TEXCOORD9 al final, como lo saca el VS 455eb97bc2c3a958. Todo el codigo vive en 5ce3: cambiar SOLO alla.
+#define PES_FACE_UV2 1
+#include "5ce3ed8702271bc1-ps_replace.txt"
