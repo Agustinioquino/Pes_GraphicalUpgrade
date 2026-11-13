@@ -1525,7 +1525,10 @@ void main(
               float softM = MS.z > 0.001 ? clamp(MS.z, 0.25, 3.0) : 1.0;   // z88 suavidad de la penumbra (0 = 1)
               float visM = PESMicroShadowDir(uvC, Pgeo, Nsk, NsM, LdS, rM, jitM, softM);
               float3 floorM = skinC ? float3(0.62, 0.44, 0.40) : float3(0.35, 0.35, 0.35);
-              float kM = saturate(MS.x) * farK * sunF;
+              // REACTIVO al sudor / lluvia: la pelicula de agua llena el poro y alisa la piel (la rugosidad del G-buffer baja de ~0.42
+              // seca a ~0.2 mojada): con la piel mojada la sombra del poro se acorta hasta un 60 %; arrugas y pliegues grandes quedan
+              float wetM = skinC ? saturate((0.38 - saturate(gmC.x)) / 0.18) : 0.0;
+              float kM = saturate(MS.x) * farK * sunF * (1.0 - 0.6 * wetM);
               diffC *= lerp(1.0, lerp(floorM, 1.0, visM), kM);
               specC *= lerp(1.0, lerp(0.25, 1.0, visM), kM);
             }
