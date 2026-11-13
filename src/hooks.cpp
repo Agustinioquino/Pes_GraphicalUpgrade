@@ -595,7 +595,7 @@ static void UploadParams() {
 }
 
 // ---------------------------------------------------------------- estado por contexto
-struct CtxState { const ShaderEntry* ps = nullptr; const ShaderEntry* vs = nullptr; ID3D11Device* dev = nullptr; bool devKnown = false; ID3D11Buffer* lastHairCB = nullptr; uint64_t lastFace = 0; bool clothCS = false; ID3D11DepthStencilView* shadowDSV = nullptr; bool gameShadow = false; };   // shadowDSV: (27/10 c) el DSV puesto es el shadow map del sol del juego (sombra de la cabeza)   // clothCS: el CS puesto es el simulador del mod de ropa (diagnostico en Dispatch)   // lastHairCB: b11 de la ultima cara dibujada en este contexto (la boca la hereda)
+struct CtxState { const ShaderEntry* ps = nullptr; const ShaderEntry* vs = nullptr; ID3D11Device* dev = nullptr; bool devKnown = false; ID3D11Buffer* lastHairCB = nullptr; uint64_t lastFace = 0; bool clothCS = false; ID3D11DepthStencilView* shadowDSV = nullptr; bool gameShadow = false; SpCtx sp; };   // shadowDSV: (27/10 c) el DSV puesto es el shadow map del sol del juego (sombra de la cabeza)   // clothCS: el CS puesto es el simulador del mod de ropa (diagnostico en Dispatch)   // lastHairCB: b11 de la ultima cara dibujada en este contexto (la boca la hereda)
 static std::unordered_map<ID3D11DeviceContext*, CtxState> s_ctx;
 static std::shared_mutex s_ctxMutex;
 static CtxState& Ctx(ID3D11DeviceContext* c) {
@@ -642,21 +642,21 @@ static PFN_OMSetRT o_OMSetRT[2]; static PFN_OMSetRTU o_OMSetRTU[2]; static PFN_C
 // instancias (t18: matriz de mundo de cada prenda) para comparar con los personajes del lote (cada 20 s, ver cuerpo.cpp)
 using PFN_Dispatch = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT);
 static PFN_Dispatch o_Dispatch[2];
-template<int V> static void STDMETHODCALLTYPE hk_Dispatch(ID3D11DeviceContext* c, UINT x, UINT y, UINT z) {
+template<int V> static void STDMETHODCALLTYPE hk_Dispatch(ID3D11DeviceContext* c, UINT x, UINT y, UINT z) { PerfDrawScope pds_(c, false);
     if (g_bodyDiagArmed.load(std::memory_order_relaxed) && Ctx(c).clothCS) BodyNoteClothDispatch(c, x);
     o_Dispatch[V](c, x, y, z);
 }
-template<int V> static void STDMETHODCALLTYPE hk_OMSetRT(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d) {
+template<int V> static void STDMETHODCALLTYPE hk_OMSetRT(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d) { PerfDrawScope pds_(c, false);
     GrassBaseFlush(c, 1, 0, v ? n : 0, v, d);
     o_OMSetRT[V](c, n, v, d);
     Ctx(c).shadowDSV = HeadShadowBind(n, v, d); Ctx(c).gameShadow = HeadShadowIsGameRes(d);
 }
-template<int V> static void STDMETHODCALLTYPE hk_OMSetRTU(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d, UINT us, UINT un, ID3D11UnorderedAccessView* const* u, const UINT* ic) {
+template<int V> static void STDMETHODCALLTYPE hk_OMSetRTU(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d, UINT us, UINT un, ID3D11UnorderedAccessView* const* u, const UINT* ic) { PerfDrawScope pds_(c, false);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) GrassBaseFlush(c, 1, 0, v ? n : 0, v, d);   // solo UAVs: los targets no cambian
     o_OMSetRTU[V](c, n, v, d, us, un, u, ic);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) { Ctx(c).shadowDSV = HeadShadowBind(n, v, d); Ctx(c).gameShadow = HeadShadowIsGameRes(d); }
 }
-template<int V> static void STDMETHODCALLTYPE hk_ClearState(ID3D11DeviceContext* c) {
+template<int V> static void STDMETHODCALLTYPE hk_ClearState(ID3D11DeviceContext* c) { PerfDrawScope pds_(c, false);
     GrassBaseFlush(c, 5, 0);
     o_ClearState[V](c);
 }
@@ -850,11 +850,15 @@ template<int V> static void STDMETHODCALLTYPE hk_ExecCL(ID3D11DeviceContext* c, 
     GrassBaseFlush(c, 4, 0);   // (26/10 g) lo pendiente de este contexto va antes que la lista
     BodyOnExecute(c, l);
     GrassOnExecuteCL(c, l);   // (26/10 d) pasto: demora grabacion -> ejecucion, listas anidadas
-    GpuShaderProfExec(c);   // (13/11) perfil por shader: lo que sigue es la lista diferida
+    GpuShaderProfExec(c, Ctx(c).sp);   // (13/11) perfil por shader: lo que sigue es la lista diferida
+    const uint64_t pe0 = g_perfOn.load(std::memory_order_relaxed) ? __rdtsc() : 0;   // (13/11) rendimiento: CPU del driver al ejecutar la lista
     o_ExecCL[V](c, l, r);
+    if (pe0) PerfExecTicks(__rdtsc() - pe0);
 }
 template<int V> static HRESULT STDMETHODCALLTYPE hk_FinishCL(ID3D11DeviceContext* c, BOOL r, ID3D11CommandList** l) {
     GrassBaseFlush(c, 3, 0);   // (26/10 g) la base pendiente se emite dentro de esta lista
+    GpuShaderProfFinish(c, Ctx(c).sp);   // (13/11 v3) perfil por shader: cierra la cadena de marcas de esta lista
+    if (g_perfOn.load(std::memory_order_relaxed)) PerfFinishList();
     HRESULT hr = o_FinishCL[V](c, r, l);
     if (FAILED(hr)) {   // (08/11) un FinishCommandList fallido dejaba el lock de la entrada del juego tomado (cuelgues del editor)
         static std::atomic<int> nf{0};
@@ -868,7 +872,7 @@ template<int V> static HRESULT STDMETHODCALLTYPE hk_FinishCL(ID3D11DeviceContext
 }
 // cejas (18/10): para dibujar las hebras hace falta saber si el juego usa profundidad invertida (limpia a 0) o normal (limpia a 1)
 std::atomic<int> g_depthClearZero{0}, g_depthClearOne{0};
-template<int V> static void STDMETHODCALLTYPE hk_ClearDSV(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, UINT f, FLOAT d, UINT8 st) {
+template<int V> static void STDMETHODCALLTYPE hk_ClearDSV(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, UINT f, FLOAT d, UINT8 st) { PerfDrawScope pds_(c, false);
     if (f & D3D11_CLEAR_DEPTH) { if (d < 0.5f) g_depthClearZero++; else g_depthClearOne++; HeadShadowOnClear(c, v, d); }   // (27/10 c) el atlas de la cabeza se limpia con el shadow map del juego
     GrassBaseFlush(c, 2, 0);   // (26/10 g) antes de borrar la profundidad de la pasada
     o_ClearDSV[V](c, v, f, d, st);
@@ -999,13 +1003,13 @@ static inline ID3D11ShaderResourceView* ParamSRVFor(const ShaderEntry* e) {
 
 // los parametros (t120) se enlazan justo antes de cada dibujo (BeforeDraw), igual que 3DMigoto,
 // asi no se pierden si el juego limpia todos los slots entre pasadas
-template<int V> static void STDMETHODCALLTYPE hk_SetPS(ID3D11DeviceContext* c, ID3D11PixelShader* s, ID3D11ClassInstance* const* ci, UINT n) {
+template<int V> static void STDMETHODCALLTYPE hk_SetPS(ID3D11DeviceContext* c, ID3D11PixelShader* s, ID3D11ClassInstance* const* ci, UINT n) { PerfDrawScope pds_(c, false);
     const ShaderEntry* e = FindShader(s);
     Ctx(c).ps = e;
     if (e && e->repl && !g_cfg.bypass) { o_SetPS[V](c, (ID3D11PixelShader*)e->repl, ci, n); return; }
     o_SetPS[V](c, s, ci, n);
 }
-template<int V> static void STDMETHODCALLTYPE hk_SetVS(ID3D11DeviceContext* c, ID3D11VertexShader* s, ID3D11ClassInstance* const* ci, UINT n) {
+template<int V> static void STDMETHODCALLTYPE hk_SetVS(ID3D11DeviceContext* c, ID3D11VertexShader* s, ID3D11ClassInstance* const* ci, UINT n) { PerfDrawScope pds_(c, false);
     const ShaderEntry* e = FindShader(s);
     Ctx(c).vs = e;
     if (e && e->repl && !g_cfg.bypass) { o_SetVS[V](c, (ID3D11VertexShader*)e->repl, ci, n); return; }
@@ -1026,7 +1030,7 @@ ShaderBind BindShadersRaw(ID3D11DeviceContext* c, const ShaderBind& b) {
     if (fp) fp(c, b.psObj, nullptr, 0); else c->PSSetShader(b.psObj, nullptr, 0);
     return old;
 }
-template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, ID3D11ComputeShader* s, ID3D11ClassInstance* const* ci, UINT n) {
+template<int V> static void STDMETHODCALLTYPE hk_SetCS(ID3D11DeviceContext* c, ID3D11ComputeShader* s, ID3D11ClassInstance* const* ci, UINT n) { PerfDrawScope pds_(c, false);
     const ShaderEntry* e = FindShader(s);
     CatalogCS(e);
     Ctx(c).clothCS = e && e->clothSim;
@@ -1467,7 +1471,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (s.dev != g_dev.dev) return false;
     if (g_motorWire.load(std::memory_order_relaxed)) d.wire = MotorWireBegin(c, &d.wireRS);   // (11/11 3icxbh) Motor en tiempo real: geometria del G-buffer en alambre (y429); se devuelve en FX_DRAW
     const ShaderEntry *ps = s.ps, *vs = s.vs;
-    GpuShaderProfDraw(c, ps, vs);   // (13/11) perfil por shader del medidor (solo con x375, 120 cuadros por minuto)
+    GpuShaderProfDraw(c, ps, vs, s.sp);   // (13/11) perfil por shader del medidor (solo con x375, 120 cuadros por minuto; v3 tambien en las listas diferidas)
     // (27/10 b) brazos, manos, muslos y torso de TorsoBody del tono de la cara (brazos.cpp, filas 321 / 327): son las texturas
     // del cuerpo, no un shader, asi que valen tambien con "Ver original" (el shader original lee el mismo t0)
     LeakCheck(c, ps, vs);
@@ -1727,7 +1731,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if ((kind) == 1 && g_lodAny) { if (!t_lodNoted && !ds.lod.count) { CtxState& cl_ = Ctx(c); LodNoteAnyDraw(c, cl_.vs ? cl_.vs->hash : 0, cl_.ps ? cl_.ps->hash : 0, verts, t_drawStart, t_drawBase, &ds.lod); } t_lodNoted = false; } \
     if ((kind) == 1 && !ds.lod.count && g_caraMallaAny.load(std::memory_order_relaxed) && CaraMallaAnyDraw(c, verts, t_drawStart, t_drawBase, &ds.lod)) ds.hdMesh = true; \
     if ((kind) == 1 && t_grassSub.count) { if (!ds.lod.count) ds.lod = t_grassSub; else t_grassSub.Release(); t_grassSub = LodIA(); } \
-    if (!ds.skip) { call; } if (ds.wire) MotorWireEnd(c, ds.wireRS); if (ds.restorePS) { c->PSSetShader(ds.restorePS, nullptr, 0); ds.restorePS->Release(); } if (ds.glass.on) GlassAfterDraw(c, ds.glass); if (ds.ring.on) RingAfterDraw(c, ds.ring); \
+    if (!ds.skip) { const uint64_t pc0_ = g_perfOn.load(std::memory_order_relaxed) ? __rdtsc() : 0; call; if (pc0_) t_perfCall += __rdtsc() - pc0_; } if (ds.wire) MotorWireEnd(c, ds.wireRS); if (ds.restorePS) { c->PSSetShader(ds.restorePS, nullptr, 0); ds.restorePS->Release(); } if (ds.glass.on) GlassAfterDraw(c, ds.glass); if (ds.ring.on) RingAfterDraw(c, ds.ring); \
     if (ds.ring.overlay && !ds.skip) { RingOverlayBegin(c, ds.ring); call; RingOverlayEnd(c, ds.ring); } \
     { CtxState& cm_ = Ctx(c); if (cm_.ps && (cm_.ps->hash == 0x619b86cb5691cdceULL || cm_.ps->hash == 0xf807e74d5b900a15ULL)) { if (cm_.ps->hash == 0x619b86cb5691cdceULL && !ds.skip) GrassSunVisAfterComposition(c); /* (12/11 23:45) w447: copia de t14 para las hojas */ if (!ds.skip) HairFwdAfterComposition(c); if (g_meterHook) { int gz_ = GpuZoneBegin(c, kGzLightMeter); LightMeterAfterComposition(c); GpuZoneEnd(c, gz_); } } } \
     if (g_inspectOn) { CtxState& ci_ = Ctx(c); if (InspectBegin(c, ci_.ps, ci_.vs, kind, verts, inst)) { call; InspectEnd(c); } } \
@@ -1956,6 +1960,7 @@ template<int V> static void TessAtlas(ID3D11DeviceContext* c, DrawScope& ds) {
     if (oldRS) oldRS->Release(); if (oldDSS) oldDSS->Release();
 }
 template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c, UINT a, UINT b, INT d) {
+    PerfDrawScope pds_(c);   // (13/11) rendimiento: CPU del mod en este gancho (perfrec.cpp)
     // (13/11 tanda 2) D10 pelota vieja: si este dibujo del pasto del juego (G-buffer, PS de las hojas) va a disparar la emision pendiente de la
     // base (GRASS_FLUSH), primero se guarda su estado y su pelota (b4): la emision lee la pelota de este cuadro y no la del anterior
     if (g_grassPendN.load(std::memory_order_relaxed) > 0) { CtxState& ce_ = Ctx(c); if (ce_.vs && ce_.vs->hash == 0x498b30bad256e8edULL) GrassCaptureEarly(c, ce_.vs, ce_.ps); }
@@ -1977,13 +1982,13 @@ template<int V> static void STDMETHODCALLTYPE hk_DrawIdx(ID3D11DeviceContext* c,
     // tambien tras la piel del cuerpo (VS 1c02a92a): si un cuadro no dibuja la cara en el G-buffer (cerca de las piernas, cara fuera
     // de cuadro o en otra pasada) el pasto no se emitia ese cuadro y parpadeaba; el primero de los dos por cuadro emite.
     { CtxState& ce_ = Ctx(c); if (!ds.faceId.empty() || (ce_.vs && ce_.vs->hash == 0x1c02a92ab4ae3362ULL)) GrassEditorAfterFace(c); } }
-template<int V> static void STDMETHODCALLTYPE hk_Draw(ID3D11DeviceContext* c, UINT a, UINT b) { GRASS_FLUSH(c) FX_DRAW(a, 0, 1, o_Draw[V](c, a, b))
+template<int V> static void STDMETHODCALLTYPE hk_Draw(ID3D11DeviceContext* c, UINT a, UINT b) { PerfDrawScope pds_(c); GRASS_FLUSH(c) FX_DRAW(a, 0, 1, o_Draw[V](c, a, b))
     { CtxState& ch_ = Ctx(c); if (ch_.gameShadow) ShadowCasterProbe(c); if (ch_.shadowDSV && !ds.skip) HeadShadowReplay<V>(c, ch_.shadowDSV, 0, [&] { o_Draw[V](c, a, b); }); } }
 // (25/10) dibujo indirecto (pasto v3): pasa por BeforeDraw como cualquier dibujo (reglas, t120); vertices e instancias desconocidos
-template<int V> static void STDMETHODCALLTYPE hk_DrawIdxInstInd(ID3D11DeviceContext* c, ID3D11Buffer* a, UINT b) { GRASS_FLUSH(c) FX_DRAW(0, 3, 0, o_DrawIdxInstInd[V](c, a, b)) }
-template<int V> static void STDMETHODCALLTYPE hk_DrawIdxInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, INT e, UINT f) { GRASS_FLUSH(c) FX_DRAW(a, 3, b, o_DrawIdxInst[V](c, a, b, d, e, f))
+template<int V> static void STDMETHODCALLTYPE hk_DrawIdxInstInd(ID3D11DeviceContext* c, ID3D11Buffer* a, UINT b) { PerfDrawScope pds_(c); GRASS_FLUSH(c) FX_DRAW(0, 3, 0, o_DrawIdxInstInd[V](c, a, b)) }
+template<int V> static void STDMETHODCALLTYPE hk_DrawIdxInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, INT e, UINT f) { PerfDrawScope pds_(c); GRASS_FLUSH(c) FX_DRAW(a, 3, b, o_DrawIdxInst[V](c, a, b, d, e, f))
     { CtxState& ch_ = Ctx(c); if (ch_.gameShadow) ShadowCasterProbe(c); if (ch_.shadowDSV && !ds.skip) HeadShadowReplay<V>(c, ch_.shadowDSV, 3, [&] { o_DrawIdxInst[V](c, a, b, d, e, f); }); } }
-template<int V> static void STDMETHODCALLTYPE hk_DrawInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, UINT e) { GRASS_FLUSH(c) FX_DRAW(a, 2, b, o_DrawInst[V](c, a, b, d, e))
+template<int V> static void STDMETHODCALLTYPE hk_DrawInst(ID3D11DeviceContext* c, UINT a, UINT b, UINT d, UINT e) { PerfDrawScope pds_(c); GRASS_FLUSH(c) FX_DRAW(a, 2, b, o_DrawInst[V](c, a, b, d, e))
     { CtxState& ch_ = Ctx(c); if (ch_.gameShadow) ShadowCasterProbe(c); if (ch_.shadowDSV && !ds.skip) HeadShadowReplay<V>(c, ch_.shadowDSV, 2, [&] { o_DrawInst[V](c, a, b, d, e); }); } }
 
 // ---------------------------------------------------------------- instalacion sobre vtables
@@ -2268,6 +2273,8 @@ void AutoCapturePresent(ID3D11Texture2D* frame) {
     if (count == 1) Log("captura automatica: primera imagen en capturas\\ (cada %.0f s, maximo %d)", g_cfg.autoCapSec, g_cfg.autoCapMax);
 }
 static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT flags) {
+    const uint64_t pfT0 = __rdtsc();   // (13/11) rendimiento: tiempo del mod en Present y espera dentro del Present original (perfrec.cpp)
+    ++t_perfDepth;   // lo que el mod dibuja en Present (menu, pasto, copias) cuenta como "mod en Present", no como dibujos
     ID3D11Device* d = nullptr;
     if (SUCCEEDED(sc->GetDevice(__uuidof(ID3D11Device), (void**)&d)) && d) {
         if (!s_deviceHooked) {   // el juego creo el dispositivo antes que nosotros
@@ -2387,7 +2394,10 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     FisicoCapturePresent(s_frameTex);   // (26/10 c) paginas del menu Fisico
     MenuTestPresent(sc, s_frameTex);   // (08/11) prueba automatica v2: mide, fotografia y escribe PES21FX/diagnostico/<fecha>/ (OJO: nunca terminar un comentario // con barra invertida: continua la linea y se come la siguiente)
     { GpuZoneScope gz_(g_dev.imm, kGzOverlay); OverlayPresent(sc); }
+    --t_perfDepth;
+    const uint64_t pfT1 = __rdtsc();
     HRESULT hrP = o_Present(sc, sync, flags);
+    PerfPresent(sc, sync, pfT0, pfT1, __rdtsc());
     if (hrP == DXGI_ERROR_DEVICE_REMOVED || hrP == DXGI_ERROR_DEVICE_RESET) {   // (08/11 e) placa reiniciada (TDR)
         ID3D11Device* d = g_dev.dev; HRESULT rr = d ? d->GetDeviceRemovedReason() : hrP;
         OnDeviceLost((unsigned)(FAILED(rr) ? rr : hrP));

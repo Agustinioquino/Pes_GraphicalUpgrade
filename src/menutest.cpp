@@ -7,6 +7,13 @@
 //   3) cada vista de depuracion (cascadas, sombra sola, rebote, piel, pasto...) se prende un momento y se fotografia
 //   4) se vuelve todo a como estaba y se escribe PES21FX\diagnostico\<fecha>\ resumen.txt + informe.json + capturas/
 // No se guarda nada en el ini (SaveConfigValues se niega mientras corre). Esc o "Cancelar" la cortan (el informe parcial queda).
+// (13/11 v3, Agustin: "mejorar la prueba automatica de diagnostico para que te de mas valores de rendimiento en un archivo de texto",
+// "valores de cpu, gpu, memoria, ram, almacenamiento, lag", "dos pruebas una de cerca y otra en la camara lejana"): ademas escribe
+// rendimiento.txt con el equipo, la escena elegida en el menu, la base de 8 s con todo lo de perfrec.cpp (FPS, tirones, reparto del cuadro
+// entre el juego / el mod / el driver / la espera a la placa, CPU y hilos, placa en %, VRAM, RAM, disco), el perfil de la placa por shader
+// (40, con las listas diferidas), lo que ahorra cada nivel del pasto del mod (cerca / medio / lejos / hojas 3D), cada grupo con su reparto
+// y, si se pide, el juego entero sin el mod ("Ver original", al final y con el informe ya escrito). Una linea por medicion en
+// PES21FX\diagnostico\rendimiento_todas.csv para comparar las dos escenas.
 #include "core.h"
 #include <d3d11_1.h>
 #include <vector>
@@ -21,9 +28,9 @@ void GpuMeterTotals(double& frameMs, int& frames, double* zoneMs);   // gpumeter
 static const char* const kZoneNm[kGpuZoneN] = { "SSSS piel", "GTAO", "SSGI", "medidor de luz", "ropa contra el cuerpo", "desgaste de la cancha",
     "pasto", "caras", "caras HD", "aro del Fisico", "copia del cuadro", "menu Insert", "vidrio de menus" };
 
-struct Meas { double cpuMs = 0, gpuMs = 0; double zone[kGpuZoneN] = {}; int n = 0, gn = 0; };
-struct MenuTestResult { std::string group, section, shot; float diff = 0; int state = 0; float cpuSave = 0, gpuSave = 0; float zoneSave[kGpuZoneN] = {}; };   // 0 sin cambio, 1 cambia, 2 no probado, 3 apagado (no se mide)
-struct Step { int kind = 0; int gi = -1; int idx = -1, comp = 0; float val = 0; std::string label, section; };   // kind 0 base, 1 grupo, 2 vista
+struct Meas { double cpuMs = 0, gpuMs = 0; double zone[kGpuZoneN] = {}; int n = 0, gn = 0; PerfStats ps; };
+struct MenuTestResult { std::string group, section, shot; float diff = 0; int state = 0; float cpuSave = 0, gpuSave = 0; float zoneSave[kGpuZoneN] = {}; int kind = 1; PerfStats on, off; bool perf = false; };   // 0 sin cambio, 1 cambia, 2 no probado, 3 apagado (no se mide)
+struct Step { int kind = 0; int gi = -1; int idx = -1, comp = 0; float val = 0; std::string label, section; };   // kind 0 base, 1 grupo, 2 vista, 3 perfil de la placa, 4 nivel del pasto (val = bits), 5 sin el mod
 struct MenuTestState {
     bool active = false;
     std::vector<Step> steps; size_t si = 0;
@@ -40,6 +47,8 @@ struct MenuTestState {
     int tested = 0, changed = 0, skipped = 0, off = 0;
     float meterSaved = 0; bool meterHad = false;
     std::wstring dir; size_t nGroups = 0;
+    int scene = 0; bool withBypass = false, bypassSaved = false, bypassOn = false; double measEndT = 0; PerfWin pw; int profRuns0 = 0, profWait = 0; double profT0 = 0;
+    std::string profText; PerfStats baseFinal; char date[32] = {};
 };
 static MenuTestState s_t;
 static ID3D11Texture2D* s_stage = nullptr;
@@ -176,15 +185,20 @@ static std::wstring Slug(const std::string& t, size_t max = 28) {
 }
 static std::string W2A(const std::wstring& w) { std::string o; for (wchar_t c : w) o += (c < 128 ? (char)c : '_'); return o; }
 
-void MenuTestStart() {
+void MenuTestStart(int scene, bool withBypass) {
     if (s_h.active) return;
     s_t = MenuTestState();
+    s_t.scene = scene; s_t.withBypass = withBypass; s_t.bypassSaved = g_cfg.bypass;
     SYSTEMTIME st; GetLocalTime(&st); wchar_t n[32];
     swprintf(n, 32, L"%04d%02d%02d_%02d%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    snprintf(s_t.date, sizeof s_t.date, "%04d-%02d-%02d %02d:%02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
     const std::wstring root = g_cfg.baseDir + L"diagnostico\\"; CreateDirectoryW(root.c_str(), nullptr);
     s_t.dir = root + n + L"\\"; CreateDirectoryW(s_t.dir.c_str(), nullptr); CreateDirectoryW((s_t.dir + L"capturas").c_str(), nullptr);
     // pasos: base, grupos (primero los de interruptor prendido), base final, vistas de depuracion
     s_t.steps.push_back({ 0, -1, -1, 0, 0, "base", "" });
+    s_t.steps.push_back({ 3, -1, -1, 0, 0, "perfil de la placa por shader", "" });   // (13/11 v3)
+    { static const char* const kLv[4] = { "Pasto del mod: sin el nivel 0 (cerca)", "Pasto del mod: sin el nivel 1 (medio)", "Pasto del mod: sin el nivel 2 (lejos)", "Pasto del mod: sin las hojas 3D" };
+      for (int k = 0; k < 4; k++) { Step sp; sp.kind = 4; sp.val = (float)(1 << k); sp.label = kLv[k]; sp.section = "Pasto (niveles)"; s_t.steps.push_back(sp); } }
     for (int i = 0; i < (int)g_cfg.groups.size(); i++) {
         const MenuGroup& g = g_cfg.groups[i];
         if (Skippable(g)) { MenuTestResult r; r.group = g.title; r.section = g.section; r.state = 2; s_t.results.push_back(r); s_t.skipped++; continue; }
@@ -192,21 +206,26 @@ void MenuTestStart() {
         Step sp; sp.kind = 1; sp.gi = i; sp.label = g.title; sp.section = g.section; s_t.steps.push_back(sp);
     }
     s_t.steps.push_back({ 0, -1, -1, 0, 0, "base final", "" });
+    if (withBypass) { Step sp; sp.kind = 5; sp.label = "TODO EL MOD APAGADO (Ver original)"; sp.section = "Juego sin el mod"; s_t.steps.push_back(sp); }
     for (int i = 0; i < DebugParamCount(); i++) { const DebugParam& d = DebugParamAt(i);
         for (int k = 0; k < d.nViews; k++) { Step sp; sp.kind = 2; sp.idx = d.idx; sp.comp = d.comp; sp.val = d.views[k]; sp.label = d.name; sp.section = d.section; s_t.steps.push_back(sp); } }
     s_t.nGroups = g_cfg.groups.size();
     s_t.meterSaved = g_cfg.live[375][0]; g_cfg.live[375][0] = 1.0f;   // el medidor de ms por efecto, solo mientras dura la prueba
+    PerfUse(true); GpuShaderProfHold(true);   // (13/11 v3) mediciones del cuadro y del equipo; el perfil por shader solo cuando lo pide la prueba
+    g_grassLevelOff.store(0);
     s_t.active = true; s_t.si = 0; s_t.phase = 0; s_t.wait = 20;
     s_t.status = "Probando... (no muevas la camara; Esc corta)";
     Log("prueba automatica: inicio (%d pasos, %d grupos, carpeta diagnostico\\%ls)", (int)s_t.steps.size(), (int)g_cfg.groups.size(), n);
 }
 
-static void Restore() { if (s_t.sIdx >= 0) { g_cfg.live[s_t.sIdx][s_t.sComp] = s_t.sSaved; s_t.sIdx = -1; } }
-static void WriteReport(bool cancelled);
+static void Restore() { if (s_t.sIdx >= 0) { g_cfg.live[s_t.sIdx][s_t.sComp] = s_t.sSaved; s_t.sIdx = -1; }
+    g_grassLevelOff.store(0); if (s_t.bypassOn) { g_cfg.bypass = s_t.bypassSaved; s_t.bypassOn = false; } }
+static void WriteReport(bool cancelled, bool partial = false);
 static void Finish(bool cancelled) {
     Restore();
     g_cfg.live[375][0] = s_t.meterSaved;
     s_t.active = false;
+    PerfUse(false); GpuShaderProfHold(false);
     WriteReport(cancelled);
 }
 void MenuTestStop() { if (s_h.active) { HangFinish("cortada con Cancelar"); s_t.status = "Busqueda del cuelgue cortada. Todo quedo como estaba."; return; } if (s_t.active) Finish(true); }
@@ -283,13 +302,15 @@ static bool Apply(int gi) {
     }
     return false;
 }
-static void MeasBegin() { s_t.cur = Meas(); s_t.cpu0T = Now(); GpuMeterTotals(s_t.gpu0, s_t.gpu0N, s_t.z0); }
+static void MeasBegin() { s_t.cur = Meas(); s_t.cpu0T = Now(); GpuMeterTotals(s_t.gpu0, s_t.gpu0N, s_t.z0); s_t.pw = PerfBegin(); }
 static void MeasEnd(int frames) {
+    PerfEnd(s_t.pw); s_t.cur = Meas(); s_t.cur.ps = PerfCompute(s_t.pw); if (s_t.cur.ps.frames > 0) frames = s_t.cur.ps.frames;   // (13/11 v3) la base dura 8 s
     double g = 0, z[kGpuZoneN] = {}; int gn = 0; GpuMeterTotals(g, gn, z);
     s_t.cur.n = frames; s_t.cur.cpuMs = frames ? (Now() - s_t.cpu0T) * 1000.0 / frames : 0;
     s_t.cur.gn = gn - s_t.gpu0N; s_t.cur.gpuMs = s_t.cur.gn > 0 ? (g - s_t.gpu0) / s_t.cur.gn : 0;
     for (int k = 0; k < kGpuZoneN; k++) s_t.cur.zone[k] = frames ? (z[k] - s_t.z0[k]) / frames : 0;
 }
+static bool Measured(const Step& sp) { return sp.kind == 4 || sp.kind == 5 || (sp.kind == 1 && g_cfg.groups[sp.gi].tIdx >= 0); }
 static const int kSettle = 20, kMeasure = 30;   // (08/11 h) asentar 14 -> 20: recompilacion / recarga tras el cambio
 
 void MenuTestPresent(IDXGISwapChain* sc, ID3D11Texture2D* frame) {
@@ -304,16 +325,23 @@ void MenuTestPresent(IDXGISwapChain* sc, ID3D11Texture2D* frame) {
     switch (s_t.phase) {
     case 0:   // (08/11 h) referencia justo antes de cada grupo: el cuadro se va aliviando durante la prueba (la base del principio
               // daba +2 a +3 ms a TODOS los grupos del editor); el costo se mide contra lo que cuesta AHORA con el grupo prendido
-        if (sp.kind == 1 && g_cfg.groups[sp.gi].tIdx >= 0 && !s_t.refDone) { MeasBegin(); s_t.refDone = true; s_t.phase = 5; s_t.wait = kMeasure; return; }
+        if (Measured(sp) && !s_t.refDone) { MeasBegin(); s_t.refDone = true; s_t.phase = 5; s_t.wait = kMeasure; return; }
         s_t.refDone = false;
         if (sp.kind == 1) { if (!Apply(sp.gi)) { MenuTestResult r; r.group = sp.label; r.section = sp.section; r.state = 2; s_t.results.push_back(r); s_t.skipped++; s_t.si++; return; } }
         else if (sp.kind == 2) { s_t.sIdx = sp.idx; s_t.sComp = sp.comp; s_t.sSaved = g_cfg.live[sp.idx][sp.comp]; g_cfg.live[sp.idx][sp.comp] = sp.val; }
+        else if (sp.kind == 3) {   // (13/11 v3) perfil de la placa por shader con todo prendido (120 cuadros + lectura)
+            s_t.profRuns0 = GpuShaderProfRuns(); GpuShaderProfKick(); s_t.profT0 = Now();
+            snprintf(b, sizeof b, "Probando %d/%d: %s (unos segundos)", (int)s_t.si + 1, (int)s_t.steps.size(), sp.label.c_str()); s_t.status = b;
+            s_t.phase = 6; return; }
+        else if (sp.kind == 4) g_grassLevelOff.store((int)sp.val);
+        else if (sp.kind == 5) { WriteReport(false, true); s_t.bypassSaved = g_cfg.bypass; s_t.bypassOn = true; g_cfg.bypass = true; }   // el informe ya queda escrito por si la placa se reinicia
         snprintf(b, sizeof b, "Probando %d/%d: %s", (int)s_t.si + 1, (int)s_t.steps.size(), sp.label.c_str()); s_t.status = b;
-        s_t.phase = 1; s_t.wait = sp.kind == 2 ? 10 : kSettle; return;
-    case 1:   // medir (solo base y grupos con interruptor)
-        if (sp.kind == 0 || (sp.kind == 1 && g_cfg.groups[sp.gi].tIdx >= 0)) { MeasBegin(); s_t.phase = 2; s_t.wait = kMeasure; return; }
+        s_t.phase = 1; s_t.wait = sp.kind == 2 ? 10 : sp.kind == 5 ? 2 * kSettle : kSettle; return;
+    case 1:   // medir (base, grupos con interruptor, niveles del pasto y sin el mod)
+        if (sp.kind == 0 || Measured(sp)) { MeasBegin(); s_t.phase = 2; s_t.wait = kMeasure; s_t.measEndT = sp.kind == 0 ? Now() + 8.0 : 0.0; return; }
         s_t.cur = Meas(); s_t.phase = 3; return;
-    case 2: MeasEnd(kMeasure); s_t.phase = 3; return;
+    case 2: if (s_t.measEndT > 0.0 && Now() < s_t.measEndT) return;
+        MeasEnd(kMeasure); s_t.phase = 3; return;
     case 3: {  // capturar
         std::vector<float> cap; Capture(sc, cap);
         wchar_t nm[96];
@@ -322,22 +350,28 @@ void MenuTestPresent(IDXGISwapChain* sc, ID3D11Texture2D* frame) {
         EnsureComInit(); if (frame) AsyncShot(frame, s_t.dir + L"capturas\\" + nm);
         if (sp.kind == 0) {
             if (s_t.si == 0) { s_t.base = cap; s_t.base0 = s_t.cur; }
-            else { s_t.base2 = cap; s_t.noise = Diff(s_t.base, s_t.base2); }
-        } else if (sp.kind == 1) {
-            MenuTestResult r; r.group = sp.label; r.section = sp.section; r.shot = W2A(nm); r.diff = Diff(s_t.base, cap);
+            else { s_t.base2 = cap; s_t.noise = Diff(s_t.base, s_t.base2); s_t.baseFinal = s_t.cur.ps; }
+        } else if (sp.kind == 1 || sp.kind == 4 || sp.kind == 5) {
+            MenuTestResult r; r.group = sp.label; r.section = sp.section; r.shot = W2A(nm); r.diff = Diff(s_t.base, cap); r.kind = sp.kind;
             const float thr = (std::max)(0.0025f, s_t.noise * 3.0f);
             r.state = r.diff > thr ? 1 : 0; if (r.state) s_t.changed++; s_t.tested++;
             if (s_t.cur.n) { const Meas& R = s_t.refOk ? s_t.ref : s_t.base0;   // (08/11 h) contra la referencia de este grupo
                 r.cpuSave = (float)(R.cpuMs - s_t.cur.cpuMs); r.gpuSave = (float)(R.gpuMs - s_t.cur.gpuMs);
-                for (int k = 0; k < kGpuZoneN; k++) r.zoneSave[k] = (float)(R.zone[k] - s_t.cur.zone[k]); }
+                for (int k = 0; k < kGpuZoneN; k++) r.zoneSave[k] = (float)(R.zone[k] - s_t.cur.zone[k]);
+                r.on = R.ps; r.off = s_t.cur.ps; r.perf = R.ps.frames > 0 && s_t.cur.ps.frames > 0; }
             s_t.refOk = false;
             s_t.results.push_back(r);
         } else s_t.views.push_back(sp.label + " = " + std::to_string((int)sp.val) + " -> capturas\\" + W2A(nm));
         s_t.phase = 4; return; }
     case 4:
-        Restore(); s_t.si++; s_t.phase = 0; s_t.wait = 6; return;
+        Restore(); s_t.si++; s_t.phase = 0; s_t.wait = sp.kind == 5 ? 2 * kSettle : 6; return;
     case 5:   // fin de la referencia del grupo
         MeasEnd(kMeasure); s_t.ref = s_t.cur; s_t.refOk = true; s_t.phase = 0; return;
+    case 6:   // (13/11 v3) esperando el perfil por shader
+        if (GpuShaderProfRuns() > s_t.profRuns0 || Now() - s_t.profT0 > 45.0) {
+            s_t.profText = GpuShaderProfRuns() > s_t.profRuns0 ? GpuShaderProfReport() : std::string("(el perfil por shader no termino en 45 s: el medidor necesita [PES21FX] medidor = 1 en el ini)\r\n");
+            s_t.si++; s_t.phase = 0; s_t.wait = 6; }
+        return;
     }
 }
 
@@ -347,8 +381,46 @@ static std::string U8(const std::string& cp) {   // los textos del menu estan en
     int m = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), n, nullptr, 0, nullptr, nullptr); std::string o(m, '\0'); if (m) WideCharToMultiByte(CP_UTF8, 0, w.c_str(), n, &o[0], m, nullptr, nullptr); return o;
 }
 static std::string J(const std::string& s) { std::string o = "\""; for (unsigned char c : U8(s)) { if (c == '"' || c == '\\') { o += '\\'; o += (char)c; } else if (c < 0x20) o += ' '; else o += (char)c; } return o + "\""; }
-static void WriteReport(bool cancelled) {
+// (13/11 v3) rendimiento.txt: todo lo de perfrec.cpp + perfil por shader + niveles del pasto + grupos con su reparto + sin el mod
+static void WritePerf(bool cancelled, bool partial) {
+    std::string o; char b[1200];
+    const char* scene = PerfSceneName(s_t.scene);
+    snprintf(b, sizeof b, "RENDIMIENTO - PRUEBA AUTOMATICA%s - %s - escena: %s\r\n", partial ? " (PARCIAL: falta lo que sigue a 'sin el mod')" : cancelled ? " (CORTADA)" : "", s_t.date, scene); o += b;
+    o += PerfHardwareText();
+    snprintf(b, sizeof b, "pasto del mod en la escena: %d parcelas, %d emisiones%s%s | %d shaders propios activos\r\n\r\n", g_grassDbg.patches, g_grassDbg.emits,
+        g_grassDbg.why ? ", motivo: " : "", g_grassDbg.why ? g_grassDbg.why : "", g_replacedCount.load()); o += b;
+    o += PerfStatsText(s_t.base0.ps, "BASE (todo como lo tenes, 8 s con la camara quieta)");
+    snprintf(b, sizeof b, "cuadro en la placa (marcas de Present a Present): %.2f ms\r\n\r\n", s_t.base0.gpuMs); o += b;
+    o += s_t.profText.empty() ? std::string("(sin perfil por shader)\r\n") : s_t.profText; o += "\r\n";
+    auto row = [&](const MenuTestResult& r) {
+        const PerfStats &A = r.on, &B = r.off;
+        snprintf(b, sizeof b, "  %-46.46s ahorra %+6.2f ms del cuadro (%5.1f -> %5.1f FPS) | placa %+6.2f | espera a la placa %+6.2f | mod en dibujos %+5.2f | juego %+5.2f | driver %+5.2f | placa 3D %s | %s\r\n",
+            r.group.c_str(), r.cpuSave, A.fps, B.fps, r.gpuSave, A.waitMs - B.waitMs, (A.modImmMs + A.modDefMs + A.hookImmMs + A.hookDefMs) - (B.modImmMs + B.modDefMs + B.hookImmMs + B.hookDefMs),
+            A.gameRtMs - B.gameRtMs, (A.drvImmMs + A.drvDefMs) - (B.drvImmMs + B.drvDefMs),
+            (A.gpu3d >= 0 && B.gpu3d >= 0) ? (std::to_string((int)lroundf(A.gpu3d)) + " -> " + std::to_string((int)lroundf(B.gpu3d)) + " %").c_str() : "sin dato",
+            r.state ? "cambia la imagen" : "sin efecto en la imagen");
+        o += b; };
+    o += "PASTO DEL MOD POR NIVEL (apagado un momento; ahorra = lo que gana el cuadro sin ese nivel)\r\n";
+    for (auto& r : s_t.results) if (r.kind == 4) row(r);
+    std::vector<const MenuTestResult*> v; for (auto& r : s_t.results) if (r.kind == 1 && r.state <= 1 && r.perf) v.push_back(&r);
+    std::sort(v.begin(), v.end(), [](const MenuTestResult* a, const MenuTestResult* c) { return a->cpuSave > c->cpuSave; });
+    o += "\r\nGRUPOS DEL MENU (los prendidos con interruptor, del que mas ahorra al que menos; ahorra = cuadro con el grupo prendido menos apagado)\r\n";
+    for (auto* r : v) row(*r);
+    for (auto& r : s_t.results) if (r.kind == 5) { o += "\r\nJUEGO SIN EL MOD (Ver original, al final)\r\n"; row(r); o += PerfStatsText(r.off, "sin el mod"); }
+    if (s_t.baseFinal.frames) { o += "\r\n"; o += PerfStatsText(s_t.baseFinal, "BASE FINAL (todo prendido de nuevo: si difiere mucho de la base, la escena cambio durante la prueba)"); }
+    snprintf(b, sizeof b, "\r\nruido de la imagen entre base y base final: %.4f (> 0.01 = la camara se movio)\r\n", s_t.noise); o += b;
+    o += "\r\nCOMO LEERLO: 'esperando en Present' alto = la placa no da abasto (bajar costo de placa sube FPS). 'juego' alto con la placa baja = el procesador\r\n"
+         "(el hilo que dibuja del juego) es el limite y achicar el pasto o los efectos no sube los FPS. 'mod en dibujos' = lo que la DLL tarda en cada dibujo.\r\n";
+    if (FILE* f = _wfopen((s_t.dir + L"rendimiento.txt").c_str(), L"wb")) { fwrite(o.data(), 1, o.size(), f); fclose(f); }
+    if (partial) return;
+    std::string rows = PerfCsvRow(s_t.date, scene, "base", s_t.base0.ps);
+    for (auto& r : s_t.results) if ((r.kind == 4 || r.kind == 5) && r.perf) rows += PerfCsvRow(s_t.date, scene, r.group.c_str(), r.off);
+    for (size_t i = 0; i < v.size() && i < 12; i++) rows += PerfCsvRow(s_t.date, scene, ("sin " + v[i]->group).c_str(), v[i]->off);
+    PerfAppendAll(rows);
+}
+static void WriteReport(bool cancelled, bool partial) {
     if (s_t.dir.empty()) return;
+    WritePerf(cancelled, partial);
     std::string sum, js; char b[600];
     const Meas& B = s_t.base0;
     snprintf(b, sizeof b, "PRUEBA AUTOMATICA%s - %d pasos de %d\r\nbase: %.2f ms por cuadro de CPU (%.0f cuadros/s), %.2f ms de GPU (%d cuadros medidos)%s\r\nruido de la escena: %.4f (si es > 0.01 la camara se movio y las diferencias de imagen no sirven)\r\n",

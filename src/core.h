@@ -1,6 +1,7 @@
 // PES21 FX - mod grafico para PES 2021 (DX11). Lo carga Sider (PES21FX.lua) y reemplaza a 3DMigoto.
 #pragma once
 #include <windows.h>
+#include <intrin.h>
 #include <d3d11.h>
 #include <dxgi.h>
 #include <atomic>
@@ -640,8 +641,36 @@ ID3D11ShaderResourceView* MouthMaskSRV(); void MouthMaskPresent(); void MouthMas
 enum { kGzSSSS, kGzGTAO, kGzSSGI, kGzLightMeter, kGzBody, kGzPitchWear, kGzGrass, kGzFaceGen, kGzCarasHd, kGzRing, kGzFrameCopy, kGzOverlay, kGzGlass, kGpuZoneN };
 void GpuMeterHookDevice(ID3D11Device* d); void GpuMeterPresent(); std::string GpuMeterSummary(); void GpuMeterCrashInfo(FILE* f, EXCEPTION_POINTERS* ep);
 int GpuZoneBegin(ID3D11DeviceContext* c, int zone); void GpuZoneEnd(ID3D11DeviceContext* c, int idx);
-void GpuShaderProfDraw(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEntry* vs); void GpuShaderProfExec(ID3D11DeviceContext* c);   // (13/11) perfil por shader (gpumeter.cpp)
+// (13/11) perfil por shader (gpumeter.cpp); (13/11 v3) con cadena de marcas por contexto (listas diferidas incluidas)
+struct SpCtx { int slot = -1, last = -1, gen = -1; uint64_t key = 0; };
+void GpuShaderProfDraw(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEntry* vs, SpCtx& x); void GpuShaderProfExec(ID3D11DeviceContext* c, SpCtx& x);
+void GpuShaderProfFinish(ID3D11DeviceContext* c, SpCtx& x); void GpuShaderProfKick(); void GpuShaderProfHold(bool on); int GpuShaderProfRuns(); std::string GpuShaderProfReport();
+// (13/11) rendimiento del cuadro y del equipo (perfrec.cpp): reparto del cuadro, CPU / hilos, placa en %, VRAM, RAM, disco, tirones
+extern std::atomic<bool> g_perfOn; extern thread_local uint64_t t_perfCall; extern thread_local int t_perfDepth;
+void PerfDrawDone(uint64_t t0, uint64_t c0, bool imm, bool draw); void PerfExecTicks(uint64_t ticks); void PerfFinishList();
+void PerfPresent(IDXGISwapChain* sc, UINT sync, uint64_t tEntry, uint64_t tBefore, uint64_t tAfter);
+struct PerfWin { int64_t f0 = 0, f1 = 0; double t0 = 0, t1 = 0; };
+struct PerfTop { DWORD tid = 0; float pct = 0; char name[112] = {}; };
+struct PerfStats {
+    int frames = 0, samples = 0, stutters = 0, over50 = 0, over100 = 0, nThreads = 0; DWORD renderTid = 0;
+    float frameMs = 0, fps = 0, p50 = 0, p90 = 0, p95 = 0, p99 = 0, maxMs = 0, low1Fps = 0, jitterMs = 0;
+    float waitMs = 0, modPresMs = 0, modImmMs = 0, modDefMs = 0, hookImmMs = 0, hookDefMs = 0, drvImmMs = 0, drvDefMs = 0, execMs = 0, gameRtMs = 0, drawsImm = 0, drawsDef = 0, lists = 0;
+    float procCpu = 0, sysCpu = 0, cores = 0, wsMB = 0, privMB = 0, sysRamPct = 0, sysRamUsedMB = 0, sysRamTotMB = 0, pfPerS = 0;
+    float rdMBs = 0, rdOps = 0, wrMBs = 0, rdPeakMBs = 0, vramMB = 0, vramBudMB = 0, vramPeakMB = 0, sharedMB = 0, gpu3d = -1, gpuCopy = -1, gpu3dAll = 0;
+    PerfTop top[5];
+};
+void PerfUse(bool on); PerfWin PerfBegin(); void PerfEnd(PerfWin& w); PerfStats PerfCompute(const PerfWin& w);
+const char* PerfVerdict(const PerfStats& s, char* b, size_t n); std::string PerfHardwareText(); std::string PerfStatsText(const PerfStats& s, const char* title);
+std::string PerfCsvHeader(); std::string PerfCsvRow(const char* date, const char* scene, const char* what, const PerfStats& s); void PerfAppendAll(const std::string& rows);
+const char* PerfSceneName(int i); int PerfSceneCount(); bool PerfRecordActive(); const std::string& PerfRecordStatus(); void PerfRecordStart(int scene, double seconds); void PerfRecordStop();
+extern std::atomic<int> g_grassLevelOff;   // (13/11) prueba automatica: bits 0..2 = no emitir el nivel 0 / 1 / 2 del pasto del mod, bit 3 = sin hojas 3D (grass.cpp)
 struct GpuZoneScope { ID3D11DeviceContext* c; int i; GpuZoneScope(ID3D11DeviceContext* c_, int z) : c(c_), i(GpuZoneBegin(c_, z)) {} ~GpuZoneScope() { GpuZoneEnd(c, i); } };
+// (13/11) CPU de cada gancho de dibujo (perfrec.cpp): total del gancho menos lo que tarda la llamada original (t_perfCall, la mide FX_DRAW).
+// Solo cuenta el gancho de afuera: los dibujos que el mod manda desde adentro de otro gancho (pasto) quedan en el del dibujo del juego.
+// draw = false: otros ganchos (SetShader, render targets, Dispatch...), sin separar el driver (cuesta casi nada)
+struct PerfDrawScope { uint64_t t0 = 0, c0 = 0; bool imm = false, in = false, draw = true;
+    explicit PerfDrawScope(ID3D11DeviceContext* c, bool isDraw = true) { if (g_perfOn.load(std::memory_order_relaxed)) { in = true; if (t_perfDepth++ == 0) { t0 = __rdtsc(); c0 = t_perfCall; imm = c == g_dev.imm; draw = isDraw; } } }
+    ~PerfDrawScope() { if (in) { --t_perfDepth; if (t0) PerfDrawDone(t0, c0, imm, draw); } } };
 void HeadShadowPresent(); int HeadShadowSlots(); bool HeadShadowBodyOn(); ID3D11ShaderResourceView* HeadShadowSRV(); ID3D11DepthStencilView* HeadShadowDSV();
 ID3D11Buffer* HeadShadowCB(int i); void HeadShadowViewport(int i, D3D11_VIEWPORT& vp); bool HeadShadowIsGameShadow(ID3D11DepthStencilView* v); bool HeadShadowIsGameRes(ID3D11DepthStencilView* v);
 bool HeadShadowIsNearCascade(ID3D11DeviceContext* c, ID3D11DepthStencilView* gameDSV, int kind); ID3D11DepthStencilView* HeadShadowBind(UINT n, ID3D11RenderTargetView* const* rt, ID3D11DepthStencilView* dsv); void HeadShadowOnClear(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, float depth);
@@ -650,7 +679,7 @@ ID3D11Resource* NamedSRVResource(const std::string& name);   // hooks.cpp: recur
 ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c); ID3D11ShaderResourceView* SSSSSpecSRV(); void SSSSReloadShaders(); double SSSSEditorLightAge(); void SSSSRenderSize(unsigned& w, unsigned& h); extern std::atomic<int> g_ssssDraws;   // ssss.cpp
 // prueba automatica del menu (menutest.cpp)
 void MenuTestPresent(IDXGISwapChain* sc, ID3D11Texture2D* frame);
-void MenuTestStart(); void MenuTestStop(); bool MenuTestActive(); void MenuHangStart(); bool MenuHangActive(); void MenuHangStartGroup(int tIdx, int tComp);   // (11/11) buscar el cuelgue (TDR)
+void MenuTestStart(int scene = 0, bool withBypass = false); void MenuTestStop(); bool MenuTestActive(); void MenuHangStart(); bool MenuHangActive(); void MenuHangStartGroup(int tIdx, int tComp);   // (11/11) buscar el cuelgue (TDR)
 int MenuTestCount(int what); float MenuTestNoise(); const std::string& MenuTestStatus();
 size_t MenuTestResults(); bool MenuTestResult_(size_t i, std::string& group, std::string& section, float& diff, int& state, float& cpuMs, float& gpuMs);
 float MenuTestProgress(); const std::wstring& MenuTestDir();

@@ -1575,16 +1575,28 @@ static void DrawSectionExtras(const std::string& sname) {
         ImGui::TextUnformatted(IcoL(kIcoDiag, TRS("Prueba automatica")).c_str());
         if (s_fontBold) ImGui::PopFont();
         ImGui::TextWrapped("%s", TRS("Apaga un momento cada efecto prendido, mide cuantos ms cuesta (CPU y placa), si cambia la imagen y saca una foto; despues prende una por una las vistas de depuracion y las fotografia. Al final deja todo como estaba (no guarda nada en el ini) y escribe PES21FX\\diagnostico\\<fecha>\\ con resumen.txt, informe.json y las fotos, para que Claude lo lea. Con la camara quieta (repeticion en pausa o el editor); tarda 2 a 4 minutos. Esc la corta."));
-        if (!MenuTestActive()) { if (ImGui::Button(IcoL(kIcoDiag, TRS("Empezar la prueba")).c_str(), ImVec2(0, 0))) MenuTestStart();
+        // (13/11 v3) rendimiento.txt: escena elegida, base de 8 s con CPU / placa / VRAM / RAM / disco / tirones, perfil por shader, niveles del pasto
+        static int s_perfScene = 1; static bool s_perfBypass = false;
+        ImGui::TextWrapped("%s", TRS("Ademas escribe rendimiento.txt: FPS y tirones, en que se va cada cuadro (el juego, el mod, el driver, la espera a la placa), uso del procesador y de sus hilos, uso de la placa, memoria de video, RAM, disco, el costo de cada shader de la placa y de cada nivel del pasto. Elegi la escena antes de empezar; con todo tarda 10 a 15 minutos."));
+        ImGui::SetNextItemWidth(260.0f * UIK());
+        if (ImGui::BeginCombo(TRS("Escena"), TRS(PerfSceneName(s_perfScene)))) { for (int i = 0; i < PerfSceneCount(); i++) if (ImGui::Selectable(TRS(PerfSceneName(i)), i == s_perfScene)) s_perfScene = i; ImGui::EndCombo(); }
+        ImGui::Checkbox(TRS("Medir tambien el juego sin el mod (Ver original, al final)"), &s_perfBypass);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Al final saca 'Ver original' unos segundos para medir el juego solo y lo vuelve a poner. El informe ya queda escrito antes, por si la placa se reinicia (paso el 11/11 con las cejas con hebras)."));
+        if (!MenuTestActive() && !PerfRecordActive()) { if (ImGui::Button(IcoL(kIcoDiag, TRS("Empezar la prueba")).c_str(), ImVec2(0, 0))) MenuTestStart(s_perfScene, s_perfBypass);
+            ImGui::SameLine(); if (ImGui::Button(IcoL(kIcoDiag, TRS("Grabar rendimiento jugando (2 min)")).c_str(), ImVec2(0, 0))) PerfRecordStart(s_perfScene, 120.0);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Durante 2 minutos anota el rendimiento mientras jugas normal (con el procesador del partido andando): FPS, tirones, procesador, placa, memoria y disco, segundo a segundo. Archivo PES21FX\\diagnostico\\rendimiento_<fecha>.txt y .csv. Esc lo corta."));
             // (11/11) buscar el cuelgue: para el reinicio de la placa al sacar "Ver original" en el partido (menutest.cpp MenuHangStart)
             ImGui::SameLine(); if (ImGui::Button(IcoL(kIcoDiag, TRS("Buscar el cuelgue")).c_str(), ImVec2(0, 0))) MenuHangStart();
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Para cuando la placa se reinicia con el mod prendido. Apaga todos los efectos, saca 'Ver original' y los vuelve a prender de a uno cada 4 segundos, anotando cada paso en el log antes de hacerlo. Si la placa se reinicia, el ultimo efecto anotado es el culpable. No guarda nada; con Esc se corta y todo vuelve a como estaba."));
             // (11/11) la busqueda general dio "Cejas con hebras": ahora cual de sus opciones (hebras v3, pasada propia, sombra, barba...)
             ImGui::SameLine(); if (ImGui::Button(IcoL(kIcoDiag, TRS("Buscar dentro de: Cejas con hebras")).c_str(), ImVec2(0, 0))) MenuHangStartGroup(74, 0);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Deja el resto del mod como esta, pone en 0 las opciones de Cejas con hebras, prende la tarjeta y devuelve cada opcion de a una cada 4 segundos, anotando antes cada paso. Si la placa se reinicia, la ultima opcion anotada es la culpable. No guarda nada.")); }
+        else if (PerfRecordActive()) { if (ImGui::Button(IcoL(kIcoX, TRS("Cortar la grabacion")).c_str(), ImVec2(0, 0))) PerfRecordStop(); }
         else { if (ImGui::Button(IcoL(kIcoX, TRS("Cancelar")).c_str(), ImVec2(0, 0))) MenuTestStop();
                ImGui::SameLine(); ImGui::ProgressBar(MenuTestProgress(), ImVec2(std::max(120.0f * UIK(), ImGui::GetContentRegionAvail().x), 0)); }
-        ImGui::PushTextWrapPos(0); ImGui::TextUnformatted(Utf8(MenuTestStatus()).c_str()); ImGui::PopTextWrapPos();
+        ImGui::PushTextWrapPos(0); ImGui::TextUnformatted(Utf8(MenuTestStatus()).c_str());
+        if (!PerfRecordStatus().empty()) ImGui::TextUnformatted(Utf8(PerfRecordStatus()).c_str());
+        ImGui::PopTextWrapPos();
         size_t nres = MenuTestResults();
         if (nres && !MenuTestActive()) {
             ImGui::TextDisabled(TRS("ruido de la escena: %.4f (si es alto, la camara se movio: pausa y repeti)"), MenuTestNoise());

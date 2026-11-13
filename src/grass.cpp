@@ -25,6 +25,7 @@
 #include <map>
 
 namespace fx {
+std::atomic<int> g_grassLevelOff{0};   // (13/11) prueba automatica (menutest.cpp): bits 0..2 niveles, bit 3 hojas 3D
 std::atomic<int> g_grassSeenFrame{-1000000};   // (13/11 sk9ema) ultimo cuadro con el pasto de la cancha (wind.cpp: bajo techo)
 
 static const uint64_t kGrassVS = 0x498b30bad256e8edULL;
@@ -1304,7 +1305,9 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         GpuTimer* tm = ((p58[3] > 0.5f || s_adaptTm.load(std::memory_order_relaxed)) && TimersReady()) ? TimerClaim(s_frame.load()) : nullptr;   // (1/11) medidor de GPU (con el registro prendido; (13/11) o con la adaptativa)
         if (tm) { c->Begin(tm->dis); c->End(tm->ts[0]); }
         cull[0] = 4.0f; c->UpdateSubresource(s_cullCb, 0, nullptr, cull, 0, 0); c->Dispatch(1, 1, 1);
+        const int lvOff = g_grassLevelOff.load(std::memory_order_relaxed);   // (13/11) prueba automatica: costo de cada nivel
         for (int i = 0; i < 3; i++) {
+            if (lvOff & (1 << i)) continue;   // sin su pasada, el nivel queda con 0 hojas (el contador se limpia arriba)
             UINT gw = (UINT)ceilf(2.0f * halfL / L[i].cell), gh = (UINT)ceilf(2.0f * halfW / L[i].cell);
             cull[0] = (float)i; cull[1] = L[i].cell; cull[2] = i == 2 ? loFar : T[i + 1]; cull[3] = T[i];
             if (t_editor && i == 0) cull[3] = 0.0f;   // (08/11 i) editor: nivel 0 sin tope (ver arriba)   // nivel 2: sin limite inferior (toda la cancha) salvo con cesped lejano en la base
@@ -1319,7 +1322,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         // (11/11, Agustin: "solo de cerca siiiii", "para primerisimos primer plano nada mas") HOJAS 3D (z410, solo el natural): celdas de 0.5 m
         // que miden >= w410 px/m (1200 si 0); z408 cantidad (hojas por celda hasta 4096 x z408 y un tope total de 200000 x z408 x adaptativa, minimo 0.6)
         /* (11/11 m) cull[40..43] se llenan arriba, antes de los niveles 0..2 */ cull[40] = bladeThr; cull[41] = bladePerCell; cull[42] = 200000.0f * bladeAmt;   /* (11/11 l) sin adaptativa */   // (11/11 g) 60000 -> 200000: en la captura 13.54 habia 219 hojas por celda de 0.5 m (se veia el suelo negro entre las hojas); la adaptativa no baja de 0.6 (solo primerisimos planos) cull[43] = (float)kBladeIpb;
-        if (bladeOn) {
+        if (bladeOn && !(lvOff & 8)) {
             UINT gw = (UINT)ceilf(2.0f * halfL / 0.5f), gh = (UINT)ceilf(2.0f * halfW / 0.5f);
             cull[0] = 5.0f; cull[1] = 0.5f; cull[7] = (float)gw; cull[8] = (float)gh;
             c->UpdateSubresource(s_cullCb, 0, nullptr, cull, 0, 0); c->Dispatch((gw + 7) / 8, (gh + 7) / 8, 1);   // suma de lo pedido
