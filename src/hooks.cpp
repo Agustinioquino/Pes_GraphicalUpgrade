@@ -850,6 +850,7 @@ template<int V> static void STDMETHODCALLTYPE hk_ExecCL(ID3D11DeviceContext* c, 
     GrassBaseFlush(c, 4, 0);   // (26/10 g) lo pendiente de este contexto va antes que la lista
     BodyOnExecute(c, l);
     GrassOnExecuteCL(c, l);   // (26/10 d) pasto: demora grabacion -> ejecucion, listas anidadas
+    GpuShaderProfExec(c);   // (13/11) perfil por shader: lo que sigue es la lista diferida
     o_ExecCL[V](c, l, r);
 }
 template<int V> static HRESULT STDMETHODCALLTYPE hk_FinishCL(ID3D11DeviceContext* c, BOOL r, ID3D11CommandList** l) {
@@ -1466,6 +1467,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (s.dev != g_dev.dev) return false;
     if (g_motorWire.load(std::memory_order_relaxed)) d.wire = MotorWireBegin(c, &d.wireRS);   // (11/11 3icxbh) Motor en tiempo real: geometria del G-buffer en alambre (y429); se devuelve en FX_DRAW
     const ShaderEntry *ps = s.ps, *vs = s.vs;
+    GpuShaderProfDraw(c, ps, vs);   // (13/11) perfil por shader del medidor (solo con x375, 120 cuadros por minuto)
     // (27/10 b) brazos, manos, muslos y torso de TorsoBody del tono de la cara (brazos.cpp, filas 321 / 327): son las texturas
     // del cuerpo, no un shader, asi que valen tambien con "Ver original" (el shader original lee el mismo t0)
     LeakCheck(c, ps, vs);

@@ -640,6 +640,7 @@ ID3D11ShaderResourceView* MouthMaskSRV(); void MouthMaskPresent(); void MouthMas
 enum { kGzSSSS, kGzGTAO, kGzSSGI, kGzLightMeter, kGzBody, kGzPitchWear, kGzGrass, kGzFaceGen, kGzCarasHd, kGzRing, kGzFrameCopy, kGzOverlay, kGzGlass, kGpuZoneN };
 void GpuMeterHookDevice(ID3D11Device* d); void GpuMeterPresent(); std::string GpuMeterSummary(); void GpuMeterCrashInfo(FILE* f, EXCEPTION_POINTERS* ep);
 int GpuZoneBegin(ID3D11DeviceContext* c, int zone); void GpuZoneEnd(ID3D11DeviceContext* c, int idx);
+void GpuShaderProfDraw(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEntry* vs); void GpuShaderProfExec(ID3D11DeviceContext* c);   // (13/11) perfil por shader (gpumeter.cpp)
 struct GpuZoneScope { ID3D11DeviceContext* c; int i; GpuZoneScope(ID3D11DeviceContext* c_, int z) : c(c_), i(GpuZoneBegin(c_, z)) {} ~GpuZoneScope() { GpuZoneEnd(c, i); } };
 void HeadShadowPresent(); int HeadShadowSlots(); bool HeadShadowBodyOn(); ID3D11ShaderResourceView* HeadShadowSRV(); ID3D11DepthStencilView* HeadShadowDSV();
 ID3D11Buffer* HeadShadowCB(int i); void HeadShadowViewport(int i, D3D11_VIEWPORT& vp); bool HeadShadowIsGameShadow(ID3D11DepthStencilView* v); bool HeadShadowIsGameRes(ID3D11DepthStencilView* v);
