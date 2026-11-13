@@ -1535,7 +1535,7 @@ void main(
     // pliegues y costuras, sin puntos sueltos; pasados 3 largos se apaga. Piso por material: en la piel la sombra chica nunca es
     // negra y deja pasar rojo (la luz cruza un poro por debajo), en la tela baja pareja
     { float4 MS = IniParams.Load(int2(88,0));
-      if (MS.y > 0.5 && MS.x > 0.0 && geoOk && tyC == 0 && zsk < 25.0 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+      if (MS.y > 0.5 && MS.x > 0.0 && geoOk && tyC == 0 && !mouthM && zsk < 25.0 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {   // (13/11) nada en la boca (regla)
         float3 LdS = normalize(pLc_dir.xyz);
         float ndlM = dot(Nsk, LdS);
         float sunSh = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);

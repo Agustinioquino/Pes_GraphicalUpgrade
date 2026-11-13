@@ -257,6 +257,7 @@ static float3 s_kick;
 static float3 s_grav;   // PES21 FX: gravedad en el espacio de la prenda (para el deslizamiento)
 static float3 s_omega;  // PES21 FX: velocidad angular de la prenda (rad/s, espacio de la prenda)
 static float3 s_center; // PES21 FX: origen de la prenda
+static float  s_windLen; // PES21 FX (13/11): largo del viento de cloth.ini (fijo en el partido): marca la velocidad de la onda de turbulencia
 static bool   s_menu;   // PES21 FX (25/10): escena de menu (editor, presentacion): sin empujes por movimiento del cuerpo
 static float3 s_ref;    // PES21 FX (25/10): punto cerca de la prenda; las sumas en enteros van relativas a el
 COH RWByteAddressBuffer             g_outPos    : register(u0);
@@ -661,7 +662,7 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
         float3 up = cross(side, wd);
         float3 r = g_rest[p].posPin.xyz;
         float  tt = g_time + float(s) * h;
-        float  sp = clamp(ws * 0.6, 1.0, 4.0);
+        float  sp = clamp(s_windLen * 0.6, 1.0, 4.0);   // (13/11) velocidad fija de la onda: con el viento unico ws cambia cada cuadro y la fase (tiempo x sp) saltaba
         float  a1 = dot(r, wd) * 30.0 - tt * 30.0 * sp * 0.25 + dot(r, side) * 9.0;
         float  a2 = dot(r, wd) * 21.0 - tt * 21.0 * sp * 0.25 + dot(r, up) * 13.0 + 1.7;
         float  a3 = dot(r, side) * 26.0 + dot(r, up) * 11.0 - tt * 17.0;
@@ -1455,6 +1456,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
               s_center = (s_flags & 32) ? float3(s_W[0].w, s_W[1].w, s_W[2].w) : 0;
             }
             float3 windBase = mul(transpose(W), g_wind.xyz);
+            s_windLen = length(windBase);   // (13/11) antes de cambiarlo por el viento unico: la fase de la onda no salta cada cuadro
             // PES21 FX (13/11) viento unico: si la DLL publica la fila 494 (z > 0) y z353 = 1, la tela usa ese viento (rumbo y
             // velocidad de este cuadro, con sus rachas) en vez del fijo de cloth.ini; la componente vertical sigue siendo la de cloth.ini.
             // Sin DLL (fila en cero) o con el viento del mod apagado (menus), todo queda como antes.
