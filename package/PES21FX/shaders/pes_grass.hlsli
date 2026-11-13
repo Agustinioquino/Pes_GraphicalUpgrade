@@ -382,8 +382,9 @@ void PESGrassColorGrade(inout float3 c)
     float mxP = max(c.r, max(c.g, c.b)), mnP = min(c.r, min(c.g, c.b));
     float kSP = saturate(((mxP - mnP) / max(mxP, 1e-3) - 0.12) * 5.0);
     float kG = kSP * smoothstep(1.02, 0.80, rgP) * smoothstep(1.10, 0.85, bgP) * step(mnP + 1e-4, c.g);   // verde (no paja, tierra ni gris)
-    float3 rtP = lerp(float3(1.0, 1.0, 1.0), tP / gCur, saturate(C456.y) * kG);
+    float3 rtP = lerp(float3(1.0, 1.0, 1.0), clamp(tP / gCur, 0.25, 4.0), saturate(C456.y) * kG);
     rtP.r = min(rtP.r, max(max(tP.r, 0.95) * c.g / max(c.r, 1e-4), 1.0));   // (13/11) un verde nunca termina con mas rojo que verde
+    rtP.b = min(rtP.b, max(max(tP.b, 0.95) * c.g / max(c.b, 1e-4), 1.0));   // ni con mas azul que verde (x112 alto + Esmeralda / Ingles)
     float3 cP = c * rtP; c = max(cP * (lP / max(dot(cP, LW), 1e-5)), 0.0);
   }
 }
