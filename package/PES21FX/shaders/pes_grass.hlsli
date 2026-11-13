@@ -194,6 +194,18 @@ void PESGroundLook(inout float3 c, inout float spec, inout float rough, float2 g
   if (g.x > 0.001) { c = lerp(c, pow(max(c, 1e-4), 1.25) * 0.72, g.x); spec = lerp(spec, saturate(spec * 2.2 + 0.25), g.x); rough = lerp(rough, max(0.14, rough * 0.6), g.x); }
   if (g.y > 0.001) { c = PESDryTint(c, g.y * 0.4); spec = lerp(spec, spec * 0.7, g.y); }
 }
+// (13/11 tanda 2) x448 PISADAS VISIBLES DE LEJOS: el pasto pisado (crush = mapa pes_flat, 0..1) se ve desde la camara de juego: seco = hojas
+// acostadas que muestran el enves (mas claro y con mas brillo, mas en rasante), mojado = mas oscuro y mate. Mas fuerte de lejos (donde no hay
+// hojas 3D que lo muestren). col = albedo, spec = brillo (o2.y en los PS), pxm = px/m del punto, graz = 0 desde arriba .. 1 rasante,
+// wet = humedad 0..1. Lo usan la base (5e92 / c956) y el VS 498b30. 0 = como antes
+void PESCrushLook(inout float3 col, inout float spec, float crush, float pxm, float graz, float wet) {
+  float k = clamp(IniParams.Load(int2(448, 0)).x, 0.0, 2.0);
+  float a = saturate(crush) * k * lerp(0.35, 1.0, 1.0 - smoothstep(110.0, 400.0, pxm));
+  if (a < 0.001) return;
+  float dry = 1.0 - saturate(wet);
+  col  *= lerp(1.0 - 0.10 * a, 1.0 + a * (0.10 + 0.08 * graz), dry);
+  spec *= lerp(1.0 - 0.40 * a, 1.0 + a * (0.35 + 0.25 * graz), dry);
+}
 // sol en espacio mundo (lo publica la DLL en 111: xyz hacia el sol, w altura en grados); (0,1,0) si todavia no hay dato
 float3 PESSunWorld() { float4 L = IniParams.Load(int2(111, 0)); return dot(L.xyz, L.xyz) > 0.5 ? L.xyz : float3(0.0, 1.0, 0.0); }
 // (04/11) sol del cielo en mundo (fila 312 de la DLL, no gira con la camara en repeticiones); si no hay, el de la luz (111)
@@ -256,7 +268,7 @@ void PESNatCanopy(inout float3 c, inout float spec, inout float rough, float3 V,
   float back = saturate(0.5 - 0.5 * dot(normalize(V.xz + 1e-5), normalize(S.xz + 1e-5)));   // mirando hacia el sol = contraluz
   float tx = 0.32 * sunK * (0.28 + 0.82 * back) * clamp(IniParams.Load(int2(413, 0)).w, 0.0, 2.0);   // media de la transmision a lo largo de la hoja
   c = lerp(c, c * float3(1.26, 1.36, 0.86), saturate(tx * 0.95) * kY);
-  c *= lerp(float3(1.0, 1.0, 1.0), float3(1.05, 1.06, 0.95), 0.5 * clamp(IniParams.Load(int2(295, 0)).z, 0.0, 2.0) * kY * lerp(0.3, 1.0, saturate(P414.w) * sunV));   // puntas
+  c *= lerp(float3(1.0, 1.0, 1.0), float3(1.05, 1.06, 0.95), 0.5 * clamp(IniParams.Load(int2(295, 0)).z, 0.0, 2.0) * kY * lerp(0.3 * sunV, 1.0, saturate(P414.w) * sunV));   // puntas; (13/11 tanda 2) w447: en la sombra entera nada (antes quedaba el piso 0.3)
   // puntas mojadas (x329: una de cada ~8 hojas, mas con la cancha humeda, en invierno y al amanecer): brillo promedio
   float2 g = PESGround();
   float dewK = (1.0 + 0.8 * g.x) * (1.0 - 0.85 * g.y) * (abs(P114.z - 1.0) < 0.5 ? 1.4 : 1.0);
@@ -293,6 +305,12 @@ void PESFarTurf(inout float3 c, inout float spec, float3 V, float2 wxz, float px
 // (25/10 b) color del pasto, el mismo para la base y las hojas (fila 112): x matiz (giro del tono en grados, -60..60),
 // y verde (acerca el tono a un verde de cesped sano con la misma claridad; negativo = lo aleja), z contraste (alrededor
 // del gris medio del cesped). Se aplica despues de la correccion del amarillo (29) y antes del desgaste / cesped lejano.
+// (13/11 tanda 2) x = c.rb / c.g. Debajo del verde medio (o del otro lado del empuje) x * rtK como antes; pasado el verde medio el empuje
+// se apaga de a poco hasta 0 a 2|d|: el promedio llega igual, los colores no se cruzan, lo calido casi no cambia
+float2 PESNatMap(float2 x, float2 ref, float2 rtK) {
+  float2 d = ref * (rtK - 1.0), y = x * rtK, s = sign(d), u = (x - ref) * s;   // u > 0: pasado ref en la direccion del empuje
+  float2 z = x + d * saturate(1.0 - u / max(2.0 * abs(d), 1e-5));
+  return (u > 0.0) ? z : y; }
 void PESGrassColorGrade(inout float3 c)
 {
   float4 C = IniParams.Load(int2(112, 0));
@@ -325,13 +343,17 @@ void PESGrassColorGrade(inout float3 c)
   // (12/11) el tono del natural solo mueve lo que tiene color: gris / blanco (lineas de cal, bordes de linea) quedan como estan
   float mxC = max(c.r, max(c.g, c.b)), mnC = min(c.r, min(c.g, c.b));
   float kS = saturate(((mxC - mnC) / max(mxC, 1e-3) - 0.12) * 5.0);
+  float2 natRef = gRef.rb;   // (13/11) donde esta el verde medio (r/g, b/g) antes del w112: si el y112 ya lo movio, el w112 parte de ahi
   if (abs(C.y) > 0.001) {
     float3 g = float3(0.19, 0.42, 0.10);
     if (natR) {
       float3 rt = max(lerp(gRef, g / g.g, clamp(C.y, -1.0, 1.0) * 0.6), 0.02) / gRef;
       gCur *= rt;
-      rt = lerp(float3(1.0, 1.0, 1.0), rt, kS);
-      float3 cn = c * rt; c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
+      float3 rtK = lerp(float3(1.0, 1.0, 1.0), rt, kS);
+      float gN = max(c.g, 1e-4);
+      float3 cn = c; cn.rb = gN * PESNatMap(c.rb / gN, gRef.rb, rtK.rb);   // (13/11 tanda 2) rt.g = 1: el verde no cambia
+      natRef *= rt.rb;   // el verde medio (kS = 1) cae justo en ref * rt
+      c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
     } else {
       { float3 gg = g * (dot(gCur, LW) / dot(g, LW)); gCur = max(lerp(gCur, gg, clamp(C.y, -1.0, 1.0) * 0.6), 1e-3); gCur /= gCur.g; }
       g *= l / dot(g, LW);
@@ -347,8 +369,10 @@ void PESGrassColorGrade(inout float3 c)
     if (natR) {
       float3 rt = lerp(gRef, t, clamp(C.w, 0.0, 1.0) * 0.85) / gRef;
       gCur *= rt;
-      rt = lerp(float3(1.0, 1.0, 1.0), rt, kS);
-      float3 cn = c * rt; c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
+      float3 rtK = lerp(float3(1.0, 1.0, 1.0), rt, kS);
+      float gN = max(c.g, 1e-4);
+      float3 cn = c; cn.rb = gN * PESNatMap(c.rb / gN, natRef, rtK.rb);   // (13/11 tanda 2) rt.g = 1: el verde no cambia
+      c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
     } else {
       { float3 tt = t * (dot(gCur, LW) / dot(t, LW)); gCur = max(lerp(gCur, tt, clamp(C.w, 0.0, 1.0) * 0.85), 1e-3); gCur /= gCur.g; }
       t *= l / dot(t, LW); c = max(lerp(c, t, clamp(C.w, 0.0, 1.0) * 0.85), 0.0);

@@ -93,6 +93,7 @@ cbuffer PESLightCopyC : register(b13)
   float4 pLc_color;
 }
 
+#include "pes_microsh.hlsli"   // PES21 (13/11): micro sombras v4, sombra de relieve con direccion
 #include "pes_vista_motor.hlsli"   // PES21 (11/11, Motor en tiempo real): vistas del motor (fila 429)
 // PES21 (12/11 20:50, fila 445): azar y ruido fijos al mundo (sin seno: estables lejos del centro de la cancha) y luz del sol en un
 // punto del aire (espacio de vista; shadow map del sol con la misma cuenta que la luz volumetrica 335)
@@ -159,7 +160,8 @@ void main(
           float hB = g_psScene.m_eyepos.y + dot(PB, upB);                        // altura del pixel sobre la cancha (m)
           float mmB = IniParams.Load(int2(296,0)).w; mmB = mmB > 1.0 ? clamp(mmB, 15.0, 80.0) : 28.0;
           float pxB = abs(2.0 * g_psScene.m_projectionParam.y * zB * g_psSystem.m_renderBuffer.w);   // metros que mide un pixel a esa distancia
-          float topB = mmB * 0.001 * kCv * smoothstep(0.0007, 0.0016, pxB);
+          int tyHB = (int)(IniParams.Load(int2(104,0)).y + 0.5); float hTyB = tyHB == 0 ? 0.9 : (tyHB == 2 ? 1.45 : 1.0);   // (13/11 tanda 2, BUG FIX) tipo de pasto y104 como el VS (hT): con Largo el borde quedaba 31 % bajo
+          float topB = mmB * hTyB * 0.001 * kCv * smoothstep(0.0007, 0.0016, pxB);
           float3 NB = PESDecN(uvB); NB.z = -NB.z;
           if (topB > 0.002 && hB > -0.03 && hB < topB && dot(NB, upB) < 0.6) {
             float3 vXB = float3(g_psScene.m_view._m00, g_psScene.m_view._m01, g_psScene.m_view._m02), vZB = float3(g_psScene.m_view._m20, g_psScene.m_view._m21, g_psScene.m_view._m22);
@@ -196,6 +198,9 @@ void main(
   float gnZ = inGBufferNormal.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).z;
   int tyC = (int)((uint)(gnZ * 1023 + 0.5) & 15);
   float trC = (float)(((uint)(gnZ * 1023 + 0.5) >> 4) & 63) / 63.0;   // PES21 pasto v3: translucidez por pixel del G-buffer (hojas: grosor)
+  // (13/11 tanda 2) x496: trC sale subida de cerca (18afff) y x0.45 de lejos: el mismo sol encendia el doble de cerca. En el brillo del sol que
+  // atraviesa la hoja (y57, x414 / z436, sol bajo) va con la mitad de su contraste alrededor de 0.5. 0 = como antes
+  float trCn = lerp(trC, lerp(0.5, trC, 0.5), saturate(IniParams.Load(int2(496,0)).x));
   bool skinC = cmpOn && (tyC == 0) && (abs(gmC.z - 0.98039) < 0.003);
   // (12/11, Agustin: "a la pelota le falta tener una luz de el cielo tambien un poco") la pelota y los botines son tipo 1 (como los carteles)
   // y el tipo 1 no recibia la luz de cielo (x47) ni el reflejo del cielo (151). El PS de la pelota / botines (aadffecf) marca RT2.w = 1 (el
@@ -209,6 +214,13 @@ void main(
   r1.xyz = inLightSpecular.Sample(g_samplerPoint_Wrap_s, r0.xy).xyz;
   r2.xyz = inLightDiffuse.Sample(g_samplerPoint_Wrap_s, r0.xy).xyz;
   float3 pesRawL = r2.xyz;   // (12/11 23:50) x447: la luz del motor tal como llega (a la sombra, solo su ambiente)
+  // (13/11 tanda 2) w447: RT2.w (t14) = visibilidad limpia del sol (sin x440 ni micro sombra; la escriben los PS del sol). Una sola lectura
+  // para toda la composicion. y57, x414 y el brillo SH usan el minimo (nada en la sombra entera aunque x440 aclare .x); x447 usa el maximo
+  // (al sol nada que recolorear aunque haya micro sombra en .x; en la sombra como antes). w447 0 = como antes (.x)
+  float kSGc = saturate(IniParams.Load(int2(447,0)).w);
+  float4 pesS4 = inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0);
+  float pesShMn = lerp(saturate(pesS4.x), min(saturate(pesS4.x), saturate(pesS4.w)), kSGc);   // y57, x414, brillo SH
+  float pesShMx = lerp(saturate(pesS4.x), max(saturate(pesS4.x), saturate(pesS4.w)), kSGc);   // x447
   r3.xyz = inAlbedo.SampleLevel(g_samplerPoint_Clamp_s, r0.xy, 0).xyz;
   { // PES21 tono de piel (20/10, 140): cromaticidad dentro del lugar de la piel real para su claridad (cada tono se conserva)
     float4 SK = IniParams.Load(int2(140,0));
@@ -671,7 +683,8 @@ void main(
       float3 Pp = float3((sP - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zbp, zbp);
       float hPp = g_psScene.m_eyepos.y + dot(Pp, upP);                        // altura del pixel sobre la cancha (m)
       float mmP = IniParams.Load(int2(296,0)).w; mmP = mmP > 1.0 ? clamp(mmP, 15.0, 80.0) : 28.0;
-      float HgP = mmP * 0.00115 + 0.012;                                         // alto del pasto (m) + el nido de la pelota
+      int tyHP = (int)(IniParams.Load(int2(104,0)).y + 0.5); float hTyP = tyHP == 0 ? 0.9 : (tyHP == 2 ? 1.45 : 1.0);   // (13/11 tanda 2, BUG FIX) tipo de pasto y104 como el VS (hT)
+      float HgP = mmP * hTyP * 0.00115 + 0.012;                                  // alto del pasto (m) + el nido de la pelota
       float inG = (1.0 - smoothstep(0.15 * HgP, HgP, hPp)) * step(-0.05, hPp);
       if (inG > 0.001) {
         float kG2 = saturate(inG * 0.60 * kBp);
@@ -841,12 +854,12 @@ void main(
       float3 upV = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
       if (dot(Ld, upV) < 0) upV = -upV;
       float low = 1.0 - saturate(dot(Ld, upV));                          // mas fuerte con el sol bajo
-      float shG = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+      float shG = pesShMn;   // (13/11 tanda 2) w447: sin la aclarada de x440 en la sombra entera
       float3 sunC = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
       // pasto v3: las hojas finas (puntas) dejan pasar mas luz que la base; la translucidez viene del G-buffer
       // (26/10 d) hojas y base con casi el mismo peso (antes 0.85 vs 1.6: brillaban distinto mirando al sol) y tinte menos amarillo
       // (el azul en 0.55 ponia lima toda la cancha hacia el sol, y x29 no llega a la luz)
-      float trK = IniParams.Load(int2(104,0)).x > 0.5 ? lerp(0.9, 1.3, saturate(trC)) : 1.0;
+      float trK = IniParams.Load(int2(104,0)).x > 0.5 ? lerp(0.9, 1.3, saturate(trCn)) : 1.0;
       r2.xyz += sunC * tr * (0.35 + 0.65 * low) * shG * STg.y * 0.35 * trK * float3(1.0, 1.03, 0.80);
     }
   }
@@ -887,14 +900,24 @@ void main(
       if (dot(LdH, upH) < 0) upH = -upH;
       float sinEH = saturate(dot(LdH, upH));
       pesHueK = kH7 * smoothstep(0.0, 0.25, sinEH) * warmH;
-      float wH = pesHueK * (1.0 - saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x));
+      float wH = pesHueK * (1.0 - pesShMx);   // (13/11 tanda 2) w447: al sol 0 aunque haya micro sombra; en la sombra como antes
       if (wH > 0.001) {
         const float3 LWh = float3(0.2126, 0.7152, 0.0722);
         float3 tgtH = PESSunChroma(scH, sinEH) * dot(scH * g_psScene.m_exposure.zzz, LWh) * max(dot(Nsk, LdH), 0.25)
                     + max(pesRawL, 0.0) + sky314 * saturate(IniParams.Load(int2(314,0)).y) + sky436;
         float lH = dot(r2.xyz, LWh);
         float lTH = dot(tgtH, LWh);   // sin luz de referencia (sol y cielo casi 0) se deja como antes: nunca mas oscuro
+        float3 r2pre = r2.xyz;   // (13/11 tanda 2) y447: la luz de la sombra tal como llega (cielo / ambiente)
         if (lTH > 1e-5) r2.xyz = lerp(r2.xyz, tgtH * (lH / lTH), wH);
+        // (13/11 tanda 2) y447 SOMBRA SIN AMARILLO: x447 copiaba a la sombra el color calido del sol (R/G x1.10-1.23, B/G x0.74-0.87) y con el
+        // albedo amarillo la sombra quedaba oliva y las puntas translucidas amarillas. Ahora la sombra nunca queda mas calida que el sol y guarda
+        // hasta la mitad del B/G del cielo, con el mismo brillo. Acotado por la sombra de x447 = 0 (nunca mas celeste que antes). 0 = como antes
+        float kSky = saturate(IniParams.Load(int2(447,0)).y);
+        if (kSky > 0.001 && lTH > 1e-5) { float3 hyO = r2.xyz, hyS = r2pre;
+          float rgS = scH.r / max(scH.g, 1e-4);                                                               // R/G de la luz del sol
+          hyO.r = min(hyO.r, hyO.g * max(rgS * lerp(1.0, 0.94, kSky), hyS.r / max(hyS.g, 1e-5)));             // la sombra nunca mas calida que el sol
+          hyO.b = max(hyO.b, hyO.g * lerp(hyO.b / max(hyO.g, 1e-5), hyS.b / max(hyS.g, 1e-5), 0.5 * kSky));   // hasta la mitad del B/G del cielo
+          r2.xyz = hyO * (lH / max(dot(hyO, LWh), 1e-5)); }                                                    // mismo brillo
       }
     }
   }
@@ -912,7 +935,7 @@ void main(
         float3 upV = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));
         if (dot(Ld, upV) < 0) upV = -upV;
         float sunUp = saturate(dot(Ld, upV));
-        float shG = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+        float shG = pesShMn;   // (13/11 tanda 2) w447: sin la aclarada de x440 en la sombra entera
         float strong = saturate(0.35 + 1.3 * sunUp) * day;                 // sol alto y despejado: pinta mas; sol muy bajo: mas calido que saturado
         strong *= saturate(PS4.w);   // (08/11 ab) w414 = fuerza del sol de la DLL: despejado, de dia, altura del sol y estacion (0 con lluvia / de noche)
         float lit = shG * strong * clamp(PS4.x, 0.0, 2.0) * saturate((300.0 - zsk) / 120.0);
@@ -930,16 +953,16 @@ void main(
           r2.xyz = c;
           float fwd = saturate(dot(Ld, Vsk)), side = saturate(1.0 - abs(dot(Ld, Vsk)));
           float3 sunC = sc * g_psScene.m_exposure.zzz;
-          float glow = (0.55 * pow(fwd, 2.0) + 0.30 * side) * lerp(0.6, 1.4, saturate(trC)) * clamp(PS4.z, 0.0, 2.0);
+          float glow = (0.55 * pow(fwd, 2.0) + 0.30 * side) * lerp(0.6, 1.4, saturate(trCn)) * clamp(PS4.z, 0.0, 2.0);
           // (11/11 n, Agustin: "hacer un poco mas notorio las puntas con un traspaso de la luz a contraluz") natural: a contraluz la punta
           // fina (trC alto) se enciende mas; de frente igual que antes
           // (12/11, Agustin con la captura del pasto largo: "que el sol pinte las puntas un poco mas al ser luz de contraluz o cuando le da el
           // sol directamente") z436: la punta (trC alto: la mas fina y translucida, medida en mm en 18afff) a contraluz se enciende mas y al sol
           // directo toma su verde amarillo palido (no lima: sigue la referencia de puntas crema)
           float kTp = clamp(IniParams.Load(int2(436,0)).z, 0.0, 2.0);
-          if (natP < 0.99) glow += 0.40 * (1.0 + 0.6 * kTp) * pow(fwd, 2.0) * smoothstep(0.35, 0.9, saturate(trC)) * clamp(PS4.z, 0.0, 2.0);
+          if (natP < 0.99) glow += 0.40 * (1.0 + 0.6 * kTp) * pow(fwd, 2.0) * smoothstep(0.35, 0.9, saturate(trCn)) * clamp(PS4.z, 0.0, 2.0);
           if (natP < 0.99 && kTp > 0.001) {
-            float tipT = smoothstep(0.40, 0.92, saturate(trC));
+            float tipT = smoothstep(0.40, 0.92, saturate(trCn));
             float lumP = dot(r2.xyz, float3(0.2126, 0.7152, 0.0722));
             float3 cP = r2.xyz * lerp(float3(1.0, 1.0, 1.0), float3(1.10, 1.13, 0.80), saturate(0.45 * lit * tipT * kTp));
             r2.xyz = cP * (lumP / max(dot(cP, float3(0.2126, 0.7152, 0.0722)), 1e-5)) * (1.0 + 0.10 * lit * tipT * kTp);
@@ -961,7 +984,7 @@ void main(
           r2.xyz = c * (lum0 / max(lum1, 1e-5)) * (1.0 + 0.08 * lowS);
           float fwd = saturate(dot(Ld, Vsk));
           float3 sunC = sc * g_psScene.m_exposure.zzz;
-          r2.xyz += sunC * pow(fwd, 3.0) * lerp(0.6, 1.3, saturate(trC)) * lowS * 0.05 * clamp(PS4.z, 0.0, 2.0) * lerp(float3(0.95, 0.85, 0.70), float3(1.0, 0.72, 0.45), setting);
+          r2.xyz += sunC * pow(fwd, 3.0) * lerp(0.6, 1.3, saturate(trCn)) * lowS * 0.05 * clamp(PS4.z, 0.0, 2.0) * lerp(float3(0.95, 0.85, 0.70), float3(1.0, 0.72, 0.45), setting);
         }
       }
     }
@@ -981,7 +1004,7 @@ void main(
         float graz = 1.0 - saturate(dot(Nsk, -Vsk));
         float open = lerp(48.0, 10.0, saturate(SH.y));
         float fres = 0.04 + 0.96 * pow(graz, 4.0);
-        float shG = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+        float shG = pesShMn;   // (13/11 tanda 2) w447: sin la aclarada de x440 en la sombra entera
         float3 sunC = sc * g_psScene.m_exposure.zzz;
         r1.xyz += sunC * pow(nh, open) * fres * shG * saturate(dot(Nsk, Ld) * 3.0) * max(SH.x, 0.0) * 0.6 * day;
       }
@@ -1266,7 +1289,20 @@ void main(
   float3 occRGB = r0.xxx;
   { // PES21 pasto v3 (20/10): el SSAO del motor entre las hojas apaga el pasto cercano (se ve gris y sin sol); x108 lo alivia solo en el cesped
     float4 GA = IniParams.Load(int2(108,0));
-    if (tyC == 3 && GA.x > 0.001 && IniParams.Load(int2(104,0)).x > 0.5) { float k = saturate(1.0 - GA.x); aoRaw = lerp(1.0, aoRaw, k); occRGB = lerp(float3(1,1,1), occRGB, k); }
+    if (tyC == 3 && GA.x > 0.001 && IniParams.Load(int2(104,0)).x > 0.5) {
+      // (13/11 tanda 2) z496 PROFUNDIDAD DE CERCA: x108 saca el SSAO del motor entre todas las hojas y el pasto 3D de cerca quedaba sin hondura.
+      // En la zona de las hojas 3D (la regla de la DLL: x407 0, z412 0, z410 y el umbral w410 en px/m; x104 ya probado) vuelve la MITAD de lo
+      // que x108 saca (ese SSAO tambien apaga el sol directo: entero volveria el pasto gris). Tarjetas del juego y pasto lejano igual. 0 = como antes
+      float kZ = saturate(IniParams.Load(int2(496,0)).z), r3D = 0.0;
+      if (kZ > 0.001) {
+        float pxA = abs(2.0 * g_psScene.m_projectionParam.y * zsk * g_psSystem.m_renderBuffer.w);   // m por pixel (= pxB de x443)
+        float hhA = IniParams.Load(int2(63,0)).z;
+        float pxM = abs(g_psScene.m_projection._m11) * (hhA > 1.0 ? hhA : 540.0) / max(length(Pgeo), 0.05);   // px/m como la DLL (y pxc de 5e92 / c956)
+        float4 P410c = IniParams.Load(int2(410,0)); float w410c = P410c.w >= 100.0 ? clamp(P410c.w, 100.0, 6000.0) : 1200.0;   // = bladeThr de grass.cpp
+        bool on3D = IniParams.Load(int2(407,0)).x < 0.5 && IniParams.Load(int2(412,0)).z < 0.5 && P410c.z > 0.5;   // = bladeNat + z410
+        r3D = on3D ? kZ * smoothstep(0.8 * w410c, 1.2 * w410c, pxM) * smoothstep(0.003, 0.0015, pxA) : 0.0; }
+      float k = saturate(1.0 - GA.x * lerp(1.0, 0.5, r3D));   // solo la mitad del SSAO del motor vuelve, y solo en la zona de hojas 3D
+      aoRaw = lerp(1.0, aoRaw, k); occRGB = lerp(float3(1,1,1), occRGB, k); }
   }
   { // === PES21 piel en la sombra (02/11, 259) ===
     // Agustin (02/11): con parche 0 o 1 la piel en sombra salia casi negra, gris y plana (cuello bajo el menton). Dos cosas reales
@@ -1484,11 +1520,14 @@ void main(
     // sombra a si mismos con la luz rasante del sol. La apertura la da la oclusion ambiental; solo del lado iluminado.
     // x88 fuerza, y88 on/off, z88 apertura: 0 = oclusion de pantalla (cambia con la camara), 1 = relieve (31/10): el angulo
     // entre la normal de detalle (poros, pliegues, trama) y la geometrica de la profundidad; no depende de la camara
+    // (13/11, pedido del hilo del pasto) LA MICRO SOMBRA VIEJA SIGUE para todo lo que no es piel ni tela (tyC != 0: pasto, pelota,
+    // estadio) hasta que tengan su version v4: el pasto de cerca depende de ella para la profundidad entre hojas. z88 ahora es la
+    // suavidad de la v4: aca queda siempre el modo relieve (el que estaba por defecto)
     { float4 MS = IniParams.Load(int2(88,0));
-      if (MS.y > 0.5 && MS.x > 0.0 && geoOk && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+      if (tyC != 0 && MS.y > 0.5 && MS.x > 0.0 && geoOk && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
         float ndlM = dot(Nsk, normalize(pLc_dir.xyz));
         float aper = 2.0 * aoRaw * aoRaw;
-        if (MS.z > 0.5) {
+        if (true) {
           // (01/11) relieve v2: la normal de detalle contra el PROMEDIO de las normales del G-buffer en un anillo de ~1.2 cm del
           // mundo (no contra la normal de la profundidad). La de la profundidad salia a facetas (cuadrados de 2x2 y triangulos de
           // mallas con pocos poligonos, como la mano) y cada faceta se leia como un pliegue hondo. El promedio de un anillo
@@ -1523,6 +1562,56 @@ void main(
         float msFar = (skinC && IniParams.Load(int2(124,0)).w > 0.5) ? saturate((2.0 - 2000.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z) / 1.2) : 1.0;
         float msK = lerp(1.0, max(micro, 0.4), saturate(MS.x) * litSide * msFar);
         diffC *= msK; specC *= skinC ? msK : lerp(1.0, msK, 0.5);
+      } }
+    // (13/11) MICRO SOMBRAS v4 (pes_microsh.hlsli): sombra de relieve con direccion, hacia el sol, para piel, tela y todo lo
+    // que no es pasto ni pelota. x88 fuerza, y88 on/off, w88 largo (0 = 1). z88 ya no se usa. Solo sobre la parte de la luz que
+    // viene del sol (su color x N.L x sombra del juego contra el total): en la sombra del estadio o de la cabeza no hace nada.
+    // Largo por material (piel 6 mm, lo demas 15 mm), nunca menos de 5 pixeles: de cerca marca poros y trama, mas lejos arrugas,
+    // pliegues y costuras, sin puntos sueltos; pasados 3 largos se apaga. Piso por material: en la piel la sombra chica nunca es
+    // negra y deja pasar rojo (la luz cruza un poro por debajo), en la tela baja pareja
+    { float4 MS = IniParams.Load(int2(88,0));
+      if (MS.y > 0.5 && MS.x > 0.0 && geoOk && tyC == 0 && !mouthM && zsk < 25.0 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {   // (13/11) nada en la boca (regla)
+        float3 LdS = normalize(pLc_dir.xyz);
+        float ndlM = dot(Nsk, LdS);
+        float sunSh = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+        float3 sunD = max(pLc_color.xyz, 0.0) * saturate(ndlM) * sunSh;
+        float sunF = saturate(dot(sunD, float3(0.2126, 0.7152, 0.0722)) / max(dot(r2.xyz, float3(0.2126, 0.7152, 0.0722)), 1e-4)) * saturate(ndlM * 6.0) * sunSh;
+        if (sunF > 0.01) {
+          float pxmM = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zsk * g_psSystem.m_renderBuffer.z, 1e-5);   // pixeles por metro
+          float rBase = (skinC ? 0.006 : 0.015) * (MS.w > 0.001 ? clamp(MS.w, 0.25, 4.0) : 1.0);
+          float rM = max(rBase, 5.0 / pxmM);
+          float farK = saturate((3.0 * rBase - rM) / (1.5 * rBase) + 1.0) * saturate((25.0 - zsk) / 5.0);
+          if (farK > 0.01) {
+            // forma lisa: promedio de las normales en un anillo del largo del camino, solo vecinos sobre el plano del pixel
+            float3 Nc0 = PESDecN(uvC);
+            float3 NvC = float3(Nc0.xy, -Nc0.z);
+            float rPx = clamp(rM * pxmM, 2.0, 24.0);
+            float tolM = 0.35 * rM + 0.001;
+            float3 nAcc = 0; float nW = 0;
+            [unroll] for (int mi = 0; mi < 8; mi++) {
+              float angM = mi * 0.78539816 + 0.3927;
+              float2 uvM = uvC + float2(cos(angM), sin(angM)) * rPx * g_psSystem.m_renderBuffer.zw;
+              float zM = PESLinZ(uvM);
+              float3 Pm = float3(((uvM * float2(2, -2) + float2(-1, 1)) - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zM, zM);
+              float wM = abs(dot(Pm - Pgeo, NvC)) < tolM ? 1.0 : 0.0;
+              nAcc += PESDecN(uvM) * wM; nW += wM;
+            }
+            if (nW > 2.5) {
+              float3 NsM = normalize(nAcc + Nc0); NsM.z = -NsM.z;
+              // ESTABLE: el ruido por pixel solo con el TAA de la DLL prendido (x454), que lo promedia; sin TAA paso fijo (sin hormigueo)
+              float jitM = IniParams.Load(int2(454,0)).x > 0.5 ? frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715)))) : 0.5;
+              float softM = MS.z > 0.001 ? clamp(MS.z, 0.25, 3.0) : 1.0;   // z88 suavidad de la penumbra (0 = 1)
+              float visM = PESMicroShadowDir(uvC, Pgeo, Nsk, NsM, LdS, rM, jitM, softM);
+              float3 floorM = skinC ? float3(0.62, 0.44, 0.40) : float3(0.35, 0.35, 0.35);
+              // REACTIVO al sudor / lluvia: la pelicula de agua llena el poro y alisa la piel (la rugosidad del G-buffer baja de ~0.42
+              // seca a ~0.2 mojada): con la piel mojada la sombra del poro se acorta hasta un 60 %; arrugas y pliegues grandes quedan
+              float wetM = skinC ? saturate((0.38 - saturate(gmC.x)) / 0.18) : 0.0;
+              float kM = saturate(MS.x) * farK * sunF * (1.0 - 0.6 * wetM);
+              diffC *= lerp(1.0, lerp(floorM, 1.0, visM), kM);
+              specC *= lerp(1.0, lerp(0.25, 1.0, visM), kM);
+            }
+          }
+        }
       } }
     r0.xyw = diffC * aoD + specC * aoS;
   } else {

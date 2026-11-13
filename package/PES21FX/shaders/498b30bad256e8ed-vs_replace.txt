@@ -31,7 +31,14 @@ StructuredBuffer<float4> PESGrassInst : register(t121);   // PES21: parcelas del
 cbuffer PESTurfMatC : register(b6) { float4 pTM[8]; }
 #include "pes_grass.hlsli"   // PES21 pasto v3 (19/10): tipo, alto, patrones de corte, desgaste, zonas
 // (12/11) pasto aplastado: el mayor de pisadas (R) y rastro de la pelota (G) en una uv de la cancha
-float PESFlatAt(float2 uv) { float2 f = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, uv, 0).xy; return max(f.x, f.y); }
+// (13/11 tanda 2) z448 pisadas que se borran despacio: B = canal plastico de las pisadas (la DLL, solo con z448 > 0; en el mapa de 2 canales
+// se lee 0). Para doblar y hundir R pasa a max(R, 0.55 B'), B' = (B - 0.012) / 0.988. x = como antes (R / G: los rebotes), y = con B
+float2 PESFlatAt2(float2 uv) {
+  float3 f = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, uv, 0).xyz; float rP = f.x;
+  if (IniParams.Load(int2(448, 0)).z > 0.0) rP = max(f.x, 0.55 * saturate((f.z - 0.012) / 0.988));
+  return float2(max(f.x, f.y), max(rP, f.y));
+}
+float PESFlatAt(float2 uv) { return PESFlatAt2(uv).y; }
 // (11/11 o) gradiente analitico del ruido de valor de PESGnoise (las mismas 4 esquinas): para correr los macollos de las hojas 3D
 float2 PESGnGrad(float2 p) {
   float2 i = floor(p), f = frac(p), u = f * f * (3.0 - 2.0 * f), du = 6.0 * f * (1.0 - f);
@@ -44,6 +51,39 @@ float PESHal3(uint n) { float f = 1.0, r = 0.0; [loop] for (int k = 0; k < 12; k
 
 // (11/11) hojas 3D de primerisimo plano: azar entero (PCG) por celda y por hoja, el mismo en todos los vertices de la hoja
 float PESBu(uint s, uint k) { return (float)(PESBh(s ^ (k * 0x9E3779B9u)) & 0xFFFFFFu) * (1.0 / 16777216.0); }
+// (13/11 tanda 2) ruido de valor periodico a lo largo de x cada nx celdas (D da la vuelta a los 8192 m y las frecuencias son n / 8192: sin
+// costura). El indice x se corre 4 nx antes del modulo: a >= -1.01 x 8192 m, asi que nunca es negativo (modulo sin signo, bien definido)
+float PESWv(float2 p, uint nx, uint seed) {
+  float2 i = floor(p), f = p - i; f = f * f * (3.0 - 2.0 * f);
+  uint x0 = (uint)((int)i.x + 4 * (int)nx) % nx;
+  uint x1 = (x0 + 1u == nx) ? 0u : x0 + 1u;
+  uint y0 = (uint)(int)i.y, y1 = y0 + 1u;
+  return lerp(lerp(PESBu(x0 + y0 * 8209u, seed), PESBu(x1 + y0 * 8209u, seed), f.x),
+              lerp(PESBu(x0 + y1 * 8209u, seed), PESBu(x1 + y1 * 8209u, seed), f.x), f.y);
+}
+#define PESWF(n) ((float)(n) / 8192.0)
+float PESWg(float a, float c, float tg) { return 0.65 * PESWv(float2(a * PESWF(901), 0.035 * c + 0.03 * tg), 901u, 14u) + 0.35 * PESWv(float2(a * PESWF(3441), 0.16 * c + 0.08 * tg), 3441u, 15u); }
+#define PESFR(f) (6.2831853 * frac(tg * (f) / 6.2831853))   // fase de (f) rad/s, precisa para cualquier tg
+// (13/11 tanda 2) el viento unico (filas 494 / 495, wind.cpp): D (recorrido del aire, m mod 8192) y tg (reloj del juego, s mod 8192) vienen
+// de la DLL. Mismo dibujo que V6 (frentes de racha, temblor al llegar, turbulencia de costado) pero el campo viaja con D: en camara lenta va
+// mas lento y en la pausa queda quieto. Sin las rachas propias de x408 (la velocidad de 494.z ya trae la racha); y408 sigue girando el empuje
+float2 PESGrassWindU(float2 root, float2 wd, float2 wc, float hb, float D, float tg, float W, out float gustOut) {
+  float a = dot(root, wd) - D, c = dot(root, wc);   // = V6 con q = root - wd * D
+  float dA = radians(clamp(IniParams.Load(int2(408, 0)).y, 0.0, 60.0)) * (PESWv(float2(a * PESWF(91), c / 90.0 + 0.01 * tg), 91u, 13u) * 2.0 - 1.0);
+  float2 pd = wd, pc = wc;   // solo giran los vectores del empuje
+  if (abs(dA) > 1e-4) { float cA = cos(dA), sA = sin(dA); pd = float2(cA * wd.x - sA * wd.y, sA * wd.x + cA * wd.y); pc = float2(-pd.y, pd.x); }
+  float gN = PESWg(a, c, tg), gB = PESWg(a - 0.7, c, tg);   // gB = lo que llega en ~0.2 s
+  float gust = smoothstep(0.38, 0.80, gN), rise = saturate((smoothstep(0.38, 0.80, gB) - gust) * 4.0);
+  float aB = 0.55 + 0.9 * frac(hb * 7.13 + 0.31);
+  float osc  = sin(PESFR(5.0 + 4.0 * hb) + hb * 6.2832 + 6.2831853 * frac(a * PESWF(1696)));   // = V6 a * 1.3
+  float osc2 = sin(PESFR(1.1 + 0.9 * hb) + hb * 17.0 + c * 0.4);
+  float push = gust * (0.34 + 0.10 * osc2), trem = (0.22 * gust + 0.78 * rise) * 0.11;
+  float turb = (PESWv(float2(a * PESWF(7373), 0.9 * c), 7373u, 16u) - 0.5) * 0.30 * (0.3 + 0.7 * gust);
+  gustOut = gust * saturate(W);
+  return (pd * (0.03 + push + trem * osc) + pc * (turb + trem * 0.7 * cos(PESFR(4.1 + 3.3 * hb) + hb * 11.0))) * W * aB;
+}
+#undef PESFR
+#undef PESWF
 
 // (2/11) viento de las hojas en funcion del tiempo, para calcularlo dos veces: ahora (z23) y en el cuadro anterior (w23). Con la
 // camara quieta el TAA del juego solo ve el movimiento que le dice el vector de velocidad (o6.zw / o7.y): antes se calculaba con la
@@ -56,6 +96,9 @@ float PESBu(uint s, uint k) { return (float)(PESBh(s ^ (k * 0x9E3779B9u)) & 0xFF
 //    y cada hoja tiene su fuerza (unas duras, otras flojas), su fase y su respiracion lenta
 //  - turbulencia de costado que viaja con el viento (remolinos de ~1 m): las hojas no se mueven todas en el mismo plano
 float2 PESGrassWindV6(float2 pesRoot, float2 wd, float2 wc, float hb, float tw, float W, out float gustOut) {
+  // (13/11 tanda 2) la velocidad de los frentes sale del W del menu, no del W con las rachas de x408: con la racha el campo se corria
+  // tw x dspd en cada cuadro (0.25-0.75 mm de ruido por cuadro que el TAA borroneaba). Las rachas cambian solo la fuerza
+  float W0 = W;
   float4 P408 = IniParams.Load(int2(408, 0));
   float kG = clamp(P408.x, 0.0, 2.0);
   if (kG > 0.001) {
@@ -64,7 +107,7 @@ float2 PESGrassWindV6(float2 pesRoot, float2 wd, float2 wc, float hb, float tw, 
   }
   float dA = radians(clamp(P408.y, 0.0, 60.0)) * (PESGnoise(float2(tw * 0.06, 1.3) + pesRoot * 0.012) * 2.0 - 1.0);
   if (abs(dA) > 1e-4) { float cA = cos(dA), sA = sin(dA); wd = float2(cA * wd.x - sA * wd.y, sA * wd.x + cA * wd.y); wc = float2(-wd.y, wd.x); }
-  float spd = 1.6 + 3.2 * saturate(W);
+  float spd = 1.6 + 3.2 * saturate(W0);
   float2 q = pesRoot - wd * tw * spd;
   float a = dot(q, wd), c = dot(q, wc);
   float gN = PESGnoise(float2(a * 0.11, c * 0.035) + 1.7) * 0.65 + PESGnoise(float2(a * 0.42, c * 0.16) + 7.3) * 0.35;
@@ -108,6 +151,140 @@ float2 PESGrassWindV3(float2 pesRoot, float2 wd, float tw, float W) {
   float phw = dot(pesRoot, wd) * 0.6 - tw * 2.2;
   float gust = sin(phw) * 0.6 + sin(phw * 2.7 + tw * 0.9) * 0.25 + sin(tw * 0.7 + pesRoot.x * 0.13) * 0.15;
   return wd * (0.25 + 0.75 * saturate(gust * 0.5 + 0.5)) * 0.45 * W;
+}
+
+// (13/11 tanda 2) pelota v2 (y446): movimiento de la pelota en s de JUEGO. bA / bB = pelota ahora / cuadro anterior, dtB = s de juego del
+// cuadro. x = recorrido del cuadro (m), y = m/s de juego (una copia repetida con recorrido 0 da 0: sin saltos), z = rodando (0..1)
+float3 PESBallKin(float3 bA, float3 bB, float dtB, out float2 dirB) {
+  float2 vB = bA.xz - bB.xz; float dF = length(vB); dirB = dF > 1e-4 ? vB / dF : float2(0.0, 0.0);
+  float vG = dF > 0.001 ? dF / clamp(dtB, 1.0 / 1000.0, 0.1) : 0.0;
+  float kRoll = (dF < 1.5 ? 1.0 : 0.0) * smoothstep(0.30, 0.15, bA.y) * smoothstep(0.15, 0.6, vG);
+  return float3(dF, vG, kRoll);
+}
+// capsula de la pelota entre este cuadro (bA) y el anterior (bB): punto mas cercano a p y alto del centro ahi (12/11, igual que antes)
+void PESBallCap(float2 p, float3 bA, float3 bB, out float2 cC, out float yC) {
+  float2 sA = bA.xz, sAB = bB.xz - bA.xz;
+  float lAB = dot(sAB, sAB);
+  float uC = (lAB > 1e-6 && lAB < 4.0 && bB.y < 0.35) ? saturate(dot(p - sA, sAB) / lAB) : 0.0;
+  cC = sA + sAB * uC; yC = lerp(bA.y, bB.y, uC);
+}
+// (13/11 tanda 2) y446 CORONA: la hoja cuya raiz esta a dBr del centro se abre hasta que la punta (alto hRef) queda 1.5 cm afuera de la
+// pelota (radio de la esfera a la altura de la punta); las raices mas cerca (debajo de la pelota) se hunden como antes. need = cuanto corre
+// la punta, maxL = tope (2/3 del alto). Devuelve el peso de la corona (0..kV2)
+float PESCrownK(float dBr, float yC, float hRef, float kV2, float w177, out float need, out float maxL) {
+  const float RbS = 0.115;
+  float dyT = yC - hRef, rSec = sqrt(max(RbS * RbS - dyT * dyT, 0.0));   // radio de la pelota a la altura de la punta
+  float rTgt = rSec + 0.015, onG = smoothstep(0.17, 0.125, yC) * saturate(w177);
+  maxL = 0.66 * hRef;
+  float kClear = smoothstep(rTgt - maxL - 0.010, rTgt - maxL + 0.005, dBr);   // las raices mas cerca se hunden como antes
+  need = max(rTgt - dBr, 0.0);
+  return kV2 * onG * kClear * saturate(need / 0.004);
+}
+// (13/11 tanda 2) todo lo que la pelota corre la hoja (huella, nido o corona y fila 442), como funcion para poder calcularlo dos veces: con la
+// pelota de este cuadro y con la del anterior (w446: el TAA recibe el movimiento de las hojas que empuja la pelota). Es la MISMA cuenta de
+// antes (12/11) con y446 = 0, salvo hTopB (alto real de la punta con el tipo y104). p = vertice (xz) antes de la pelota, hW0 = su alto (v0.y), rootB = raiz de la hoja (igual en toda la hoja),
+// hRefE = pesHref, kV2 = y446, sZ = zona x446 (1 sin y446), dtB = s de juego del cuadro. Devuelve el corrimiento; sinkF = hundimiento
+float2 PESBallDeform(float2 p, float hW0, float2 rootB, float3 bA, float3 bB, float hRefE, bool blade, bool natV, bool isExt, float natCut,
+                     float hv, float kV2, float sZ, float dtB, inout float sinkF, out float crK) {
+  crK = 0.0;
+  float2 q = p;
+  float iS = 1.0 / sZ;
+  float4 W177 = IniParams.Load(int2(177, 0));
+  float2 dirK; float3 kin = PESBallKin(bA, bB, dtB, dirK);
+  if ((isExt || natV) && W177.w > 0.001 && bA.y < 0.35) {
+    float dB = length(q - bA.xz);
+    if (natV) {
+      // (11/11 h / l, 12/11) natural: huella de la esfera R 0.115 en la capsula de la pelota, nido y w439 pelota asentada (ver main)
+      const float RbS = 0.115;
+      float2 cC; float yC; PESBallCap(q, bA, bB, cC, yC);
+      dB = length(q - cC);
+      float ySB = dB < RbS ? yC - sqrt(max(RbS * RbS - dB * dB, 0.0)) : 1000.0;
+      float hRef = max(hRefE * (blade ? natCut : 1.0), 0.005);
+      float kB = saturate(1.0 - max(ySB, 0.0) / hRef) * saturate(W177.w);   // alto real de la hoja
+      float kNest = smoothstep(0.17, 0.085, dB) * smoothstep(0.17, 0.125, yC) * saturate(W177.w);
+      float kSeat = saturate(IniParams.Load(int2(439, 0)).w);
+      kNest *= 1.0 - 0.75 * kSeat;
+      float kLeanIn = kSeat * smoothstep(0.145, 0.095, dB) * (1.0 - kB) * smoothstep(0.17, 0.125, yC) * saturate(W177.w);
+      float2 dO = dB > 1e-4 ? (q - cC) / dB : float2(1.0, 0.0);
+      // (13/11 tanda 2, Agustin: con el original la pelota quieta queda rodeada de hojas paradas) y446 CORONA en vez del nido / asiento: el nido
+      // empujaba y hundia en proporcion al alto, el disco del mapa la hundia otra vez y quedaba un pozo. Ahora la hoja se abre ENTERA desde la
+      // raiz (viga empotrada: la raiz firme, la punta afuera de la pelota) y no se hunde. Medido en la RAIZ: toda la hoja igual. Rodando, sin
+      // pliegue hacia atras (la estela la lleva hacia adelante)
+      if (kV2 > 0.001) {
+        float2 cCr; float yCr; PESBallCap(rootB, bA, bB, cCr, yCr);
+        float dBr = length(rootB - cCr); float2 dOr = dBr > 1e-4 ? (rootB - cCr) / dBr : dO;
+        dOr -= dirK * min(dot(dOr, dirK), 0.0) * kin.z;   // sin pliegue hacia atras
+        float need, maxL; crK = PESCrownK(dBr, yCr, hRef, kV2, W177.w, need, maxL);
+        float tB = saturate(max(hW0, 0.0) / hRef);
+        q += dOr * (min(need, maxL) * crK * tB * tB * (3.0 - tB) * 0.5);   // viga: la punta despeja la pelota
+        kB *= 1.0 - crK; kNest *= 1.0 - kV2; kLeanIn *= 1.0 - kV2;
+        sinkF *= 1.0 - 0.7 * crK;   // el disco del mapa no hunde la corona
+      }
+      sinkF = max(sinkF, max(0.9 * kB, 0.45 * kNest));
+      q += dO * ((max(kB * 0.9, kNest * 0.75) - 0.35 * kLeanIn) * max(hW0, 0.0));
+    } else sinkF = max(sinkF, 0.7 * smoothstep(0.22, 0.10, dB) * saturate(W177.w));   // (02/11 paso 7) la pelota se apoya (capsula radio 0.112)
+  }
+  // fila 442 (12/11 20:00 / 20:50): proa, estela pegada, rasante y onda al picar, ver main. (13/11 tanda 2) con y446: en m/s de JUEGO (antes
+  // por cuadro: 5 veces mas fuerte a 12 FPS y casi nada en camara lenta), estela por tiempo desde que paso la pelota (se levanta con un rebote,
+  // sin la linea dura en el centro de la pelota) y x446 agranda la zona (pesos con las distancias / S, direcciones sin escalar)
+  float4 P442 = IniParams.Load(int2(442, 0));
+  if ((isExt || natV) && (P442.x > 0.001 || P442.w > 0.001) && bA.y > 0.05 && bA.y < 1.2) {
+    float2 vB = bA.xz - bB.xz; float dF = length(vB);              // recorrido de este cuadro (m)
+    float vY = bA.y - bB.y;
+    if (dF < 1.5) {                                                // salto de camara / saque: nada
+      float2 dirB = dF > 1e-4 ? vB / dF : float2(0.0, 0.0), latB = float2(-dirB.y, dirB.x);
+      float2 dP = q - bA.xz; float dL = length(dP); float2 dU = dL > 1e-4 ? dP / dL : dirB;
+      float hW = max(hW0, 0.0);
+      float hRB = max(hRefE * (blade ? natCut : 1.0), 0.005);
+      float tBb = saturate(hW / hRB);
+      float gBb = tBb * (3.0 - tBb) * 0.5;                         // hW x gBb = perfil de viga (1 en la punta, 0.28 a un quinto)
+      float gndB = IniParams.Load(int2(114, 0)).x;
+      float wetB = (abs(gndB - 1.0) < 0.5 ? 1.2 : (abs(gndB - 2.0) < 0.5 ? 0.9 : 1.0)) * (1.0 + 0.15 * saturate(IniParams.Load(int2(407, 0)).y));
+      float stB = (0.8 + 0.4 * frac(hv * 7.13 + 0.3)) * wetB * (IniParams.Load(int2(407, 0)).x > 0.5 ? 0.7 : 1.0);
+      float aJ = (hv - 0.5) * 0.6; float2 csJ = float2(cos(aJ), sin(aJ));
+      float kBall = clamp(P442.x, 0.0, 2.0);
+      bool v2 = kV2 > 0.5;
+      float dLs = dL * iS;
+      if (kBall > 0.001 && dF > (v2 ? 1e-4 : 0.002) && dL < 1.6 * sZ) {
+        float contact = smoothstep(0.30, 0.15, bA.y);              // rodando o apoyada
+        float al = dot(dP, dirB), lt = dot(dP, latB);
+        float als = al * iS, lts = lt * iS;
+        float hTopB = min(natV ? hRB : hRefE, 0.1);   // (13/11 tanda 2) alto real de la punta (antes PES_NAT_CUT x 0.058: sin el tipo y104, Largo x1.45)
+        float rCt = sqrt(max(0.013225 - (0.115 - hTopB) * (0.115 - hTopB), 0.0));   // donde la esfera toca la altura de las puntas
+        float rnd = frac(sin(dot(floor(q * 40.0), float2(12.9898, 78.233))) * 43758.55);   // cada hoja un poco distinta
+        float kBow = 0.0, kWake = 0.0, kAir = 0.0, cWk = 1.0;
+        if (v2) {
+          float vG = kin.y, spK = saturate(vG / 4.8), rBow = rCt + 0.04 + 0.04 * spK;
+          kBow = smoothstep(rBow, rCt * 0.55, dLs) * smoothstep(-0.06, 0.0, als) * contact * (0.6 + 0.4 * spK) * smoothstep(0.05, 0.3, vG);
+          float age = max(-als, 0.0) / max(vG, 0.05), tauW = 0.25 * wetB * (IniParams.Load(int2(407, 0)).x > 0.5 ? 0.7 : 1.0);   // s desde que paso
+          kWake = smoothstep(0.13, 0.05, abs(lts)) * smoothstep(0.02, -0.03, als) * exp(-age / tauW) * kin.z * smoothstep(1.6, 1.3, dLs);
+          cWk = cos(3.93 * age / tauW);                            // se levanta con un rebote
+          float air = smoothstep(1.0, 0.35, bA.y) * (1.0 - contact) * smoothstep(3.6, 12.0, vG);
+          kAir = air * smoothstep(0.30, 0.0, abs(lts)) * saturate(1.0 + als / (0.15 + 0.067 * vG)) * (1.0 - step(0.10, als)) * (0.6 + 0.4 * rnd);
+        } else {
+          float spK = saturate(dF / 0.08);                         // ~5 m/s a 60 cuadros por segundo = todo
+          float rBow = rCt + 0.02 + 0.06 * spK;
+          kBow = smoothstep(rBow, rCt * 0.55, dL) * smoothstep(-0.06, 0.0, al) * contact * (0.35 * smoothstep(0.002, 0.006, dF) + 0.65 * spK);   // el piso entra suave: la pelota que se frena no suelta el pasto de golpe
+          float Lw = 0.10 + 6.0 * dF;
+          kWake = smoothstep(0.13, 0.05, abs(lt)) * saturate(1.0 + al / Lw) * (1.0 - step(0.0, al)) * contact * spK;
+          float air = smoothstep(1.0, 0.35, bA.y) * (1.0 - contact) * smoothstep(0.06, 0.20, dF);
+          kAir = air * smoothstep(0.30, 0.0, abs(lt)) * saturate(1.0 + al / (0.15 + 4.0 * dF)) * (1.0 - step(0.10, al)) * (0.6 + 0.4 * rnd);
+        }
+        float2 dsp = normalize(dU + dirB * 0.8) * (0.85 * kBow) + dirB * (0.80 * kWake * cWk + 0.55 * kAir) + latB * (sign(lt) * 0.25 * kAir);
+        dsp = float2(dsp.x * csJ.x - dsp.y * csJ.y, dsp.x * csJ.y + dsp.y * csJ.x);   // desvio propio de la hoja
+        q += dsp * (kBall * hW * gBb * stB * 1.1);
+        sinkF = max(sinkF, saturate((0.30 * kBow + 0.60 * kWake) * kBall * wetB));
+      }
+      float kPq = clamp(P442.w, 0.0, 2.0) * smoothstep(0.010, 0.035, vY) * smoothstep(0.65, 0.20, bA.y);
+      if (kPq > 0.001 && dL < 0.8 * sZ) {
+        float rr = 0.12 + 0.9 * max(bA.y - 0.11, 0.0);
+        float ring = exp(-((dLs - rr) * (dLs - rr)) / 0.005);
+        q += dU * (ring * kPq * 1.2 * hW * gBb * stB);
+        sinkF = max(sinkF, saturate(0.40 * ring * kPq));
+      }
+    }
+  }
+  return q - p;
 }
 
 void main(
@@ -158,6 +335,25 @@ void main(
   float kShortV = saturate((1.0 - PES_NAT_CUT) * 60.0 / 32.0);   // (11/11 n) natural bajo: 0 desde 60 mm, 1 a 28 mm (ver kShortP en 18afff)
   float4 P58 = IniParams.Load(int2(58, 0));
   bool pesNatV0 = IniParams.Load(int2(407, 0)).x < 0.5;   // (12/11) natural (x438 reparto sin filas: el artificial no cambia)
+  // (13/11 tanda 2) reloj y pelota, una vez para todo el VS:
+  //  - dtG = s de JUEGO de este cuadro (z23 - w23 = s reales, por el ritmo medido z157 si w157 = 1; 0 en la pausa): viento y pelota v2.
+  //    pesDtB = el de la pelota: en la pausa (ritmo < 0.05) el real, asi una copia de la pelota que siga moviendose no da 1000 m/s
+  //  - pelota vieja: en las parcelas del mod la copia de b4 puede ser de otro cuadro (cb5[14].y = su edad en Presents, la DLL; 0 = de este
+  //    cuadro o DLL vieja). Edad 1-2: se extrapola (si no salto mas de 1.5 m); mas vieja: nada en vivo de la pelota (doblado, sombra, contacto)
+  //  - 446: y pelota v2 (corona y velocidad real), x tamano de la zona S (solo con y; 1 = como antes)
+  float4 T23 = IniParams.Load(int2(23, 0)), T157 = IniParams.Load(int2(157, 0));
+  float pesDtR = T23.z - T23.w; if (pesDtR < 0.0) pesDtR += 10000.0; pesDtR = min(pesDtR, 0.25);
+  float dtG = pesDtR * (T157.w > 0.5 ? clamp(T157.z, 0.0, 2.0) : 1.0);
+  float pesDtB = (T157.w > 0.5 && T157.z < 0.05) ? pesDtR : dtG;
+  float3 pesBA = cb4[3].xyz, pesBB = cb4[4].xyz; bool pesBLive = true;
+  if (pesIsExt && cb5[14].y > 0.5) {
+    float3 bV = pesBA - pesBB;
+    if (cb5[14].y > 2.5) pesBLive = false;
+    else if (dot(bV.xz, bV.xz) < 2.25) { float bAge = floor(cb5[14].y + 0.5); pesBA += bV * bAge; pesBB += bV * bAge; }
+  }
+  float4 P446 = IniParams.Load(int2(446, 0));
+  float pesKV2 = saturate(P446.y), pesSZ = pesKV2 > 0.5 ? clamp(P446.x, 1.0, 2.0) : 1.0, pesIS = 1.0 / pesSZ;
+  float2 pesDirB; float3 pesBK = PESBallKin(pesBA, pesBB, pesDtB, pesDirB);   // x recorrido del cuadro, y m/s de juego, z rodando
   if (pesIsExt) {
     // v2 instanciado: la parcela sale del buffer de instancias; fundido por altura en los bordes de la banda y
     // descarte exacto con la camara de este cuadro
@@ -379,7 +575,48 @@ void main(
       // Al levantarse el mapa la hoja vuelve por los mismos modelos (y el vaiven de x413). Cada hoja con su respuesta
       float4 Q39b = IniParams.Load(int2(139, 0));
       if (Q39b.x > 0.5 && Q39b.z > 0.001 && pesBIrr < 0.5) {
-        float flB = saturate(PESFlatAt(uvRt) * clamp(Q39b.z, 0.0, 2.0) * (0.75 + 0.5 * PESBu(sB, 29u)));
+        float2 flB2 = PESFlatAt2(uvRt);   // (13/11 tanda 2) x = el mapa de antes (R / G: el rebote z442), y = con las pisadas lentas (z448)
+        float flB = saturate(flB2.y * clamp(Q39b.z, 0.0, 2.0) * (0.75 + 0.5 * PESBu(sB, 29u)));
+        float flR = saturate(flB2.x * clamp(Q39b.z, 0.0, 2.0) * (0.75 + 0.5 * PESBu(sB, 29u)));
+        // (13/11 tanda 2) z446 HOJAS 3D HUNDIDAS CON LA PELOTA: el mapa llega 4-7 cuadros tarde (lectura de la DLL) y a pasos de 20-25 cm: delante
+        // y al costado de la pelota las hojas 3D no cambiaban de modelo mientras la pelota estaba ahi (asomaban a traves de ella). Ahora la pelota
+        // en vivo (la misma capsula, medida en la raiz) tambien elige el modelo: debajo de la esfera tumbada, en el borde el reborde; con y446 sin
+        // la corona (esas quedan paradas) y con la estela de la fila 442 detras (el paso al mapa no salta). Donde gana la pelota la hoja cae hacia
+        // afuera de la pelota (la estela: hacia donde va), no segun el mapa. 0 = solo el mapa, como antes
+        float kLv = 0.0; float2 dLv = float2(0.0, 0.0);
+        { float zLv = clamp(P446.z, 0.0, 2.0);
+          float2 dRb = rootW - pesBA.xz; float rG = max(1.6 * pesSZ, length(pesBB.xz - pesBA.xz) + 0.12);   // (13/11) solo cerca de la pelota (mismo resultado)
+          if (zLv > 0.001 && pesBA.y < 0.35 && pesBLive && dot(dRb, dRb) < rG * rG) {
+           float4 W177b = IniParams.Load(int2(177, 0));
+           if (W177b.w > 0.001) {
+            const float RbL = 0.115;
+            float2 cCl; float yCl; PESBallCap(rootW, pesBA, pesBB, cCl, yCl);
+            int tyL = (int)(IniParams.Load(int2(104, 0)).y + 0.5);
+            float hRL = max(PES_NAT_CUT * 0.06 * (tyL == 2 ? 1.45 : (tyL == 0 ? 0.9 : 1.0)), 0.005);   // alto de la hoja 3D (el hRef de la pelota, con el tipo y104)
+            float dBl = length(rootW - cCl);
+            float ySl = dBl < RbL ? yCl - sqrt(max(RbL * RbL - dBl * dBl, 0.0)) : 1000.0;
+            float kBr = saturate(1.0 - max(ySl, 0.0) / hRL) * saturate(W177b.w);   // la esfera, en la raiz
+            float kCrR = 0.0;
+            if (pesKV2 > 0.001) { float ndL, mxL; kCrR = PESCrownK(dBl, yCl, hRL, pesKV2, W177b.w, ndL, mxL); }   // la corona queda parada
+            float kSph = 0.85 * kBr * (1.0 - kCrR) * smoothstep(0.17, 0.125, yCl);
+            float kWkR = 0.0;
+            if (pesKV2 > 0.5 && IniParams.Load(int2(442, 0)).x > 0.001 && pesBA.y > 0.05) {   // la estela de la fila 442 (y446), en la raiz
+              float2 dPr = rootW - pesBA.xz;
+              float alR = dot(dPr, pesDirB) * pesIS, ltR = dot(dPr, float2(-pesDirB.y, pesDirB.x)) * pesIS;
+              float gndR = IniParams.Load(int2(114, 0)).x;
+              float wetR = (abs(gndR - 1.0) < 0.5 ? 1.2 : (abs(gndR - 2.0) < 0.5 ? 0.9 : 1.0)) * (1.0 + 0.15 * saturate(IniParams.Load(int2(407, 0)).y));
+              float tauR = 0.25 * wetR * (IniParams.Load(int2(407, 0)).x > 0.5 ? 0.7 : 1.0);
+              float ageR = max(-alR, 0.0) / max(pesBK.y, 0.05);
+              kWkR = smoothstep(0.13, 0.05, abs(ltR)) * smoothstep(0.02, -0.03, alR) * exp(-ageR / tauR) * pesBK.z * smoothstep(1.6, 1.3, length(dPr) * pesIS);
+            }
+            kLv = zLv * (kSph + 0.6 * kWkR);
+            float2 dOl = dBl > 1e-4 ? (rootW - cCl) / dBl : pesDirB;
+            dLv = kSph * dOl + (0.6 * kWkR) * pesDirB;
+           }
+          }
+        }
+        bool pesLvW = kLv > flB;   // gana la pelota en vivo
+        flB = max(flB, saturate(kLv));
         if (flB > 0.02) {
           const float2 tF = float2(2.0 / 1024.0, 2.0 / 512.0);
           float2 gF = float2(PESFlatAt(uvRt + float2(tF.x, 0.0)) - PESFlatAt(uvRt - float2(tF.x, 0.0)), PESFlatAt(uvRt + float2(0.0, tF.y)) - PESFlatAt(uvRt - float2(0.0, tF.y)));
@@ -391,6 +628,7 @@ void main(
           float2 fRG = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, uvRt, 0).xy;
           float kComb = saturate(P442b.y) * saturate((fRG.y - fRG.x) * 6.0) * (lgF > 1e-3 ? 1.0 : 0.0);
           if (kComb > 0.001) { float2 tgC = float2(-dW.y, dW.x); tgC *= dot(tgC, float2(0.83, 0.55)) >= 0.0 ? 1.0 : -1.0; dW = normalize(lerp(dW, tgC, kComb) + 1e-5); }
+          if (pesLvW && dot(dLv, dLv) > 1e-8) dW = normalize(dLv);   // (13/11 tanda 2) z446: la hoja cae segun la pelota, no segun el mapa
           float2 dOu = float2(csR * dW.x - snR * dW.y, snR * dW.x + csR * dW.y);                          // de la cancha a la celda
           float2 dE = normalize(dOu + F0 * 0.30 + float2(-F0.y, F0.x) * (PESBu(sB, 30u) - 0.5) * 0.5);    // borde: hacia afuera, con su desvio
           float aX = (PESBu(sB, 35u) - 0.5) * 1.5 * (1.0 - 0.7 * kComb);                                  // tumbada: cruzada hasta +-43 grados (peinada: +-13)
@@ -412,7 +650,7 @@ void main(
           // (12/11 20:00) z442 REBOTE DE LAS HOJAS 3D: mientras el mapa se apaga (la hoja se levanta) la hoja no sube derecha: se pasa y vuelve
           // (2 vaivenes a lo largo de la recuperacion, fase al azar por hoja) y se mece un poco de costado, como x413 en las tarjetas
           float kRb = clamp(P442b.z, 0.0, 2.0);
-          if (kRb > 0.001) { float phR = flB * 12.566 + PESBu(sB, 40u) * 6.2832; float envR = saturate(flB * (1.0 - flB) * 4.0) * (1.0 - kTm);
+          if (kRb > 0.001) { float phR = flR * 12.566 + PESBu(sB, 40u) * 6.2832; float envR = saturate(flR * (1.0 - flR) * 4.0) * (1.0 - kTm);   // (13/11 tanda 2) con el mapa de antes (flR)
             cXZ += (dE * sin(phR) * 0.30 + float2(-dE.y, dE.x) * cos(phR * 0.5) * 0.12) * (envR * kRb * h * t); }
           float cY = lerp(lerp(yy, cE.y, kEm), cT.y, kTm);
           float2 dC = normalize(lerp(dE, dT, kTm));
@@ -556,6 +794,8 @@ void main(
   // (profesional -> potrero: hojas mas cortas donde esta seco y sin hojas donde esta pelado). Todo en funcion de la
   // raiz en el mundo para que coincida con la base de la cancha (misma funcion, pes_grass.hlsli).
   float4 Q4 = IniParams.Load(int2(104, 0));
+  float4 R494 = IniParams.Load(int2(494, 0)), R495 = IniParams.Load(int2(495, 0));   // (13/11 tanda 2) viento unico (wind.cpp): solo se leen
+  bool pesZ447 = IniParams.Load(int2(447, 0)).z > 0.5;   // (13/11 tanda 2) z447 pisadas v2: sin doble rebote en las hojas 3D y largo de la hoja
   float pesH = 1.0; float2 pesWear = float2(0.0, 0.0); float3 pesZone = float3(1.0, 1.0, 1.0); float2 pesPm = float2(0.0, 0.0); float pesBand = 1.0;
   float2 pesLean = float2(0.0, 0.0);   // corrimiento horizontal de la punta (inclinacion por el corte + viento), por metro de alto
   bool pesV3 = Q4.x > 0.5;
@@ -717,10 +957,13 @@ void main(
       if (Q5e.x > 0.5) gr = PESMowGrain(pesPm, gr, Q5e.x, Q5e.y, 0.55 * clamp(Q5e.z, 0.2, 3.0));
       gr = PESTrampleGrain(gr, pesRoot, pesLiveW);   // (12/11 20:30) w443: pisoteado, acostado para cualquier lado
       pesLean += gr.xz * 0.7 * saturate(Q8.z);
-      float tw = IniParams.Load(int2(23, 0)).z;
+      // (13/11 tanda 2) el viento corre con el reloj del JUEGO (antes el real z23: seguia en la pausa y a toda velocidad en la camara lenta):
+      // z495 (wind.cpp, s mod 8192) o, sin el viento unico, 157.x (mod 8192 como z495: 157.x llega a 100000 s y el campo de V6, que va hasta
+      // 4.8 x tw metros, perdia precision). Sin la fila 157 (DLL vieja), el real de antes. twp = el del cuadro anterior (dtG, arriba)
+      float tw = R495.z > 0.0 ? R495.z : (T157.y > 0.5 ? fmod(T157.x, 8192.0) : T23.z);
       float ang = radians(IniParams.Load(int2(84, 0)).z);
       float2 wd = float2(cos(ang), sin(ang));
-      float twp = IniParams.Load(int2(23, 0)).w;   // (2/11) tiempo del cuadro anterior (lo escribe la DLL)
+      float twp = tw - dtG;   // (2/11) tiempo del cuadro anterior; (13/11 tanda 2) en s de juego (negativo no importa)
       if (pesV5) {
         // (20/10) pasto v5: viento fisico. Rafagas = campo de ruido que VIAJA con el viento (3 m/s): frentes irregulares que
         // recorren la cancha (no una onda senoidal pareja); cada hoja suma su propio aleteo de alta frecuencia con fase al
@@ -731,9 +974,20 @@ void main(
         float hb = (pesIsExt && pesCard >= 0) ? PESGh21(float2((float)pesCard * 0.0137 + pesExtOrg.x * 0.71, pesExtOrg.y * 0.53 + (float)pesCard * 0.0071 + (float)pesRot * 0.37) + 0.31)
                                               : PESGh21(floor(pesRoot * 10.0) * 0.173 + 0.31);
         float W = saturate(Q8.y);
-        float2 wNow = PESGrassWindV5(pesRoot, wd, wc, hb, tw, W, pesGust);
-        pesLean += wNow;
-        if (Q39.w > 0.5) { float gp; pesWindD = PESGrassWindV5(pesRoot, wd, wc, hb, twp, W, gp) - wNow; }
+        // (13/11 tanda 2) viento nuevo (w433) + viento unico con dato (z353 = 1: 494.z > 0): rumbo, fuerza (racha incluida), recorrido D y reloj
+        // de wind.cpp, el mismo viento que la ropa y el pelo. Si no, el V6 / V5 de antes (con el reloj del juego)
+        bool pesWR = IniParams.Load(int2(433, 0)).w > 0.5 && R494.z > 0.0;
+        if (pesWR) {
+          float2 wdU = R494.xy * rsqrt(max(dot(R494.xy, R494.xy), 1e-8)), wcU = float2(-wdU.y, wdU.x);   // mismo XZ que (cos z84, sin z84)
+          float WU = W * clamp(R494.z / 2.0, 0.25, 2.0);   // 2 m/s = la base de wind.cpp sin el mod de ropa: x353 1 se ve como hoy
+          float2 wNow = PESGrassWindU(pesRoot, wdU, wcU, hb, R494.w, R495.z, WU, pesGust);
+          pesLean += wNow;
+          if (Q39.w > 0.5) { float gp; pesWindD = PESGrassWindU(pesRoot, wdU, wcU, hb, R494.w - R494.z * dtG, R495.z - dtG, WU, gp) - wNow; }
+        } else {
+          float2 wNow = PESGrassWindV5(pesRoot, wd, wc, hb, tw, W, pesGust);
+          pesLean += wNow;
+          if (Q39.w > 0.5) { float gp; pesWindD = PESGrassWindV5(pesRoot, wd, wc, hb, twp, W, gp) - wNow; }
+        }
       } else {
         float2 wNow = PESGrassWindV3(pesRoot, wd, tw, saturate(Q8.y));
         pesLean += wNow;
@@ -748,15 +1002,18 @@ void main(
     // rastro y las agachan; la base de la cancha no cambia de color (eso daba manchones)
     float2 puvF = pesRoot * cb4[1].xy + cb4[1].zw;
     // (27/10 n) R = pisadas (se levantan en segundos), G = rastro de la pelota (dura z329 s): las hojas se agachan con el mayor de los dos
-    float2 fl2 = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF, 0).xy;
-    float fl0 = max(fl2.x, fl2.y);
+    float4 fl4 = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF, 0);
+    float2 fl2 = fl4.xy;
+    float fl0 = max(fl2.x, fl2.y);   // (13/11 tanda 2) el rebote x413 sigue con R / G (sin las pisadas lentas)
+    if (IniParams.Load(int2(448, 0)).z > 0.0) fl2.x = max(fl2.x, 0.55 * saturate((fl4.z - 0.012) / 0.988));   // (13/11 tanda 2) z448: + pisadas lentas (B)
+    float flP = max(fl2.x, fl2.y);
     if ((pesIsExt || pesNatV) && W177.w > 0.001) pesSinkF = saturate(0.55 * saturate(fl2.x) + 0.35 * saturate(fl2.y)) * saturate(W177.w) * (1.0 - 0.7 * pesDefK);   // (12/11) la hoja 3D acostada no se entierra   // (11/11 h) natural: tambien el pasto del juego pegado a la camara   // (02/11 paso 7) R pisadas, G rastro de la pelota
-    if (fl0 > 0.003) {
+    if (flP > 0.003) {
       const float2 tx = float2(2.0 / 1024.0, 2.0 / 512.0);
-      #define PESFL(o) (max(PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF + (o), 0).x, PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, puvF + (o), 0).y))
+      #define PESFL(o) (PESFlatAt(puvF + (o)))   // max(R, G); (13/11 tanda 2) con z448, R = max(R, 0.55 B')
       float2 gF = float2(PESFL(float2(tx.x, 0)) - PESFL(float2(-tx.x, 0)), PESFL(float2(0, tx.y)) - PESFL(float2(0, -tx.y)));
       #undef PESFL
-      float kF = saturate(fl0) * clamp(Q39.z, 0.0, 2.0);
+      float kF = saturate(flP) * clamp(Q39.z, 0.0, 2.0);
       float lg = length(gF);
       float2 dOut = (lg > 1e-4 ? -gF / lg : float2(0.0, 0.0));
       // (08/11 aa, Agustin: "pasto saltando por la reaccion de los jugadores") REBOTE: el mapa se apaga solo (exp), asi que mientras fl0 baja la
@@ -764,7 +1021,7 @@ void main(
       // pequeno salto hacia arriba del tramo medio del rastro: las hojas no vuelven rectas como un resorte lento sino que tiemblan. x413 cuanto.
       float4 P413 = IniParams.Load(int2(413, 0));
       float kReb = clamp(P413.x, 0.0, 2.0);
-      if (kReb > 0.001 && pesIsExt) {
+      if (kReb > 0.001 && pesIsExt && !(pesZ447 && pesBlade && IniParams.Load(int2(442, 0)).z > 0.0)) {   // (13/11 tanda 2) z447: la hoja 3D ya rebota con z442 (no dos veces)
         float hbR = (pesCard >= 0) ? PESGh21(float2((float)pesCard * 0.0191 + pesExtOrg.x * 0.43, pesExtOrg.y * 0.67 + (float)pesRot * 0.23) + 0.59) : 0.5;
         float ph = saturate(fl0) * 12.566 + hbR * 6.2832;             // 2 vueltas a lo largo de la recuperacion
         float env = saturate(fl0) * (1.0 - saturate(fl0)) * 4.0;      // 0 al tocar fondo y 0 al terminar: maximo a mitad de camino
@@ -776,8 +1033,10 @@ void main(
     }
   }
   // --- posicion en el mundo y doblado por jugador / pelota ---
+  // (13/11 tanda 2) la pelota es pesBA / pesBB (cb4[3] / cb4[4], extrapolada si la copia del mod es vieja, arriba); x446 agranda tambien el
+  // empuje del juego (solo en xz: el alto que alcanza no cambia). S = 1: la misma cuenta
   r0.x = v0.y + 10.0;
-  r0.yzw = cb4[3].xyz - cb4[4].xyz;
+  r0.yzw = (pesBA - pesBB) * float3(pesIS, 1.0, pesIS);
   r0.y = dot(r0.yzw, r0.yzw);
   r0.y = r0.y * 0.3 + 0.012544;
   r1.y = dot(v0, cb5[5]);
@@ -792,50 +1051,30 @@ void main(
     r1.xz += pesLean * pesHref * pesTB * pesTB;
   } else
   r1.xz += pesLean * v0.y * saturate(v0.y * 25.0);   // PES21 pasto v3: la hoja se curva (mas en la punta) por el corte y el viento
-  r2.xyz = r1.xyz - cb4[3].xyz;
+  r2.xyz = (r1.xyz - pesBA) * float3(pesIS, 1.0, pesIS);
   r0.z = dot(r2.xyz, r2.xyz);
-  r2.xyz = r1.xyz - cb4[4].xyz;
+  r2.xyz = (r1.xyz - pesBB) * float3(pesIS, 1.0, pesIS);
   r0.w = dot(r2.xyz, r2.xyz);
   r0.z = r0.w + r0.z;
   r0.y = -r0.z * 0.5 + r0.y;
   r0.y = max(r0.y, 0.0);
   r0.x = r0.y * r0.x;
   r0.x = r0.x * 16.0;
-  if ((pesIsExt || pesNatV) && W177.w > 0.001 && cb4[3].y < 0.35) {
-    float dB = length(r1.xz - cb4[3].xz);
-    if (pesNatV) {
-      // (11/11 h, Agustin: "no reacciona mucho aplastandose con la pelota") natural: debajo de la pelota el pasto se aplasta mas (85 %) en un
-      // radio algo mayor y se abre hacia afuera (la punta mas que la raiz); tambien el pasto del juego pegado a la camara (antes solo el del mod)
-      // (11/11 l, Agustin: "aunque la pelota este saltando el pasto abajo desaparece") con el pasto de 28 mm el aplastado fijo (85 % en
-      // 26 cm con el centro de la pelota a menos de 35 cm) dejaba un circulo pelado bajo la pelota en el aire. Ahora la hoja baja solo hasta
-      // la superficie de la pelota encima de ella (esfera R 0.115): en el aire no toca nada, apoyada aplasta solo la huella (~8 cm)
-      // (12/11, Agustin: "a veces parece como si la pelota estuviera flotando, como que no se hundio el pasto a su alrededor o siguiendo la
-      // pelota") dos cambios. 1) la pelota se mide como la CAPSULA entre su posicion de este cuadro y la anterior (cb4[3] .. cb4[4]): rodando
-      // rapido el aplastado ya no queda atras ni adelante de la pelota. 2) apoyada, el pasto forma un NIDO: ademas de la huella que toca la
-      // esfera, las hojas hasta ~17 cm del centro se abren hacia afuera y bajan (mas cuanto mas cerca), como el pasto que la pelota empuja al
-      // asentarse; se apaga cuando la pelota se levanta (centro a mas de ~17 cm del suelo)
-      const float RbS = 0.115;
-      float2 sA = cb4[3].xz, sAB = cb4[4].xz - cb4[3].xz;
-      float lAB = dot(sAB, sAB);
-      float uC = (lAB > 1e-6 && lAB < 4.0 && cb4[4].y < 0.35) ? saturate(dot(r1.xz - sA, sAB) / lAB) : 0.0;
-      float2 cC = sA + sAB * uC; float yC = lerp(cb4[3].y, cb4[4].y, uC);
-      dB = length(r1.xz - cC);
-      float ySB = dB < RbS ? yC - sqrt(max(RbS * RbS - dB * dB, 0.0)) : 1000.0;
-      float hRef = max(pesHref * (pesBlade ? PES_NAT_CUT : 1.0), 0.005);
-      float kB = saturate(1.0 - max(ySB, 0.0) / hRef) * saturate(W177.w);   // alto real de la hoja
-      float kNest = smoothstep(0.17, 0.085, dB) * smoothstep(0.17, 0.125, yC) * saturate(W177.w);
-      // (12/11, Agustin: captura vieja de pasto largo, "la pelota hundida / asentada entre las hojas") w439 PELOTA ASENTADA: el nido abria y
-      // bajaba las hojas de alrededor (hasta 17 cm), justo las que de frente tapan la parte de abajo de la pelota: quedaba apoyada arriba de
-      // un pozo. Ahora el nido es chico (un cuarto) y las hojas del borde de la huella (hasta ~14 cm del centro) quedan paradas y se
-      // recuestan un poco CONTRA la pelota: de frente tapan y oscurecen su base, como el pasto real alrededor de una pelota quieta. 0 = como antes
-      float kSeat = saturate(IniParams.Load(int2(439, 0)).w);
-      kNest *= 1.0 - 0.75 * kSeat;
-      float kLeanIn = kSeat * smoothstep(0.145, 0.095, dB) * (1.0 - kB) * smoothstep(0.17, 0.125, yC) * saturate(W177.w);
-      pesSinkF = max(pesSinkF, max(0.9 * kB, 0.45 * kNest));
-      float2 dO = dB > 1e-4 ? (r1.xz - cC) / dB : float2(1.0, 0.0);
-      r1.xz += dO * ((max(kB * 0.9, kNest * 0.75) - 0.35 * kLeanIn) * max(v0.y, 0.0));
-    } else pesSinkF = max(pesSinkF, 0.7 * smoothstep(0.22, 0.10, dB) * saturate(W177.w));   // (02/11 paso 7) la pelota se apoya (capsula radio 0.112)
-  }   // (02/11 paso 7) la pelota se apoya (capsula radio 0.112)
+  if (!pesBLive) r0.x = 0.0;   // (13/11 tanda 2) pelota vieja: nada en vivo
+  // (11/11 h, Agustin: "no reacciona mucho aplastandose con la pelota") natural: debajo de la pelota el pasto se aplasta mas (85 %) en un
+  // radio algo mayor y se abre hacia afuera (la punta mas que la raiz); tambien el pasto del juego pegado a la camara (antes solo el del mod)
+  // (11/11 l, Agustin: "aunque la pelota este saltando el pasto abajo desaparece") con el pasto de 28 mm el aplastado fijo (85 % en
+  // 26 cm con el centro de la pelota a menos de 35 cm) dejaba un circulo pelado bajo la pelota en el aire. Ahora la hoja baja solo hasta
+  // la superficie de la pelota encima de ella (esfera R 0.115): en el aire no toca nada, apoyada aplasta solo la huella (~8 cm)
+  // (12/11, Agustin: "a veces parece como si la pelota estuviera flotando, como que no se hundio el pasto a su alrededor o siguiendo la
+  // pelota") dos cambios. 1) la pelota se mide como la CAPSULA entre su posicion de este cuadro y la anterior (cb4[3] .. cb4[4]): rodando
+  // rapido el aplastado ya no queda atras ni adelante de la pelota. 2) apoyada, el pasto forma un NIDO: ademas de la huella que toca la
+  // esfera, las hojas hasta ~17 cm del centro se abren hacia afuera y bajan (mas cuanto mas cerca), como el pasto que la pelota empuja al
+  // asentarse; se apaga cuando la pelota se levanta (centro a mas de ~17 cm del suelo)
+  // (12/11, Agustin: captura vieja de pasto largo, "la pelota hundida / asentada entre las hojas") w439 PELOTA ASENTADA: el nido abria y
+  // bajaba las hojas de alrededor (hasta 17 cm), justo las que de frente tapan la parte de abajo de la pelota: quedaba apoyada arriba de
+  // un pozo. Ahora el nido es chico (un cuarto) y las hojas del borde de la huella (hasta ~14 cm del centro) quedan paradas y se
+  // recuestan un poco CONTRA la pelota: de frente tapan y oscurecen su base, como el pasto real alrededor de una pelota quieta. 0 = como antes
   // (12/11 20:00, Agustin: "la reaccion de la pelota al moverse, como se aprecia en el original, que el pasto se resienta con la pelota y al
   // moverse siga el movimiento") fila 442, en vivo con la capsula del juego (cb4[3] este cuadro, cb4[4] el anterior), sin esperar al mapa:
   //  x LA PELOTA EMPUJA Y ARRASTRA EL PASTO
@@ -845,58 +1084,28 @@ void main(
   //    - rasante: pelota rapida a menos de ~1 m del piso: las hojas debajo de su camino se sacuden hacia donde va (el aire que empuja)
   //  w ONDA AL PICAR: la pelota que sube despues de tocar el piso abre un anillo de hojas que se agranda mientras sube
   // Todo en recorrido por CUADRO: en camara lenta la pelota avanza menos por cuadro y la estela es mas corta (como el atraso del mapa)
-  float4 P442 = IniParams.Load(int2(442, 0));
-  if ((pesIsExt || pesNatV) && (P442.x > 0.001 || P442.w > 0.001) && cb4[3].y > 0.05 && cb4[3].y < 1.2) {
-    float2 vB = cb4[3].xz - cb4[4].xz; float dF = length(vB);              // recorrido de este cuadro (m)
-    float vY = cb4[3].y - cb4[4].y;
-    if (dF < 1.5) {                                                        // salto de camara / saque: nada
-      float2 dirB = dF > 1e-4 ? vB / dF : float2(0.0, 0.0), latB = float2(-dirB.y, dirB.x);
-      float2 dP = r1.xz - cb4[3].xz; float dL = length(dP); float2 dU = dL > 1e-4 ? dP / dL : dirB;
-      float hW = max(v0.y, 0.0);
-      // (12/11 20:50, Agustin: "revisa tambien la forma que tiene el pasto de doblarse con la pelota al moverse al ras") 1) la hoja ya no se
-      // inclina recta como un palito (corrimiento proporcional al alto): se DOBLA EN CURVA como una hoja empujada cerca de la punta (viga
-      // empotrada, t^2 (3 - t) / 2: la raiz firme y el tramo de arriba mas; el largo constante v5 baja la punta). 2) la proa empieza donde la
-      // pelota toca de verdad las puntas: radio de contacto de una esfera de 11.5 cm con el alto del corte (28 mm ~7.5 cm, 60 mm ~10 cm; mas
-      // rapida un poco antes) y no a 15-25 cm; rodando despacio tambien empuja (antes casi nada). 3) cada hoja con su rigidez y un desvio de
-      // hasta 17 grados (no se peinan todas iguales). 4) segun la cancha: mojada (lluvia o humedad y407) se dobla mas y queda mas acostada,
-      // suelo seco un poco menos, artificial (fibra rigida) bastante menos
-      float hRB = max(pesHref * (pesBlade ? PES_NAT_CUT : 1.0), 0.005);
-      float tBb = saturate(hW / hRB);
-      float gBb = tBb * (3.0 - tBb) * 0.5;                                 // hW x gBb = perfil de viga (1 en la punta, 0.28 a un quinto)
-      float gndB = IniParams.Load(int2(114, 0)).x;
-      float wetB = (abs(gndB - 1.0) < 0.5 ? 1.2 : (abs(gndB - 2.0) < 0.5 ? 0.9 : 1.0)) * (1.0 + 0.15 * saturate(IniParams.Load(int2(407, 0)).y));
-      float stB = (0.8 + 0.4 * frac(pesHv * 7.13 + 0.3)) * wetB * (IniParams.Load(int2(407, 0)).x > 0.5 ? 0.7 : 1.0);
-      float aJ = (pesHv - 0.5) * 0.6; float2 csJ = float2(cos(aJ), sin(aJ));
-      float kBall = clamp(P442.x, 0.0, 2.0);
-      if (kBall > 0.001 && dF > 0.002 && dL < 1.6) {
-        float spK = saturate(dF / 0.08);                                   // ~5 m/s a 60 cuadros por segundo = todo
-        float contact = smoothstep(0.30, 0.15, cb4[3].y);                 // rodando o apoyada
-        float al = dot(dP, dirB), lt = dot(dP, latB);
-        float hTopB = min(pesNatV ? PES_NAT_CUT * 0.058 : pesHref, 0.1);
-        float rCt = sqrt(max(0.013225 - (0.115 - hTopB) * (0.115 - hTopB), 0.0));   // donde la esfera toca la altura de las puntas
-        float rBow = rCt + 0.02 + 0.06 * spK;
-        float kBow = smoothstep(rBow, rCt * 0.55, dL) * smoothstep(-0.06, 0.0, al) * contact * (0.35 * smoothstep(0.002, 0.006, dF) + 0.65 * spK);   // el piso entra suave: la pelota que se frena no suelta el pasto de golpe
-        float Lw = 0.10 + 6.0 * dF;
-        float kWake = smoothstep(0.13, 0.05, abs(lt)) * saturate(1.0 + al / Lw) * (1.0 - step(0.0, al)) * contact * spK;
-        float air = smoothstep(1.0, 0.35, cb4[3].y) * (1.0 - contact) * smoothstep(0.06, 0.20, dF);
-        float rnd = frac(sin(dot(floor(r1.xz * 40.0), float2(12.9898, 78.233))) * 43758.55);   // cada hoja un poco distinta
-        float kAir = air * smoothstep(0.30, 0.0, abs(lt)) * saturate(1.0 + al / (0.15 + 4.0 * dF)) * (1.0 - step(0.10, al)) * (0.6 + 0.4 * rnd);
-        float2 dsp = normalize(dU + dirB * 0.8) * (0.85 * kBow) + dirB * (0.80 * kWake + 0.55 * kAir) + latB * (sign(lt) * 0.25 * kAir);
-        dsp = float2(dsp.x * csJ.x - dsp.y * csJ.y, dsp.x * csJ.y + dsp.y * csJ.x);   // desvio propio de la hoja
-        r1.xz += dsp * (kBall * hW * gBb * stB * 1.1);
-        pesSinkF = max(pesSinkF, saturate((0.30 * kBow + 0.60 * kWake) * kBall * wetB));
-      }
-      float kPq = clamp(P442.w, 0.0, 2.0) * smoothstep(0.010, 0.035, vY) * smoothstep(0.65, 0.20, cb4[3].y);
-      if (kPq > 0.001 && dL < 0.8) {
-        float rr = 0.12 + 0.9 * max(cb4[3].y - 0.11, 0.0);
-        float ring = exp(-((dL - rr) * (dL - rr)) / 0.005);
-        r1.xz += dU * (ring * kPq * 1.2 * hW * gBb * stB);
-        pesSinkF = max(pesSinkF, saturate(0.40 * ring * kPq));
-      }
+  // (12/11 20:50, Agustin: "revisa tambien la forma que tiene el pasto de doblarse con la pelota al moverse al ras") 1) la hoja ya no se
+  // inclina recta como un palito (corrimiento proporcional al alto): se DOBLA EN CURVA como una hoja empujada cerca de la punta (viga
+  // empotrada, t^2 (3 - t) / 2: la raiz firme y el tramo de arriba mas; el largo constante v5 baja la punta). 2) la proa empieza donde la
+  // pelota toca de verdad las puntas: radio de contacto de una esfera de 11.5 cm con el alto del corte (28 mm ~7.5 cm, 60 mm ~10 cm; mas
+  // rapida un poco antes) y no a 15-25 cm; rodando despacio tambien empuja (antes casi nada). 3) cada hoja con su rigidez y un desvio de
+  // hasta 17 grados (no se peinan todas iguales). 4) segun la cancha: mojada (lluvia o humedad y407) se dobla mas y queda mas acostada,
+  // suelo seco un poco menos, artificial (fibra rigida) bastante menos
+  // (13/11 tanda 2) la huella, el nido (o la corona de y446) y la fila 442 estan en PESBallDeform (misma cuenta, ver arriba del main). w446: se
+  // calcula otra vez con la pelota del cuadro anterior (B, 2B - A: la misma velocidad) y la diferencia va al vector de velocidad del TAA (r6p,
+  // abajo), como el viento (2/11): el TAA ve moverse las hojas que empuja la pelota y no las promedia (mancha borrosa). Solo cerca de la pelota
+  float pesCrK = 0.0; float2 pesR1n = r1.xz, pesBallD = float2(0.0, 0.0);
+  if (pesBLive) {
+    float2 pesRootB = pesIsExt ? pesCardRoot : pesRoot;   // raiz de la tarjeta / hoja 3D (igual en todos sus vertices)
+    float2 bdN = PESBallDeform(r1.xz, v0.y, pesRootB, pesBA, pesBB, pesHref, pesBlade, pesNatV, pesIsExt, PES_NAT_CUT, pesHv, pesKV2, pesSZ, pesDtB, pesSinkF, pesCrK);
+    if (P446.w > 0.5 && (pesIsExt || pesNatV) && length(r1.xz - pesBA.xz) < 1.7 * pesSZ) {
+      float skP = 0.0, crP = 0.0;
+      pesBallD = PESBallDeform(r1.xz, v0.y, pesRootB, pesBB, 2.0 * pesBB - pesBA, pesHref, pesBlade, pesNatV, pesIsExt, PES_NAT_CUT, pesHv, pesKV2, pesSZ, pesDtB, skP, crP) - bdN;
     }
+    r1.xz += bdN;
   }
-  r0.yz = cb4[3].xz + cb4[4].xz;
-  r0.yz = -r0.yz * 0.5 + r1.xz;
+  r0.yz = pesBA.xz + pesBB.xz;
+  r0.yz = -r0.yz * 0.5 + (pesKV2 > 0.5 ? pesR1n : r1.xz);   // (13/11 tanda 2) y446: el empuje del juego desde la hoja sin la pelota (no se apila)
   r0.xz = r0.yz * r0.xx;
   r2.xy = r1.xz * cb4[1].xy + cb4[1].zw;
   float2 pesUV = r2.xy;   // PES21: uv de la cancha en este vertice (la misma v1.xy de la base)
@@ -1003,11 +1212,20 @@ void main(
   }
   float2 pesBend = float2(0.0, 0.0);
   float pesYY = 0.0, pesBentY = 0.0;   // (2/11) alto antes y despues del largo constante (para la posicion del cuadro anterior)
+  float2 pesBendU = float2(0.0, 0.0); float pesLimB = -1.0;   // (13/11) corrimiento antes del tope de costado y el tope (-1 = sin tope)
   if (pesV5) {
     // (20/10) pasto v5: largo constante. Toda la deformacion (corte, viento, pisadas, jugador / pelota del juego) corre la
     // hoja de costado; una hoja real no se estira: la altura baja para que el largo raiz -> vertice se mantenga
     pesBend = r6.xz - (pesIsExt ? pesExtRoot : pesRoot);
     float yy = max(r6.y, 0.0);
+    // (13/11 tanda 2) el largo constante tambien limita lo que la hoja se corre de costado (antes solo bajaba el alto: con la pisada + x413 las
+    // tarjetas se estiraban hasta x1.2). Corona (y446): la punta llega hasta 2/3 del alto (queda 75-100 % parada); z447: hasta 0.968 del alto.
+    // Las parcelas lejanas del juego (pesFarK) no: ahi el corrimiento es la escala de la celda
+    pesBendU = pesBend;
+    if ((pesCrK > 0.001 || pesZ447) && pesFarK <= 0.0) {
+      float yyL = yy / max(1.0 - pesSinkF, 0.25);   // alto antes del hundimiento (r6.y ya trae * (1 - pesSinkF))
+      float limB = lerp(0.968, 0.66, pesCrK) * yyL, bl = length(pesBend); pesLimB = limB;
+      if (bl > limB && bl > 1e-6) { float2 nb = pesBend * (limB / bl); r6.xz += nb - pesBend; pesBend = nb; } }
     float bb = min(dot(pesBend, pesBend), yy * yy * 0.9375);
     r6.y = sqrt(max(yy * yy - bb, 0.0));
     pesYY = yy; pesBentY = r6.y;
@@ -1265,10 +1483,18 @@ void main(
     o3.xyz = saturate(PESDryTint(o3.xyz * pesZone, pesMatch ? 0.0 : pesWear.x * (pesWShort ? 0.6 : 1.0) * saturate(Q7b.y) * 0.85));   // (11/11 h) natural menos seco
     // (27/10 n) tanda 11, w329: el rastro de la pelota (pes_flat.y) se ve en el color de la hoja: tumbada muestra el enves y la punta, mas
     // clara y un poco mas palida (como la franja de corte a favor). Las pisadas (x) la mitad
-    { float4 P329v = IniParams.Load(int2(329, 0));
-      if (P329v.w > 0.001) { float2 f2 = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, pesRoot * cb4[1].xy + cb4[1].zw, 0).xy;
+    // (13/11 tanda 2) una sola lectura del mapa para w329 y x448; z448: las pisadas lentas (B) cuentan como pisadas (igual que 5e92 / c956).
+    // x448 PISADAS VISIBLES DE LEJOS (PESCrushLook, pes_grass.hlsli): el pasto pisado seco mas claro y brillante, mojado mas oscuro y mate
+    { float4 P329v = IniParams.Load(int2(329, 0)), P448v = IniParams.Load(int2(448, 0));
+      float3 f3 = float3(0.0, 0.0, 0.0);
+      if (P329v.w > 0.001 || P448v.x > 0.001) f3 = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, pesRoot * cb4[1].xy + cb4[1].zw, 0).xyz;
+      float crR = P448v.z > 0.0 ? max(f3.x, 0.55 * saturate((f3.z - 0.012) / 0.988)) : f3.x;   // pisadas: max(R, 0.55 B')
+      if (P329v.w > 0.001) { float2 f2 = float2(crR, f3.y);
         float tr = saturate(max(f2.y, 0.5 * f2.x) * 1.5) * clamp(P329v.w, 0.0, 2.0);
-        o3.xyz = saturate(o3.xyz * lerp(float3(1.0, 1.0, 1.0), float3(1.12, 1.08, 0.94), tr)); } }
+        o3.xyz = saturate(o3.xyz * lerp(float3(1.0, 1.0, 1.0), float3(1.12, 1.08, 0.94), tr)); }
+      if (P448v.x > 0.001) { float3 cL = o3.xyz; float sL = o1.w; float3 Vc = normalize(cb2[20].xyz - r6.xyz);
+        PESCrushLook(cL, sL, crR, abs(o4.w), 1.0 - abs(Vc.y), saturate(PESGround().x + 0.4 * IniParams.Load(int2(407, 0)).y));   // px/m del vertice (o4.w), rasante, mojado
+        o3.xyz = saturate(cL); o1.w = saturate(sL); } }
     o1.w = saturate(o1.w * (1.0 - pesWear.x * 0.5) * ((int)(Q4.y + 0.5) == 2 ? 1.3 : 1.0));
     // (12/11) hoja 3D aplastada, la "textura" de cada estado (sutil, Agustin: "que no sobresalga mucho del resto"): doblandose = pliegue algo mas
     // oscuro a media hoja y la parte doblada muestra el enves (un poco mas claro y palido); acostada = verde apenas mas claro con el brillo largo
@@ -1366,11 +1592,17 @@ void main(
   o5.w = (pesIsExt && cb5[9].x > 0.5) ? 1.0 : -pesPaint;   // PES21: depuracion, el PS pinta magenta (1); (27/10 h) negativo = hoja pintada por la linea
   // (2/11) w139: posicion de este vertice en el CUADRO ANTERIOR con el viento de entonces (misma hoja, misma curva): el TAA recibe el
   // movimiento real de la hoja y deja de promediarla con la camara quieta (nitidez). Sin viento o con w139 = 0, la misma posicion de antes
+  // (13/11 tanda 2) w446: + lo que la pelota corria esta parte de la hoja en el cuadro anterior (pesBallD = antes - ahora; 0 sin w446)
   float4 r6p = r6;
-  if (abs(pesWindD.x) + abs(pesWindD.y) > 1e-7) {
-    float2 dxz = pesWindD * (pesV5 ? pesHref * pesTB * pesTB : v0.y * saturate(v0.y * 25.0));
+  if (abs(pesWindD.x) + abs(pesWindD.y) > 1e-7 || abs(pesBallD.x) + abs(pesBallD.y) > 1e-9) {
+    float2 dxz = pesWindD * (pesV5 ? pesHref * pesTB * pesTB : v0.y * saturate(v0.y * 25.0)) + pesBallD;
     r6p.xz += dxz;
-    if (pesV5) { float2 bp = pesBend + dxz; float bb2 = min(dot(bp, bp), pesYY * pesYY * 0.9375); r6p.y += sqrt(max(pesYY * pesYY - bb2, 0.0)) - pesBentY; }
+    if (pesV5) { float2 bp = pesBend + dxz;
+      if (pesLimB >= 0.0) {   // (13/11) el mismo tope de costado en el cuadro anterior: sin esto el TAA veia una hoja que se estiraba de mas
+        float2 bpU = pesBendU + dxz; float blP = length(bpU);
+        float2 bpC = (blP > pesLimB && blP > 1e-6) ? bpU * (pesLimB / blP) : bpU;
+        r6p.xz += bpC - bp; bp = bpC; }
+      float bb2 = min(dot(bp, bp), pesYY * pesYY * 0.9375); r6p.y += sqrt(max(pesYY * pesYY - bb2, 0.0)) - pesBentY; }
   }
   o6.z = dot(r6p, cb2[16]);
   o6.w = dot(r6p, cb2[17]);
@@ -1393,9 +1625,9 @@ void main(
   // plana prendida (x290 = 0, "Como el pasto del juego"): antes este bloque no corria y sobre las hojas quedaba solo la sombra plana del
   // juego, leida en la raiz (borrosa, sin la oscuridad de contacto). Se toma la MAS OSCURA de las dos (no se oscurece dos veces)
   bool pesBallSh = pesPlanOff || (pesIsExt && IniParams.Load(int2(439, 0)).w > 0.001);
-  if (pesNatV && pesBallSh && cb4[3].y > 0.06 && cb4[3].y < 40.0) {
+  if (pesNatV && pesBallSh && pesBLive && pesBA.y > 0.06 && pesBA.y < 40.0) {   // (13/11 tanda 2) pesBA: la pelota de este cuadro (o extrapolada); vieja: nada
     const float Rb = 0.112;
-    float3 dB = cb4[3].xyz - r6.xyz;
+    float3 dB = pesBA - r6.xyz;
     float3 Ls = PESSunSky();
     float shB = 0.0;
     float tB = dot(dB, Ls);
@@ -1405,7 +1637,7 @@ void main(
     }
     float sunB = saturate(IniParams.Load(int2(414, 0)).w);
     float dl = length(dB);
-    float aoB = (1.0 - smoothstep(Rb * 1.05, Rb * 2.4, dl)) * saturate(0.25 + 0.75 * saturate(dB.y / max(dl, 1e-3)));
+    float aoB = (1.0 - smoothstep(Rb * 1.05, Rb * (2.4 + 1.35 * (pesSZ - 1.0)), dl)) * saturate(0.25 + 0.75 * saturate(dB.y / max(dl, 1e-3)));   // (13/11 tanda 2) x446: borde 1.05 + 1.35 S
     // (11/11 m, capturas 19.22 de Agustin: hojas lima dentro de la sombra negra de la pelota) mas fuerte, como la sombra plana del suelo:
     // 0.62 x (0.35..1 segun el sol) -> 0.88 x (0.6..1); con el sol tapado o de noche igual queda la sombra de contacto
     float kB = saturate(1.0 - 0.88 * shB * lerp(0.6, 1.0, sunB) - 0.40 * aoB);

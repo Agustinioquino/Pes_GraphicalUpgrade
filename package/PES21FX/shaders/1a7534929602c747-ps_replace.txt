@@ -29,6 +29,15 @@
 //        (completa debajo de 0.5 px por cuadro, nada desde 1.2 px), no en los paneos rapidos.
 // Con x / y / z > 0 ademas la mezcla pesada por luminancia nunca queda por debajo del recorte de la caja (antes podia dejar fantasmas),
 // y el realce no vuelve a serruchar los bordes que el AA por bordes (y331) acaba de suavizar mientras la camara se mueve.
+//
+// === (13/11 tanda 2) fila 497, TAA del pasto (con w332 = 1; 0 = como antes). Solo en pixeles verdes o verde amarillentos (pasto): piel,
+// pelo castano o negro, lineas blancas y costuras de la camiseta no pasan la prueba del color:
+//   x497 sin fantasmas entre las hojas: la velocidad que usa el juego es la del vecino mas cercano de 5 (dilatada); en el hueco entre hojas
+//        al viento toma la de la hoja y la historia sale de otro lado (sombra borrosa de la hoja en el hueco). Donde la velocidad propia
+//        difiere de la dilatada como una hoja al viento (0.75-4 px por cuadro) el cuadro actual pesa hasta 0.4 x x497; los cuerpos y la
+//        pelota (saltos mas grandes) quedan como antes. 1 lectura mas de t2,
+//   y497 puntas finas con la camara quieta: una punta de 1 px mas clara (o mas oscura) que sus 4 vecinos pesa hasta 0.2 x y497 hacia el
+//        cuadro actual y entra sin la mezcla pesada por luminancia (que descuenta lo claro); con el pixel en movimiento (> 0.3 px) nada.
 cbuffer cb0 : register(b0) { float4 cb0[3]; }
 cbuffer cb5 : register(b5) { float4 cb5[13]; }
 SamplerState s9 : register(s9);
@@ -115,6 +124,9 @@ void main(
   r0.zw = ((t2.Sample(s9, (r0.zwzz).xy)).zwxy).zw;
   r0.zw = ((r0.zzzw + -(cb5[10].zzzw))).zw;
   float pesVelPx = length(r0.zw);   // (12/11) w440: movimiento de este pixel en px por cuadro (velocidad del juego, sin el jitter)
+  // (13/11 tanda 2) x497: cuanto difiere la velocidad propia de este pixel (r0.xy = su uv) de la dilatada de arriba (px por cuadro)
+  float4 P497 = IniParams.Load(int2(497, 0)); float pesDVel = 0.0;
+  if (pesOn && P497.x > 0.0) { float2 vOwn = t2.SampleLevel(s9, r0.xy, 0).xy - cb5[10].zw; pesDVel = length(vOwn - r0.zw); }
   r1.xy = ((r0.zwzz * cb5[9].zwzz)).xy;
   r1.zw = (((float4(0.0, 0.0, 0.0, 0.0) != cb5[12].yyyx) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).zw;
   r2.x = (float4((~int4(r1.wwww)))).x;
@@ -162,6 +174,13 @@ void main(
   r13.xyz = (max(r10.xyzx, r13.xyzx)).xyz;
   r13.xyz = (max(r8.xyzx, r13.xyzx)).xyz;
   float3 pesNMin = min(r12.xyz, r7.xyz), pesNMax = max(r13.xyz, r7.xyz), pesMean5 = r7.xyz;   // (12/11) y440: vecindario del cuadro actual
+  // (13/11 tanda 2) x497 / y497 solo en el pasto: centro verde o verde amarillento (r7 = centro, r12 / r13 = minimo / maximo de los 4 vecinos)
+  bool pesGrn = r7.g > 1.02 * r7.r && r7.g > 1.3 * r7.b;
+  float pesTipK = 0.0;   // y497: punta de 1 px con el pixel quieto
+  if (pesOn && P497.y > 0.0 && pesGrn) { float3 LWt = float3(0.2126, 0.7152, 0.0722);
+    float lC = dot(r7.xyz, LWt), lMx = dot(r13.xyz, LWt), lMn = dot(r12.xyz, LWt);
+    float ex = max(lC - lMx, lMn - lC) / max(lC + lMx, 1e-3);   // punta de 1 px: mas alla de los 4 vecinos
+    pesTipK = saturate(P497.y) * smoothstep(0.04, 0.10, ex) * (1.0 - smoothstep(0.15, 0.30, pesVelPx)); }
   r2.w = (((r2.wwww < float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).w;
   r12.xyz = (((r12.xyzx != r13.xyzx) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).xyz;
   r5.z = (float4(0.0, 0.0, (float)((int)r12.y | (int)r12.x), 0.0)).z;
@@ -379,6 +398,10 @@ void main(
     }
     // PES21 x332 / z332: piso del peso hacia el cuadro actual (la historia no acumula sin limite); mas donde hay contraste fino
     if (pesOn) r0.x = max(r0.x, saturate(clamp(P332.x, 0.0, 0.5) + clamp(P332.z, 0.0, 0.5) * saturate(pesCon * 2.0 - 0.1)));
+    // (13/11 tanda 2) x497: hueco con la velocidad de una hoja al viento (salto de 0.75-4 px): mas del cuadro actual (cuerpos y pelota saltan
+    // mas y quedan como antes). y497: la punta fina con la camara quieta tambien
+    if (pesOn && P497.x > 0.0 && pesGrn) r0.x = max(r0.x, 0.4 * saturate(P497.x) * smoothstep(0.75, 1.5, pesDVel) * smoothstep(4.0, 2.5, pesDVel));
+    if (pesTipK > 0.0) r0.x = max(r0.x, 0.2 * pesTipK);
     // (12/11, Agustin: "al hacer zoom parece que el taa borroneo mas el pasto") w440 NITIDEZ EN MOVIMIENTO: con la camara quieta la historia
     // vale ~1 / x332 cuadros; con zoom o paneo cada cuadro la historia se vuelve a muestrear corrida una fraccion de pixel y cada vuelta la
     // ablanda un poco: en las hojas (1-2 px, mucho contraste) se nota como pasto borroso mientras la camara se mueve. Mientras el pixel se
@@ -423,9 +446,13 @@ void main(
           pesCur = clamp(c0 + (c0 - pesMean5) * (0.6 * kDef), min(pesNMin, c0) - pesER, max(pesNMax, c0) + pesER); } }
       float wc = r0.x / (1.0 + dot(pesCur, float3(0.2126, 0.7152, 0.0722)));
       float wh = (1.0 - r0.x) / (1.0 + dot(r9.xyz, float3(0.2126, 0.7152, 0.0722)));
+      // (13/11 tanda 2) y497: en la punta fina el peso deja la mezcla por luminancia (que descuenta lo claro) y va hacia el alfa tal cual
+      float wF = wc / max(wc + wh, 1e-5);
+      if (pesTipK > 0.0) wF = lerp(wF, r0.x, pesTipK);
       // (12/11) fix D: con x / y / z454 > 0 el peso del cuadro actual nunca queda por debajo del recorte de la caja (un pixel claro del
       // cuadro actual pesaba menos y la historia que no entraba en la caja quedaba afuera: rastro)
-      if (p454) r1.xyz = lerp(r9.xyz, pesCur, max(wc / max(wc + wh, 1e-5), min(r0.x, pesT)));
+      if (p454) r1.xyz = lerp(r9.xyz, pesCur, max(wF, min(r0.x, pesT)));
+      else if (pesTipK > 0.0) r1.xyz = lerp(r9.xyz, pesCur, wF);
       else r1.xyz = (pesCur * wc + r9.xyz * wh) / max(wc + wh, 1e-5);
     } else
     r1.xyz = ((r0.xxxx * r1.xzwx + r9.xyzx)).xyz;
