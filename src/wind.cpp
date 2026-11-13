@@ -70,7 +70,7 @@ void WindFrame(float (*p)[4], double tReal) {
     double g = (double)p[157][0], dG = 0.0;
     if (lastGame >= 0.0) { dG = g - lastGame; if (dG < -50000.0) dG += 100000.0; dG = std::clamp(dG, 0.0, 0.5); }
     lastGame = g; tG += dG;
-    if (c.live[353][2] < 0.5f) { for (int k = 0; k < 4; k++) p[494][k] = p[495][k] = 0.0f; return; }
+    if (c.live[353][2] < 0.5f || c.live[353][3] < 0.5f) {   // z353 viento unico; w353 = el grupo "viento distinto en cada partido" prendido for (int k = 0; k < 4; k++) p[494][k] = p[495][k] = 0.0f; return; }
     // viento base de este partido
     float tx, tz;
     { auto wx = c.clothVals.find("sim.wind_x"), wz = c.clothVals.find("sim.wind_z");
@@ -111,8 +111,7 @@ void WindFrame(float (*p)[4], double tReal) {
     dist += (double)U * dG; if (dist >= 8192.0) dist -= 8192.0;
     p[494][0] = dx; p[494][1] = dz; p[494][2] = u0 > 1e-4f ? (std::max)(U, 0.01f) : 0.0f; p[494][3] = (float)dist;
     p[495][0] = (float)e; p[495][1] = std::clamp(turbI * (0.5f + 0.5f * (float)e) * 2.0f, 0.0f, 1.0f); p[495][2] = (float)fmod(tG, 8192.0); p[495][3] = p[157][3];
-    // el pelo sigue el mismo rumbo (fila 23: x, y; antes quedaba fijo todo el partido)
-    if (u0 > 1e-4f) { p[23][0] = dx; p[23][1] = dz; }
+    // (el pelo toma el rumbo de la fila 494 en sus shaders; la fila 23 x / y queda como la del ini / cloth.ini)
     if (tReal >= nextLog) { nextLog = tReal + 60.0;
         Log("viento unico: base %.2f m/s rumbo %.0f grados | ahora %.2f m/s rumbo %.0f grados, racha %.2f, turbulencia %.2f, recorrido %.0f m, reloj %s%s | hora %.1f (x%.2f), estadio %d reparo %.2f tipico %.1f, estacion %d",
             u0, atan2f(bz, bx) * 57.2958f, U, atan2f(dz, dx) * 57.2958f, (float)e, p[495][1], (float)dist, p[157][3] > 0.5f ? "del juego" : "real", rain ? ", lluvia" : "",
