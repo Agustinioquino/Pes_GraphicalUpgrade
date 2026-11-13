@@ -17,11 +17,10 @@
 //  1) engancha 0x1419e3d40 (cada punto suelto, cada paso): despues del juego suma el empuje del viento unico (filas 494 / 495)
 //     a la posicion: a = k * v * |v| en el rumbo, con frentes de racha que viajan con el aire (w494) y un poco de aleteo vertical.
 //  2) engancha la entrada 14 del nodo: con viento, si la red se durmio la despierta por el mismo camino del juego (+0xf0, +0x31).
-//  3) "red con mas vida en el gol" (y499, apagada por defecto para no pisar reactive_nets): cambia en memoria 4 constantes que
-//     solo usa la red: peso, cuanto conserva el movimiento un punto que tiro la pelota, pasadas y estiramiento maximo.
-//     Apagado = la base leida al engancharse (la del juego o la del mod de redes); si otro mod las cambia despues, se aparta.
-// Filas: 499 x viento en la red (0 = nada de esto; 1 = natural), y red con mas vida en el gol, z peso, w rebote;
-//        500 x viento bajo techo (0 auto, 1 siempre afuera), y viento que queda bajo techo, z pasadas, w estiramiento
+//  3) la fisica de la red (peso, rebote, pasadas, estiramiento, hilos) la cambia el modulo de Sider PES21FX_redes.lua
+//     (presets juego / reactiva / viva / tv / personal). La DLL solo lee el peso actual para escalar el viento.
+// Filas: 499 x viento en la red (0 = nada de esto; 1 = natural), y / z / w libres;
+//        500 x viento bajo techo (0 auto, 1 siempre afuera), y viento que queda bajo techo, z / w libres
 //        (500 x / y los usa wind.cpp: el viento bajo techo vale para todo, no solo la red).
 #include "core.h"
 #include <MinHook.h>
@@ -63,20 +62,6 @@ bool Readable(const void* p, size_t n) {
     return (const char*)p + n <= (const char*)mi.BaseAddress + mi.RegionSize;
 }
 bool SigAt(uintptr_t a, const unsigned char* s, size_t n) { return Readable((const void*)a, n) && memcmp((const void*)a, s, n) == 0; }
-// (13/11) otro mod puede tocar las mismas constantes (Agustin tiene reactive_nets_physics.lua, que busca y pisa un bloque de
-// floats de la fisica de la red): solo se escribe si el valor actual es el del juego o el que puso la DLL; si aparece otro
-// valor, la DLL deja de escribir esas constantes para siempre (gana su mod) y lo anota en el log.
-bool s_foreign = false;
-template <class T> void Put(uintptr_t a, T v, T game, T& mine) {
-    const T cur = *(volatile T*)a;
-    if (s_foreign) return;
-    if (cur != game && cur != mine) { s_foreign = true; Log("redes: otro mod cambio la constante %p (vale %g): la red con mas vida se apaga y quedan los valores de ese mod", (void*)a, (double)cur); return; }
-    mine = v;
-    if (cur == v) return;
-    DWORD old = 0;
-    if (VirtualProtect((void*)a, sizeof(T), PAGE_READWRITE, &old)) { *(volatile T*)a = v; DWORD t = 0; VirtualProtect((void*)a, sizeof(T), old, &t); }
-}
-
 // viento de este cuadro (lo arma RedesPresent, lo leen los ganchos en el hilo del juego)
 struct NetWind { float ax, az, ay, dx, dz, D, turb, on; };
 NetWind s_w{};
@@ -145,25 +130,19 @@ void RedesPresent() {
     if (k > 0.0f && v > 0.0f) {
         // empuje en proporcion al peso BASE de la red (el del juego 6.0 o el de su mod 0.25): asi el viento la mueve igual de
         // "en serio" con o sin reactive_nets. Red real: arrastre / peso ~ 0.015 v2 -> 5 m/s = 0.37 del peso, 10 m/s = 1.5
-        const float a = 0.015f * k * v * v * std::clamp(bG, 0.1f, 10.0f);
+        const float gNow = s_constOk ? *(const volatile float*)kGravity : bG;   // el peso que haya ahora (preset del Lua)
+        const float a = 0.015f * k * v * v * std::clamp(gNow, 0.1f, 10.0f);
         w.ax = a * p[494][0]; w.az = a * p[494][1]; w.ay = 0.15f * a; w.dx = p[494][0]; w.dz = p[494][1]; w.D = p[494][3];
         w.turb = std::clamp(p[495][1], 0.0f, 1.0f); w.on = v * sqrtf(k) > 0.3f ? 1.0f : 0.0f;
     }
     s_w = w;
-    // 2) red con mas vida en el gol
-    if (s_constOk) {
-        const bool on = p[499][1] > 0.5f;
-        static float mG = bG, mH = bH, mS = bS; static unsigned mI = bI;
-        Put<float>(kGravity, on ? std::clamp(p[499][2], 0.1f, 10.0f) : bG, bG, mG);
-        Put<float>(kHitKeep, on ? std::clamp(p[499][3], 0.05f, 1.0f) : bH, bH, mH);
-        Put<unsigned>(kIters, on ? (unsigned)std::clamp((int)lroundf(p[500][2]), 1, 6) : bI, bI, mI);
-        Put<float>(kStretch, on ? std::clamp(p[500][3], 1.05f, 1.8f) : bS, bS, mS);
-    }
+    // 2) (13/11 16:45) la fisica de la red (peso, rebote, pasadas...) la cambia el modulo de Sider PES21FX_redes.lua (presets,
+    //    reemplaza a reactive_nets_physics.lua): Sider antes que DLL. La DLL ya no escribe esas constantes; solo las lee.
     static ULONGLONG next = 0; const ULONGLONG now = GetTickCount64();
     if (now >= next) { next = now + 60000;
-        Log("redes: viento %.2f m/s, empuje %.2f m/s2 (%s); en 60 s: %d pasos de red, %d despertares, %d puntos empujados; gol %s (peso %.2f, rebote %.2f, pasadas %u, estiramiento %.2f)",
+        Log("redes: viento %.2f m/s, empuje %.2f m/s2 (%s); en 60 s: %d pasos de red, %d despertares, %d puntos empujados; red ahora: peso %.2f, rebote %.2f, pasadas %u, estiramiento %.2f",
             v, sqrtf(w.ax * w.ax + w.az * w.az), w.on > 0.5f ? "prendido" : "apagado", s_nodes.exchange(0), s_wakes.exchange(0), s_pushed.exchange(0),
-            s_foreign ? "de otro mod" : s_constOk && p[499][1] > 0.5f ? "con mas vida" : "la base", s_constOk ? *(const float*)kGravity : 0.0f, s_constOk ? *(const float*)kHitKeep : 0.0f,
+            s_constOk ? *(const float*)kGravity : 0.0f, s_constOk ? *(const float*)kHitKeep : 0.0f,
             s_constOk ? *(const unsigned*)kIters : 0u, s_constOk ? *(const float*)kStretch : 0.0f); }
 }
 } // namespace fx
