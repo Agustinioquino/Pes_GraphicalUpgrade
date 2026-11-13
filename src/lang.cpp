@@ -7,6 +7,37 @@
 namespace fx {
 
 static const char* const kEn[][2] = {
+    // (13/11 sk9ema) panel "Viento ahora"
+    { "Calma", "Calm" },
+    { "Ventolina", "Light air" },
+    { "Brisa muy debil", "Light breeze" },
+    { "Brisa debil", "Gentle breeze" },
+    { "Brisa moderada", "Moderate breeze" },
+    { "Brisa fresca", "Fresh breeze" },
+    { "Brisa fuerte", "Strong breeze" },
+    { "Viento fuerte", "Near gale" },
+    { "Temporal", "Gale" },
+    { "Temporal fuerte", "Strong gale" },
+    { "Viento unico apagado: prende 'Viento distinto en cada partido' y 'Viento unico (rachas reales)'.", "Single wind is off: turn on 'Different wind every match' and 'Single wind (real gusts)'." },
+    { "Ahora: %.1f m/s (%.0f km/h), %s", "Now: %.1f m/s (%.0f km/h), %s" },
+    { "En 2 s: %.1f m/s. Promedio del partido: %.1f m/s", "In 2 s: %.1f m/s. Match average: %.1f m/s" },
+    { "Hacia donde sopla (amarilla) y dentro de 2 s (clara). Arcos a los costados.", "Where it blows to (yellow) and in 2 s (faint). Goals on the sides." },
+    { "Racha %.0f %%", "Gust %.0f %%" },
+    { "Revuelto %.0f %%", "Turbulent %.0f %%" },
+    { "Segun el partido", "From the match" },
+    { "Calmo", "Calm" },
+    { "Brisa", "Breeze" },
+    { "Ventoso", "Windy" },
+    { "Tormenta", "Storm" },
+    { "Viene de: %s%s%s. Reparo del estadio %.2f (%s)%s.", "Comes from: %s%s%s. Stadium shelter %.2f (%s)%s." },
+    { ", cloth.ini", ", cloth.ini" },
+    { ", cielo del mod", ", mod sky" },
+    { ", rumbo fijo", ", fixed heading" },
+    { "a mano", "by hand" },
+    { "tabla", "table" },
+    { "sin estadio", "no stadium" },
+    { ", lluvia", ", rain" },
+    { "Bajo techo: llega el %.0f %% del viento de afuera", "Under a roof: %.0f %% of the outdoor wind gets in" },
     // (08/11 d) iconos y slider de vidrio, guardado automatico
     { "Va de %s a %s. Arrastra, o la rueda del mouse para el ajuste fino (Shift: mas fino). Doble clic o clic derecho: volver a lo guardado. Toca el numero para escribirlo.", "From %s to %s. Drag, or use the mouse wheel for fine tuning (Shift: finer). Double click or right click: back to the saved value. Click the number to type it." },
     { "Guardado automatico", "Auto save" },
@@ -517,6 +548,37 @@ static const char* const kEn[][2] = {
 
 // (27/10) portugues: mismo orden que kEn
 static const char* const kPt[][2] = {
+    // (13/11 sk9ema) panel "Viento ahora"
+    { "Calma", "Calmaria" },
+    { "Ventolina", "Aragem" },
+    { "Brisa muy debil", "Brisa leve" },
+    { "Brisa debil", "Brisa fraca" },
+    { "Brisa moderada", "Brisa moderada" },
+    { "Brisa fresca", "Brisa forte" },
+    { "Brisa fuerte", "Vento fresco" },
+    { "Viento fuerte", "Vento forte" },
+    { "Temporal", "Ventania" },
+    { "Temporal fuerte", "Ventania forte" },
+    { "Viento unico apagado: prende 'Viento distinto en cada partido' y 'Viento unico (rachas reales)'.", "Vento \303\272nico desligado: ligue 'Vento diferente em cada partida' e 'Vento \303\272nico (rajadas reais)'." },
+    { "Ahora: %.1f m/s (%.0f km/h), %s", "Agora: %.1f m/s (%.0f km/h), %s" },
+    { "En 2 s: %.1f m/s. Promedio del partido: %.1f m/s", "Em 2 s: %.1f m/s. M\303\251dia da partida: %.1f m/s" },
+    { "Hacia donde sopla (amarilla) y dentro de 2 s (clara). Arcos a los costados.", "Para onde sopra (amarela) e em 2 s (clara). Gols nas laterais." },
+    { "Racha %.0f %%", "Rajada %.0f %%" },
+    { "Revuelto %.0f %%", "Turbul\303\252ncia %.0f %%" },
+    { "Segun el partido", "Conforme a partida" },
+    { "Calmo", "Calmo" },
+    { "Brisa", "Brisa" },
+    { "Ventoso", "Ventoso" },
+    { "Tormenta", "Tempestade" },
+    { "Viene de: %s%s%s. Reparo del estadio %.2f (%s)%s.", "Vem de: %s%s%s. Abrigo do est\303\241dio %.2f (%s)%s." },
+    { ", cloth.ini", ", cloth.ini" },
+    { ", cielo del mod", ", c\303\251u do mod" },
+    { ", rumbo fijo", ", rumo fixo" },
+    { "a mano", "manual" },
+    { "tabla", "tabela" },
+    { "sin estadio", "sem est\303\241dio" },
+    { ", lluvia", ", chuva" },
+    { "Bajo techo: llega el %.0f %% del viento de afuera", "Sob teto: chega %.0f %% do vento de fora" },
     // (08/11 d) iconos y slider de vidrio, guardado automatico
     { "Va de %s a %s. Arrastra, o la rueda del mouse para el ajuste fino (Shift: mas fino). Doble clic o clic derecho: volver a lo guardado. Toca el numero para escribirlo.", "Vai de %s a %s. Arraste, ou use a roda do mouse para o ajuste fino (Shift: mais fino). Duplo clique ou clique direito: voltar ao salvo. Clique no n\303\272mero para digit\303\241-lo." },
     { "Guardado automatico", "Salvamento autom\303\241tico" },
@@ -1034,6 +1096,7 @@ const char* TutorialForEn(const std::string& sec) {
     if (sec.rfind("Pelo", 0) == 0) return "What is here: hair definition, banded shine (anisotropic, like real hair), reaction to movement (inertia) and wind.\nWhere to start: 1) 'Hair reaction' > 'Inertia' 1 = natural; 2 = long, heavy hair. 2) 'Hair shine' > 'Band strength' 0.6 is natural; if the band appears on the side opposite the sun, switch 'Light direction' between World and View. 3) Hair wind copies the direction of the cloth wind.\nHow to test: a long-haired player running in a slow replay.";
     if (sec.rfind("Kits", 0) == 0) return "What is here: kit fabric (weave, 'sheen' shine, wrap lighting), numbers and badges with relief, and clean shadows on simulated cloth.\nWhere to start: 1) 'Next-gen weave' is the main effect: look at the shirt up close. 2) If shadow stripes appear on moving cloth, raise 'Clean shadow on kits'. 3) Careful with fabric shine: too much = satin.\nHow to test: a close-up of a player's back (number) with side sunlight.";
     if (sec.rfind("Pasto", 0) == 0) return "What is here: all the grass: the mod's grass (near and the whole pitch), natural grass (height in mm, extreme close-up 3D blades and their filler), colour, light, mowing, wind, footsteps and wear.\nWhere to start: 1) 'Natural grass' > 'Grass height (mm)': 28 = professional pitch. 2) If the ground shows between the blades up close, raise 'Filler under the 3D blades' or 'Amount of 3D blades'. 3) The grass looks best with a low camera.\nTip: if the grass looks 'pasty', lower the macro variation.";
+    if (sec.rfind("Viento", 0) == 0) return "What is here: one single wind for everything (grass, cloth, hair, nets): where it comes from, presets, heading, gusts, turbulence, stadium shelter and how much reaches each thing.\nWhere to start: 1) Watch 'Wind now' while playing: it shows how hard it blows and where to. 2) For a really windy match pick the 'Windy' preset. 3) To record a video that is always the same, fixed heading and 'Change during the match' at 0.\nTip: pause freezes the wind and slow motion slows it, like in real life.";
     if (sec.rfind("Cancha", 0) == 0) return "What is here: the wet pitch (reflections), clouds, the sky and the visible sun. The grass has its own section (Grass).\nWhere to start: 1) Sky changes show more in the afternoon. 2) Wet pitch reflections only with rain.\nTip: the green light bounced from the grass onto the players is in Lighting.";
     if (sec.rfind("Color", 0) == 0) return "What is here: the final colour of the image: tone, contrast, saturation, warmth of shadows and highlights.\nWhere to start: 1) Small changes: 0.05 is already visible. 2) Tune with a day scene and a night scene, not just one. 3) 'Show original' to keep the reference.\nTip: if you have a colour preset in another mod (PostProcessingEditor), don't duplicate the same change here.";
     if (sec.rfind("Post", 0) == 0) return "What is here: effects on the finished image: bloom, sharpening, depth of field, grain, vignette.\nWhere to start: 1) 'Sharpening' is the most visible at 1080p; lower it at 4K. 2) Careful with 'Bloom', it washes out the image. 3) 'Depth of field' only in replays and cutscenes.\nTip: all of this adds to the game's TAA; if you see halos, lower the sharpening.";
@@ -1055,6 +1118,7 @@ const char* TutorialForPt(const std::string& sec) {
     if (sec.rfind("Pelo", 0) == 0) return "O que tem aqui: defini\303\247\303\243o do cabelo, brilho em faixa (anisotr\303\263pico, como o cabelo real), rea\303\247\303\243o ao movimento (in\303\251rcia) e vento.\nPor onde come\303\247ar: 1) 'Rea\303\247\303\243o do cabelo' > 'In\303\251rcia' 1 = natural; 2 = cabelo longo e pesado. 2) 'Brilho do cabelo' > 'For\303\247a da faixa' 0.6 \303\251 natural; se a faixa aparecer do lado oposto ao sol, troque 'Dire\303\247\303\243o da luz' entre Mundo e Vista. 3) O vento do cabelo copia a dire\303\247\303\243o do vento da roupa.\nComo testar: um jogador de cabelo longo correndo num replay lento.";
     if (sec.rfind("Kits", 0) == 0) return "O que tem aqui: o tecido do uniforme (trama, brilho 'sheen', luz envolvente), n\303\272meros e escudos com relevo e sombras limpas na roupa simulada.\nPor onde come\303\247ar: 1) 'Trama next-gen' \303\251 o efeito principal: olhe a camisa de perto. 2) Se aparecerem listras de sombra na roupa em movimento, suba 'Sombra limpa nos uniformes'. 3) Cuidado com o brilho do tecido: demais = cetim.\nComo testar: um close das costas de um jogador (n\303\272mero) com sol de lado.";
     if (sec.rfind("Pasto", 0) == 0) return "O que tem aqui: toda a grama: a do mod (perto e o campo todo), a natural (altura em mm, folhas 3D de primeir\303\255ssimo plano e o preenchimento), cor, luz, corte, vento, pisadas e desgaste.\nPor onde come\303\247ar: 1) 'Grama natural' > 'Altura da grama (mm)': 28 = campo profissional. 2) Se de perto o ch\303\243o aparece entre as folhas, suba 'Preenchimento sob as folhas 3D' ou 'Quantidade de folhas 3D'. 3) A grama se v\303\252 melhor com a c\303\242mera baixa.\nDica: se a grama parecer 'pastosa', abaixe a varia\303\247\303\243o macro.";
+    if (sec.rfind("Viento", 0) == 0) return "O que tem aqui: um s\303\263 vento para tudo (grama, roupa, cabelo, redes): de onde vem, predefini\303\247\303\265es, rumo, rajadas, turbul\303\252ncia, abrigo do est\303\241dio e quanto chega a cada coisa.\nPor onde come\303\247ar: 1) Olhe 'Vento agora' durante o jogo: mostra quanto sopra e para onde. 2) Para uma partida com vento de verdade escolha a predefini\303\247\303\243o 'Ventoso'. 3) Para gravar um v\303\255deo sempre igual, rumo fixo e 'Mudan\303\247a durante a partida' em 0.\nDica: a pausa congela o vento e a c\303\242mera lenta o freia, como na realidade.";
     if (sec.rfind("Cancha", 0) == 0) return "O que tem aqui: o campo molhado (reflexos), as nuvens, o c\303\251u e o sol vis\303\255vel. A grama tem a sua pr\303\263pria se\303\247\303\243o (Grama).\nPor onde come\303\247ar: 1) As mudan\303\247as do c\303\251u se notam mais \303\240 tarde. 2) Os reflexos do campo molhado s\303\263 com chuva.\nDica: a luz verde que a grama rebate nos jogadores est\303\241 em Ilumina\303\247\303\243o.";
     if (sec.rfind("Color", 0) == 0) return "O que tem aqui: a cor final da imagem: tom, contraste, satura\303\247\303\243o, calor das sombras e das luzes.\nPor onde come\303\247ar: 1) Mudan\303\247as pequenas: 0.05 j\303\241 se nota. 2) Ajuste com uma cena de dia e uma de noite, n\303\243o s\303\263 uma. 3) 'Ver original' para n\303\243o perder a refer\303\252ncia.\nDica: se voc\303\252 tem um preset de cor em outro mod (PostProcessingEditor), n\303\243o duplique a mesma mudan\303\247a aqui.";
     if (sec.rfind("Post", 0) == 0) return "O que tem aqui: efeitos sobre a imagem pronta: bloom, nitidez, profundidade de campo, granula\303\247\303\243o, vinheta.\nPor onde come\303\247ar: 1) 'Nitidez' \303\251 o mais vis\303\255vel em 1080p; abaixe em 4K. 2) Cuidado com o 'Bloom', ele lava a imagem. 3) 'Profundidade de campo' s\303\263 em replays e cenas.\nDica: tudo isso se soma ao TAA do jogo; se aparecerem halos, abaixe a nitidez.";

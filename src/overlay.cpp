@@ -332,7 +332,7 @@ static void SecInfo(const std::string& s, int& cat, int& ord, unsigned& ico) {
     struct E { const char* pre; int cat, ord; unsigned ico; };
     static const E kE[] = {
         { "Ilumin", 0, 0, kIcoLight }, { "Sombra", 0, 1, kIcoShadow }, { "Color", 0, 2, kIcoPalette }, { "Post", 0, 3, kIcoWand },
-        { "Cancha", 0, 4, kIcoBall }, { "Pasto", 0, 5, kIcoSeedling }, { "Estadio", 0, 6, kIcoStadium },   // (11/11 m) Pasto: seccion propia (Agustin: "separado de la cancha y cielo")
+        { "Cancha", 0, 4, kIcoBall }, { "Pasto", 0, 5, kIcoSeedling }, { "Estadio", 0, 6, kIcoStadium }, { "Viento", 0, 7, kIcoWind },   // (13/11 sk9ema) Viento: seccion propia   // (11/11 m) Pasto: seccion propia (Agustin: "separado de la cancha y cielo")
         { "Cara", 1, 0, kIcoFace }, { "Piel", 1, 1, kIcoHand }, { "Pelo", 1, 2, kIcoHair }, { "Sudor", 1, 3, kIcoDrop },
         { "Cuerpo", 1, 4, kIcoBody }, { "Kits", 1, 5, kIcoShirt }, { "Ropa", 1, 6, kIcoWind },
         { "Diagn", 2, 9, kIcoDiag },
@@ -793,6 +793,51 @@ static void CardGlow() {
     dl->PopClipRect();
 }
 
+// (13/11 sk9ema etapa 2b, menu "Viento") panel "Viento ahora": el viento de este cuadro tal como lo reciben el pasto, la ropa, el
+// pelo y la red. Velocidad en m/s y km/h con el nombre de la escala de Beaufort, la cancha vista desde arriba con la flecha (y la del
+// viento de dentro de 2 s, clarita), la racha y lo revuelto, y de donde sale (partido, preajuste, estadio, hora, bajo techo)
+static const char* BeaufortName(float v) {
+    static const float kLim[] = { 0.3f, 1.6f, 3.4f, 5.5f, 8.0f, 10.8f, 13.9f, 17.2f, 20.8f };
+    static const char* kName[] = { "Calma", "Ventolina", "Brisa muy debil", "Brisa debil", "Brisa moderada", "Brisa fresca", "Brisa fuerte", "Viento fuerte", "Temporal", "Temporal fuerte" };
+    int i = 0; while (i < 9 && v >= kLim[i]) i++;
+    return TRS(kName[i]);
+}
+static void DrawWindNowPanel() {
+    const WindNow w = g_windNow;
+    ImGui::Spacing();
+    if (!w.on) { ImGui::TextDisabled("%s", TRS("Viento unico apagado: prende 'Viento distinto en cada partido' y 'Viento unico (rachas reales)'.")); return; }
+    ImGui::Text(TRS("Ahora: %.1f m/s (%.0f km/h), %s"), w.speed, w.speed * 3.6f, BeaufortName(w.speed));
+    ImGui::TextDisabled(TRS("En 2 s: %.1f m/s. Promedio del partido: %.1f m/s"), w.soonSpeed, w.base);
+    // cancha desde arriba: X del mundo = el largo (105 m), Z = el ancho (68 m); la flecha va hacia donde sopla
+    const float k = UIK(), W = 210.0f * k, H = W * 68.0f / 105.0f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + W, a.y + H), c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+    dl->AddRectFilled(a, b, IM_COL32(38, 92, 52, 200), 4.0f * k);
+    const ImU32 ln = IM_COL32(230, 240, 230, 150);
+    dl->AddRect(a, b, ln, 4.0f * k); dl->AddLine(ImVec2(c.x, a.y), ImVec2(c.x, b.y), ln); dl->AddCircle(c, H * 9.15f / 68.0f, ln, 32);
+    const float ga = H * 7.32f / 68.0f * 0.5f, gd = W * 2.0f / 105.0f;
+    dl->AddRect(ImVec2(a.x - gd, c.y - ga), ImVec2(a.x, c.y + ga), ln); dl->AddRect(ImVec2(b.x, c.y - ga), ImVec2(b.x + gd, c.y + ga), ln);
+    auto arrow = [&](float deg, float len, ImU32 col, float th) {
+        const float r = deg * 0.0174533f, dx = cosf(r), dy = sinf(r);   // +Z del mundo hacia abajo en la pantalla
+        const ImVec2 p0(c.x - dx * len * 0.5f, c.y - dy * len * 0.5f), p1(c.x + dx * len * 0.5f, c.y + dy * len * 0.5f);
+        dl->AddLine(p0, p1, col, th);
+        const float hs = 9.0f * k; const ImVec2 l(p1.x - dx * hs - dy * hs * 0.6f, p1.y - dy * hs + dx * hs * 0.6f), rr(p1.x - dx * hs + dy * hs * 0.6f, p1.y - dy * hs - dx * hs * 0.6f);
+        dl->AddTriangleFilled(p1, l, rr, col);
+    };
+    const float L0 = H * 0.35f, L1 = H * 0.9f;
+    arrow(w.soonDirDeg, L0 + (L1 - L0) * std::clamp(w.soonSpeed / 12.0f, 0.0f, 1.0f), IM_COL32(255, 255, 255, 70), 2.0f * k);
+    arrow(w.dirDeg, L0 + (L1 - L0) * std::clamp(w.speed / 12.0f, 0.0f, 1.0f), IM_COL32(255, 235, 120, 235), 3.0f * k);
+    ImGui::Dummy(ImVec2(W + 2.0f * gd, H + 4.0f * k));
+    ImGui::TextDisabled(TRS("Hacia donde sopla (amarilla) y dentro de 2 s (clara). Arcos a los costados."));
+    char ov[48];
+    snprintf(ov, sizeof ov, TRS("Racha %.0f %%"), w.gust * 100.0f); ImGui::ProgressBar(std::clamp(w.gust, 0.0f, 1.0f), ImVec2(W * 0.75f, 0), ov);
+    snprintf(ov, sizeof ov, TRS("Revuelto %.0f %%"), w.turb * 100.0f); ImGui::ProgressBar(std::clamp(w.turb, 0.0f, 1.0f), ImVec2(W * 0.75f, 0), ov);
+    static const char* kPre[] = { "Segun el partido", "Calmo", "Brisa", "Ventoso", "Tormenta" };
+    ImGui::TextDisabled(TRS("Viene de: %s%s%s. Reparo del estadio %.2f (%s)%s."), TRS(kPre[std::clamp(w.preset, 0, 4)]),
+        w.preset == 0 ? (w.fromCloth ? TRS(", cloth.ini") : TRS(", cielo del mod")) : "", w.fixedDir ? TRS(", rumbo fijo") : "",
+        w.shelter, w.shelterManual ? TRS("a mano") : (w.stadium >= 0 ? TRS("tabla") : TRS("sin estadio")), w.rain ? TRS(", lluvia") : "");
+    if (w.outside < 0.99f) ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.45f, 1), TRS("Bajo techo: llega el %.0f %% del viento de afuera"), 100.0f * w.outside);
+}
 static void DrawGroup(MenuGroup& g, int gid) {
     ImGui::PushID(1000 + gid);
     ImGui::PushStyleColor(ImGuiCol_FrameBg, PanelCol(ImVec4(0.11f, 0.12f, 0.15f, 1), 0.50f));   // fondo de la tarjeta ((08/11) con vidrio, translucido)
@@ -996,6 +1041,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
     }
     ImGui::PopStyleVar();   // aparicion del contenido
     if (g.special == "musculatura_jugador") { ImGui::Spacing(); MuscleDrawPlayerPanel(); }
+    if (g.special == "viento_ahora") DrawWindNowPanel();
     if (!g.buttons.empty()) {
         ImGui::Spacing();
         for (auto& b : g.buttons) {
@@ -1058,6 +1104,10 @@ static const char* TutorialFor(const std::string& sec) {
         "Que hay aca: todo el pasto: el del mod (cerca y toda la cancha), el natural (alto en mm, hojas 3D de primerisimo plano y su relleno), color, luz, corte, viento, pisadas y desgaste.\n"
         "Por donde empezar: 1) 'Pasto natural' > 'Alto del pasto (mm)': 28 = cancha profesional. 2) Si de cerca se ve el suelo entre las hojas, subi 'Relleno bajo las hojas 3D' o 'Cantidad de hojas 3D'. 3) El pasto se ve mejor en camara baja.\n"
         "Consejo: si el pasto queda 'empastado', baja la variacion macro.";
+    if (sec.rfind("Viento", 0) == 0) return   // (13/11 sk9ema) menu "Viento"
+        "Que hay aca: un solo viento para todo (pasto, ropa, pelo, redes): de donde sale, preajustes, rumbo, rachas, turbulencia, reparo del estadio y cuanto le llega a cada cosa.\n"
+        "Por donde empezar: 1) Mira 'Viento ahora' mientras se juega: dice cuanto sopla y hacia donde. 2) Para un partido con viento de verdad elegi el preajuste 'Ventoso'. 3) Para grabar un video siempre igual, rumbo fijo y 'Cambio durante el partido' en 0.\n"
+        "Consejo: la pausa congela el viento y la camara lenta lo frena, como en la realidad.";
     if (sec.rfind("Cancha", 0) == 0) return
         "Que hay aca: la cancha mojada (reflejos), las nubes, el cielo y el sol visible. El pasto tiene su propia seccion (Pasto).\n"
         "Por donde empezar: 1) Los cambios de cielo se notan mas de tarde. 2) Los reflejos de la cancha mojada solo con lluvia.\n"

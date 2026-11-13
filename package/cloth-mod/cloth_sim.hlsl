@@ -1462,7 +1462,8 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             // Sin DLL (fila en cero) o con el viento del mod apagado (menus), todo queda como antes.
             float4 pesWU = IniParams.Load(int2(494, 0));
             bool pesWOn = PES_CLOTH_FX && pesWU.z > 0.0 && IniParams.Load(int2(353, 0)).z > 0.5 && any(g_wind.xyz != 0);
-            if (pesWOn) windBase = mul(transpose(W), float3(pesWU.x * pesWU.z, g_wind.y, pesWU.y * pesWU.z));
+            // (13/11 etapa 2b) w503 = cuanto viento le llega a la ropa (menu Viento; 1 = real, 0 = sin viento de costado)
+            if (pesWOn) { pesWU.z *= IniParams.Load(int2(503, 0)).w; windBase = mul(transpose(W), float3(pesWU.x * pesWU.z, g_wind.y, pesWU.y * pesWU.z)); }
             // PES21 FX (25/10): el cuerpo real de este personaje (cuerpo.cpp): de las tablas que la DLL armo en el ultimo Present (una
             // por personaje, con la piel del cuadro anterior), la que tiene su origen en el mundo mas cerca del de la prenda
             s_bodyTab = 0xffffffffu; s_bodyTc = 0.0;
