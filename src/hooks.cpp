@@ -1326,7 +1326,7 @@ static void MouthDrawDiagPresent() {
     if (t - s_mdLast > 10.0) { s_mdSeq = 0; s_mdState = 1; Log("dibujo boca diag: cuadro nuevo"); }
 }
 // (13/11 tanda 2) D2: prueba de la fila 498 (camara, config.cpp) contra la velocidad que usa el TAA del juego (1a753492, t2). Cada 10 s
-// (TaaVelProbeArm) el dibujo del TAA, en el contexto que sea, copia el texel del centro del area usada a una textura propia de 1 x 1; dos
+// (TaaVelProbeArm) el dibujo del TAA, en el contexto que sea, copia el texel del centro del area usada a una textura propia de 1 x 1; cuatro
 // Presents despues (la lista del cuadro ya se ejecuto) el contexto inmediato la pasa a un staging y la lee sin esperar. Solo el log "camara:"
 static std::mutex s_tvMx; static std::atomic<int> s_tvArm{0};
 static ID3D11Texture2D* s_tvMid = nullptr; static ID3D11Texture2D* s_tvStage = nullptr;
@@ -1383,7 +1383,7 @@ static void TaaVelProbeDraw(ID3D11DeviceContext* c) {
 bool TaaVelProbeRead(float v[2], float* hAct, int* fmt) {
     std::lock_guard<std::mutex> lk(s_tvMx);
     if (!g_dev.imm || !s_tvMid || !s_tvStage || s_tvState == 0 || s_tvDev != g_dev.dev) return false;
-    if (s_tvState == 1) { if (PresentNo() - s_tvPres < 2) return false; g_dev.imm->CopyResource(s_tvStage, s_tvMid); s_tvState = 2; return false; }
+    if (s_tvState == 1) { if (PresentNo() - s_tvPres < 4) return false;   // (13/11 tanda 2) 4 Presents: con 3 cuadros en cola la lista ya corrio g_dev.imm->CopyResource(s_tvStage, s_tvMid); s_tvState = 2; return false; }
     D3D11_MAPPED_SUBRESOURCE m{};
     if (FAILED(g_dev.imm->Map(s_tvStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { if (++s_tvTries > 60) s_tvState = 0; return false; }
     auto half = [](unsigned short x) { unsigned sg = (x >> 15) & 1, e = (x >> 10) & 31, mt = x & 1023; float f; if (e == 0) f = ldexpf((float)mt, -24); else if (e == 31) f = 0.f; else f = ldexpf((float)(mt | 1024), (int)e - 25); return sg ? -f : f; };

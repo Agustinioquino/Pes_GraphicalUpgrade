@@ -479,7 +479,12 @@ static void PitchFlatPresent() {
               const float* q = (const float*)m.pData;
               bool ok = fabsf(q[0]) < 70.f && fabsf(q[2]) < 45.f && q[1] > -0.5f && q[1] < 20.f && (fabsf(q[0]) + fabsf(q[2]) > 0.01f);
               if (ok) { if (s_ballOk) { s_ballPrev[0] = s_ball[0]; s_ballPrev[1] = s_ball[1]; s_ballPrev[2] = s_ball[2]; } else { s_ballPrev[0] = q[0]; s_ballPrev[1] = q[1]; s_ballPrev[2] = q[2]; }
-                        s_ball[0] = q[0]; s_ball[1] = q[1]; s_ball[2] = q[2]; s_ballOk = true; ballNewN = s_ballPresN; s_ballPresN = 0; }
+                        s_ball[0] = q[0]; s_ball[1] = q[1]; s_ball[2] = q[2]; s_ballOk = true; ballNewN = s_ballPresN; s_ballPresN = 0;
+                        // (13/11 tanda 2) una vez, con la primera pelota que rueda: cb4[3] (este cuadro) contra cb4[4] (el anterior) y el paso de
+                        // juego de un cuadro. Una velocidad razonable (1-30 m/s) confirma que cb4[4] es el cuadro anterior dibujado (prueba 8)
+                        { static bool s_kinLog = false; const float ex = q[0] - q[4], ez = q[2] - q[6], dd = sqrtf(ex * ex + ez * ez);
+                          if (!s_kinLog && q[1] < 0.3f && q[5] < 0.3f && dd > 0.005f && dd < 1.5f && dt > 1e-4f) {
+                              s_kinLog = true; Log("pelota: recorrido %.3f m en %.4f s de juego = %.2f m/s", dd, dt, dd / dt); } } }
               g_dev.imm->Unmap(s_ballStage[rd], 0);
           }
       } }

@@ -584,8 +584,11 @@ void main(
         // la corona (esas quedan paradas) y con la estela de la fila 442 detras (el paso al mapa no salta). Donde gana la pelota la hoja cae hacia
         // afuera de la pelota (la estela: hacia donde va), no segun el mapa. 0 = solo el mapa, como antes
         float kLv = 0.0; float2 dLv = float2(0.0, 0.0);
-        { float zLv = clamp(P446.z, 0.0, 2.0); float4 W177b = IniParams.Load(int2(177, 0));
-          if (zLv > 0.001 && W177b.w > 0.001 && pesBA.y < 0.35 && pesBLive) {
+        { float zLv = clamp(P446.z, 0.0, 2.0);
+          float2 dRb = rootW - pesBA.xz; float rG = max(1.6 * pesSZ, length(pesBB.xz - pesBA.xz) + 0.12);   // (13/11) solo cerca de la pelota (mismo resultado)
+          if (zLv > 0.001 && pesBA.y < 0.35 && pesBLive && dot(dRb, dRb) < rG * rG) {
+           float4 W177b = IniParams.Load(int2(177, 0));
+           if (W177b.w > 0.001) {
             const float RbL = 0.115;
             float2 cCl; float yCl; PESBallCap(rootW, pesBA, pesBB, cCl, yCl);
             int tyL = (int)(IniParams.Load(int2(104, 0)).y + 0.5);
@@ -609,6 +612,7 @@ void main(
             kLv = zLv * (kSph + 0.6 * kWkR);
             float2 dOl = dBl > 1e-4 ? (rootW - cCl) / dBl : pesDirB;
             dLv = kSph * dOl + (0.6 * kWkR) * pesDirB;
+           }
           }
         }
         bool pesLvW = kLv > flB;   // gana la pelota en vivo
@@ -1208,6 +1212,7 @@ void main(
   }
   float2 pesBend = float2(0.0, 0.0);
   float pesYY = 0.0, pesBentY = 0.0;   // (2/11) alto antes y despues del largo constante (para la posicion del cuadro anterior)
+  float2 pesBendU = float2(0.0, 0.0); float pesLimB = -1.0;   // (13/11) corrimiento antes del tope de costado y el tope (-1 = sin tope)
   if (pesV5) {
     // (20/10) pasto v5: largo constante. Toda la deformacion (corte, viento, pisadas, jugador / pelota del juego) corre la
     // hoja de costado; una hoja real no se estira: la altura baja para que el largo raiz -> vertice se mantenga
@@ -1216,9 +1221,10 @@ void main(
     // (13/11 tanda 2) el largo constante tambien limita lo que la hoja se corre de costado (antes solo bajaba el alto: con la pisada + x413 las
     // tarjetas se estiraban hasta x1.2). Corona (y446): la punta llega hasta 2/3 del alto (queda 75-100 % parada); z447: hasta 0.968 del alto.
     // Las parcelas lejanas del juego (pesFarK) no: ahi el corrimiento es la escala de la celda
+    pesBendU = pesBend;
     if ((pesCrK > 0.001 || pesZ447) && pesFarK <= 0.0) {
       float yyL = yy / max(1.0 - pesSinkF, 0.25);   // alto antes del hundimiento (r6.y ya trae * (1 - pesSinkF))
-      float limB = lerp(0.968, 0.66, pesCrK) * yyL, bl = length(pesBend);
+      float limB = lerp(0.968, 0.66, pesCrK) * yyL, bl = length(pesBend); pesLimB = limB;
       if (bl > limB && bl > 1e-6) { float2 nb = pesBend * (limB / bl); r6.xz += nb - pesBend; pesBend = nb; } }
     float bb = min(dot(pesBend, pesBend), yy * yy * 0.9375);
     r6.y = sqrt(max(yy * yy - bb, 0.0));
@@ -1591,7 +1597,12 @@ void main(
   if (abs(pesWindD.x) + abs(pesWindD.y) > 1e-7 || abs(pesBallD.x) + abs(pesBallD.y) > 1e-9) {
     float2 dxz = pesWindD * (pesV5 ? pesHref * pesTB * pesTB : v0.y * saturate(v0.y * 25.0)) + pesBallD;
     r6p.xz += dxz;
-    if (pesV5) { float2 bp = pesBend + dxz; float bb2 = min(dot(bp, bp), pesYY * pesYY * 0.9375); r6p.y += sqrt(max(pesYY * pesYY - bb2, 0.0)) - pesBentY; }
+    if (pesV5) { float2 bp = pesBend + dxz;
+      if (pesLimB >= 0.0) {   // (13/11) el mismo tope de costado en el cuadro anterior: sin esto el TAA veia una hoja que se estiraba de mas
+        float2 bpU = pesBendU + dxz; float blP = length(bpU);
+        float2 bpC = (blP > pesLimB && blP > 1e-6) ? bpU * (pesLimB / blP) : bpU;
+        r6p.xz += bpC - bp; bp = bpC; }
+      float bb2 = min(dot(bp, bp), pesYY * pesYY * 0.9375); r6p.y += sqrt(max(pesYY * pesYY - bb2, 0.0)) - pesBentY; }
   }
   o6.z = dot(r6p, cb2[16]);
   o6.w = dot(r6p, cb2[17]);
