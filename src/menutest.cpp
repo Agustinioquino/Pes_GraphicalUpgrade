@@ -28,8 +28,8 @@ void GpuMeterTotals(double& frameMs, int& frames, double* zoneMs);   // gpumeter
 static const char* const kZoneNm[kGpuZoneN] = { "SSSS piel", "GTAO", "SSGI", "medidor de luz", "ropa contra el cuerpo", "desgaste de la cancha",
     "pasto", "caras", "caras HD", "aro del Fisico", "copia del cuadro", "menu Insert", "vidrio de menus" };
 
-struct Meas { double cpuMs = 0, gpuMs = 0; double zone[kGpuZoneN] = {}; int n = 0, gn = 0; PerfStats ps; };
-struct MenuTestResult { std::string group, section, shot; float diff = 0; int state = 0; float cpuSave = 0, gpuSave = 0; float zoneSave[kGpuZoneN] = {}; int kind = 1; PerfStats on, off; bool perf = false; };   // 0 sin cambio, 1 cambia, 2 no probado, 3 apagado (no se mide)
+struct Meas { double cpuMs = 0, gpuMs = 0; double zone[kGpuZoneN] = {}; int n = 0, gn = 0; PerfRun ps; };
+struct MenuTestResult { std::string group, section, shot; float diff = 0; int state = 0; float cpuSave = 0, gpuSave = 0; float zoneSave[kGpuZoneN] = {}; int kind = 1; PerfRun on, off; bool perf = false; };   // 0 sin cambio, 1 cambia, 2 no probado, 3 apagado (no se mide)
 struct Step { int kind = 0; int gi = -1; int idx = -1, comp = 0; float val = 0; std::string label, section; };   // kind 0 base, 1 grupo, 2 vista, 3 perfil de la placa, 4 nivel del pasto (val = bits), 5 sin el mod
 struct MenuTestState {
     bool active = false;
@@ -48,7 +48,7 @@ struct MenuTestState {
     float meterSaved = 0; bool meterHad = false;
     std::wstring dir; size_t nGroups = 0;
     int scene = 0; bool withBypass = false, bypassSaved = false, bypassOn = false; double measEndT = 0; PerfWin pw; int profRuns0 = 0, profWait = 0; double profT0 = 0;
-    std::string profText; PerfStats baseFinal; char date[32] = {};
+    std::string profText; PerfRun baseFinal; char date[32] = {};
 };
 static MenuTestState s_t;
 static ID3D11Texture2D* s_stage = nullptr;
@@ -393,7 +393,7 @@ static void WritePerf(bool cancelled, bool partial) {
     snprintf(b, sizeof b, "cuadro en la placa (marcas de Present a Present): %.2f ms\r\n\r\n", s_t.base0.gpuMs); o += b;
     o += s_t.profText.empty() ? std::string("(sin perfil por shader)\r\n") : s_t.profText; o += "\r\n";
     auto row = [&](const MenuTestResult& r) {
-        const PerfStats &A = r.on, &B = r.off;
+        const PerfRun &A = r.on, &B = r.off;
         snprintf(b, sizeof b, "  %-46.46s ahorra %+6.2f ms del cuadro (%5.1f -> %5.1f FPS) | placa %+6.2f | espera a la placa %+6.2f | mod en dibujos %+5.2f | juego %+5.2f | driver %+5.2f | placa 3D %s | %s\r\n",
             r.group.c_str(), r.cpuSave, A.fps, B.fps, r.gpuSave, A.waitMs - B.waitMs, (A.modImmMs + A.modDefMs + A.hookImmMs + A.hookDefMs) - (B.modImmMs + B.modDefMs + B.hookImmMs + B.hookDefMs),
             A.gameRtMs - B.gameRtMs, (A.drvImmMs + A.drvDefMs) - (B.drvImmMs + B.drvDefMs),

@@ -287,8 +287,8 @@ void PerfUse(bool on) { if (on) s_users.fetch_add(1); else s_users.fetch_sub(1);
 PerfWin PerfBegin() { PerfWin w; w.f0 = s_frN.load(); w.t0 = Now(); return w; }
 void PerfEnd(PerfWin& w) { w.f1 = s_frN.load(); w.t1 = Now(); }
 
-PerfStats PerfCompute(const PerfWin& w) {
-    PerfStats s;
+PerfRun PerfCompute(const PerfWin& w) {
+    PerfRun s;
     const int64_t end = w.f1 > 0 ? w.f1 : s_frN.load(), beg = (std::max)(w.f0, end - (int64_t)kFrMax + 16);
     std::vector<float> ft; ft.reserve((size_t)(std::max<int64_t>)(0, end - beg));
     double sw = 0, smp = 0, smi = 0, smd = 0, shi = 0, shd = 0, sdi = 0, sdd = 0, sx = 0, sdI = 0, sdD = 0, sl = 0, sf = 0;
@@ -331,7 +331,7 @@ PerfStats PerfCompute(const PerfWin& w) {
     return s;
 }
 
-const char* PerfVerdict(const PerfStats& s, char* b, size_t n) {
+const char* PerfVerdict(const PerfRun& s, char* b, size_t n) {
     const float wf = s.frameMs > 0 ? s.waitMs / s.frameMs : 0;
     const float hz = s_scr.refD ? float(s_scr.refN) / float(s_scr.refD) : 0.0f;
     if (s.gpu3d >= 85.0f || wf >= 0.30f)
@@ -367,7 +367,7 @@ std::string PerfHardwareText() {
     return o;
 }
 
-std::string PerfStatsText(const PerfStats& s, const char* title) {
+std::string PerfStatsText(const PerfRun& s, const char* title) {
     std::string o; char b[900];
     snprintf(b, sizeof b, "== %s: %d cuadros en %.1f s ==\r\n", title, s.frames, s.frames ? s.frames * s.frameMs / 1000.0 : 0.0); o += b;
     if (!s.frames) return o + "(sin cuadros)\r\n";
@@ -400,7 +400,7 @@ std::string PerfCsvHeader() {
     return "fecha;escena;medicion;fps;cuadro_ms;p99_ms;max_ms;fps_1pc;tirones;mas_50ms;espera_placa_ms;mod_present_ms;mod_dibujos_ms;driver_ms;juego_hilo_ms;"
            "dibujos_inm;dibujos_dif;placa_3d_pct;vram_mb;cpu_juego_pct;nucleos;hilo_max_pct;hilo_max;ram_mb;ram_sistema_pct;disco_mb_s;fallos_pag_s\r\n";
 }
-std::string PerfCsvRow(const char* date, const char* scene, const char* what, const PerfStats& s) {
+std::string PerfCsvRow(const char* date, const char* scene, const char* what, const PerfRun& s) {
     char b[900]; std::string nm = s.top[0].name; for (char& ch : nm) if (ch == ';') ch = ',';
     snprintf(b, sizeof b, "%s;%s;%s;%.2f;%.2f;%.2f;%.2f;%.2f;%d;%d;%.2f;%.2f;%.2f;%.2f;%.2f;%.0f;%.0f;%.1f;%.0f;%.1f;%.2f;%.1f;%s;%.0f;%.0f;%.2f;%.0f\r\n",
         date, scene, what, s.fps, s.frameMs, s.p99, s.maxMs, s.low1Fps, s.stutters, s.over50, s.waitMs, s.modPresMs, s.modImmMs + s.modDefMs + s.hookImmMs + s.hookDefMs, s.drvImmMs + s.drvDefMs, s.gameRtMs,
@@ -420,7 +420,7 @@ static void LiveLog(double t) {
     static double next = 0; static PerfWin w;
     if (next == 0) { next = t + 10.0; w = PerfBegin(); return; }
     if (t < next) return;
-    next = t + 10.0; PerfEnd(w); const PerfStats s = PerfCompute(w); w = PerfBegin();
+    next = t + 10.0; PerfEnd(w); const PerfRun s = PerfCompute(w); w = PerfBegin();
     if (!s.frames) return;
     char v[400];
     Log("rendimiento (10 s): FPS %.1f, cuadro %.1f ms (99 %% %.1f, max %.1f), tirones %d | hilo que dibuja: juego %.1f, mod en dibujos %.1f (+ otros ganchos %.1f), driver %.1f, listas %.1f, "
@@ -453,7 +453,7 @@ void PerfRecordStart(int scene, double seconds) {
 }
 static void RecFinish(bool cut) {
     if (!s_rec.on) return;
-    PerfEnd(s_rec.all); const PerfStats s = PerfCompute(s_rec.all);
+    PerfEnd(s_rec.all); const PerfRun s = PerfCompute(s_rec.all);
     std::string txt = "RENDIMIENTO JUGANDO" + std::string(cut ? " (CORTADA)" : "") + " - " + s_rec.date + " - escena: " + s_rec.scene + "\r\n" + PerfHardwareText() + "\r\n" + PerfStatsText(s, "todo el tiempo")
         + "\r\nPor segundo: el .csv del mismo nombre (se abre con Excel).\r\n";
     if (FILE* f = _wfopen((s_rec.dir + L".txt").c_str(), L"wb")) { fwrite(txt.data(), 1, txt.size(), f); fclose(f); }
@@ -470,7 +470,7 @@ static void RecPresent(double t) {
     if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) { RecFinish(true); return; }
     if (t >= s_rec.nextSec) {
         PerfEnd(s_rec.sec);
-        const PerfStats s = PerfCompute(s_rec.sec);
+        const PerfRun s = PerfCompute(s_rec.sec);
         s_rec.secs++;
         if (s.frames) { std::string row = PerfCsvRow("", "", "", s); row = row.substr(3); s_rec.csv += std::to_string(s_rec.secs) + ";" + row; }
         s_rec.sec = PerfBegin(); s_rec.nextSec = t + 1.0;

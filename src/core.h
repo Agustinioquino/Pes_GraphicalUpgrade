@@ -651,7 +651,7 @@ void PerfDrawDone(uint64_t t0, uint64_t c0, bool imm, bool draw); void PerfExecT
 void PerfPresent(IDXGISwapChain* sc, UINT sync, uint64_t tEntry, uint64_t tBefore, uint64_t tAfter);
 struct PerfWin { int64_t f0 = 0, f1 = 0; double t0 = 0, t1 = 0; };
 struct PerfTop { DWORD tid = 0; float pct = 0; char name[112] = {}; };
-struct PerfStats {
+struct PerfRun {
     int frames = 0, samples = 0, stutters = 0, over50 = 0, over100 = 0, nThreads = 0; DWORD renderTid = 0;
     float frameMs = 0, fps = 0, p50 = 0, p90 = 0, p95 = 0, p99 = 0, maxMs = 0, low1Fps = 0, jitterMs = 0;
     float waitMs = 0, modPresMs = 0, modImmMs = 0, modDefMs = 0, hookImmMs = 0, hookDefMs = 0, drvImmMs = 0, drvDefMs = 0, execMs = 0, gameRtMs = 0, drawsImm = 0, drawsDef = 0, lists = 0;
@@ -659,9 +659,9 @@ struct PerfStats {
     float rdMBs = 0, rdOps = 0, wrMBs = 0, rdPeakMBs = 0, vramMB = 0, vramBudMB = 0, vramPeakMB = 0, sharedMB = 0, gpu3d = -1, gpuCopy = -1, gpu3dAll = 0;
     PerfTop top[5];
 };
-void PerfUse(bool on); PerfWin PerfBegin(); void PerfEnd(PerfWin& w); PerfStats PerfCompute(const PerfWin& w);
-const char* PerfVerdict(const PerfStats& s, char* b, size_t n); std::string PerfHardwareText(); std::string PerfStatsText(const PerfStats& s, const char* title);
-std::string PerfCsvHeader(); std::string PerfCsvRow(const char* date, const char* scene, const char* what, const PerfStats& s); void PerfAppendAll(const std::string& rows);
+void PerfUse(bool on); PerfWin PerfBegin(); void PerfEnd(PerfWin& w); PerfRun PerfCompute(const PerfWin& w);
+const char* PerfVerdict(const PerfRun& s, char* b, size_t n); std::string PerfHardwareText(); std::string PerfStatsText(const PerfRun& s, const char* title);
+std::string PerfCsvHeader(); std::string PerfCsvRow(const char* date, const char* scene, const char* what, const PerfRun& s); void PerfAppendAll(const std::string& rows);
 const char* PerfSceneName(int i); int PerfSceneCount(); bool PerfRecordActive(); const std::string& PerfRecordStatus(); void PerfRecordStart(int scene, double seconds); void PerfRecordStop();
 extern std::atomic<int> g_grassLevelOff;   // (13/11) prueba automatica: bits 0..2 = no emitir el nivel 0 / 1 / 2 del pasto del mod, bit 3 = sin hojas 3D (grass.cpp)
 struct GpuZoneScope { ID3D11DeviceContext* c; int i; GpuZoneScope(ID3D11DeviceContext* c_, int z) : c(c_), i(GpuZoneBegin(c_, z)) {} ~GpuZoneScope() { GpuZoneEnd(c, i); } };
