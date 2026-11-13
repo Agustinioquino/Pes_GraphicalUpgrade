@@ -1455,6 +1455,12 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
               s_center = (s_flags & 32) ? float3(s_W[0].w, s_W[1].w, s_W[2].w) : 0;
             }
             float3 windBase = mul(transpose(W), g_wind.xyz);
+            // PES21 FX (13/11) viento unico: si la DLL publica la fila 494 (z > 0) y z353 = 1, la tela usa ese viento (rumbo y
+            // velocidad de este cuadro, con sus rachas) en vez del fijo de cloth.ini; la componente vertical sigue siendo la de cloth.ini.
+            // Sin DLL (fila en cero) o con el viento del mod apagado (menus), todo queda como antes.
+            float4 pesWU = IniParams.Load(int2(494, 0));
+            bool pesWOn = PES_CLOTH_FX && pesWU.z > 0.0 && IniParams.Load(int2(353, 0)).z > 0.5 && any(g_wind.xyz != 0);
+            if (pesWOn) windBase = mul(transpose(W), float3(pesWU.x * pesWU.z, g_wind.y, pesWU.y * pesWU.z));
             // PES21 FX (25/10): el cuerpo real de este personaje (cuerpo.cpp): de las tablas que la DLL armo en el ultimo Present (una
             // por personaje, con la piel del cuadro anterior), la que tiene su origen en el mundo mas cerca del de la prenda
             s_bodyTab = 0xffffffffu; s_bodyTc = 0.0;
@@ -1492,7 +1498,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             for (uint s = 0; s < s_substeps; ++s) {
                 float t = float(s + 1) / float(s_substeps);
                 float tg = g_time + float(s) * h;
-                float gust = 1.0 + g_wind.w * sin(tg * 1.7) * sin(tg * 0.63);
+                float gust = pesWOn ? 1.0 : 1.0 + g_wind.w * sin(tg * 1.7) * sin(tg * 0.63);   // (13/11) las rachas ya vienen en la fila 494
                 fillBoneCache(gi, t);
                 DeviceMemoryBarrierWithGroupSync();
                 if (gi < g_capsuleCount && gi < MAXCAPS) {

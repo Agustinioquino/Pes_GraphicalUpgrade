@@ -377,7 +377,7 @@ static void SunSettingsPresent() {
     }
     // filas que escribe la DLL sola (tiempos, sol medido, tabla de tonos de piel, vista, cuadro): no son ajustes
     auto autoRow = [](int r) { return r == 10 || r == 23 || r == 24 || r == 44 || r == 63 || r == 93 || (r >= 111 && r <= 114) || r == 157 || r == 159
-                                      || (r >= 192 && r <= 254) || r == 255 || r == 257 || (r >= 264 && r <= 284) || r == 312 || r == 452 || r == 453; };   // (12/11) 452 / 453 sol libre
+                                      || (r >= 192 && r <= 254) || r == 255 || r == 257 || (r >= 264 && r <= 284) || r == 312 || r == 452 || r == 453 || r == 494 || r == 495; };   // (12/11) 452 / 453 sol libre
     // y por si falta alguna: un valor que cambia 5 segundos seguidos se toma como automatico y no se anota mas
     static unsigned char streak[kParamCount][4]; static bool muted[kParamCount][4];
     int lines = 0;

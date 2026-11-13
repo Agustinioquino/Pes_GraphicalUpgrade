@@ -1016,6 +1016,7 @@ void UpdateTimeParams() {
       }
       int ground = 0; if (g_cfg.match.known && g_cfg.match.weather == 1) ground = 1;
       p[114][0] = (float)ground; p[114][2] = g_cfg.match.known ? (float)g_cfg.match.season : -1.0f; }
+    WindFrame(p, t);       // (13/11 sk9ema) viento unico: filas 494 / 495 (usa el reloj del juego de la fila 157)
     SolLibreFrame(p, t);   // (12/11 hefeaf) sol libre: filas 452 / 453 y la direccion para el motor
     UpdatePhysSky(p);   // (21/10) cielo fisico: color de la luz del cielo para la sombra y la luz de cielo (150)
     SudorFrame(p, t);   // (13/11) sudor 2: tabla por jugador (filas 460..492)
