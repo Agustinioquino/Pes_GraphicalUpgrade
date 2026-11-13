@@ -285,13 +285,83 @@ static void SetFav(const std::string& title, bool on) {
     if (f == "|") f.clear();
     g_cfg.favorites = f; SaveOption("favoritos", f);
 }
-static bool GroupMatches(const MenuGroup& g, const std::string& q) {
-    if (q.empty()) return true;
-    std::string hay = LowerU(g.title + " " + g.desc + " " + g.section + " " + g.titleEn + " " + g.descEn + " " + g.sectionEn);
-    for (auto& sl : g.sliders) hay += " " + LowerU(sl.label + " " + sl.labelEn);
-    // todas las palabras de la busqueda tienen que aparecer
-    size_t a = 0; while (a < q.size()) { size_t b = q.find(' ', a); if (b == std::string::npos) b = q.size(); std::string w = q.substr(a, b - a); if (!w.empty() && hay.find(w) == std::string::npos) return false; a = b + 1; }
-    return true;
+// (13/11, Agustin: "mejorar el buscador para que sea mas rapido y pueda buscar palabras claves de las opciones") BUSCADOR NUEVO:
+// sin tildes ni mayusculas (los textos del ini vienen en Latin-1 y lo escrito en UTF-8: los dos se pasan a letras simples), palabras en
+// cualquier orden, tambien en la ayuda de cada opcion y por su clave (x496, w112). La tarjeta muestra solo las opciones que coinciden
+// (boton para ver la tarjeta entera) y las de nombre van primero. Los textos se preparan una vez y el resultado se calcula una sola vez por
+// cada letra escrita (antes se rearmaba todo el texto del menu dos veces por cuadro)
+static std::string FoldS(const std::string& s) {
+    static const char kHi[] = "aaaaaaaceeeeiiiidnooooo ouuuuyts" "aaaaaaaceeeeiiiidnooooo ouuuuyty";   // U+00C0..U+00FF
+    std::string o; o.reserve(s.size());
+    for (size_t i = 0; i < s.size(); i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c >= 0xC2) {   // UTF-8 valido? (si no, es Latin-1: 0xC0..0xFF = letra con tilde)
+            const int n = c < 0xE0 ? 1 : c < 0xF0 ? 2 : c < 0xF5 ? 3 : 0; bool u = n > 0;
+            for (int k = 1; u && k <= n; k++) u = i + k < s.size() && ((unsigned char)s[i + k] >> 6) == 2;
+            if (u) { if (c == 0xC3) c = (unsigned char)((unsigned char)s[i + 1] + 0x40); else { i += n; o += ' '; continue; } i += n; }   // U+00C0..U+00FF = el mismo byte de Latin-1; otros: espacio
+        }
+        char r;
+        if (c >= 0xC0) r = kHi[c - 0xC0];
+        else if (c >= 'A' && c <= 'Z') r = (char)(c - 'A' + 'a');
+        else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) r = (char)c;
+        else r = ' ';
+        o += r;
+    }
+    return o;
+}
+static std::vector<std::string> SplitWords(const std::string& f) {
+    std::vector<std::string> w; size_t a = 0;
+    while (a < f.size()) { size_t b = f.find(' ', a); if (b == std::string::npos) b = f.size(); if (b > a) w.push_back(f.substr(a, b - a)); a = b + 1; }
+    return w;
+}
+static bool HasAll(const std::string& hay, const std::vector<std::string>& w) { for (auto& x : w) if (hay.find(x) == std::string::npos) return false; return true; }
+struct SearchHay { std::string grp, grpTitle; std::vector<std::string> lab, help; };
+struct SearchHit { int gid = -1, score = 0, nShow = 0; std::vector<char> show; };
+static std::vector<SearchHay> s_hay; static size_t s_hayKey = 0;
+static std::string s_qDone; static size_t s_qKey = 0; static std::vector<SearchHit> s_hits; static std::map<int, size_t> s_hitOf;
+static std::set<std::string> s_searchFull;   // tarjetas que el usuario abrio enteras durante la busqueda
+static size_t MenuKey() { size_t k = (size_t)g_cfg.groups.data() ^ (g_cfg.groups.size() * 2654435761u); for (auto& g : g_cfg.groups) k = k * 31u + g.sliders.size() + g.title.size(); return k; }
+static void SearchPrep() {
+    const size_t key = MenuKey(); if (key == s_hayKey && s_hay.size() == g_cfg.groups.size()) return;
+    s_hayKey = key; s_hay.assign(g_cfg.groups.size(), SearchHay());
+    for (size_t gi = 0; gi < g_cfg.groups.size(); gi++) {
+        const MenuGroup& g = g_cfg.groups[gi]; SearchHay& h = s_hay[gi];
+        h.grpTitle = FoldS(g.title + " " + g.titleEn + " " + g.section + " " + g.sectionEn);
+        h.grp = h.grpTitle + " " + FoldS(g.desc + " " + g.descEn);
+        for (auto& sl : g.sliders) {
+            std::string k = sl.ext.empty() ? (std::string(1, "xyzw"[sl.comp & 3]) + std::to_string(sl.idx)) : sl.ext;
+            std::string opts; for (auto& o : sl.options) opts += " " + o; for (auto& o : sl.optionsEn) opts += " " + o;
+            h.lab.push_back(FoldS(sl.label + " " + sl.labelEn + " " + k));
+            h.help.push_back(FoldS(sl.help + " " + sl.helpEn + opts));
+        }
+    }
+    s_qDone.clear();
+}
+// devuelve las tarjetas que coinciden, ordenadas: 3 = el nombre de una opcion, 2 = el titulo de la tarjeta, 1 = solo la ayuda
+static const std::vector<SearchHit>& SearchRun(const std::string& q) {
+    SearchPrep();
+    if (q == s_qDone && s_qKey == s_hayKey) return s_hits;
+    s_qDone = q; s_qKey = s_hayKey; s_hits.clear(); s_hitOf.clear();
+    const std::vector<std::string> w = SplitWords(FoldS(q));
+    if (w.empty()) return s_hits;
+    for (size_t gi = 0; gi < s_hay.size(); gi++) {
+        const SearchHay& h = s_hay[gi]; SearchHit hit; hit.gid = (int)gi;
+        const size_t n = h.lab.size(); std::vector<char> byLab(n, 0), byHelp(n, 0); int nLab = 0, nHelp = 0;
+        for (size_t i = 0; i < n; i++) {
+            const std::string lt = h.lab[i] + " " + h.grpTitle;
+            if (HasAll(lt, w)) { byLab[i] = 1; nLab++; }
+            else if (HasAll(lt + " " + h.help[i], w)) { byHelp[i] = 1; nHelp++; }
+        }
+        const bool grpHit = HasAll(h.grp, w);
+        if (nLab > 0) { hit.score = 3; hit.show = byLab; hit.nShow = nLab; }
+        else if (grpHit) { hit.score = 2; hit.show.assign(n, 1); hit.nShow = (int)n; }
+        else if (nHelp > 0) { hit.score = 1; hit.show = byHelp; hit.nShow = nHelp; }
+        else continue;
+        s_hits.push_back(std::move(hit));
+    }
+    std::stable_sort(s_hits.begin(), s_hits.end(), [](const SearchHit& a, const SearchHit& b) { return a.score > b.score; });
+    for (size_t i = 0; i < s_hits.size(); i++) s_hitOf[s_hits[i].gid] = i;
+    return s_hits;
 }
 static bool GroupActive(const MenuGroup& g) { return g.tIdx < 0 || g_cfg.live[g.tIdx][g.tComp] > 0.5f; }
 // (04/11 n) el grupo tiene valores distintos de lo guardado en PES21FX.ini (la ropa no cuenta: cloth.ini se escribe solo)
@@ -892,7 +962,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
       if (!changed) ImGui::PopStyleColor();
       ImGui::PopStyleColor();
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", TRS("Volver todo el grupo a lo guardado")); }
-    if (col) { if (!gDesc.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.52f, 0.56f, 1)); ImGui::TextUnformatted(Utf8(gDesc.substr(0, 90) + (gDesc.size() > 90 ? "..." : "")).c_str()); ImGui::PopStyleColor(); } ImGui::PopStyleColor(3); CardGlow(); ImGui::EndChild(); ImGui::Spacing(); ImGui::PopID(); return; }
+    if (col && !s_search[0]) { if (!gDesc.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.52f, 0.56f, 1)); ImGui::TextUnformatted(Utf8(gDesc.substr(0, 90) + (gDesc.size() > 90 ? "..." : "")).c_str()); ImGui::PopStyleColor(); } ImGui::PopStyleColor(3); CardGlow(); ImGui::EndChild(); ImGui::Spacing(); ImGui::PopID(); return; }
     // (08/11) al desplegar, el contenido aparece suave (0.22 s)
     float openA = 1.0f;
     { auto it = s_cardOpenT.find(g.title); if (it != s_cardOpenT.end()) { const float t = (float)(Now() - it->second) / 0.22f; if (t >= 1.0f) s_cardOpenT.erase(it); else openA = Ease(t); } }
@@ -926,8 +996,12 @@ static void DrawGroup(MenuGroup& g, int gid) {
         // Con la busqueda, en Cambiados o con [PES21FX] menu_avanzado = 1 se ven todos; un control cambiado sin guardar siempre se ve.
         const bool searching = s_search[0] != 0;
         const bool allOpen = searching || g_cfg.menuAdvanced || s_sel == "chg" || s_moreOpen.count(g.title) || (int)g.sliders.size() <= kMoreAfter;
-        int nHidden = 0, slN = 0;
+        int nHidden = 0, slN = 0, slI = -1, nFilt = 0;
+        const SearchHit* sHit = nullptr;   // (13/11) con la busqueda: solo las opciones que coinciden
+        if (searching && !s_searchFull.count(g.title)) { SearchRun(s_search); auto it = s_hitOf.find(gid); if (it != s_hitOf.end()) sHit = &s_hits[it->second]; }
         for (auto& sl : g.sliders) {
+            slI++;
+            if (sHit && slI < (int)sHit->show.size() && !sHit->show[slI]) { nFilt++; continue; }
             const bool hiddenSl = !allOpen && slN++ >= kMoreAfter - 1 && !(sl.ext.empty() && SlChanged(sl));
             if (hiddenSl) { nHidden++; continue; }
             ImGui::PushID(&sl);
@@ -1030,6 +1104,12 @@ static void DrawGroup(MenuGroup& g, int gid) {
             ImGui::PopID();
         }
         ImGui::EndDisabled();
+        if (searching && (nFilt > 0 || s_searchFull.count(g.title))) {   // (13/11) ver la tarjeta entera / volver a lo que coincide
+            const bool full = nFilt == 0; char fb[96]; snprintf(fb, sizeof fb, full ? TRS("Solo lo que coincide") : TRS("Ver las %d opciones de la tarjeta"), (int)g.sliders.size());
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0)); ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.78f, 0.56f, 1));
+            if (ImGui::SmallButton(IcoL(full ? kIcoDown : kIcoRight, fb).c_str())) { if (full) s_searchFull.erase(g.title); else s_searchFull.insert(g.title); }
+            ImGui::PopStyleColor(2);
+        }
         if (nHidden > 0 || (!searching && !g_cfg.menuAdvanced && s_moreOpen.count(g.title))) {   // (08/11) "mas opciones" / "menos opciones"
             const bool isOpen = nHidden == 0;
             char mb[96]; snprintf(mb, sizeof mb, isOpen ? TRS("Menos opciones") : TRS("%d opciones mas"), nHidden);
@@ -1969,13 +2049,15 @@ static void DrawMenu() {
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * (0.2f + 0.8f * pe));
         if (pIn > 0.5f) ImGui::Indent(pIn);
         if (!q.empty()) {
-            int n = 0; for (auto& g : g_cfg.groups) if (GroupMatches(g, q)) n++;
-            char sub[128]; snprintf(sub, sizeof sub, TRS("%d grupos coinciden (Esc para limpiar)"), n);
+            const auto& hits = SearchRun(s_search);
+            int n = (int)hits.size(), nOpt = 0; for (auto& h : hits) nOpt += h.score == 2 ? 0 : h.nShow;
+            char sub[160]; snprintf(sub, sizeof sub, TRS("%d opciones en %d tarjetas (sin importar tildes; Esc para limpiar)"), nOpt, n);
             PageTitle(kIcoSearch, std::string(TRS("Resultados")) + ": \"" + s_search + "\"", sub, true);
             ImGui::BeginChild("cards_res", ImVec2(0, 0), ImGuiChildFlags_None);
             std::vector<int> ids;
-            for (int gid = 0; gid < (int)g_cfg.groups.size(); gid++) { const MenuGroup& g = g_cfg.groups[gid]; if (GroupMatches(g, q) && (!s_onlyActive || GroupActive(g))) ids.push_back(gid); }
+            for (auto& h : hits) { const MenuGroup& g = g_cfg.groups[h.gid]; if (!s_onlyActive || GroupActive(g)) ids.push_back(h.gid); }
             DrawCards(ids, true);
+            if (n > 0 && ids.empty()) EmptyState(TRS("Coincide en tarjetas apagadas: saca el filtro Solo activos para verlas."));
             if (!n) EmptyState(TRS("Nada coincide. Proba con otra palabra (busca en titulos, descripciones y sliders)."));
             ImGui::EndChild();
         } else if (s_sel == "fav" || s_sel == "chg" || s_sel == "rec") {
