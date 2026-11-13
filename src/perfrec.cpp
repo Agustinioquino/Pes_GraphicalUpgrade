@@ -35,8 +35,14 @@ thread_local int t_perfDepth = 0;
 
 namespace {
 // ---------------------------------------------------------------- acumuladores del cuadro (cualquier hilo)
-struct Acc { std::atomic<uint64_t> modImm{0}, modDef{0}, hookImm{0}, hookDef{0}, drvImm{0}, drvDef{0}, dImm{0}, dDef{0}, lists{0}, execT{0}, fin{0}; };
-Acc s_acc;
+// uno por hilo (sin competir por la misma linea de cache entre los hilos del juego); Present los suma y los pone en 0 una vez por cuadro
+enum { kAModImm, kAModDef, kAHookImm, kAHookDef, kADrvImm, kADrvDef, kADImm, kADDef, kALists, kAExec, kAN };
+struct alignas(64) TAcc { std::atomic<uint64_t> v[kAN]; TAcc() { for (auto& x : v) x.store(0); } };
+std::mutex s_taMx; std::vector<TAcc*>* s_ta = new std::vector<TAcc*>;
+thread_local TAcc* t_ta = nullptr;
+inline TAcc* MyAcc() { if (!t_ta) { t_ta = new TAcc(); std::lock_guard<std::mutex> lk(s_taMx); s_ta->push_back(t_ta); } return t_ta; }
+void TakeAll(uint64_t out[kAN]) { for (int k = 0; k < kAN; k++) out[k] = 0; std::lock_guard<std::mutex> lk(s_taMx);
+    for (TAcc* a : *s_ta) for (int k = 0; k < kAN; k++) out[k] += a->v[k].exchange(0, std::memory_order_relaxed); }
 std::atomic<int> s_users{0};       // prueba automatica / grabacion / medidor
 std::atomic<bool> s_meterUser{false};
 
@@ -235,12 +241,13 @@ const char* EffName(DXGI_SWAP_EFFECT e) {
 // ---------------------------------------------------------------- ganchos (hooks.cpp)
 void PerfDrawDone(uint64_t t0, uint64_t c0, bool imm, bool draw) {
     const uint64_t tot = __rdtsc() - t0, drv = t_perfCall - c0, mod = tot > drv ? tot - drv : 0;
-    if (!draw) { (imm ? s_acc.hookImm : s_acc.hookDef).fetch_add(mod, std::memory_order_relaxed); return; }
-    if (imm) { s_acc.modImm.fetch_add(mod, std::memory_order_relaxed); s_acc.drvImm.fetch_add(drv, std::memory_order_relaxed); s_acc.dImm.fetch_add(1, std::memory_order_relaxed); }
-    else { s_acc.modDef.fetch_add(mod, std::memory_order_relaxed); s_acc.drvDef.fetch_add(drv, std::memory_order_relaxed); s_acc.dDef.fetch_add(1, std::memory_order_relaxed); }
+    TAcc* a = MyAcc();
+    if (!draw) { a->v[imm ? kAHookImm : kAHookDef].fetch_add(mod, std::memory_order_relaxed); return; }
+    a->v[imm ? kAModImm : kAModDef].fetch_add(mod, std::memory_order_relaxed); a->v[imm ? kADrvImm : kADrvDef].fetch_add(drv, std::memory_order_relaxed);
+    a->v[imm ? kADImm : kADDef].fetch_add(1, std::memory_order_relaxed);
 }
-void PerfExecTicks(uint64_t ticks) { s_acc.lists.fetch_add(1, std::memory_order_relaxed); s_acc.execT.fetch_add(ticks, std::memory_order_relaxed); }
-void PerfFinishList() { s_acc.fin.fetch_add(1, std::memory_order_relaxed); }
+void PerfExecTicks(uint64_t ticks) { TAcc* a = MyAcc(); a->v[kALists].fetch_add(1, std::memory_order_relaxed); a->v[kAExec].fetch_add(ticks, std::memory_order_relaxed); }
+void PerfFinishList() {}
 
 static void RecPresent(double t);
 static void LiveLog(double t);
@@ -253,8 +260,7 @@ void PerfPresent(IDXGISwapChain* sc, UINT sync, uint64_t tEntry, uint64_t tBefor
     const bool meter = g_cfg.live[375][0] > 0.5f;
     if (meter != s_meterUser.load()) s_meterUser.store(meter);
     const bool on = s_users.load() > 0 || meter;
-    if (on && !g_perfOn.load()) { EnsureSampler(); g_perfOn.store(true); s_lastEntry = 0;
-        s_acc.modImm = 0; s_acc.modDef = 0; s_acc.hookImm = 0; s_acc.hookDef = 0; s_acc.drvImm = 0; s_acc.drvDef = 0; s_acc.dImm = 0; s_acc.dDef = 0; s_acc.lists = 0; s_acc.execT = 0; s_acc.fin = 0; }
+    if (on && !g_perfOn.load()) { EnsureSampler(); g_perfOn.store(true); s_lastEntry = 0; }
     if (!on) { if (g_perfOn.load()) g_perfOn.store(false); return; }
     const double t = Now();
     if (sc && t - s_scrT > 2.0) { s_scrT = t; DXGI_SWAP_CHAIN_DESC d; if (SUCCEEDED(sc->GetDesc(&d))) {
@@ -266,10 +272,11 @@ void PerfPresent(IDXGISwapChain* sc, UINT sync, uint64_t tEntry, uint64_t tBefor
     if (s_lastEntry && s_tscPerMs > 0.0) {
         FrameRec r; r.t = t;
         r.frame = (float)Ms(tEntry - s_lastEntry); r.modPres = (float)Ms(tBefore - tEntry); r.wait = (float)Ms(tAfter - tBefore);
-        r.modImm = (float)Ms(s_acc.modImm.exchange(0)); r.modDef = (float)Ms(s_acc.modDef.exchange(0)); r.hookImm = (float)Ms(s_acc.hookImm.exchange(0)); r.hookDef = (float)Ms(s_acc.hookDef.exchange(0)); r.drvImm = (float)Ms(s_acc.drvImm.exchange(0)); r.drvDef = (float)Ms(s_acc.drvDef.exchange(0));
-        r.exec = (float)Ms(s_acc.execT.exchange(0)); r.dImm = (uint32_t)s_acc.dImm.exchange(0); r.dDef = (uint32_t)s_acc.dDef.exchange(0); r.lists = (uint32_t)s_acc.lists.exchange(0); s_acc.fin.exchange(0);
+        uint64_t A[kAN]; TakeAll(A);
+        r.modImm = (float)Ms(A[kAModImm]); r.modDef = (float)Ms(A[kAModDef]); r.hookImm = (float)Ms(A[kAHookImm]); r.hookDef = (float)Ms(A[kAHookDef]); r.drvImm = (float)Ms(A[kADrvImm]); r.drvDef = (float)Ms(A[kADrvDef]);
+        r.exec = (float)Ms(A[kAExec]); r.dImm = (uint32_t)A[kADImm]; r.dDef = (uint32_t)A[kADDef]; r.lists = (uint32_t)A[kALists];
         if (r.frame > 0.0f && r.frame < 5000.0f) { s_fr[s_frN.load() % kFrMax] = r; s_frN.fetch_add(1); }
-    } else { s_acc.modImm = 0; s_acc.modDef = 0; s_acc.hookImm = 0; s_acc.hookDef = 0; s_acc.drvImm = 0; s_acc.drvDef = 0; s_acc.dImm = 0; s_acc.dDef = 0; s_acc.lists = 0; s_acc.execT = 0; }
+    } else { uint64_t A[kAN]; TakeAll(A); }   // primer cuadro: lo de antes no cuenta
     s_lastEntry = tEntry;
     RecPresent(t);
     if (meter) LiveLog(t);
