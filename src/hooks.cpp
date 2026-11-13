@@ -1383,7 +1383,7 @@ static void TaaVelProbeDraw(ID3D11DeviceContext* c) {
 bool TaaVelProbeRead(float v[2], float* hAct, int* fmt) {
     std::lock_guard<std::mutex> lk(s_tvMx);
     if (!g_dev.imm || !s_tvMid || !s_tvStage || s_tvState == 0 || s_tvDev != g_dev.dev) return false;
-    if (s_tvState == 1) { if (PresentNo() - s_tvPres < 4) return false;   // (13/11 tanda 2) 4 Presents: con 3 cuadros en cola la lista ya corrio g_dev.imm->CopyResource(s_tvStage, s_tvMid); s_tvState = 2; return false; }
+    if (s_tvState == 1) { if (PresentNo() - s_tvPres < 4) return false; g_dev.imm->CopyResource(s_tvStage, s_tvMid); s_tvState = 2; return false; }   // (13/11 tanda 2) 4 Presents: con 3 cuadros en cola la lista ya corrio
     D3D11_MAPPED_SUBRESOURCE m{};
     if (FAILED(g_dev.imm->Map(s_tvStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) { if (++s_tvTries > 60) s_tvState = 0; return false; }
     auto half = [](unsigned short x) { unsigned sg = (x >> 15) & 1, e = (x >> 10) & 31, mt = x & 1023; float f; if (e == 0) f = ldexpf((float)mt, -24); else if (e == 31) f = 0.f; else f = ldexpf((float)(mt | 1024), (int)e - 25); return sg ? -f : f; };
