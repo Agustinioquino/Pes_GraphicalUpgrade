@@ -573,6 +573,9 @@ static const DebugParam kDebugParams[] = {
     { 429, 1, 0.5f, 0.0f, "Vista del motor: alambre", "Diagnostico", kV1, 1 },   // (11/11 3icxbh) motorlink.cpp
     { 18, 2, 0.5f, 0.0f, "Zonas de la boca (dientes / encia / cavidad)", "Boca", kV1, 1 },
     { 27, 2, 0.5f, 0.0f, "Transpiracion: zonas / UV", "Piel", kV27, 2 },
+    { 459, 0, 0.01f, 0.0f, "Sudor 2: sudor de prueba", "Piel", kV1, 1 },   // (13/11) sudor.cpp / pes_sweat2.hlsli
+    { 459, 1, 0.01f, 0.0f, "Sudor 2: lluvia de prueba", "Piel", kV1, 1 },
+    { 459, 2, 0.5f, 0.0f, "Sudor 2: sudor y calor de cada jugador / zonas", "Piel", kV27, 2 },
     { 80, 0, 0.5f, 0.0f, "Arrugas de la ropa: compresion", "Ropa", kV1, 1 },
     { 75, 2, 0.5f, 0.0f, "Cejas: hebras / semillas", "Cejas", kV75, 2 },
     { 107, 3, 0.5f, 0.0f, "Cancha: UV / desgaste / normal / lejos-cerca / sombra real", "Pasto", kV107, 5 },
@@ -1015,6 +1018,7 @@ void UpdateTimeParams() {
       p[114][0] = (float)ground; p[114][2] = g_cfg.match.known ? (float)g_cfg.match.season : -1.0f; }
     SolLibreFrame(p, t);   // (12/11 hefeaf) sol libre: filas 452 / 453 y la direccion para el motor
     UpdatePhysSky(p);   // (21/10) cielo fisico: color de la luz del cielo para la sombra y la luz de cielo (150)
+    SudorFrame(p, t);   // (13/11) sudor 2: tabla por jugador (filas 460..492)
     UpdateClothWet(t);
     UpdateClothFit(t);
 }
@@ -1030,6 +1034,7 @@ void UpdateClothWet(double t) {
     if (p[70][3] < 0.5 || !g_cfg.clothFound) return;
     float tmin = p[10][0], t0 = p[9][0], t1 = p[9][1];
     float sweat = (p[8][3] > 0.5 && t1 > t0 && p[24][1] > 0.5) ? std::clamp((tmin - t0) / (t1 - t0), 0.0f, 1.0f) : 0.0f;
+    if (p[457][0] > 0.5f) sweat = p[24][1] > 0.5 ? std::clamp(SudorMedio() * (p[458][3] > 0.0f ? 1.0f : 0.0f), 0.0f, 1.0f) : 0.0f;   // (13/11) sudor 2: el sudor medio de los jugadores, no el reloj
     float wet = sweat * std::clamp(p[70][0], 0.0f, 1.0f);
     if (g_cfg.match.known && g_cfg.match.weather == 1) wet = std::max(wet, std::clamp(p[70][1], 0.0f, 1.0f));
     if (last >= 0 && fabsf(wet - last) < 0.08) return;

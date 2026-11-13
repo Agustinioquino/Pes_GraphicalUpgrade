@@ -141,6 +141,8 @@ Texture2D<float4> StereoParams : register(t125);
 #include "pes_collar.hlsli"   // (27/10) cuello de las caras reales fundido con el torso (fila 322)
 #include "pes_wrdepth.hlsli"   // (09/11 g) arrugas por gesto con profundidad (t45 / t46, x15 = 2) y edad del jugador
 #include "pes_skin2.hlsli"     // (12/11) PIEL v2 (w124): color, sangre, cavidades, rugosidad y brillo rehechos
+#define PES_SW_HAS_SCENE
+#include "pes_sweat2.hlsli"    // (13/11) SUDOR 2 (x457): sudor por jugador + lluvia aparte; reemplaza al del juego
 #ifdef PES_HL_ACC
 RWByteAddressBuffer gHlAcc : register(u7);   // (24/10 e) medicion del color de la cara (ring.cpp / skintone.cpp; u5 / u6 son las semillas de las cejas)
 #endif
@@ -254,6 +256,10 @@ void main(
   float tmin = IniParams.Load(int2(10,0)).x;   // minutos reales de partido (los calcula d3dx.ini)
   float sweatProg = saturate((tmin - P9.x) / max(P9.y - P9.x, 0.1));
   bool  enhance      = P0.w > 0.5;
+  // (13/11) SUDOR 2: sudor, calor y lluvia de ESTE jugador (tabla de la DLL). El rubor (x12) sigue al calor del jugador, no al reloj
+  bool  sw2 = enhance && PesSwOn();
+  float4 sw2P = float4(0, 0, 0, 0);
+  if (sw2) { sw2P = PesSwPlayer(v0, v3.xyz); sweatProg = saturate(sw2P.y * 1.2 - 0.14); }
   bool  sk2          = enhance && PesSk2On();   // (12/11) piel v2 (pes_skin2.hlsli); 0 = la de antes
   float sssBoost     = enhance ? P0.x : 1.0;
   float albedoSat    = enhance ? P0.y : 1.0;
@@ -660,7 +666,7 @@ void main(
   // zonas: pelicula de agua (menos rugosidad, mas brillo, albedo apenas mas oscuro) y gotas aunque todavia no haya sudor
   float4 P12 = IniParams.Load(int2(12,0));
   float pesRainV = IniParams.Load(int2(114,0)).x;
-  float rainK = (enhance && pesRainV > 0.5 && pesRainV < 1.5) ? saturate(P12.z) : 0.0;
+  float rainK = (enhance && !sw2 && pesRainV > 0.5 && pesRainV < 1.5) ? saturate(P12.z) : 0.0;   // (13/11) con el sudor 2 la lluvia va aparte (pes_sweat2)
   filmWet = max(filmWet, rainK * 0.85);
   sweatProgZ = max(sweatProgZ, rainK * 0.6);
   if (enhance && P9.z > 0) {
@@ -705,6 +711,15 @@ void main(
     r1.xyz = normalize(r1.xyz);
   }
   float pesSwFp = max(length(ddx(v2.xy)), length(ddy(v2.xy)));   // PES21 (20/10): tamano del pixel en uv (fuera de la rama)
+  if (sw2) {   // (13/11) SUDOR 2: pelicula por zonas + perlado + lluvia; reemplaza la pelicula y las gotas de antes (filas 8 / 9 / 72.x / 73.z / 12.z)
+    float4 swUp = IniParams.Load(int2(435, 0));
+    float upK = swUp.w > 0.5 ? dot(normalize(v6.xyz), swUp.xyz) : 0.3;
+    PesSwOut swO = PesSwSkin(sw2P, v2.xy, zonesOn ? saturate(FZ.r * 1.25) : 0.6, upK, pesSwFp, 1.0, g_psSystem.m_timeParam.z, true);
+    float swSkin = (1.0 - lipM) * (1.0 - pesEdgeAll);   // ni en los labios ni en la franja del borde de las genericas
+    filmWet = swO.film * swSkin; sweatWet = swO.drop * swSkin * (1.0 - 0.7 * fhMask);
+    r1.xy += swO.grad * swSkin * (1.0 - 0.7 * fhMask);
+    r1.xyz = normalize(r1.xyz);
+  } else
   if (enhance && P8.w > 0.5 && (sweatProg > 0.001 || rainK > 0.001)) {
     float t = g_psSystem.m_timeParam.z * max(P8.z, 0.01);
     float4 sA = SweatLayer(v2.xy, 70.0, P8.x * sweatProgZ, max(P8.y, 0.1), t, true, pesSwFp * 70.0);          // PES21 zonas: gotas donde se suda
@@ -802,6 +817,12 @@ void main(
     } }
   r3.xyz = g_tex_Dirty.Sample(g_sampler_Dirty_s, v2.xy).xyz;
   r1.w = saturate(dot(g_psMaterial.m_materials[1].yzw, r3.xyz));
+  if (sw2) {   // (13/11) SUDOR 2 reemplaza al sudor del juego (mascara t4 x m_materials[1].yzw, que oscurecia la piel hasta 27 %)
+    r1.w = 0.0;
+    float swDbg = IniParams.Load(int2(459, 0)).z;
+    if (swDbg > 1.5) r2.xyz = lerp(r2.xyz, float3(FZ.r, filmWet, sweatWet), 0.85);            // zonas / pelicula / gotas
+    else if (swDbg > 0.5) r2.xyz = lerp(r2.xyz, float3(sw2P.y, 0.5 * sw2P.w, sw2P.x), 0.85);  // rojo calor, verde = encontro al jugador, azul sudor
+  }
   r3.xy = r0.ww * float2(255,255) + float2(-205,-170);
   r4.x = 0.0110000009 * r3.y;
   r2.w = r3.x * -0.00800000038 + 0.930000007;
