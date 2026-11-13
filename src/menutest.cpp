@@ -186,7 +186,7 @@ static std::wstring Slug(const std::string& t, size_t max = 28) {
 static std::string W2A(const std::wstring& w) { std::string o; for (wchar_t c : w) o += (c < 128 ? (char)c : '_'); return o; }
 
 void MenuTestStart(int scene, bool withBypass) {
-    if (s_h.active) return;
+    if (s_h.active || s_t.active) return;   // (13/11 v3) sin doble inicio: PerfUse y el medidor guardado quedarian mal
     s_t = MenuTestState();
     s_t.scene = scene; s_t.withBypass = withBypass; s_t.bypassSaved = g_cfg.bypass;
     SYSTEMTIME st; GetLocalTime(&st); wchar_t n[32];

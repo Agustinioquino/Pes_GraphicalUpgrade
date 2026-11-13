@@ -376,8 +376,8 @@ std::string PerfStatsText(const PerfRun& s, const char* title) {
     snprintf(b, sizeof b, "LAG / TIRONES: %d cuadros de mas del doble de la mediana (%.1f por minuto), %d de mas de 50 ms, %d de mas de 100 ms; variacion de un cuadro al otro %.1f ms\r\n",
         s.stutters, s.frames ? s.stutters * 60000.0 / (s.frames * s.frameMs) : 0.0, s.over50, s.over100, s.jitterMs); o += b;
     snprintf(b, sizeof b, "DONDE SE VA EL CUADRO (ms por cuadro, en el procesador):\r\n"
-        "  hilo que dibuja: juego %.2f | mod en sus dibujos %.2f | mod en otros ganchos %.2f | driver en esos dibujos %.2f | listas ejecutadas %.2f | mod en Present %.2f | esperando en Present %.2f\r\n"
-        "  otros hilos (listas diferidas): mod en sus dibujos %.2f | mod en otros ganchos %.2f | driver %.2f\r\n"
+        "  hilo que dibuja: juego %.2f | mod en sus dibujos %.2f | otros ganchos del mod (con su llamada al driver) %.2f | driver en esos dibujos %.2f | listas ejecutadas %.2f | mod en Present %.2f | esperando en Present %.2f\r\n"
+        "  otros hilos (listas diferidas): mod en sus dibujos %.2f | otros ganchos del mod (con driver) %.2f | driver %.2f\r\n"
         "  dibujos por cuadro: %.0f en el inmediato, %.0f en listas diferidas, %.1f listas\r\n",
         s.gameRtMs, s.modImmMs, s.hookImmMs, s.drvImmMs, s.execMs, s.modPresMs, s.waitMs, s.modDefMs, s.hookDefMs, s.drvDefMs, s.drawsImm, s.drawsDef, s.lists); o += b;
     if (s.samples) {
@@ -423,7 +423,7 @@ static void LiveLog(double t) {
     next = t + 10.0; PerfEnd(w); const PerfRun s = PerfCompute(w); w = PerfBegin();
     if (!s.frames) return;
     char v[400];
-    Log("rendimiento (10 s): FPS %.1f, cuadro %.1f ms (99 %% %.1f, max %.1f), tirones %d | hilo que dibuja: juego %.1f, mod en dibujos %.1f (+ otros ganchos %.1f), driver %.1f, listas %.1f, "
+    Log("rendimiento (10 s): FPS %.1f, cuadro %.1f ms (99 %% %.1f, max %.1f), tirones %d | hilo que dibuja: juego %.1f, mod en dibujos %.1f (+ otros ganchos con su driver %.1f), driver %.1f, listas %.1f, "
         "mod en Present %.1f, esperando a la placa %.1f | otros hilos: mod %.1f, driver %.1f | dibujos %.0f + %.0f | placa 3D %.0f %%, VRAM %.0f MB | CPU del juego %.0f %% (hilo mas cargado %.0f %%: %s) | "
         "RAM %.0f MB, disco %.1f MB/s | %s",
         s.fps, s.frameMs, s.p99, s.maxMs, s.stutters, s.gameRtMs, s.modImmMs, s.hookImmMs, s.drvImmMs, s.execMs, s.modPresMs, s.waitMs, s.modDefMs + s.hookDefMs, s.drvDefMs, s.drawsImm, s.drawsDef,
