@@ -979,7 +979,7 @@ void main(
         bool pesWR = IniParams.Load(int2(433, 0)).w > 0.5 && R494.z > 0.0;
         if (pesWR) {
           float2 wdU = R494.xy * rsqrt(max(dot(R494.xy, R494.xy), 1e-8)), wcU = float2(-wdU.y, wdU.x);   // mismo XZ que (cos z84, sin z84)
-          float WU = W * clamp(R494.z / 2.0, 0.25, 2.0);   // 2 m/s = la base de wind.cpp sin el mod de ropa: x353 1 se ve como hoy
+          float WU = W * min(clamp(R494.z / 2.0, 0.25, 2.0) * clamp(IniParams.Load(int2(503, 0)).z, 0.0, 3.0), 3.0);   // 2 m/s = la base de wind.cpp sin el mod de ropa: x353 1 se ve como hoy; (13/11) z503 = cuanto viento le llega al pasto (menu Viento, 1 = real, 0 = quieto)
           float2 wNow = PESGrassWindU(pesRoot, wdU, wcU, hb, R494.w, R495.z, WU, pesGust);
           pesLean += wNow;
           if (Q39.w > 0.5) { float gp; pesWindD = PESGrassWindU(pesRoot, wdU, wcU, hb, R494.w - R494.z * dtG, R495.z - dtG, WU, gp) - wNow; }
