@@ -1,0 +1,207 @@
+// PES 2021 - desenfoque de movimiento: composicion final [hash 24943e559ce781b9] - PES21 (20/10, 138)
+// El juego calcula el desenfoque de movimiento a media resolucion (960x540, 3 pasadas tipo Jimenez 2014) y aca lo mezcla
+// sobre la imagen con un muestreo del texel MAS CERCANO: escalones de 2x2 px en todos los bordes en movimiento (jugadores
+// corriendo, lineas de la cancha en un paneo) y un borde duro donde empieza / termina el desenfoque.
+// Reemplazo: B-spline bicubica de 4 lecturas (sin escalones), y la mezcla tiene en cuenta tambien la velocidad de los
+// vecinos a resolucion completa (sin cortes duros). 138: x on | y fuerza (1 = la del juego, 0 = sin desenfoque) | z velocidad minima (px)
+// (12/11, Agustin: "el desenfoque solo me interesa que haya menos en la camara lenta o que sea mejor sin tanto consumo") fila 449 (con x138 = 1;
+// todo 449 = 0 = como antes): x menos desenfoque en la camara lenta / repeticiones (ritmo del reloj del juego, z157 / w157 de la DLL) |
+// y menos desenfoque en los paneos (se separa el movimiento de la camara del de jugadores y pelota) | z menos en el zoom |
+// w velocidad de desenfoque completo (px por cuadro a 1080p; 0 = la curva lineal de antes). Con cualquier 449 > 0 y la profundidad
+// enlazada (regla srv = 2 Depth) un vecino MAS LEJANO ya no extiende su desenfoque: sin halo alrededor de un jugador quieto.
+// Menos consumo: donde no hay nada que mezclar (camara lenta, corte de camara, pixel lento) se sale antes de la B-spline.
+cbuffer cPSObject : register(b5)
+{
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[9];
+  } g_psObject : packoffset(c0);
+}
+
+cbuffer cPSSystem : register(b0)
+{
+  struct
+  {
+    float4 m_param;
+    float4 m_renderInfo;
+    float4 m_renderBuffer;
+    float4 m_dominantLightDir;
+    float4 m_timeParam;
+  } g_psSystem : packoffset(c0);
+}
+
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+SamplerState g_samplerLinear_Wrap_s : register(s10);
+Texture2D<float4> g_motionBlurBuffer : register(t0);
+Texture2D<float4> g_velocityBuffer : register(t1);
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> PesDepth : register(t2);   // (12/11) profundidad de la composicion (regla srv = 2 Depth; Z invertida: mas = mas cerca)
+
+float PESCoverage(float w) {
+  uint q = (uint)((w + 0.05) * 100.0);
+  q = q > 50 ? q * 2 - 50 : q;
+  return min((float)q * 0.02, 1.0);
+}
+
+// (12/11) velocidad que decide la mezcla: la de pantalla sin la parte de la camara que se quita, pero nunca MAS que la de pantalla
+// (un jugador que la camara sigue esta quieto en pantalla: restarle la camara lo haria "moverse" y se desenfocaria; con vSub = 0 da
+// length(v) como antes)
+float PesMbSpeed(float2 v, float2 vSub) { return min(length(v), length(v - vSub)); }
+// (12/11) un vecino; con la profundidad (useZ = 1) solo cuenta si NO esta mas lejos que este pixel (Z invertida: completo desde la misma
+// profundidad, nada si esta un 1.5 % o mas lejos): el desenfoque de un jugador que corre se extiende sobre la cancha, y el de una pelota
+// que rueda o de los pies tambien sobre el pasto de al lado (esta solo 0.3-1 % mas lejos: pedir un 1 % mas cerca dejaba un borde duro
+// en su contorno), pero el de la cancha en un paneo ya no se mete en el contorno de un jugador quieto (detras del cuerpo esta un 3-25 %
+// mas lejos)
+float PesMbTap(float2 vN, float2 uvN, float2 vSub, float dC, float useZ)
+{
+  float s = PesMbSpeed(vN, vSub);
+  if (useZ > 0.0) s *= smoothstep(0.985, 1.005, PesDepth.SampleLevel(g_samplerPoint_Wrap_s, uvN, 0).x / dC);
+  return s;
+}
+// (12/11) cuanto desenfoque segun la velocidad v (px de esta resolucion). w449 > 0: curva suave en px a 1080p, 0 debajo de z138 y completa
+// en w449 (la de antes ya daba 0.25 en z138 y algo desde 2.5 px antes; z138 = 0 valia 3). Las dos crecen con v
+float PesMbCurve(float v, float4 P, float4 Q, float rs)
+{
+  float zMin = max(P.z, 0.0);
+  return Q.w > 0.0 ? smoothstep(zMin, max(Q.w, zMin + 1.0), v * rs) : saturate((v - (P.z > 0.0 ? P.z : 3.0)) * 0.1 + 0.25);
+}
+
+void main(
+  float2 v0 : TEXCOORD0,
+  float4 v1 : SV_Position0,
+  out float4 o0 : SV_Target0)
+{
+  float4 P = IniParams.Load(int2(138, 0));
+  float2 hs = g_psObject.m_localParam[0].xx;   // cb5[9].x: escala a media resolucion
+  float2 ts = g_psObject.m_localParam[0].zw;   // cb5[9].zw: tamano del texel de media resolucion
+  if (P.x < 0.5) {
+    // original del juego
+    float2 uvN = (floor(v1.xy * hs) + 0.5) * ts;
+    float4 m = g_motionBlurBuffer.Sample(g_samplerLinear_Wrap_s, uvN);
+    o0.xyz = m.xyz;
+    float2 vel = g_velocityBuffer.Sample(g_samplerPoint_Wrap_s, v1.xy * g_psSystem.m_renderBuffer.zw).xy;
+    o0.w = saturate((length(vel) - 3.0) * 0.1 + 0.25) * PESCoverage(m.w);
+    return;
+  }
+  // (12/11) y138 = 0 apaga de verdad el desenfoque (antes 0 valia 1 = el del juego). Se escribe cero (no solo alfa 0): da lo mismo
+  // con mezcla premultiplicada o no
+  if (P.y <= 0.0) { o0 = 0; return; }
+
+  // ---- (12/11) fila 449. Con 449 = 0 todo lo que sigue da exactamente lo de antes (vSub = 0, useZ = 0, cutK = slowMul = 1)
+  float4 Q = IniParams.Load(int2(449, 0));
+  bool q449 = any(Q > 0.0);
+  float2 px = g_psSystem.m_renderBuffer.zw, uv = v1.xy * px;
+  float rs = 1080.0 * px.y;                 // px de esta resolucion -> px a 1080p
+  float slowMul = 1.0, cutK = 1.0, camK = 1.0;
+  float2 vCam = 0.0;
+  if (q449) {
+    // (12/11, Agustin: "que haya menos en la camara lenta") x449: la DLL mide el ritmo del reloj del juego (z157 = s de juego por s real,
+    // w157 = 1 cuando lo sigue). A mitad de velocidad o mas lento (repeticiones en camara lenta) x449 = 1 no deja desenfoque; a ritmo
+    // normal (> 0.92) nada cambia. Sin el reloj del juego (w157 = 0) = ritmo normal
+    float4 C157 = IniParams.Load(int2(157, 0));
+    float rate = C157.w > 0.5 ? clamp(C157.z, 0.0, 1.5) : 1.0;
+    slowMul = 1.0 - saturate(Q.x) * (1.0 - smoothstep(0.55, 0.92, rate));
+    // corte de camara: el cuadro del corte todavia no lo sabe (160 se escribe en Present), los 3 siguientes entran de a poco
+    float4 T160 = IniParams.Load(int2(160, 0));
+    if (T160.w > 0.5) cutK = saturate(T160.x / 4.0);
+  }
+  if (q449 && slowMul * cutK <= 0.0) { o0 = 0; return; }   // nada que mezclar: sin lecturas de mas
+
+  // velocidad a resolucion completa: la propia y la de 4 vecinos a 2 px (el borde del desenfoque no corta en seco); se leen una sola vez
+  float2 uvTE = saturate(uv + float2( 2, 0) * px), uvTW = saturate(uv + float2(-2, 0) * px);
+  float2 uvTS = saturate(uv + float2(0,  2) * px), uvTN = saturate(uv + float2(0, -2) * px);
+  float2 velC = g_velocityBuffer.SampleLevel(g_samplerPoint_Wrap_s, uv, 0).xy;
+  float2 velE = g_velocityBuffer.SampleLevel(g_samplerPoint_Wrap_s, uvTE, 0).xy, velW = g_velocityBuffer.SampleLevel(g_samplerPoint_Wrap_s, uvTW, 0).xy;
+  float2 velS = g_velocityBuffer.SampleLevel(g_samplerPoint_Wrap_s, uvTS, 0).xy, velN = g_velocityBuffer.SampleLevel(g_samplerPoint_Wrap_s, uvTN, 0).xy;
+  if (q449) {
+    // (12/11) menos consumo: sin la camara y con la profundidad la velocidad solo puede bajar; si con la de pantalla ya no hay desenfoque
+    // (camara quieta: casi toda la imagen) se sale aca, sin el ajuste de la camara ni la B-spline
+    float vRaw = max(length(velC), 0.35 * max(max(length(velE), length(velW)), max(length(velS), length(velN))));
+    if (PesMbCurve(vRaw, P, Q, rs) * cutK * slowMul <= 0.0) { o0 = 0; return; }
+  }
+
+  if (q449 && (Q.y > 0.0 || Q.z > 0.0)) {
+    // (12/11) y449 / z449: movimiento de la camara = ajuste afin de la velocidad en una grilla de 12 puntos (4 x 3) de la pantalla:
+    // v(d) = t + ax * d.x + ay * d.y (d desde el centro, en altos de pantalla). Primero el ajuste cerrado (la grilla es simetrica), despues
+    // una pasada robusta (los puntos que caen en jugadores o en la pelota pesan poco) con la inversa adjunta de la matriz 3x3
+    float aspX = g_psSystem.m_renderBuffer.x * px.y;
+    float2 mbV[12];
+    float2 sV = 0.0, sVx = 0.0, sVy = 0.0;
+    [unroll] for (uint gi = 0; gi < 12; gi++) {
+      float2 gU = float2(0.125 + 0.25 * (float)(gi % 4u), 0.2 + 0.3 * (float)(gi / 4u));
+      float2 gD = (gU - 0.5) * float2(aspX, 1.0);
+      mbV[gi] = g_velocityBuffer.SampleLevel(g_samplerPoint_Wrap_s, gU, 0).xy;
+      sV += mbV[gi]; sVx += mbV[gi] * gD.x; sVy += mbV[gi] * gD.y;
+    }
+    float2 cT = sV / 12.0;
+    float2 cAx = sVx / max(0.9375 * aspX * aspX, 1e-4);   // suma de d.x^2 de la grilla
+    float2 cAy = sVy / 0.72;                              // suma de d.y^2
+    float S = 0.0, Sx = 0.0, Sy = 0.0, Sxx = 0.0, Sxy = 0.0, Syy = 0.0;
+    float2 B0 = 0.0, B1 = 0.0, B2 = 0.0;
+    [unroll] for (uint gj = 0; gj < 12; gj++) {
+      float2 gU = float2(0.125 + 0.25 * (float)(gj % 4u), 0.2 + 0.3 * (float)(gj / 4u));
+      float2 gD = (gU - 0.5) * float2(aspX, 1.0);
+      float2 pr = cT + cAx * gD.x + cAy * gD.y;
+      float rr = length(mbV[gj] - pr) / (1.0 + 0.25 * length(pr));
+      float wg = 1.0 / (1.0 + rr * rr);
+      S += wg; Sx += wg * gD.x; Sy += wg * gD.y;
+      Sxx += wg * gD.x * gD.x; Sxy += wg * gD.x * gD.y; Syy += wg * gD.y * gD.y;
+      B0 += wg * mbV[gj]; B1 += (wg * gD.x) * mbV[gj]; B2 += (wg * gD.y) * mbV[gj];
+    }
+    float c00 = Sxx * Syy - Sxy * Sxy, c01 = Sxy * Sy - Sx * Syy, c02 = Sx * Sxy - Sxx * Sy;
+    float c11 = S * Syy - Sy * Sy, c12 = Sx * Sy - S * Sxy, c22 = S * Sxx - Sx * Sx;
+    float det = S * c00 + Sx * c01 + Sy * c02;
+    if (det > 1e-4) {   // si no, queda el ajuste cerrado
+      float iD = 1.0 / det;
+      cT  = (c00 * B0 + c01 * B1 + c02 * B2) * iD;
+      cAx = (c01 * B0 + c11 * B1 + c12 * B2) * iD;
+      cAy = (c02 * B0 + c12 * B1 + c22 * B2) * iD;
+    }
+    if (S >= 5.0) {   // con menos de ~5 puntos de cancha a la vista (primeros planos) no se separa nada
+      float2 dp = (uv - 0.5) * float2(aspX, 1.0);
+      vCam = cT + cAx * dp.x + cAy * dp.y;
+      float zf = saturate(length(0.5 * (cAx.x + cAy.y) * dp) / max(length(vCam), 0.5));   // parte del zoom en el movimiento de la camara aca
+      camK = (1.0 - saturate(Q.y)) * (1.0 - saturate(Q.z) * zf);
+    }
+    cutK *= 1.0 - smoothstep(40.0, 80.0, length(cT) * rs);   // velocidad imposible (basura en el cuadro de un corte)
+  }
+
+  // la propia y la mayor de los vecinos (x 0.35), sin la parte de la camara que se quita
+  float2 vSub = (1.0 - camK) * vCam;        // 0 con y449 = z449 = 0
+  float v = PesMbSpeed(velC, vSub);
+  float useZ = 0.0, dC = 1.0;
+  if (q449) { uint dW = 0, dH = 0; PesDepth.GetDimensions(dW, dH);
+    if (dW > 0) { useZ = 1.0; dC = max(PesDepth.SampleLevel(g_samplerPoint_Wrap_s, uv, 0).x, 1e-7); } }
+  float vn = 0.0;
+  vn = max(vn, PesMbTap(velE, uvTE, vSub, dC, useZ));
+  vn = max(vn, PesMbTap(velW, uvTW, vSub, dC, useZ));
+  vn = max(vn, PesMbTap(velS, uvTS, vSub, dC, useZ));
+  vn = max(vn, PesMbTap(velN, uvTN, vSub, dC, useZ));
+  v = max(v, vn * 0.35);
+  float kc = PesMbCurve(v, P, Q, rs);
+  if (q449 && kc * cutK * slowMul <= 0.0) { o0 = 0; return; }   // pixel lento: sin la B-spline
+
+  // B-spline bicubica (4 lecturas bilineales) sobre la media resolucion
+  float2 st = v1.xy * hs - 0.5;
+  float2 i = floor(st), f = st - i;
+  float2 f2 = f * f, f3 = f2 * f;
+  float2 w0 = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) / 6.0;
+  float2 w1 = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0;
+  float2 w2 = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0;
+  float2 w3 = f3 / 6.0;
+  float2 g0 = w0 + w1, g1 = w2 + w3;
+  float2 h0 = (i - 1.0 + w1 / max(g0, 1e-5) + 0.5) * ts;
+  float2 h1 = (i + 1.0 + w3 / max(g1, 1e-5) + 0.5) * ts;
+  float2 lo = 0.5 * ts, hi = 1.0 - 0.5 * ts;   // el sampler es Wrap: no leer del otro lado de la pantalla
+  float4 a = g_motionBlurBuffer.SampleLevel(g_samplerLinear_Wrap_s, clamp(float2(h0.x, h0.y), lo, hi), 0);
+  float4 b = g_motionBlurBuffer.SampleLevel(g_samplerLinear_Wrap_s, clamp(float2(h1.x, h0.y), lo, hi), 0);
+  float4 c = g_motionBlurBuffer.SampleLevel(g_samplerLinear_Wrap_s, clamp(float2(h0.x, h1.y), lo, hi), 0);
+  float4 d = g_motionBlurBuffer.SampleLevel(g_samplerLinear_Wrap_s, clamp(float2(h1.x, h1.y), lo, hi), 0);
+  float4 m = g0.y * (g0.x * a + g1.x * b) + g1.y * (g0.x * c + g1.x * d);
+  o0.xyz = m.xyz;
+  float k = kc * PESCoverage(m.w);
+  o0.w = saturate(k * clamp(P.y, 0.0, 1.5) * cutK * slowMul);
+}
