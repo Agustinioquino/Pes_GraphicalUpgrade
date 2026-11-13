@@ -70,7 +70,8 @@ void WindFrame(float (*p)[4], double tReal) {
     double g = (double)p[157][0], dG = 0.0;
     if (lastGame >= 0.0) { dG = g - lastGame; if (dG < -50000.0) dG += 100000.0; dG = std::clamp(dG, 0.0, 0.5); }
     lastGame = g; tG += dG;
-    if (c.live[353][2] < 0.5f || c.live[353][3] < 0.5f) {   // z353 viento unico; w353 = el grupo "viento distinto en cada partido" prendido for (int k = 0; k < 4; k++) p[494][k] = p[495][k] = 0.0f; return; }
+    // z353 viento unico; w353 = el grupo "viento distinto en cada partido" prendido
+    if (c.live[353][2] < 0.5f || c.live[353][3] < 0.5f) { for (int k = 0; k < 4; k++) p[494][k] = p[495][k] = 0.0f; return; }
     // viento base de este partido
     float tx, tz;
     { auto wx = c.clothVals.find("sim.wind_x"), wz = c.clothVals.find("sim.wind_z");
