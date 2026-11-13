@@ -157,7 +157,9 @@ float2 PESGrassWindV3(float2 pesRoot, float2 wd, float tw, float W) {
 // cuadro. x = recorrido del cuadro (m), y = m/s de juego (una copia repetida con recorrido 0 da 0: sin saltos), z = rodando (0..1)
 float3 PESBallKin(float3 bA, float3 bB, float dtB, out float2 dirB) {
   float2 vB = bA.xz - bB.xz; float dF = length(vB); dirB = dF > 1e-4 ? vB / dF : float2(0.0, 0.0);
-  float vG = dF > 0.001 ? dF / clamp(dtB, 1.0 / 1000.0, 0.1) : 0.0;
+  // (13/11) camara lenta de la repeticion (0.02x - 0.05x, SlowMoServer): dtB es de 0.2 - 2 ms de juego por cuadro; antes el tope de 1 ms y el
+  // umbral de 1 mm por cuadro la leian casi quieta (sin proa, estela ni rodando). Tope 40 m/s (una copia vieja no da 1000 m/s)
+  float vG = dF > 2e-5 ? min(dF / clamp(dtB, 1e-5, 0.1), 40.0) : 0.0;
   float kRoll = (dF < 1.5 ? 1.0 : 0.0) * smoothstep(0.30, 0.15, bA.y) * smoothstep(0.15, 0.6, vG);
   return float3(dF, vG, kRoll);
 }
@@ -222,6 +224,38 @@ float2 PESBallDeform(float2 p, float hW0, float2 rootB, float3 bA, float3 bB, fl
       }
       sinkF = max(sinkF, max(0.9 * kB, 0.45 * kNest));
       q += dO * ((max(kB * 0.9, kNest * 0.75) - 0.35 * kLeanIn) * max(hW0, 0.0));
+      // (13/11, Agustin: "no tiene una animacion de acompanar la pelota asi como en el original", video en la repeticion) x507 ACOMPANAR LA
+      // PELOTA. En el original la pelota empuja hacia afuera las tarjetas que toca (el empuje del juego, abajo en el main) y el pasto se abre
+      // alrededor y se cierra detras mientras rueda. Las hojas de 28 mm solo tocan la pelota a ~7 cm del contacto (la corona apenas las
+      // despeja). Ahora un ANILLO de hojas alrededor de la pelota se abre (las que toca empujan a las de al lado): quieta, angosto y suave (la
+      // corona sigue parada); rodando, mas ancho y algo hacia donde va; detras, las de los costados vuelven con un rebote (en s de juego, como
+      // la estela: en camara lenta tarda lo mismo en el juego). Medido en la RAIZ (toda la hoja igual), perfil de viga. Solo visual (este VS),
+      // nada fuera de 0.32 m de la pelota (1.3 m rodando). 0 = como antes
+      float kAc = clamp(IniParams.Load(int2(507, 0)).x, 0.0, 2.0);
+      if (kAc > 0.001) {
+        float2 cCa; float yCa; PESBallCap(rootB, bA, bB, cCa, yCa);
+        float2 dRa = rootB - cCa; float dA = length(dRa);
+        float kMv = smoothstep(0.03, 0.5, kin.y) * (kin.x < 1.5 ? 1.0 : 0.0);   // rodando (m/s de juego)
+        if (dA < (kMv > 0.001 ? 1.3 : 0.32) * sZ) {
+          float hTa = min(hRef, 0.1);
+          float rCa = sqrt(max(RbS * RbS - (RbS - hTa) * (RbS - hTa), 0.0));   // la esfera apoyada, a la altura de las puntas
+          float wA = (0.035 + 0.075 * kMv) * sZ;                                // ancho del anillo afuera del contacto
+          float onA = smoothstep(RbS + hTa + 0.05, RbS + 0.4 * hTa, yCa);        // la pelota en el pasto (en el aire nada)
+          float2 dOa = dA > 1e-4 ? dRa / dA : dO, latA = float2(-dirK.y, dirK.x);
+          float alA = dot(rootB - bA.xz, dirK), ltA = dot(rootB - bA.xz, latA);
+          float fA = smoothstep(rCa + wA, rCa * 0.6, dA) * (0.3 + 0.7 * kMv);   // el anillo, con la pelota
+          float2 dLa = normalize(dOa + dirK * (kMv * (alA > 0.0 ? 0.3 : 0.15)) + 1e-5);
+          float spA = 0.0;
+          if (kMv > 0.001 && alA < 0.0) {
+            float ageA = -alA / max(kin.y, 0.05), tauA = 0.30;
+            spA = smoothstep(rCa + wA, rCa * 0.6, abs(ltA)) * smoothstep(0.0, 0.5 * rCa, abs(ltA)) * kMv * exp(-ageA / tauA) * cos(3.93 * ageA / tauA) * smoothstep(1.2 * sZ, 0.8 * sZ, -alA);
+          }
+          float2 dSa = normalize(latA * (ltA >= 0.0 ? 1.0 : -1.0) + dirK * 0.35);   // detras: afuera y un poco hacia donde fue la pelota
+          float tA = saturate(max(hW0, 0.0) / hRef), bmA = tA * tA * (3.0 - tA) * 0.5;
+          float gA = kAc * onA * (1.0 - crK) * (1.0 - kB) * 0.6 * hRef * bmA;
+          q += (dLa * fA + dSa * (spA * (1.0 - fA))) * gA;
+        }
+      }
     } else sinkF = max(sinkF, 0.7 * smoothstep(0.22, 0.10, dB) * saturate(W177.w));   // (02/11 paso 7) la pelota se apoya (capsula radio 0.112)
   }
   // fila 442 (12/11 20:00 / 20:50): proa, estela pegada, rasante y onda al picar, ver main. (13/11 tanda 2) con y446: en m/s de JUEGO (antes
@@ -245,7 +279,7 @@ float2 PESBallDeform(float2 p, float hW0, float2 rootB, float3 bA, float3 bB, fl
       float kBall = clamp(P442.x, 0.0, 2.0);
       bool v2 = kV2 > 0.5;
       float dLs = dL * iS;
-      if (kBall > 0.001 && dF > (v2 ? 1e-4 : 0.002) && dL < 1.6 * sZ) {
+      if (kBall > 0.001 && dF > (v2 ? 2e-5 : 0.002) && dL < 1.6 * sZ) {   // (13/11) v2: tambien en camara lenta (0.02x mueve la pelota 0.1 mm por cuadro)
         float contact = smoothstep(0.30, 0.15, bA.y);              // rodando o apoyada
         float al = dot(dP, dirB), lt = dot(dP, latB);
         float als = al * iS, lts = lt * iS;
@@ -344,7 +378,9 @@ void main(
   float4 T23 = IniParams.Load(int2(23, 0)), T157 = IniParams.Load(int2(157, 0));
   float pesDtR = T23.z - T23.w; if (pesDtR < 0.0) pesDtR += 10000.0; pesDtR = min(pesDtR, 0.25);
   float dtG = pesDtR * (T157.w > 0.5 ? clamp(T157.z, 0.0, 2.0) : 1.0);
-  float pesDtB = (T157.w > 0.5 && T157.z < 0.05) ? pesDtR : dtG;
+  //    (13/11, video de Agustin en la repeticion a 0.02x - 0.05x) la pausa es ritmo < 0.004: con < 0.05 la camara lenta de la repeticion
+  //    contaba como pausa y la pelota v2 se leia a 2-5 % de su velocidad (sin proa ni estela: el pasto no acompanaba a la pelota)
+  float pesDtB = (T157.w > 0.5 && T157.z < 0.004) ? pesDtR : max(dtG, 0.004 * pesDtR);
   float3 pesBA = cb4[3].xyz, pesBB = cb4[4].xyz; bool pesBLive = true;
   if (pesIsExt && cb5[14].y > 0.5) {
     float3 bV = pesBA - pesBB;
