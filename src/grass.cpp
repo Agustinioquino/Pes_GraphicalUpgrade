@@ -334,6 +334,8 @@ struct GpuTimer { ID3D11Query* dis = nullptr; ID3D11Query* ts[5] = {}; std::atom
 static GpuTimer s_tm[kTimers];
 static double s_tmSum[4] = {}, s_tmMax[4] = {}; static int s_tmN = 0, s_tmDisjoint = 0, s_tmLost = 0;   // compute, nivel 0, 1, 2 (ms)
 static std::atomic<int> s_tmState{0};   // 0 sin crear, 1 listas, 2 fallaron (sin medidor)
+static std::atomic<float> s_grassMsEma{-1.0f};   // (13/11) ms de GPU del pasto por emision (compute + 3 niveles), promedio movil: lo usa la adaptativa v2
+static std::atomic<bool> s_adaptTm{false};       // (13/11) la adaptativa v2 necesita los tiempos aunque el registro (w58) este apagado
 static std::mutex s_tmMx;
 static bool TimersReady() {   // (1/11 b) bajo llave y todo-o-nada: GrassEmit corre desde varios hilos; antes otro hilo podia tomar un juego a medio crear (End sobre null)
     int st = s_tmState.load(); if (st) return st == 1;
@@ -364,7 +366,9 @@ static void TimersRead(int f) {   // contexto inmediato
         if (!all) continue;
         t.tag = -1;
         if (d.Disjoint || d.Frequency == 0) { s_tmDisjoint++; continue; }
-        for (int i = 0; i < 4; i++) { double ms = v[i + 1] >= v[i] ? (double)(v[i + 1] - v[i]) * 1000.0 / (double)d.Frequency : 0.0; s_tmSum[i] += ms; if (ms > s_tmMax[i]) s_tmMax[i] = ms; }
+        double tot = 0.0;
+        for (int i = 0; i < 4; i++) { double ms = v[i + 1] >= v[i] ? (double)(v[i + 1] - v[i]) * 1000.0 / (double)d.Frequency : 0.0; s_tmSum[i] += ms; if (ms > s_tmMax[i]) s_tmMax[i] = ms; tot += ms; }
+        { const float e = s_grassMsEma.load(); s_grassMsEma.store(e < 0.0f ? (float)tot : e + ((float)tot - e) * 0.2f); }
         s_tmN++;
     }
 }
@@ -849,6 +853,7 @@ void GrassPresent() {
       { static bool lastNear = false; if (useN != lastNear) { lastNear = useN; s_adapt = s_adaptV[useN ? 1 : 0]; } }
       // (08/11 y, Agustin: "esas opciones no optimizan nada") con Calidad Ultra (x61 = 4) la adaptativa quedaba apagada sin avisar: el log no
       // tenia ninguna linea "pasto adaptativo" y mover x333 no cambiaba nada. Ahora vale en todas las calidades (x333 < 20 = apagada) y se anota
+      s_adaptTm.store(target >= 20.0f, std::memory_order_relaxed);
       if (target < 20.0f) { s_adapt = 1.0f; nextAdj = 0.0;
           if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 30.0; Log("pasto adaptativo: apagado (x333 = %.0f; hace falta 20 o mas)", target); } }
       else if (tn >= nextAdj && ema > 0.0f) { nextAdj = tn + 0.5;
@@ -857,7 +862,19 @@ void GrassPresent() {
           // quedo al minimo x0.61 y los FPS siguieron en 15) si bajar el pasto no sube los FPS el cuello de botella es otro (la luz, el
           // SSGI, la CPU): se vuelve al 100 % y la adaptativa descansa 60 s. Se mide desde que empieza a bajar (fps0 con a0)
           static float fps0 = 0.0f, a0 = 1.0f; static double t0 = 0.0, restUntil = 0.0;
+          // (13/11, Agustin: "la densidad adaptativa no funciona, se pierde calidad igual ... el pasto mas lejano carga una version de poca
+          // cantidad") ADAPTATIVA v2. Su log: el pasto medio y lejano cuesta 0.1-0.4 ms y el de cerca 2-15 ms con el cuadro en 46-75 ms; la v1
+          // recortaba SOLO el medio y el lejano (lo barato y lo que mas se ve ralo) y nunca el de cerca. Ahora: el medio y el lejano siempre al
+          // 100 %; solo se recorta el de cerca, nunca por debajo de 0.6, y solo si el pasto pesa al menos el 25 % del cuadro (si pesa menos,
+          // sacar pasto no puede llegar al objetivo: no se toca). Sin la medida de la GPU todavia, como antes pero solo el de cerca
+          floorA = (std::max)(floorA, 0.6f);
+          const float gMs = s_grassMsEma.load(), frMs = ema * 1000.0f, share = (gMs >= 0.0f && frMs > 0.0f) ? gMs / frMs : -1.0f;
+          static double nextLogS = 0.0;
           if (tn < restUntil) { a = (std::min)(1.0f, a * 1.06f); }
+          else if (fps < target * 0.97f && share >= 0.0f && share < 0.25f) {
+            a = (std::min)(1.0f, a * 1.06f); fps0 = 0.0f;
+            if (tn >= nextLogS && g_cfg.live[58][3] > 0.5f) { nextLogS = tn + 10.0; Log("pasto adaptativo v2: FPS %.0f (objetivo %.0f) pero el pasto es %.1f ms de %.1f ms del cuadro (%.0f %%): sacar pasto no llega, no se recorta", fps, target, gMs, frMs, 100.0f * share); }
+          }
           else {
             if (fps < target * 0.97f) {
               if (a >= 0.999f || fps0 <= 0.0f) { fps0 = fps; a0 = a; t0 = tn; }
@@ -870,7 +887,7 @@ void GrassPresent() {
             } else { fps0 = 0.0f; if (fps > target * 1.10f) a = (std::min)(1.0f, a * 1.06f); }   // (27/10 q) 1.03 -> 1.06: volvia al 100 % en 15 s, ahora en 8
           }
           s_adapt = a; s_adaptV[useN ? 1 : 0] = a;
-          if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 10.0; Log("pasto adaptativo (%s): FPS %.0f (objetivo %.0f) -> densidad x%.2f en los 3 niveles (minimo %.2f, calidad %d, parcelas %d/%d/%d)", useN ? "vista cercana, fila 410" : "general, fila 333", fps, target, a, floorA, (int)(g_cfg.live[61][0] + 0.5f), g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2]); } } }
+          if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 10.0; Log("pasto adaptativo v2 (%s): FPS %.0f (objetivo %.0f), pasto %.1f ms (%.0f %% del cuadro) -> cerca x%.2f, medio y lejos al 100 %% (minimo %.2f, calidad %d, parcelas %d/%d/%d)", useN ? "vista cercana, fila 410" : "general, fila 333", fps, target, gMs, share >= 0.0f ? 100.0f * share : -1.0f, a, floorA, (int)(g_cfg.live[61][0] + 0.5f), g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2]); } } }
     if (s_vbState.load() == 1 && s_vbStage && g_dev.imm) {
         D3D11_MAPPED_SUBRESOURCE m;
         if (SUCCEEDED(g_dev.imm->Map(s_vbStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
@@ -1284,7 +1301,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         cull[44] = narrowThr; cull[45] = narrowMul; cull[46] = (float)kBladeIpbN;
         // (26/10 d) reclamo del cuadro: la primera emision que la GPU ejecuta despues del Present se queda con el cuadro (Count[18] = 1);
         // las demas pasan por las celdas sin anotar nada y dibujan 0 instancias
-        GpuTimer* tm = (p58[3] > 0.5f && TimersReady()) ? TimerClaim(s_frame.load()) : nullptr;   // (1/11) medidor de GPU (solo con el registro prendido)
+        GpuTimer* tm = ((p58[3] > 0.5f || s_adaptTm.load(std::memory_order_relaxed)) && TimersReady()) ? TimerClaim(s_frame.load()) : nullptr;   // (1/11) medidor de GPU (con el registro prendido; (13/11) o con la adaptativa)
         if (tm) { c->Begin(tm->dis); c->End(tm->ts[0]); }
         cull[0] = 4.0f; c->UpdateSubresource(s_cullCb, 0, nullptr, cull, 0, 0); c->Dispatch(1, 1, 1);
         for (int i = 0; i < 3; i++) {
@@ -1295,7 +1312,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             cull[12] = wEff0;   // ancho de la hoja en metros; (2/11 paso 10) el mismo en los 3 niveles (antes x1.6 x2 y x2 x4 por la celda: cintas a media distancia)
             cull[15] = (float)mIpc[i];
             cull[20] = i == 0 ? Dfloor : 0.0f; cull[24] = i == 0 ? fadeT0 : fadeM;
-            cull[14] = i == 0 ? 0.30f * cMul[q] * densN : cBase; cull[19] = 4.0f * cMul[q] * (i == 0 ? densN : dens);   // (11/11 l) nivel 0 sin adaptativa
+            cull[14] = i == 0 ? cBase : 0.30f * cMul[q] * densN; cull[19] = 4.0f * cMul[q] * (i == 0 ? dens : densN);   // (13/11) adaptativa v2: solo el nivel 0 (cerca, el caro); medio y lejos siempre al 100 % (antes al reves)
             c->UpdateSubresource(s_cullCb, 0, nullptr, cull, 0, 0);
             c->Dispatch((gw + 7) / 8, (gh + 7) / 8, 1);
         }
