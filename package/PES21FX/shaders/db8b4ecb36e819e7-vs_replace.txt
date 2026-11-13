@@ -118,6 +118,17 @@ void main(
       if (tN == 0 && tP == 0) { tN = HW.z; tP = HW.w; }   // por si el juego no pasa el reloj a este shader
       float gN = max(0.2, 1.0 + HV.z * sin(tN * 1.7) * sin(tN * 0.63));
       float gP = max(0.2, 1.0 + HV.z * sin(tP * 1.7) * sin(tP * 0.63));
+      // (13/11, Agustin: "que el pelo siga el viento de forma realista, no que se mueva como el kit") con el viento unico (fila 494, z353)
+      // el pelo deja la onda fija de la ropa: la fuerza sale de la velocidad del viento de ahora (el pelo es liviano: responde casi al
+      // cuadrado de la velocidad, se levanta con la racha y cae en la calma) y encima un aleteo rapido de las puntas (7 a 12 Hz en
+      // radianes) que crece con la turbulencia (y495). z24 sigue siendo cuanto aleteo. 2 m/s = la fuerza de antes.
+      { float4 pesWU = IniParams.Load(int2(494,0)); float4 pesWT = IniParams.Load(int2(495,0));
+        if (pesWU.z > 0.0 && IniParams.Load(int2(353,0)).z > 0.5) {
+          float kW = min(pow(pesWU.z * 0.5, 1.6), 4.0);
+          float fl = HV.z * (0.25 + pesWT.y);
+          gN = kW * max(0.15, 1.0 + fl * (0.55 * sin(tN * 7.3) * sin(tN * 2.1 + 1.3) + 0.3 * sin(tN * 11.9 + 0.7)));
+          gP = kW * max(0.15, 1.0 + fl * (0.55 * sin(tP * 7.3) * sin(tP * 2.1 + 1.3) + 0.3 * sin(tP * 11.9 + 0.7)));
+        } }
       float3 wd = float3(HW.x, 0, HW.y) * HV.x;
       pesM6.xyz += wd * gN; pesM6.w += tN * HS.x;
       pesM7.xyz += wd * gP; pesM7.w += tP * HS.x;
