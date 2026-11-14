@@ -1598,8 +1598,10 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
         const float breath = anim ? 0.5f + 0.5f * sinf((float)now * 4.2f) : 0.5f;
         const float gl = (0.55f + 0.45f * breath) * s_hov + 0.8f * s_flash;
         const ImVec2 tip(m.x, m.y + 0.8f * sc);
-        for (int i = 4; i >= 1; i--) dl->AddCircleFilled(tip, (1.2f + i * (1.1f + 0.35f * breath)) * k, ColA(acc, 0.075f * gl * alpha), 20);
-        dl->AddCircleFilled(tip, 1.3f * k, ColA(Lerp4(acc, ImVec4(1, 1, 1, 1), 0.5f), 0.35f * gl * alpha), 12);
+        {   // (14/11 e, Agustin: "saca esas ondas, y solo manten el brillo verde") brillo PAREJO: muchas capas finas, sin anillos que se vean
+            const float R = (4.2f + 1.0f * breath) * k;
+            for (int i = 12; i >= 1; i--) { const float u = i / 12.0f; dl->AddCircleFilled(tip, R * u, ColA(acc, 0.050f * gl * alpha * (1.0f - u * 0.6f)), 24); }
+        }
         auto R = [&](float x0, float y0, float x1, float y1) { return std::make_pair(ImVec2(m.x + x0 * sc, m.y + y0 * sc), ImVec2(m.x + x1 * sc, m.y + y1 * sc)); };
         struct Part { float x0, y0, x1, y1, r; };
         static const Part parts[5] = { { -1.7f, 0.0f, 1.7f, 11.5f, 1.7f }, { 1.5f, 5.2f, 4.6f, 12.0f, 1.5f }, { 4.4f, 6.0f, 7.4f, 12.4f, 1.5f }, { 7.2f, 7.4f, 9.8f, 12.8f, 1.3f }, { -1.7f, 9.0f, 9.8f, 17.6f, 3.0f } };
@@ -1625,8 +1627,8 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
     const float sd = k * (1.0f - 0.10f * s_dn);
     static const float D[5][2] = { { 0, 0 }, { 0.6f, 17.0f }, { 5.0f, 12.6f }, { 6.2f, 12.3f }, { 12.4f, 12.0f } };
     ImVec2 pts[5]; for (int i = 0; i < 5; i++) pts[i] = ImVec2(m.x + D[i][0] * sd, m.y + D[i][1] * sd);
-    for (int i = 4; i >= 1; i--) { ImVec2 sp[5]; for (int j = 0; j < 5; j++) sp[j] = ImVec2(pts[j].x + (0.8f + i * 0.7f) * k, pts[j].y + (1.4f + i * 0.9f) * k);
-        dl->AddConcavePolyFilled(sp, 5, Col(0, 0, 0, 0.08f * alpha)); }
+    { ImVec2 sp[5]; for (int j = 0; j < 5; j++) sp[j] = ImVec2(pts[j].x + 1.4f * k, pts[j].y + 2.0f * k);   // (14/11 e) una sola sombra suave (sin escalones)
+      dl->AddConcavePolyFilled(sp, 5, Col(0, 0, 0, 0.22f * alpha)); }
     const int v0 = dl->VtxBuffer.Size;
     dl->AddConcavePolyFilled(pts, 5, Col(1, 1, 1, alpha));
     ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, m, ImVec2(m.x + 6.0f * sd, m.y + 20.0f * sd), white, Col(0.80f, 0.83f, 0.88f, alpha));
