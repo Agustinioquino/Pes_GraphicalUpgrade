@@ -1224,7 +1224,11 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
 // cara (entre los ojos y la boca, un poco adelante) y los ejes frente / arriba de la cabeza -> mundo con la matriz del nodo.
 namespace {
 struct HeadPub { const void* node = nullptr; float c[3] = {}, fw[3] = {}, up[3] = {}; double t = 0; };
-std::mutex s_hpMx; HeadPub s_hp[8];
+// (14/11 k, Agustin: "seguir rostro esta rota, no elije un solo sujeto y va cambiando") antes 8 lugares para 22+ personajes: el de la
+// cara seguida se pisaba con otro y la camara elegia otra cara. Ahora 32 lugares, el seguido nunca se pisa, y si deja de llegar un
+// rato (fuera del cuadro, LOD, pausa) se espera 3 s antes de elegir otra
+constexpr int kHpN = 32;
+std::mutex s_hpMx; HeadPub s_hp[kHpN]; const void* s_hpKeep = nullptr;
 std::atomic<int> s_hpOk{0}, s_hpFail{0};
 }
 static bool Norm3(float* v) { const float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (!(l > 1e-4f)) return false; v[0] /= l; v[1] /= l; v[2] /= l; return true; }
@@ -1249,7 +1253,7 @@ static void PublishHead(const Skel& S) {
     h.t = Now();
     std::lock_guard<std::mutex> lk(s_hpMx);
     int at = 0; double oldest = 1e300;
-    for (int i = 0; i < 8; i++) { if (s_hp[i].node == S.node) { at = i; break; } if (s_hp[i].t < oldest) { oldest = s_hp[i].t; at = i; } }
+    for (int i = 0; i < kHpN; i++) { if (s_hp[i].node == S.node) { at = i; break; } if (s_hp[i].node != s_hpKeep && s_hp[i].t < oldest) { oldest = s_hp[i].t; at = i; } }
     s_hp[at] = h;
     if (s_hpOk.fetch_add(1, std::memory_order_relaxed) == 0)
         Log("camara libre: cara en el mundo desde el esqueleto (%.2f, %.2f, %.2f), frente (%.2f, %.2f, %.2f), arriba (%.2f, %.2f, %.2f); sk_head en el modelo (%.3f, %.3f, %.3f)",
@@ -1265,17 +1269,17 @@ static void PublishHead(const Skel& S) {
 // la cara a seguir: la del personaje fijado (*lock) si sigue al dia; si no, la que esta mas al centro de la vista de la camara
 bool ExprFaceAny() {   // (08/11 e) hay alguna cara con dato fresco (< 0.5 s): la usa la camara libre para saber si la recarga termino
     std::lock_guard<std::mutex> lk(s_hpMx); const double now = Now();
-    for (int i = 0; i < 8; i++) if (s_hp[i].node && now - s_hp[i].t < 0.5) return true;
+    for (int i = 0; i < kHpN; i++) if (s_hp[i].node && now - s_hp[i].t < 0.5) return true;
     return false;
 }
 bool ExprFaceFrame(const float* camPos, const float* camFwd, const void** lock, float c[3], float fw[3], float up[3], double* age) {
     std::lock_guard<std::mutex> lk(s_hpMx);
     const double now = Now();
     int best = -1;
-    if (lock && *lock) for (int i = 0; i < 8; i++) if (s_hp[i].node == *lock && now - s_hp[i].t < 0.5) { best = i; break; }
+    if (lock && *lock) for (int i = 0; i < kHpN; i++) if (s_hp[i].node == *lock && now - s_hp[i].t < 3.0) { best = i; break; }   // el fijado sigue aunque no llegue un rato
     if (best < 0) {
         float bs = -1e9f;
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < kHpN; i++) {
             if (!s_hp[i].node || now - s_hp[i].t >= 0.5) continue;
             float d[3] = { s_hp[i].c[0] - camPos[0], s_hp[i].c[1] - camPos[1], s_hp[i].c[2] - camPos[2] };
             const float l = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
@@ -1285,6 +1289,7 @@ bool ExprFaceFrame(const float* camPos, const float* camFwd, const void** lock, 
         if (best < 0) return false;
         if (lock) *lock = s_hp[best].node;
     }
+    s_hpKeep = s_hp[best].node;
     memcpy(c, s_hp[best].c, 12); memcpy(fw, s_hp[best].fw, 12); memcpy(up, s_hp[best].up, 12);
     if (age) *age = now - s_hp[best].t;
     return true;
@@ -1297,8 +1302,8 @@ bool ExprFaceCycle(const float* camPos, const float* camFwd, const void** lock, 
     std::lock_guard<std::mutex> lk(s_hpMx);
     const double now = Now();
     const float r[3] = { -camFwd[2], 0.0f, camFwd[0] };
-    float ang[8]; int cur = -1, n = 0;
-    for (int i = 0; i < 8; i++) {
+    float ang[kHpN]; int cur = -1, n = 0;
+    for (int i = 0; i < kHpN; i++) {
         ang[i] = 1e9f;
         if (!s_hp[i].node || now - s_hp[i].t >= 0.5) continue;
         const float d[3] = { s_hp[i].c[0] - camPos[0], s_hp[i].c[1] - camPos[1], s_hp[i].c[2] - camPos[2] };
@@ -1308,7 +1313,7 @@ bool ExprFaceCycle(const float* camPos, const float* camFwd, const void** lock, 
     if (n < 2 && cur >= 0) return false;
     const float a0 = cur >= 0 ? ang[cur] : 0.0f;
     int best = -1, wrap = -1;
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < kHpN; i++) {
         if (ang[i] > 1e8f || i == cur) continue;
         const float a = ang[i];
         if (dir > 0) { if (a > a0 + 1e-4f && (best < 0 || a < ang[best])) best = i; if (wrap < 0 || a < ang[wrap]) wrap = i; }
@@ -1316,7 +1321,7 @@ bool ExprFaceCycle(const float* camPos, const float* camFwd, const void** lock, 
     }
     if (best < 0) best = wrap;
     if (best < 0) return false;
-    *lock = s_hp[best].node;
+    *lock = s_hp[best].node; s_hpKeep = *lock;
     return true;
 }
 

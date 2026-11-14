@@ -494,7 +494,8 @@ const float* FreeCamPhotoSteps(int* n);           // pasos de velocidad del modo
 struct FreeCamPadInfo { bool wanted = false, flying = false, paused = false, advancing = false, given = false; int step = -1; float scale = -1.0f; };
 FreeCamPadInfo FreeCamPadState();
 int FreeCamReplayDpad();
-void FreeCamDofToggle(const char* how);   // (14/11 i) R3 / B                          // (14/11 g) cruceta izq. / der. mantenida volando con el mando: -1 / 0 / 1
+void FreeCamDofToggle(const char* how);
+void FreeCamPhotoPause(bool on);   // (14/11 i) R3 / B                          // (14/11 g) cruceta izq. / der. mantenida volando con el mando: -1 / 0 / 1
 void FreeCamPadTake();                            // la tarjeta prendio el mando: si se lo habia devuelto al juego, lo vuelve a tomar
 // (31/10) camara lenta (tiempo.cpp): gancho al reloj de juego del motor (0x14035dcb0), 343 (ini: x velocidad, y prendida; DLL: z, w)
 void TiempoPresent();

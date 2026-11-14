@@ -94,6 +94,8 @@ static const int kPhotoN = (int)(sizeof kPhotoSteps / sizeof kPhotoSteps[0]), kP
 static std::atomic<int> s_phStep{-1}; static std::atomic<bool> s_phPause{false}, s_phAdv{false}, s_padFly{false};
 static std::atomic<bool> s_padGive{false};   // OPTIONS: el mando vuelve al juego (para salir de la repeticion) hasta que la camara libre se apague
 const float* FreeCamPhotoSteps(int* n) { if (n) *n = kPhotoN; return kPhotoSteps; }
+static int NearestStep(float v);
+void FreeCamPhotoPause(bool on) { if (s_phStep.load() < 0) s_phStep = NearestStep(1.0f); s_phPause = on; }   // (14/11 k) rastro.cpp: el visor estaba en pausa
 static int NearestStep(float v) { int b = kPhotoNormal; float bd = 1e9f; for (int i = 0; i < kPhotoN; i++) { const float d = fabsf(logf(kPhotoSteps[i]) - logf(std::max(0.01f, v))); if (d < bd) { bd = d; b = i; } } return b; }
 bool FreeCamPadWanted() {
     if (!g_cfg.camPad || s_padGive.load() || !FreeCamActive() || MotorPageActive()) return false;
@@ -209,6 +211,8 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
       if ((b0 && !s_b0) || (b1 && !s_b1)) { const float was = std::clamp(g_cfg.live[344][1], 0.05f, 50.0f); g_cfg.live[344][1] = std::clamp(g_cfg.live[344][1] * (b1 ? 1.1f : 1.0f / 1.1f), 0.05f, 50.0f); speed *= g_cfg.live[344][1] / was; }
       s_b0 = b0; s_b1 = b1; }
     // --- mando (14/11) ---
+    { static bool s_repWas = false; const bool rep = ReplayNow();   // (14/11 k) al terminar la repeticion la pausa del visor no queda en el partido
+      if (s_repWas && !rep && s_phPause.load()) { s_phPause = false; Log("camara libre: termino la repeticion, sin pausa"); } s_repWas = rep; }
     MvPad pad; const bool padOk = front && !typing && !g_menuOpen.load() && FreeCamPadWanted() && PadGet(pad);
     s_padFly = padOk;
     float padMul = 1.0f;

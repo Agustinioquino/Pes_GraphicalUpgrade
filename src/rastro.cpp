@@ -90,16 +90,23 @@ float RplSpeedConst(uintptr_t mulss, float def) {
     return (v == v && fabsf(v) >= 0.005f && fabsf(v) <= 4.0f) ? v : def;
 }
 void PhotoReplayCtl(void* line) {
-    if (!line || !FreeCamActive()) { s_pfLine = nullptr; return; }
+    // (14/11 k, Agustin: "un switcher para que la repeticion funcione normal cuando no esta activa la camara libre y que al activar la
+    // camara libre estos ganchos se trasladen y en reversa") con la camara libre volando (x344 != 2, mando no devuelto) la linea la maneja
+    // SIEMPRE esta funcion (tambien la reproduccion normal); al prenderla con el visor en pausa arranca en pausa; apagada, el visor del
+    // juego queda como siempre (el mando vuelve al juego, overlay.cpp g_blockGamePad)
+    static const void* s_prevLine = nullptr; static float s_prevPos = -1.0f;
+    float posNow = -1.0f; __try { posNow = *(const float*)((const char*)line + 0x14); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    const bool wasStill = line == s_prevLine && posNow == s_prevPos; s_prevLine = line; s_prevPos = posNow;
+    const FreeCamPadInfo pi0 = FreeCamPadState();
+    if (!line || !FreeCamActive() || lroundf(g_cfg.live[344][0]) == 2 || pi0.given) { s_pfLine = nullptr; return; }
     const float ph = FreeCamPhotoScale(); const int dpad = FreeCamReplayDpad();
-    if (ph <= 0.0f && dpad == 0) { s_pfLine = nullptr; return; }
     if (s_seekOk < 0) { s_seekOk = SigAt(kRplSeek, kRplSeekSig, sizeof kRplSeekSig) ? 1 : 0; Log("modo foto en la repeticion: salto del visor %s", s_seekOk ? "listo (0x14217e800)" : "NO (firma distinta)"); }
     if (!s_seekOk) return;
     __try {
         if (*(const int*)line != 5) { s_pfLine = nullptr; return; }
         const float pos = *(const float*)((const char*)line + 0x14);
         if (!(pos >= 0.0f && pos < 65536.0f)) return;
-        if (s_pfLine != line) { s_pfLine = line; s_pf = pos; }
+        if (s_pfLine != line) { s_pfLine = line; s_pf = pos; if (wasStill) { FreeCamPhotoPause(true); Log("camara libre en la repeticion: el visor estaba en pausa, sigue en pausa"); } }
         float spd = *(const float*)((const char*)line + 0x1c); if (!(spd > 0.0f && spd < 10.0f)) spd = 1.0f;   // velocidad del visor (1 = normal)
         const FreeCamPadInfo pi = FreeCamPadState();
         // como el visor del juego: cruceta derecha / izquierda mantenida = lento adelante / atras (0x14217C133 / 0x14217C154, lo que
@@ -108,7 +115,8 @@ void PhotoReplayCtl(void* line) {
         if (dpad > 0 || (pi.paused && pi.advancing)) rate = spd * RplSpeedConst(0x14217C133ull, 0.5f);
         else if (dpad < 0) rate = spd * RplSpeedConst(0x14217C154ull, -0.5f);
         else if (pi.paused) rate = 0.0;
-        else rate = (double)std::clamp(ph, 0.0f, 4.0f);
+        else if (ph > 0.0f && fabsf(ph - 1.0f) > 1e-3f) rate = (double)std::clamp(ph, 0.0f, 4.0f);   // pasos del reloj del modo foto (L1 + cruceta)
+        else rate = spd * (g_cfg.replaySlow ? RplSpeedConst(0x14217C133ull, 0.5f) : 1.0f);   // reproduccion normal (lenta con repeticion_lenta)
         s_pf = std::max(0.0, s_pf + rate);
         const int want = (int)s_pf;
         if (want != (int)pos) {
@@ -136,7 +144,7 @@ uint64_t hk_rpl(void* obj, unsigned pad, unsigned char p3) {
     // del cuadro no es el normal (flechas, stick, pausa, salto) no se toca: se vuelve a escalar en cuanto la reproduccion vuelve a la normal.
     static const void* s_nlLine = nullptr; static bool s_nlScale = false;
     float spd0 = 0.0f, pos0 = 0.0f, mul = 1.0f; bool scaled = false, st5 = false;
-    const bool nlOn = g_cfg.replaySlow != 0 && obj && s_pfLine == nullptr;
+    const bool nlOn = false;   // (14/11 k) sin camara libre la repeticion va normal; con ella la lenta la hace PhotoReplayCtl
     if (nlOn) { __try {
         st5 = *(const int*)obj == 5;
         if (st5) {
