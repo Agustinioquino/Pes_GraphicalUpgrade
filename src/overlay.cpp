@@ -282,8 +282,9 @@ static MvPad s_pad;                               // (14/11) el mando de este cu
 static int s_lastDev = 0;
 static bool PadUi() { return s_lastDev == 1 && s_pad.connected; }
 static int s_curOn = 1;   // (14/11 c) ultimo cursor prendido (para el boton Cursor y F1)
+static std::string s_toastMsg;   // (14/11 j) si no esta vacio, el aviso chico muestra esto en vez del del cursor
 static double s_curToastT = -10.0;   // (14/11 c) aviso chico abajo a la derecha al cambiar el cursor con F1
-static void CursorToggle() { s_curToastT = Now(); if (g_cfg.menuCursor != 0) { s_curOn = g_cfg.menuCursor; g_cfg.menuCursor = 0; } else g_cfg.menuCursor = s_curOn ? s_curOn : 1; char b[8]; snprintf(b, sizeof(b), "%d", g_cfg.menuCursor); SaveOption("menu_cursor", b); }
+static void CursorToggle() { s_toastMsg.clear(); s_curToastT = Now(); if (g_cfg.menuCursor != 0) { s_curOn = g_cfg.menuCursor; g_cfg.menuCursor = 0; } else g_cfg.menuCursor = s_curOn ? s_curOn : 1; char b[8]; snprintf(b, sizeof(b), "%d", g_cfg.menuCursor); SaveOption("menu_cursor", b); }
 static double s_menuMsAvg = 0.0;                  // (14/11) tiempo de CPU que lleva armar el menu (promedio)
 static double MenuCpuMs() { return s_menuMsAvg; }
 static std::set<std::string> s_moreOpen;          // tarjetas largas con "mas opciones" desplegado
@@ -2729,6 +2730,21 @@ void OverlayPresent(IDXGISwapChain* sc) {
         if (d && !s_curKeyWas && !(g_menuOpen && ImGui::GetIO().WantTextInput)) CursorToggle();
         s_curKeyWas = d;
     }
+    {   // (14/11 j, Agustin: "al mantener presionado el boton select o share, se habilite directamente la camara libre en el modo
+        // repeticion") SHARE / SELECT mantenido 0.6 s: x344 = 3 (camara libre solo en la repeticion: si ya esta en la repeticion vuela
+        // enseguida); otra vez mantenido: vuelve a lo que habia. Apretarlo corto sigue mostrando / escondiendo el HUD
+        static double s_shT = -1.0; static bool s_shDone = false; static float s_shPrev = 0.0f; static MvPad s_sp;
+        if (g_cfg.camShareHold && !g_menuOpen && !MotorPageActive() && GetForegroundWindow() == s_hwnd && MvPadPoll(s_sp) && s_sp.connected) {
+            const double tn = Now();
+            if (!s_sp.b[kPadShare]) { s_shT = -1.0; s_shDone = false; }
+            else { if (s_shT < 0.0) s_shT = tn;
+                   if (!s_shDone && tn - s_shT > 0.6) { s_shDone = true;
+                       std::lock_guard<std::mutex> lk(g_cfgMutex);
+                       if (g_cfg.live[344][0] > 2.5f || FreeCamActive()) { g_cfg.live[344][0] = s_shPrev > 2.5f ? 0.0f : s_shPrev; s_toastMsg = TRS("Camara libre apagada"); }
+                       else { s_shPrev = g_cfg.live[344][0]; g_cfg.live[344][0] = 3.0f; FreeCamPadTake(); s_toastMsg = TRS(ReplayNow() ? "Camara libre en la repeticion" : "Camara libre: se prende en la repeticion"); }
+                       s_curToastT = tn; Log("camara libre: SHARE mantenido, x344 = %.0f", g_cfg.live[344][0]); } }
+        } else { s_shT = -1.0; s_shDone = false; }
+    }
     const bool curToast = Now() - s_curToastT < 1.8;
     float mouseHintA = 0.0f;
     const bool fis = MusclePhysiqueActive();
@@ -2875,7 +2891,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
                      for (int v : kVk) input |= (GetAsyncKeyState(v) & 0x8000) != 0; }
         if (input || s_hudT == 0.0) s_hudT = tn;
         { const bool sh = pi.flying && s_pad.b[kPadShare], hk = front && camFree && (GetAsyncKeyState('H') & 0x8000) != 0;
-          if ((sh && !s_shWas) || (hk && !s_hWas)) { s_hudHide = !s_hudHide; s_hudT = tn; Log("camara libre: HUD %s", s_hudHide ? "escondido" : "a la vista"); }
+          static double s_shDown = 0.0; if (sh && !s_shWas) s_shDown = tn;   // (14/11 j) SHARE: al soltarlo y solo si fue corto (mantenido = camara libre)
+          if ((!sh && s_shWas && tn - s_shDown < 0.5) || (hk && !s_hWas)) { s_hudHide = !s_hudHide; s_hudT = tn; Log("camara libre: HUD %s", s_hudHide ? "escondido" : "a la vista"); }
           s_shWas = sh; s_hWas = hk; }
         // (14/11 i, Agustin: "que el menu se apague de la camara libre con mando pasados unos tres segundos sin presionar nada")
         // 3 s sin tocar nada: se APAGA del todo (antes se achicaba). camara_hud 1 vuelve al tocar algo; camara_hud 0 (mostrado con
@@ -2914,7 +2931,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (curToast) {   // (14/11 c) "Cursor apagado / prendido (F1)" chico, abajo a la derecha, en el idioma del menu; se va solo en 1.8 s
         const float t = (float)(Now() - s_curToastT), a = std::min(1.0f, std::min(t / 0.12f, (1.8f - t) / 0.35f));
         char kb[16]; const char* kn = KeyHudName(g_cfg.cursorKey, kb, sizeof(kb));
-        const std::string msg = std::string(TRS(g_cfg.menuCursor ? "Cursor prendido" : "Cursor apagado")) + "  (" + kn + ")";
+        const std::string msg = !s_toastMsg.empty() ? s_toastMsg : std::string(TRS(g_cfg.menuCursor ? "Cursor prendido" : "Cursor apagado")) + "  (" + kn + ")";
         ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
         const ImVec2 ts = ImGui::CalcTextSize(msg.c_str()), pad(10.0f * k, 5.0f * k);
         const ImVec2 b(ds.x - 18.0f * k, ds.y - 18.0f * k - hintH), a0(b.x - ts.x - pad.x * 2, b.y - ts.y - pad.y * 2);
