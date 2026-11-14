@@ -2005,6 +2005,10 @@ static void DrawSettingsPage() {
         if (ImGui::Combo(TRS("Cursor del menu"), &cc, cn, 3)) { if (g_cfg.menuCursor) s_curOn = g_cfg.menuCursor; g_cfg.menuCursor = cc; char b[8]; snprintf(b, sizeof(b), "%d", cc); SaveOption("menu_cursor", b); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Tambien con el boton Cursor de arriba o F1. Es el mismo con el menu abierto o cerrado. Con un mando conectado se esconde solo si no moves el mouse."));
     }
+    {   bool nd = g_cfg.camNoDof != 0;   // (14/11 h) camara libre sin desenfoque de profundidad
+        if (ImGui::Checkbox(TRS("Camara libre sin desenfoque de profundidad"), &nd)) { g_cfg.camNoDof = nd ? 1 : 0; SaveOption("camara_sin_dof", nd ? "1" : "0"); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con la camara libre prendida se apaga el desenfoque de profundidad del juego (fondo y primer plano) y el bokeh: todo queda nitido."));
+    }
     {   bool rs = g_cfg.replaySlow != 0;   // (14/11 g) la repeticion normal en camara lenta (velocidad de la flecha derecha / SlowMoServer)
         if (ImGui::Checkbox(TRS("Repeticion en camara lenta"), &rs)) { g_cfg.replaySlow = rs ? 1 : 0; SaveOption("repeticion_lenta", rs ? "1" : "0"); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("La reproduccion normal de la repeticion (despues de despausar) va a la velocidad lenta de la flecha derecha del visor: la de SlowMoServer si esta prendido, si no la mitad."));
