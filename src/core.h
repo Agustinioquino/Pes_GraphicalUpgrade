@@ -488,6 +488,7 @@ void FreeCamWheel(int delta);
 bool FreeCamWantsHead();   // (1/11) camara libre prendida con "seguir la cara": hace falta la cabeza (expr.cpp)   // (1/11) rueda del mouse (WM_MOUSEWHEEL / raw input) -> zoom   // (1/11) gancho a la camara del visor del editor (primer Present) + log
 bool FreeCamActive();
 bool RepeticionWantsHook(); void RepeticionRplHook(void* line); bool RepeticionPresent(IDXGISwapChain* sc); void RepeticionDraw();   // (14/11 9vcq5h) repeticion.cpp
+bool ReplayViewerCalled();   // (14/11 l) el visor de repeticiones se esta usando (aunque este en pausa)
 bool ReplayNow();                                 // (14/11) pitchwear.cpp: repeticion en curso (detector v2, y448)
 bool FreeCamBlocksKeys();                         // x344 = 1: el juego no ve el teclado mientras la camara libre esta prendida
 // (14/11) mando en la camara libre y modo foto (freecam.cpp): overlay.cpp le pasa el mando de cada cuadro

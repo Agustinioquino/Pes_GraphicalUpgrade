@@ -37,6 +37,7 @@ namespace fx {
 std::atomic<int> g_simTick{-1};   // (12/11) tick del partido para el desgaste real (pitchwear.cpp), lo escribe hk_rel al final de cada tick
 std::atomic<unsigned long long> g_replayMs{0};   // (12/11 16:45) visor de repeticiones reproduciendo (ver hk_rpl)
 std::atomic<int> g_replayHook{0}, g_replayCalls{0}, g_replayPlay{0};
+std::atomic<unsigned long long> g_replayCallMs{0};   // (14/11 l) ultima llamada del control del visor con la linea en estado 5 (aunque este en pausa)
 std::atomic<unsigned long long> g_replayMoveMs{0};   // (14/11 g) ultima llamada del visor con el cursor avanzando, sin depender de y448 (camara libre / lenta en la repeticion)
 std::atomic<int> g_replayCallsV2{0}, g_replayPlayV2{0}, g_replayMoveV2{0};   // (13/11 tanda 2) y448: llamadas / estado 5 / con el cursor avanzando (log "repeticiones v2" de pitchwear.cpp)
 
@@ -127,6 +128,7 @@ uint64_t hk_rpl(void* obj, unsigned pad, unsigned char p3) {
     const bool v2 = GrassLive(448, 1) > 0.5f;
     __try { if (obj && *(const int*)obj == 5) {
         if (!v2) { g_replayMs.store(GetTickCount64(), std::memory_order_relaxed); g_replayPlay.fetch_add(1, std::memory_order_relaxed); }   // y448 0: como antes
+        g_replayCallMs.store(GetTickCount64(), std::memory_order_relaxed);
         const unsigned cur = *(const unsigned*)((const char*)obj + 0x14), stp = *(const unsigned*)((const char*)obj + 0x18);
         const bool mv = RplCursorMoved(obj, cur) || (stp & 0x7fffffffu) != 0u;
         g_replayPlayV2.fetch_add(1, std::memory_order_relaxed); if (mv) { g_replayMoveV2.fetch_add(1, std::memory_order_relaxed); g_replayMoveMs.store(GetTickCount64(), std::memory_order_relaxed); }

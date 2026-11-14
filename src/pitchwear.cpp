@@ -106,6 +106,8 @@ static bool WearTestsOn() { return !RpV2() || (ReplayMode() && InReplay()); }
 // (14/11 g) para la camara libre / lenta en la repeticion: el cursor del visor avanzando hace < 0.3 s, con o sin y448 (antes pedia y448 y el
 // gancho del desgaste real: sin eso nunca daba repeticion)
 extern std::atomic<unsigned long long> g_replayMoveMs;
+extern std::atomic<unsigned long long> g_replayCallMs;
+bool ReplayViewerCalled() { const unsigned long long t = g_replayCallMs.load(std::memory_order_relaxed); return t != 0 && GetTickCount64() - t < 300; }   // (14/11 l)
 bool ReplayNow() { const unsigned long long t = g_replayMoveMs.load(std::memory_order_relaxed); return t != 0 && GetTickCount64() - t < 300; }
 static inline bool FootOn() { return g_cfg.live[441][1] > 0.5f && g_cfg.live[115][3] > 0.5f; }
 // (12/11 16:55, Agustin: "un slider para exagerar esas pisadas") z441 EXAGERAR LAS PISADAS (0 o 1 = normal, hasta 10): cada huella marca mas
