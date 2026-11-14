@@ -382,7 +382,7 @@ static const std::vector<SearchHit>& SearchRun(const std::string& q) {
             }
             if (w.size() > 1 && (" " + h.lab[i] + " ").find(" " + phrase) != std::string::npos) sc += 60;
             if (w.size() == 1 && SearchWordK(h.lab[i], w[0]) == 3 && w[0].size() >= 3 && w[0].find_first_of("0123456789") != std::string::npos
-                && w[0].find_first_not_of("0123456789", 1) != std::string::npos && strchr("xyzw", w[0][0])) sc += 400;   // clave (x496)
+                && w[0].find_first_not_of("0123456789", 1) == std::string::npos && strchr("xyzw", w[0][0])) sc += 400;   // clave (x496)
             best = (std::max)(best, sc);
             if (hit.strict[i]) bestS = (std::max)(bestS, sc);
         }
@@ -400,6 +400,24 @@ static const std::vector<SearchHit>& SearchRun(const std::string& q) {
     // (14/11, Agustin: "si se trata de sliders, por ejemplo el pasto sigue a la pelota o un slider de fuerza de cualquier cosa, que al buscar
     // me salga como primer resultado y lo demas se oculte") si alguna OPCION tiene todas las palabras en su propio nombre (o su clave), se
     // ven solo esas opciones: las tarjetas que coinciden solo por el titulo o por la ayuda se ocultan. Si ninguna, como antes
+    // (14/11) nada tiene TODAS las palabras (se acuerda el nombre a medias: "el pasto sigue a la pelota" y la opcion es "El pasto acompana a
+    // la pelota"): las opciones con mas palabras en su nombre (al menos todas menos una, y al menos 2), las mejores primero
+    if (s_hits.empty() && w.size() >= 2) {
+        int need = (std::max)(2, (int)w.size() - 1), top = 0;
+        std::vector<std::vector<int>> cnt(s_hay.size()), scs(s_hay.size());
+        for (size_t gi = 0; gi < s_hay.size(); gi++) {
+            const SearchHay& h = s_hay[gi]; cnt[gi].assign(h.lab.size(), 0); scs[gi].assign(h.lab.size(), 0);
+            for (size_t i = 0; i < h.lab.size(); i++) {
+                int c = 0, sc = 0; for (auto& x : w) { int k = SearchWordK(h.lab[i], x); if (k) { c++; sc += 30 * k; } }
+                cnt[gi][i] = c; scs[gi][i] = sc; if (c >= need) top = (std::max)(top, c);
+            }
+        }
+        if (top > 0) for (size_t gi = 0; gi < s_hay.size(); gi++) {
+            SearchHit hit; hit.gid = (int)gi; const size_t n = s_hay[gi].lab.size(); hit.show.assign(n, 0);
+            for (size_t i = 0; i < n; i++) if (cnt[gi][i] == top) { hit.show[i] = 1; hit.nShow++; hit.rank = (std::max)(hit.rank, scs[gi][i]); }
+            if (hit.nShow > 0) { hit.score = 3; s_hits.push_back(std::move(hit)); }
+        }
+    }
     bool anyStrict = false; for (auto& x : s_hits) if (x.nStrict > 0) { anyStrict = true; break; }
     if (anyStrict) {
         std::vector<SearchHit> keep;
