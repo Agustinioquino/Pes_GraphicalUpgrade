@@ -2723,7 +2723,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     const bool hint = false;
     if (!g_menuOpen) { g_blockGameKeys = FreeCamBlocksKeys(); g_menuTyping = false; }   // (31/10) con la camara libre el juego tampoco ve el teclado
     const bool camFree = FreeCamActive() && !MotorPageActive(); const float camSlow = TiempoFactor();   // (1/11) aviso en pantalla
-    const bool camHud = !g_menuOpen && (camFree || camSlow != 1.0f);
+    const bool camHud = !g_menuOpen && camFree;   // (14/11 g) la camara lenta sola ya no muestra nada abajo
     const bool lightIcons = g_cfg.live[319][0] > 0.5f && g_cfg.live[297][0] > 0.5f && g_cfg.live[378][2] < 0.5f && SSSSEditorLightAge() < 0.5;   // (08/11) con la luz fija al mundo (z378) el icono (relativo a la camara) mentiria: no se dibuja   // (1/11) iconos de la luz del editor
     const bool sunCompass = g_cfg.live[175][0] > 0.5f && g_cfg.live[93][3] > 0.5f;   // (2/11) brujula del sol, solo en partido
     {   // (08/11) el menu aparece y se desvanece en ~0.16 s
@@ -2842,15 +2842,18 @@ void OverlayPresent(IDXGISwapChain* sc) {
         MvPadDraw(ImGui::GetForegroundDrawList(), ImVec2(x, y), k, s_pad, s_padA * e, g_cfg.menuVisual, Now());
     }
     else if (hint) DrawPhysiqueHint();
-    if (camHud && g_cfg.camHud > 0) {   // (14/11, Agustin: "interfaz o hud adaptable, y mostrar lo mas posible de la pantalla del propio juego")
+    if (camHud && camFree) {   // (14/11, Agustin: "interfaz o hud adaptable, y mostrar lo mas posible de la pantalla del propio juego")
+        // (14/11 g, Agustin: "al presionar las flechas del control se muestra un menu raro abajo ... no me gusta") solo con la camara libre
+        // (no con la camara lenta sola), ESCONDIDO de fabrica (camara_hud 0): CREATE / SHARE o H lo muestran; la cruceta no lo despierta
         // HUD fino abajo; sin tocar nada 3 s se achica a una pastilla en la esquina (camara_hud = 1); CREATE / SHARE o H lo esconden
-        static double s_hudT = 0.0, s_hudLast = 0.0; static float s_hudC = 0.0f, s_hudA = 0.0f; static bool s_hudHide = false, s_shWas = false, s_hWas = false;
+        static double s_hudT = 0.0, s_hudLast = 0.0; static float s_hudC = 0.0f, s_hudA = 0.0f; static bool s_hudHide = false, s_shWas = false, s_hWas = false; static int s_hudCfgWas = -1;
+        if (g_cfg.camHud != s_hudCfgWas) { s_hudHide = g_cfg.camHud == 0; s_hudCfgWas = g_cfg.camHud; }
         const double tn = Now(); const float dth = (float)std::clamp(tn - s_hudLast, 0.0, 0.1); s_hudLast = tn;
         const FreeCamPadInfo pi = FreeCamPadState();
         const bool front = GetForegroundWindow() == s_hwnd;
         bool input = false;
-        if (pi.flying && s_pad.connected) { input = fabsf(s_pad.lx) + fabsf(s_pad.ly) + fabsf(s_pad.rx) + fabsf(s_pad.ry) > 0.15f || s_pad.l2 > 0.1f || s_pad.r2 > 0.1f; for (int i = 0; i < kPadCount; i++) input |= s_pad.b[i]; }
-        if (front) { static const int kVk[] = { 'W', 'A', 'S', 'D', 'Q', 'E', VK_RBUTTON, VK_PRIOR, VK_NEXT, VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_OEM_4, VK_OEM_6, VK_HOME };
+        if (pi.flying && s_pad.connected) input = fabsf(s_pad.lx) + fabsf(s_pad.ly) + fabsf(s_pad.rx) + fabsf(s_pad.ry) > 0.15f || s_pad.l2 > 0.1f || s_pad.r2 > 0.1f;   // sticks y gatillos; la cruceta no
+        if (front) { static const int kVk[] = { 'W', 'A', 'S', 'D', 'Q', 'E', VK_RBUTTON, VK_PRIOR, VK_NEXT, VK_OEM_4, VK_OEM_6, VK_HOME };
                      for (int v : kVk) input |= (GetAsyncKeyState(v) & 0x8000) != 0; }
         if (input || s_hudT == 0.0) s_hudT = tn;
         { const bool sh = pi.flying && s_pad.b[kPadShare], hk = front && camFree && (GetAsyncKeyState('H') & 0x8000) != 0;
