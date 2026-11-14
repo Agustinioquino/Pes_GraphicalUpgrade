@@ -1425,6 +1425,9 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         for (int sl = 0; sl < kSlots; sl++) {
             int i = sl / kBins;
             if (pass == 0 && i >= preLevels) break;
+            // (14/11, Agustin: "noto que no carga el pasto completo" con el paso 1) los niveles SIN prepasada (w325 = 1: el 1 y el 2) iban con
+            // la variante sin escritura de profundidad ni de stencil: sin profundidad propia y sin la marca de la base. Vuelven al estado del juego
+            if (pass == 1 && preDss2 && preCur && i == preLevels && sl % kBins == 0) c->OMSetDepthStencilState(preCur, preRef);
             if (boundMesh != i) { ID3D11Buffer* vbs[4] = { mPos[i], svVb[1], svVb[2], mUv[i] }; UINT sts[4] = { 12, svSt[1], svSt[2], 4 }, ofs2[4] = { 0, svOf[1], svOf[2], 0 };
                 c->IASetVertexBuffers(0, 4, vbs, sts, ofs2); c->IASetIndexBuffer(mIb[i], DXGI_FORMAT_R32_UINT, 0); boundMesh = i; }
             for (int k = 0; k < 72; k++) cbq[k] = 0.f;
