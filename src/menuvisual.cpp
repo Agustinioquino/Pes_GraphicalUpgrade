@@ -126,7 +126,49 @@ static void SideStadium(ImDrawList* dl, ImVec2 a, ImVec2 b, float ground, ImVec4
     const ImVec4 g1 = Lerp4(g0, ImVec4(0.30f, 0.60f, 0.30f, 1), 0.18f);
     const ImVec4 gl = Lerp4(g0, sunCol, 0.10f * light);
     float y = ground; float h = 2.0f * k; int i = 0;
-    while (y < b.y) { const float y1 = std::min(b.y, y + h); dl->AddRectFilled(ImVec2(a.x, y), ImVec2(b.x, y1), ImGui::GetColorU32((i & 1) ? g1 : gl)); y = y1; h *= 1.55f; i++; }
+    while (y < b.y) {   // franjas con el borde suave (el corte no es una raya dura)
+        const float y1 = std::min(b.y, y + h); const ImVec4 c0 = (i & 1) ? g1 : gl, c1 = Lerp4(c0, (i & 1) ? gl : g1, 0.35f);
+        dl->AddRectFilledMultiColor(ImVec2(a.x, y), ImVec2(b.x, y1), ImGui::GetColorU32(c0), ImGui::GetColorU32(c0), ImGui::GetColorU32(c1), ImGui::GetColorU32(c1));
+        y = y1; h *= 1.55f; i++;
+    }
+    // bruma del fondo (lejos el pasto se aclara y se pone un poco celeste) y brillo del sol sobre el pasto
+    const float depth = b.y - ground;
+    dl->AddRectFilledMultiColor(ImVec2(a.x, ground), ImVec2(b.x, ground + depth * 0.35f), ImGui::GetColorU32(ImVec4(hor.x, hor.y, hor.z, 0.30f)), ImGui::GetColorU32(ImVec4(hor.x, hor.y, hor.z, 0.30f)), 0, 0);
+    // textura: hojitas cortas por todo el pasto, chicas y apretadas al fondo, mas grandes adelante; cada una con su tono
+    unsigned sd = 4242u;
+    auto rnd = [&]() { sd = sd * 1664525u + 1013904223u; return (sd >> 8) / 16777216.0f; };
+    const ImVec4 gd = Lerp4(g0, ImVec4(0, 0, 0, 1), 0.30f), gb = Lerp4(Lerp4(g1, ImVec4(0.55f, 0.75f, 0.35f, 1), 0.35f), sunCol, 0.15f * light);
+    for (int n = 0; n < 340; n++) {
+        const float f = rnd(), x = a.x + rnd() * (b.x - a.x), yy = ground + f * f * depth;   // mas hojitas cerca del horizonte (se ven chicas)
+        const float d = (yy - ground) / std::max(depth, 1.0f), len = (0.8f + 4.5f * d) * k * (0.6f + 0.6f * rnd());
+        const ImVec4 cc = Lerp4(gd, gb, rnd()); const float lean2 = (rnd() - 0.5f) * 0.8f;
+        dl->AddLine(ImVec2(x, yy), ImVec2(x + lean2 * len, yy - len), ImGui::GetColorU32(ImVec4(cc.x, cc.y, cc.z, 0.55f + 0.3f * d)), (0.7f + 0.7f * d) * k);
+    }
+}
+// (14/11 h) "el cesped mejor": hojas de adelante finitas, que se afinan en la punta, de alturas y tonos distintos (algunas puntas
+// secas), dobladas por el viento ('lean' -1..1) y moviendose un poco; la punta toma la luz del sol
+static void GrassBlades(ImDrawList* dl, float x0, float x1, float yBase, float hMax, int n, float lean, float sway, float tt, float light, ImVec4 sunCol, unsigned seed, float k) {
+    unsigned sd = seed;
+    auto rnd = [&]() { sd = sd * 1664525u + 1013904223u; return (sd >> 8) / 16777216.0f; };
+    for (int i = 0; i < n; i++) {
+        const float x = x0 + rnd() * (x1 - x0), hh = hMax * (0.45f + 0.55f * rnd()), ph = rnd() * 6.28f, w0 = (1.4f + 1.2f * rnd()) * k;
+        const float bendA = lean * (0.55f + 0.45f * rnd()) + (sway > 0.0f ? sinf(tt * (1.8f + sway) + ph) * 0.18f * (0.3f + sway * 0.2f) : 0.0f) + (rnd() - 0.5f) * 0.25f;
+        const float tone = rnd(); const bool dry = rnd() < 0.12f;
+        const ImVec4 base = Lerp4(ImVec4(0.10f, 0.28f, 0.12f, 1), ImVec4(0.18f, 0.40f, 0.16f, 1), tone);
+        ImVec4 tip = Lerp4(ImVec4(0.30f, 0.58f, 0.24f, 1), ImVec4(0.45f, 0.70f, 0.28f, 1), tone);
+        if (dry) tip = ImVec4(0.66f, 0.62f, 0.34f, 1);
+        tip = Lerp4(tip, sunCol, 0.18f * light);
+        const float dim = 0.55f + 0.45f * light;
+        // curva: sube y se dobla hacia 'bendA'; 5 tramos que se afinan
+        ImVec2 prev(x, yBase);
+        for (int sgm = 1; sgm <= 5; sgm++) {
+            const float u = sgm / 5.0f, bx = bendA * hh * 0.85f * u * u, by = hh * u * (1.0f - 0.35f * fabsf(bendA) * u);
+            const ImVec2 cur(x + bx, yBase - by);
+            const ImVec4 c = Lerp4(base, tip, u); 
+            dl->AddLine(prev, cur, ImGui::GetColorU32(ImVec4(c.x * dim, c.y * dim, c.z * dim, 1)), std::max(0.6f * k, w0 * (1.0f - 0.8f * u)));
+            prev = cur;
+        }
+    }
 }
 static ImVec4 SunColor(const MvSunIn& in, float el) {
     ImVec4 c(1.0f, 0.96f, 0.86f, 1);
@@ -364,6 +406,7 @@ bool MvSunWidget(MvSunIn& in) {
         // resplandor del sol en el cielo (mas grande y naranja cuando esta bajo)
         const ImVec2 sp0(base.x + cosf(shEl * kDeg) * AR, base.y - sinf(shEl * kDeg) * AR);
         if (on && shEl > -3.0f) for (int i = 4; i >= 1; i--) dl->AddCircleFilled(sp0, (10.0f + i * (7.0f + 6.0f * (1.0f - light))) * k, ColA(sc, 0.045f * (on ? 1.0f : 0.4f)), 24);
+        GrassBlades(dl, a0.x - 4.0f * k, a0.x + AW + 4.0f * k, a0.y + D + 1.0f * k, 12.0f * k, 70, 0.0f, in.anim ? 0.6f : 0.0f, (float)fmod(t, 3600.0), light, sc, 991u, k);
         dl->PathArcTo(base, AR, -kPI * 0.5f, 0.0f, 24); dl->PathStroke(Col(1, 1, 1, 0.30f), 0, 2.0f * k);
         for (int e = 0; e <= 90; e += 15) { const float a = -e * kDeg, l = e % 45 == 0 ? 6.0f : 3.5f;
             dl->AddLine(ImVec2(base.x + cosf(a) * (AR - l * k), base.y + sinf(a) * (AR - l * k)), ImVec2(base.x + cosf(a) * (AR + l * k), base.y + sinf(a) * (AR + l * k)), Col(1, 1, 1, 0.5f), 1.0f);
@@ -622,15 +665,9 @@ bool MvWindWidget(MvWindIn& in) {
             dl->AddLine(ImVec2(pole.x, y0), ImVec2(pole.x, y1), (i & 1) ? Col(0.92f, 0.20f, 0.18f, 1) : Col(0.96f, 0.96f, 0.98f, 1), 2.6f * k); }
         dl->AddLine(ImVec2(pole.x + 0.8f * k, top.y), ImVec2(pole.x + 0.8f * k, pole.y), Col(0, 0, 0, 0.25f), 0.8f * k);
         dl->AddCircleFilled(ImVec2(top.x, top.y - 1.5f * k), 2.2f * k, Col(0.96f, 0.96f, 0.98f, 1), 10);
-        // pasto de adelante que se dobla (dos capas) y hojitas que vuelan con las rachas
-        for (int layer = 0; layer < 2; layer++) {
-            const float gy = a0.y + D - (layer ? 2.0f : 10.0f) * k, hgt2 = (layer ? 13.0f : 9.0f) * k;
-            for (int i = 0; i < 26; i++) {
-                const float x = a0.x + (2.0f + i * 7.3f + layer * 3.5f) * k, w = sinf(tt * (2.0f + shSpd * 0.6f) + i * 0.7f + layer) * 0.3f + 0.7f;
-                const ImU32 gc = layer ? Col(0.28f, 0.62f, 0.30f, 1) : Col(0.22f, 0.50f, 0.25f, 1);
-                dl->AddBezierQuadratic(ImVec2(x, gy), ImVec2(x, gy - hgt2 * 0.5f), ImVec2(x + side * bend * w * hgt2 * 0.85f, gy - hgt2 * (1.0f - 0.45f * bend * w)), gc, (layer ? 1.8f : 1.3f) * k);
-            }
-        }
+        // pasto de adelante que se dobla con el viento (dos capas: atras mas bajo y oscuro) y hojitas que vuelan con las rachas
+        GrassBlades(dl, a0.x - 4.0f * k, a0.x + AW + 4.0f * k, a0.y + D - 8.0f * k, 10.0f * k, 70, side * bend * 1.1f, in.anim ? shSpd * 0.25f : 0.0f, tt, 0.75f, ImVec4(1, 0.96f, 0.86f, 1), 313u, k);
+        GrassBlades(dl, a0.x - 4.0f * k, a0.x + AW + 4.0f * k, a0.y + D + 1.0f * k, 15.0f * k, 60, side * bend * 1.3f, in.anim ? shSpd * 0.3f : 0.0f, tt, 1.0f, ImVec4(1, 0.96f, 0.86f, 1), 717u, k);
         const int nLeaf = (int)(bend * 10.0f + in.gust * 4.0f);
         for (int i = 0; i < nLeaf; i++) {
             const float ph = fmodf(tt * (0.25f + shSpd * 0.04f) + i * 0.137f, 1.0f);
