@@ -488,7 +488,8 @@ void RelWatchPresent();
 void FreeCamWheel(int delta);
 bool FreeCamWantsHead();   // (1/11) camara libre prendida con "seguir la cara": hace falta la cabeza (expr.cpp)   // (1/11) rueda del mouse (WM_MOUSEWHEEL / raw input) -> zoom   // (1/11) gancho a la camara del visor del editor (primer Present) + log
 bool FreeCamActive();
-bool RepeticionWantsHook(); void RepeticionRplHook(void* line); bool RepeticionPresent(IDXGISwapChain* sc); void RepeticionDraw();   // (14/11 9vcq5h) repeticion.cpp
+bool RepeticionWantsHook(); void RepeticionRplHook(void* line); bool RepeticionPresent(IDXGISwapChain* sc); void RepeticionDraw(bool cursorShown);
+bool RepeticionLineOk(const void* line);   // (14/11 n) linea del visor de repeticiones de verdad   // (14/11 9vcq5h) repeticion.cpp
 bool ReplayViewerCalled();   // (14/11 l) el visor de repeticiones se esta usando (aunque este en pausa)
 bool ReplayNow();                                 // (14/11) pitchwear.cpp: repeticion en curso (detector v2, y448)
 bool FreeCamBlocksKeys();                         // x344 = 1: el juego no ve el teclado mientras la camara libre esta prendida
@@ -775,6 +776,7 @@ bool TiltTexturesFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView*
 float MuscleVariantT(uint32_t id, bool* own);   // (26/10) musculo.cpp: variante del jugador (-1 robusto .. 1 atletico; propia o la general)
 extern std::atomic<bool> g_menuOpen;
 extern std::atomic<bool> g_blockGamePad;    // (14/11) keyblock.cpp: el juego no ve el mando (XInput / DirectInput) mientras esta prendido
+extern std::atomic<bool> g_shareMask;       // (14/11 n) keyblock.cpp: en la repeticion el juego no ve SHARE mantenido (es de la camara libre); el toque corto le llega igual
 extern std::atomic<bool> g_blockGameKeys;   // (31/10) keyblock.cpp: el juego no ve el teclado mientras esta prendido
 extern std::atomic<bool> g_menuTyping;      // (31/10) overlay.cpp: hay un campo de texto del menu activo (la camara libre no lee W A S D)
 void KeyBlockInstall();

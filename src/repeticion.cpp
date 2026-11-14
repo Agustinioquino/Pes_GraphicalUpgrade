@@ -16,6 +16,7 @@
 //
 // ini [PES21FX]: repeticion_barra = 1 (0 apagada), repeticion_corte = 1 (0 sin desenfoque), repeticion_corte_ms = 300 (100..1000)
 #include "core.h"
+#include "menuvisual.h"
 #include <imgui.h>
 #include <d3d11.h>
 #include <atomic>
@@ -90,6 +91,9 @@ int Wrap(int a, int n) { a %= n; return a < 0 ? a + n : a; }
 } // namespace
 
 bool RepeticionWantsHook() { return g_cfg.replayBar != 0 || g_cfg.replayCut != 0; }
+// (14/11 n) la linea es la del visor de repeticiones (match::Replay o anillo del largo de la repeticion): la camara libre y la repeticion
+// lenta solo tocan esa (rastro.cpp hk_rpl)
+bool RepeticionLineOk(const void* line) { return line && Check() && IsReplayLine(line); }
 
 // hilo del juego, desde hk_rpl (rastro.cpp) ANTES del control del visor
 void RepeticionRplHook(void* line) {
@@ -182,7 +186,7 @@ BarGeo Geo(const ImVec2& ds) {
     BarGeo g;
     g.x0 = (860.0f + (104.0f - 860.0f) * e) * sx; g.x1 = (1764.0f + (1816.0f - 1764.0f) * e) * sx;
     const float h = (4.0f + 6.0f * e) * k; const float yc = (973.5f + (836.0f - 973.5f) * e) * sy;
-    g.h = h; g.y = yc - h * 0.5f; g.hit = (14.0f + 10.0f * e) * k; return g;
+    g.h = h; g.y = yc - h * 0.5f; g.hit = (18.0f + 10.0f * e) * k; return g;   // (14/11 n) un poco mas alto para acertarle (era 14)
 }
 } // namespace
 
@@ -229,7 +233,7 @@ bool RepeticionPresent(IDXGISwapChain* sc) {
     if (bar) {
         const ImVec2 ds(1920.0f, 1080.0f); const BarGeo g = Geo(ds);   // en proporcion: Geo escala con ds
         const float mx = s_mx * ds.x, my = s_my * ds.y;
-        const bool over = mx >= g.x0 - 8.0f && mx <= g.x1 + 8.0f && fabsf(my - (g.y + g.h * 0.5f)) <= g.hit;
+        const bool over = mx >= g.x0 - 12.0f && mx <= g.x1 + 12.0f && fabsf(my - (g.y + g.h * 0.5f)) <= g.hit;
         if (lNow && !s_lWas && over) s_drag = true;
         if (!lNow) s_drag = false;
         if (s_drag) {
@@ -250,7 +254,7 @@ bool RepeticionPresent(IDXGISwapChain* sc) {
 }
 
 // dentro del cuadro de ImGui de la DLL (overlay.cpp)
-void RepeticionDraw() {
+void RepeticionDraw(bool cursorShown) {
     const double now = Now();
     const ImVec2 ds = ImGui::GetIO().DisplaySize;
     const float dur = (float)std::clamp(g_cfg.replayCutMs, 100, 1000) / 1000.0f;
@@ -284,8 +288,17 @@ void RepeticionDraw() {
     const BarGeo g = Geo(ds);
     const int n = std::max(s_n.load(), 1), f0 = s_first.load(), len = std::max(Wrap(s_last.load() - f0, n), 1);
     const float mx = s_mx * ds.x, my = s_my * ds.y;
-    const bool over = s_front && mx >= g.x0 - 8.0f && mx <= g.x1 + 8.0f && fabsf(my - (g.y + g.h * 0.5f)) <= g.hit;
-    if (!over && !s_drag) return;
+    const bool over = s_front && mx >= g.x0 - 12.0f && mx <= g.x1 + 12.0f && fabsf(my - (g.y + g.h * 0.5f)) <= g.hit;
+    // (14/11 n, Agustin: "el pasar el mouse por la barra real de repeticion" a veces no andaba) el juego esconde el cursor de Windows y,
+    // con la camara libre prendida, la flecha de mouse en menus no se dibuja: no se veia donde estaba el mouse. Si nadie lo dibuja, la
+    // flecha va aca mientras se use el mouse (3 s), con la mano sobre la barra
+    auto drawCur = [&] {
+        if (!s_front || cursorShown || g_cfg.menuCursor == 0 || !(now - s_moveT < 3.0 || s_drag) || (GetAsyncKeyState(VK_RBUTTON) & 0x8000)) return;   // con el derecho se mira (camara libre)
+        CURSORINFO ci{}; ci.cbSize = sizeof ci;
+        if (GetCursorInfo(&ci) && (ci.flags & CURSOR_SHOWING)) return;   // Windows ya muestra el suyo
+        MvCursorDraw(dl, ImVec2(mx, my), over || s_drag ? 1 : 0, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, k, 1.0f, g_cfg.menuVisual != 0);
+    };
+    if (!over && !s_drag) { drawCur(); return; }
     char buf[16];
     const float fx = std::clamp(mx, g.x0, g.x1), fr = (fx - g.x0) / (g.x1 - g.x0);
     {   // (14/11 l, Agustin: "que aparezca el icono de donde se va a hacer click sobre la barra, que sea preciso, y que permita
@@ -304,6 +317,7 @@ void RepeticionDraw() {
         dl->AddRectFilled(ImVec2(bx - 5 * k, g.y - 26 * k), ImVec2(bx + ts.x + 5 * k, g.y - 6 * k), IM_COL32(16, 16, 16, 200), 3 * k);
         dl->AddText(ImVec2(bx, g.y - 24 * k), IM_COL32(255, 255, 255, 240), buf);
     }
+    drawCur();
 }
 
 } // namespace fx

@@ -3,6 +3,7 @@
 // Solo ImGui (sin core.h): overlay.cpp le pasa los valores. Asi tambien compila fuera del juego para sacar capturas de prueba.
 #pragma once
 #include <imgui.h>
+#include <cstdint>
 
 namespace fx {
 
@@ -80,8 +81,12 @@ void MvPadSetStyle(int style, unsigned rgb = 0);   // rgb 0xRRGGBB del cuerpo; 0
 int MvPadGetStyle();
 int MvPadDetectStyle(const wchar_t* gameDir);    // mira livecpk\Dream Patch 21 Graphic Controller (PS5 si no esta)
 bool MvPadPoll(MvPad& p);                     // lee el primer mando (solo Windows; afuera devuelve false)
+void MvPadPresses(uint32_t* out);              // (14/11 n) veces que se apreto cada boton (kPadCount cuentas, se leen y se comparan)
+bool MvPadPolling();                           // (14/11 n) este hilo esta adentro de MvPadPoll (la lectura es de la DLL, no del juego)
 void MvPadFeedImGui(const MvPad& p);          // le pasa el mando a ImGui si el backend no lo hizo (joystick de Windows)
 void MvPadGlyph(ImDrawList* dl, ImVec2 c, float r, int btn, float alpha, float lit = 0.0f);   // simbolo del boton (cruz, circulo, ...)
+float MvPadGlyphW(float r, int btn);           // (14/11 n) ancho del simbolo (las pastillas L1 / OPTIONS son mas anchas que 2 r)
+void MvSetPadFont(ImFont* f);                  // (14/11 n) negrita chica para las letras de las pastillas (overlay.cpp BuildFonts)
 // dibujo del mando con lo apretado y los analogicos; 'where' = esquina de arriba a la izquierda; ancho ~ 230 * k
 void MvPadDraw(ImDrawList* dl, ImVec2 where, float k, const MvPad& p, float alpha, bool anim, double now);
 ImVec2 MvPadSize(float k);

@@ -12,6 +12,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <mutex>
+#include <atomic>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -815,7 +817,20 @@ static int s_joy = -1; static JOYCAPSW s_caps = {}; static DWORD s_scanT = 0; st
 static float Ax(DWORD v, UINT lo, UINT hi) { if (hi <= lo) return 0.0f; const float f = ((float)v - lo) / (float)(hi - lo) * 2.0f - 1.0f; return fabsf(f) < 0.12f ? 0.0f : std::clamp(f, -1.0f, 1.0f); }
 static float Dz(SHORT v) { const float f = v / 32767.0f; return fabsf(f) < 0.15f ? 0.0f : std::clamp(f, -1.0f, 1.0f); }
 #endif
+// (14/11 n) lo llaman el menu, SHARE mantenido y el hilo rapido de la camara libre (freecam.cpp): un solo lector a la vez, y cada
+// boton que se APRIETA se cuenta (aunque lo vea otro lector) para que los toques cortos no se pierdan entre cuadros
+static std::mutex s_pollMx; static std::atomic<uint32_t> s_press[kPadCount]; static bool s_prevB[kPadCount] = {};
+static thread_local bool t_padPoll = false;   // joyGetPosEx (winmm) puede leer por DirectInput adentro: keyblock.cpp no lo bloquea
+bool MvPadPolling() { return t_padPoll; }
+static bool PadPollRaw(MvPad& p);
 bool MvPadPoll(MvPad& p) {
+    std::lock_guard<std::mutex> lk(s_pollMx);
+    t_padPoll = true; const bool ok = PadPollRaw(p); t_padPoll = false;
+    for (int i = 0; i < kPadCount; i++) { const bool d = ok && p.connected && p.b[i]; if (d && !s_prevB[i]) s_press[i].fetch_add(1, std::memory_order_relaxed); s_prevB[i] = d; }
+    return ok;
+}
+void MvPadPresses(uint32_t* out) { for (int i = 0; i < kPadCount; i++) out[i] = s_press[i].load(std::memory_order_relaxed); }
+static bool PadPollRaw(MvPad& p) {
     p = MvPad();
 #ifdef _WIN32
     if (!s_loaded) {
@@ -917,49 +932,74 @@ int MvPadDetectStyle(const wchar_t* gameDir) {
     return kPadStylePS5;   // sin el mod: los botones del juego son de PlayStation
 }
 
+// (14/11 n) negrita chica propia para las letras de los simbolos (overlay.cpp BuildFonts la rasteriza a ~0.7 de la letra del menu)
+static ImFont* s_padFont = nullptr;
+void MvSetPadFont(ImFont* f) { s_padFont = f; }
+// letra de la pastilla: la negrita propia a su tamano si esta cerca (nitida), achicada si hace falta menos; para letras mas grandes
+// la del menu (la negrita chica agrandada se veria borrosa)
+static ImFont* PadFont(float want, float* fs) {
+    if (s_padFont && want <= s_padFont->FontSize * 1.15f) { *fs = want >= s_padFont->FontSize * 0.85f ? s_padFont->FontSize : want; return s_padFont; }
+    *fs = want; return ImGui::GetFont();
+}
 // simbolos de los botones: en PlayStation trazos finos y claros sobre un circulo oscuro; en Xbox la letra con su color
 static void GlyphShape(ImDrawList* dl, ImVec2 c, float s, int btn, ImU32 sc, float th) {
     if (btn == kPadCross) { dl->AddLine(ImVec2(c.x - s, c.y - s), ImVec2(c.x + s, c.y + s), sc, th); dl->AddLine(ImVec2(c.x - s, c.y + s), ImVec2(c.x + s, c.y - s), sc, th); }
-    else if (btn == kPadCircle) dl->AddCircle(c, s * 1.08f, sc, 24, th);
+    else if (btn == kPadCircle) dl->AddCircle(c, s * 1.08f, sc, 0, th);
     else if (btn == kPadSquare) dl->AddRect(ImVec2(c.x - s * 0.92f, c.y - s * 0.92f), ImVec2(c.x + s * 0.92f, c.y + s * 0.92f), sc, 0, 0, th);
     else dl->AddTriangle(ImVec2(c.x, c.y - s * 1.10f), ImVec2(c.x + s * 1.05f, c.y + s * 0.72f), ImVec2(c.x - s * 1.05f, c.y + s * 0.72f), sc, th);
 }
 static const char* kXboxLetter[4] = { "A", "B", "X", "Y" };   // cruz = A, circulo = B, cuadrado = X, triangulo = Y
 static void XboxLetter(ImDrawList* dl, ImVec2 c, float s, int btn, ImU32 col) {
-    ImFont* f = ImGui::GetFont(); const float fs = s * 3.0f; const char* t = kXboxLetter[btn];
+    float fs; ImFont* f = PadFont(s * 3.0f, &fs); const char* t = kXboxLetter[btn];
     const ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0, t);
-    dl->AddText(f, fs, ImVec2(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f), col, t);
+    dl->AddText(f, fs, ImVec2(floorf(c.x - ts.x * 0.5f + 0.5f), floorf(c.y - ts.y * 0.5f + 0.5f)), col, t);
 }
 static const ImVec4 kGlyphCol[4] = { ImVec4(0.55f, 0.72f, 1.0f, 1), ImVec4(1.0f, 0.45f, 0.48f, 1), ImVec4(1.0f, 0.60f, 0.88f, 1), ImVec4(0.40f, 0.92f, 0.78f, 1) };
 static const ImVec4 kXboxCol[4] = { ImVec4(0.42f, 0.85f, 0.30f, 1), ImVec4(1.0f, 0.36f, 0.32f, 1), ImVec4(0.30f, 0.62f, 1.0f, 1), ImVec4(1.0f, 0.82f, 0.22f, 1) };
 static ImVec4 FaceCol(int btn) { return s_style == kPadStyleXbox ? kXboxCol[btn] : kGlyphCol[btn]; }
-void MvPadGlyph(ImDrawList* dl, ImVec2 c, float r, int btn, float alpha, float lit) {
-    const float th = std::max(1.3f, r * 0.17f);
-    if (btn >= kPadCross && btn <= kPadTriangle) {
-        const ImVec4 cc = FaceCol(btn);
-        if (lit > 0.01f) for (int i = 3; i >= 1; i--) dl->AddCircleFilled(c, r * (1.0f + 0.22f * i * lit), ColA(cc, 0.10f * lit * alpha), 24);
-        dl->AddCircleFilled(c, r, Col(0.06f, 0.07f, 0.09f, 0.88f * alpha), 28);
-        dl->AddCircle(c, r - 0.5f, Col(1, 1, 1, 0.22f * alpha), 28, 1.0f);
-        if (s_style == kPadStyleXbox) XboxLetter(dl, c, r * 0.5f, btn, ColA(Lerp4(cc, ImVec4(1, 1, 1, 1), 0.15f + 0.35f * lit), alpha));
-        else GlyphShape(dl, c, r * 0.46f, btn, ColA(Lerp4(ImVec4(0.93f, 0.94f, 0.96f, 1), cc, 0.25f + 0.6f * lit), alpha), th);
-        return;
-    }
-    if (btn >= kPadUp) {   // cruceta
-        const float a = r * 0.34f; const ImU32 cl = Col(0.90f, 0.91f, 0.94f, 0.9f * alpha);
-        dl->AddRectFilled(ImVec2(c.x - a, c.y - r), ImVec2(c.x + a, c.y + r), cl, a * 0.6f);
-        dl->AddRectFilled(ImVec2(c.x - r, c.y - a), ImVec2(c.x + r, c.y + a), cl, a * 0.6f);
-        dl->AddCircleFilled(c, a * 0.55f, Col(0.06f, 0.07f, 0.09f, 0.6f * alpha), 12);
-        return;
-    }
+// (14/11 n, Agustin: "los iconos de los botones del mando tienen baja calidad y son pequenos") simbolos mas nitidos: circulos con los
+// segmentos que pide su tamano (antes 24-28 fijos: se veian facetados), trazos un poco mas gruesos, el centro en un pixel entero y las
+// letras de L1 / R1 / OPTIONS con una negrita propia rasterizada a su tamano (MvSetPadFont, overlay.cpp) en vez de la letra del menu
+// achicada a la mitad (borrosa). Las filas de ayuda los dibujan mas grandes y miden el ancho real de cada simbolo (MvPadGlyphW).
+static const char* PadLabel(int btn) {
     static const char* kPS5[kPadCount] = { "", "", "", "", "L1", "R1", "L2", "R2", "CREATE", "OPTIONS", "L3", "R3", "PS", "PAD", "", "", "", "" };
     static const char* kPS4[kPadCount] = { "", "", "", "", "L1", "R1", "L2", "R2", "SHARE", "OPTIONS", "L3", "R3", "PS", "PAD", "", "", "", "" };
     static const char* kXb[kPadCount] = { "", "", "", "", "LB", "RB", "LT", "RT", "VIEW", "MENU", "LS", "RS", "XBOX", "", "", "", "", "" };
-    const char* n = (s_style == kPadStyleXbox ? kXb : s_style == kPadStylePS4 ? kPS4 : kPS5)[btn]; ImFont* f = ImGui::GetFont(); const float fs = r * 1.15f;
+    if (btn < 0 || btn >= kPadCount) return "";
+    return (s_style == kPadStyleXbox ? kXb : s_style == kPadStylePS4 ? kPS4 : kPS5)[btn];
+}
+static bool PadIsPill(int btn) { return btn > kPadTriangle && btn < kPadUp; }
+float MvPadGlyphW(float r, int btn) {   // ancho que ocupa el simbolo dibujado con radio r
+    if (!PadIsPill(btn)) return 2.0f * r;
+    float fs; ImFont* f = PadFont(r * 1.15f, &fs);
+    return f->CalcTextSizeA(fs, FLT_MAX, 0, PadLabel(btn)).x + r * 1.1f;
+}
+void MvPadGlyph(ImDrawList* dl, ImVec2 c, float r, int btn, float alpha, float lit) {
+    c = ImVec2(floorf(c.x + 0.5f), floorf(c.y + 0.5f));   // centro en pixel entero: trazos parejos
+    const float th = std::max(1.6f, r * 0.16f);
+    if (btn >= kPadCross && btn <= kPadTriangle) {
+        const ImVec4 cc = FaceCol(btn);
+        if (lit > 0.01f) for (int i = 3; i >= 1; i--) dl->AddCircleFilled(c, r * (1.0f + 0.22f * i * lit), ColA(cc, 0.10f * lit * alpha), 0);
+        dl->AddCircleFilled(c, r, Col(0.05f, 0.06f, 0.08f, 0.90f * alpha), 0);
+        dl->AddCircle(c, r - 0.75f, Col(1, 1, 1, 0.30f * alpha), 0, std::max(1.0f, r * 0.07f));
+        if (s_style == kPadStyleXbox) XboxLetter(dl, c, r * 0.5f, btn, ColA(Lerp4(cc, ImVec4(1, 1, 1, 1), 0.15f + 0.35f * lit), alpha));
+        else GlyphShape(dl, c, r * 0.50f, btn, ColA(Lerp4(ImVec4(0.95f, 0.96f, 0.98f, 1), cc, 0.30f + 0.6f * lit), alpha), th);
+        return;
+    }
+    if (btn >= kPadUp) {   // cruceta
+        const float a = floorf(r * 0.36f + 0.5f); const ImU32 cl = Col(0.92f, 0.93f, 0.96f, 0.92f * alpha);
+        dl->AddRectFilled(ImVec2(c.x - a, c.y - r), ImVec2(c.x + a, c.y + r), cl, a * 0.5f);
+        dl->AddRectFilled(ImVec2(c.x - r, c.y - a), ImVec2(c.x + r, c.y + a), cl, a * 0.5f);
+        dl->AddCircleFilled(c, a * 0.55f, Col(0.06f, 0.07f, 0.09f, 0.6f * alpha), 0);
+        return;
+    }
+    const char* n = PadLabel(btn); float fs; ImFont* f = PadFont(r * 1.15f, &fs);
     const ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0, n);
-    const ImVec2 a(c.x - ts.x * 0.5f - r * 0.5f, c.y - r * 0.78f), b(c.x + ts.x * 0.5f + r * 0.5f, c.y + r * 0.78f);
-    dl->AddRectFilled(a, b, Col(0.06f + 0.3f * lit, 0.07f + 0.3f * lit, 0.09f + 0.35f * lit, 0.88f * alpha), r * 0.78f);
-    dl->AddRect(a, b, Col(1, 1, 1, 0.25f * alpha), r * 0.78f);
-    dl->AddText(f, fs, ImVec2(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f), Col(0.93f, 0.94f, 0.96f, alpha), n);
+    const float hw = floorf(ts.x * 0.5f + r * 0.55f + 0.5f), hh = floorf(r * 0.80f + 0.5f);
+    const ImVec2 a(c.x - hw, c.y - hh), b(c.x + hw, c.y + hh);
+    dl->AddRectFilled(a, b, Col(0.05f + 0.3f * lit, 0.06f + 0.3f * lit, 0.08f + 0.35f * lit, 0.90f * alpha), hh);
+    dl->AddRect(a, b, Col(1, 1, 1, 0.32f * alpha), hh, 0, std::max(1.0f, r * 0.07f));
+    dl->AddText(f, fs, ImVec2(floorf(c.x - ts.x * 0.5f + 0.5f), floorf(c.y - ts.y * 0.5f + 0.5f)), Col(0.96f, 0.97f, 0.99f, alpha), n);
 }
 // --- dibujo del mando (14/11 e). Agustin: "respetar la forma del mando correcta". Los contornos (cuerpo, gatillos, frente gris del
 // PS5, panel tactil y puntas de los agarres del PS4) estan CALCADOS de las 3 fotos que mando Agustin (blanco PS5, rojo PS4, rojo
@@ -1240,18 +1280,19 @@ void MvPadDraw(ImDrawList* dl, ImVec2 o, float k, const MvPad& p, float alpha, b
 void MvPadHints(float k, float alpha) {
     struct { int b; const char* t; } h[] = { { kPadCross, "Elegir" }, { kPadCircle, "Volver" }, { kPadTriangle, "Escribir" }, { kPadOptions, "Buscar" }, { kPadSquare, "Ventanas" }, { kPadUp, "Moverse" }, { kPadL1, "Fino / rapido" } };
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float r = ImGui::GetFontSize() * 0.48f;
-    ImVec2 p = ImGui::GetCursorScreenPos(); const float y = p.y + ImGui::GetFontSize() * 0.5f + 1.0f;
+    const float fsz = ImGui::GetFontSize(), r = fsz * 0.62f;   // (14/11 n) mas grandes (era 0.48)
+    const float rowH = std::max(fsz, 2.0f * r) + 4.0f * k;
+    ImVec2 p = ImGui::GetCursorScreenPos(); const float y = p.y + rowH * 0.5f;
     const float maxX = p.x + ImGui::GetContentRegionAvail().x;
     for (auto& e : h) {
         const char* t = TRS(e.t);
-        const float w = r * 2.6f + ImGui::CalcTextSize(t).x + 14.0f * k;
+        const float gw = MvPadGlyphW(r, e.b), w = gw + 6.0f * k + ImGui::CalcTextSize(t).x + 16.0f * k;
         if (p.x + w > maxX) break;
-        MvPadGlyph(dl, ImVec2(p.x + r * 1.2f, y), r, e.b, alpha);
-        dl->AddText(ImVec2(p.x + r * 2.6f, p.y), Col(0.75f, 0.78f, 0.84f, alpha), t);
+        MvPadGlyph(dl, ImVec2(p.x + gw * 0.5f, y), r, e.b, alpha);
+        dl->AddText(ImVec2(p.x + gw + 6.0f * k, y - fsz * 0.5f), Col(0.78f, 0.81f, 0.87f, alpha), t);
         p.x += w;
     }
-    ImGui::Dummy(ImVec2(1, ImGui::GetFontSize() + 2.0f));
+    ImGui::Dummy(ImVec2(1, rowH + 2.0f));
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------
@@ -1407,7 +1448,7 @@ bool MvVirtualKeyboard(char* buf, int cap, const MvPad& p, float k, float alpha,
     const ImU32 txtHi = Col(0.97f, 0.98f, 1.0f, A), txtLo = Col(0.66f, 0.70f, 0.76f, A);
 
     // cabecera: icono + titulo a la izquierda; a la derecha con que se abre y se cierra
-    { const float cy = y + headH * 0.5f, gr = fs0 * 0.44f;
+    { const float cy = y + headH * 0.5f, gr = fs0 * 0.52f;   // (14/11 n) era 0.44
       const ImVec2 ia(x0, cy - fs0 * 0.45f), ib(x0 + fs0 * 1.45f, cy + fs0 * 0.45f);
       dl->AddRectFilled(ia, ib, ColA(acc, 0.18f * A), 4.0f * k); dl->AddRect(ia, ib, ColA(acc, A), 4.0f * k, 0, 1.4f * k);
       const float cw = (ib.x - ia.x - 6.0f * k) / 5.0f;
@@ -1415,12 +1456,12 @@ bool MvVirtualKeyboard(char* buf, int cap, const MvPad& p, float k, float alpha,
       dl->AddLine(ImVec2(ia.x + cw * 1.3f, ib.y - 3.0f * k), ImVec2(ib.x - cw * 1.3f, ib.y - 3.0f * k), ColA(acc, 0.95f * A), 1.6f * k);
       dl->AddText(ImGui::GetFont(), fs0 * 1.08f, ImVec2(ib.x + 10.0f * k, cy - fs0 * 0.54f), txtHi, TRS("Teclado del mando"));
       const char* tA = TRS("Abrir"); const char* tC = TRS("Cerrar");
-      const float wA = ImGui::CalcTextSize(tA).x, wC = ImGui::CalcTextSize(tC).x, gw = gr * 2.7f;
-      float hx = x1 - wC - gw;
-      MvPadGlyph(dl, ImVec2(hx + gr, cy), gr, kPadCircle, A, s_vkOpen && p.b[kPadCircle] ? 1.0f : 0.0f); dl->AddText(ImVec2(hx + gw, cy - fs0 * 0.5f), txtLo, tC);
+      const float wA = ImGui::CalcTextSize(tA).x, wC = ImGui::CalcTextSize(tC).x, gwC = MvPadGlyphW(gr, kPadCircle), gwO = MvPadGlyphW(gr, kPadOptions), sp = 6.0f * k;
+      float hx = x1 - wC - sp - gwC;
+      MvPadGlyph(dl, ImVec2(hx + gwC * 0.5f, cy), gr, kPadCircle, A, s_vkOpen && p.b[kPadCircle] ? 1.0f : 0.0f); dl->AddText(ImVec2(hx + gwC + sp, cy - fs0 * 0.5f), txtLo, tC);
       dl->AddLine(ImVec2(hx - 9.0f * k, cy - fs0 * 0.4f), ImVec2(hx - 9.0f * k, cy + fs0 * 0.4f), Col(1, 1, 1, 0.18f * A), 1.0f);
-      hx -= 18.0f * k + wA + gr * 4.4f;
-      MvPadGlyph(dl, ImVec2(hx + gr * 1.7f, cy), gr, kPadOptions, A); dl->AddText(ImVec2(hx + gr * 4.4f, cy - fs0 * 0.5f), txtLo, tA);
+      hx -= 18.0f * k + wA + sp + gwO;
+      MvPadGlyph(dl, ImVec2(hx + gwO * 0.5f, cy), gr, kPadOptions, A); dl->AddText(ImVec2(hx + gwO + sp, cy - fs0 * 0.5f), txtLo, tA);
       y += headH + gap * 2; }
     // campo: lupa, texto grande, cursor que titila, contador y tacho (L1)
     { const float fh = fieldH, ffs = fs0 * 1.22f; const ImVec2 fa(x0, y), fb(x1, y + fh);
@@ -1436,7 +1477,7 @@ bool MvVirtualKeyboard(char* buf, int cap, const MvPad& p, float k, float alpha,
       const float cd = anim ? Sat(1.0f - (float)(now - s_vkPressT[40 + kVkClear]) / 0.2f) : 0.0f;
       if (clrH || cd > 0) dl->AddCircleFilled(ImVec2(ta2.x + tb * 0.5f, ta2.y + tb * 0.5f), tb * 0.5f, ColA(acc, (0.18f + 0.3f * cd) * A), 24);
       VkIcon(dl, kVkClear, ImVec2(ta2.x + tb * 0.5f, ta2.y + tb * 0.5f), ffs, buf[0] ? Col(0.85f, 0.88f, 0.92f, A) : Col(0.5f, 0.53f, 0.58f, A), th);
-      MvPadGlyph(dl, ImVec2(ta2.x - fs0 * 0.75f, fa.y + fh * 0.5f), fs0 * 0.36f, kPadL1, A * 0.8f);
+      MvPadGlyph(dl, ImVec2(ta2.x - fs0 * 0.9f, fa.y + fh * 0.5f), fs0 * 0.44f, kPadL1, A * 0.85f);
       char cnt[24]; snprintf(cnt, sizeof cnt, "%d", (int)strlen(buf)); const float cntW = ImGui::CalcTextSize(cnt).x;
       const float cntX = ta2.x - fs0 * 1.5f - cntW;
       if (buf[0]) dl->AddText(ImVec2(cntX, fa.y + (fh - fs0) * 0.5f), Col(0.5f, 0.54f, 0.6f, A), cnt);
@@ -1521,23 +1562,23 @@ bool MvVirtualKeyboard(char* buf, int cap, const MvPad& p, float k, float alpha,
           const char* lb = sp == kVkPage ? (s_vkPage == 0 ? "?123" : "abc") : sp == kVkSpace ? TRS("Espacio") : sp == kVkBack ? TRS("Borrar") : TRS("Listo");
           const float lfs = sp == kVkPage ? fs0 * 1.15f : fs0 * 1.02f;
           const float lw = ImGui::GetFont()->CalcTextSizeA(lfs, FLT_MAX, 0, lb).x, iw = sp == kVkPage ? 0.0f : ifs * (sp == kVkBack ? 1.6f : 1.3f);
-          const float gx = kb.x - fs0 * 0.62f;   // simbolo del boton del mando, chico, en la esquina derecha
-          MvPadGlyph(dl, ImVec2(gx, ka.y + fs0 * 0.62f + push), fs0 * 0.30f, kGl[sp], A5 * 0.75f);
+          const float gr5 = fs0 * 0.38f, gx = kb.x - 5.0f * k - MvPadGlyphW(gr5, kGl[sp]) * 0.5f;   // simbolo del boton del mando en la esquina derecha (14/11 n: mas grande)
+          MvPadGlyph(dl, ImVec2(gx, ka.y + gr5 + 5.0f * k + push), gr5, kGl[sp], A5 * 0.85f);
           float lx = (ka.x + kb.x - (iw + lw)) * 0.5f;
           if (sp != kVkPage) VkIcon(dl, sp, ImVec2(lx + iw * 0.4f, cy), ifs, ic, th);
           dl->AddText(ImGui::GetFont(), lfs, ImVec2(lx + iw, cy - lfs * 0.5f), ic, lb);
       } }
     // ayuda: una linea fina y 6 celdas iguales alineadas a la grilla
     { const float ly = yBot + key + gap * 2; dl->AddLine(ImVec2(x0, ly), ImVec2(x1, ly), Col(1, 1, 1, 0.10f * A), 1.0f);
-      const float hy = ly + gap * 2, r = fs0 * 0.40f, hfs = fs0 * 0.92f;
+      const float hy = ly + gap * 2, r = fs0 * 0.50f, hfs = fs0 * 0.92f;   // (14/11 n) era 0.40
       struct { int b; const char* t; } h[] = { { kPadUp, "Moverse" }, { kPadCross, "Escribir" }, { kPadSquare, "Borrar" }, { kPadTriangle, "Espacio" }, { kPadR1, "Simbolos" }, { kPadCircle, "Cerrar" } };
       const int nH = 6; const float cellW = gridW / nH;
       for (int i = 0; i < nH; i++) {
-          const char* t = TRS(h[i].t); const float tw = ImGui::GetFont()->CalcTextSizeA(hfs, FLT_MAX, 0, t).x, w = r * 2.5f + tw;
+          const char* t = TRS(h[i].t); const float gw = MvPadGlyphW(r, h[i].b), tw = ImGui::GetFont()->CalcTextSizeA(hfs, FLT_MAX, 0, t).x, w = gw + 6.0f * k + tw;
           if (w > cellW - 4.0f * k) continue;
           const float hx = x0 + cellW * i + (cellW - w) * 0.5f, cy = hy + hintH * 0.5f;
-          MvPadGlyph(dl, ImVec2(hx + r, cy), r, h[i].b, A * 0.9f, s_vkOpen && p.b[h[i].b] ? 1.0f : 0.0f);
-          dl->AddText(ImGui::GetFont(), hfs, ImVec2(hx + r * 2.5f, cy - hfs * 0.5f), txtLo, t);
+          MvPadGlyph(dl, ImVec2(hx + gw * 0.5f, cy), r, h[i].b, A * 0.9f, s_vkOpen && p.b[h[i].b] ? 1.0f : 0.0f);
+          dl->AddText(ImGui::GetFont(), hfs, ImVec2(hx + gw + 6.0f * k, cy - hfs * 0.5f), txtLo, t);
       } }
     ImGui::End(); ImGui::PopStyleColor(); ImGui::PopStyleVar(3);
 
@@ -1767,11 +1808,11 @@ static void LgGlyph(ImDrawList* dl, ImVec2 c, float r, int g, const MvPad& p, fl
     case kLgStickR: LgStick(dl, c, r, p.rx, p.ry, xb ? "RS" : "R", lit, acc); return;
     case kLgDpadUD: LgDpad(dl, c, r, true, p, acc); return;
     case kLgDpadLR: LgDpad(dl, c, r, false, p, acc); return;
-    case kLgL2R2: MvPadGlyph(dl, ImVec2(c.x - r * 1.18f, c.y), r * 0.74f, kPadL2, 1.0f, p.l2); MvPadGlyph(dl, ImVec2(c.x + r * 1.18f, c.y), r * 0.74f, kPadR2, 1.0f, p.r2); return;
-    case kLgL1R1: MvPadGlyph(dl, ImVec2(c.x - r * 1.18f, c.y), r * 0.74f, kPadL1, 1.0f, p.b[kPadL1] ? 1.0f : 0.0f); MvPadGlyph(dl, ImVec2(c.x + r * 1.18f, c.y), r * 0.74f, kPadR1, 1.0f, p.b[kPadR1] ? 1.0f : 0.0f); return;
-    case kLgL3R3: MvPadGlyph(dl, ImVec2(c.x - r * 1.18f, c.y), r * 0.74f, kPadL3, 1.0f, p.b[kPadL3] ? 1.0f : 0.0f); MvPadGlyph(dl, ImVec2(c.x + r * 1.18f, c.y), r * 0.74f, kPadR3, 1.0f, p.b[kPadR3] ? 1.0f : 0.0f); return;
+    case kLgL2R2: MvPadGlyph(dl, ImVec2(c.x - r * 1.18f, c.y), r * 0.84f, kPadL2, 1.0f, p.l2); MvPadGlyph(dl, ImVec2(c.x + r * 1.18f, c.y), r * 0.84f, kPadR2, 1.0f, p.r2); return;
+    case kLgL1R1: MvPadGlyph(dl, ImVec2(c.x - r * 1.18f, c.y), r * 0.84f, kPadL1, 1.0f, p.b[kPadL1] ? 1.0f : 0.0f); MvPadGlyph(dl, ImVec2(c.x + r * 1.18f, c.y), r * 0.84f, kPadR1, 1.0f, p.b[kPadR1] ? 1.0f : 0.0f); return;
+    case kLgL3R3: MvPadGlyph(dl, ImVec2(c.x - r * 1.18f, c.y), r * 0.84f, kPadL3, 1.0f, p.b[kPadL3] ? 1.0f : 0.0f); MvPadGlyph(dl, ImVec2(c.x + r * 1.18f, c.y), r * 0.84f, kPadR3, 1.0f, p.b[kPadR3] ? 1.0f : 0.0f); return;
     case kLgL1: MvPadGlyph(dl, c, r * 0.86f, kPadL1, 1.0f, lit); return;
-    case kLgL1DpadLR: MvPadGlyph(dl, ImVec2(c.x - r * 1.18f, c.y), r * 0.74f, kPadL1, 1.0f, p.b[kPadL1] ? 1.0f : 0.0f); LgDpad(dl, ImVec2(c.x + r * 1.0f, c.y), r * 0.85f, false, p, acc); return;
+    case kLgL1DpadLR: MvPadGlyph(dl, ImVec2(c.x - r * 1.18f, c.y), r * 0.84f, kPadL1, 1.0f, p.b[kPadL1] ? 1.0f : 0.0f); LgDpad(dl, ImVec2(c.x + r * 1.0f, c.y), r * 0.85f, false, p, acc); return;
     case kLgR1: MvPadGlyph(dl, c, r * 0.86f, kPadR1, 1.0f, lit); return;
     default: MvPadGlyph(dl, c, r * 0.80f, g, 1.0f, lit); return;
     }
@@ -1832,10 +1873,13 @@ static void LgGrid(const LgItem* it, int n, const MvPad& p, int cols, float k, I
             dl->AddText(f, fsK, ImVec2(ka.x + 6.0f * k, cyy - fsK * 0.5f), Col(1, 1, 1, 1), it[i].key);
             tx = kb.x + 7.0f * k;
         } else {
-            const bool pair = it[i].g == kLgL2R2 || it[i].g == kLgL1R1 || it[i].g == kLgL3R3 || it[i].g == kLgL1DpadLR || it[i].g == kPadOptions || it[i].g == kPadShare;
-            const float r = (compact ? 10.0f : 13.0f) * k, gx = a.x + (pair ? 2.6f : 1.6f) * r;
-            LgGlyph(dl, ImVec2(gx, (a.y + b.y) * 0.5f), r, it[i].g, p, lit, acc);
-            tx = a.x + (pair ? 5.3f : 3.4f) * r;
+            const int g0 = it[i].g; const bool pill = g0 == kPadOptions || g0 == kPadShare;
+            const bool pair = g0 == kLgL2R2 || g0 == kLgL1R1 || g0 == kLgL3R3 || g0 == kLgL1DpadLR;
+            const float r = (compact ? 12.0f : 14.0f) * k;   // (14/11 n, Agustin: "los iconos ... son pequenos") era 10 / 13
+            float gx;
+            if (pill) { const float gw = MvPadGlyphW(r * 0.80f, g0); gx = a.x + 6.0f * k + gw * 0.5f; tx = gx + gw * 0.5f + 7.0f * k; }   // OPTIONS / SHARE: su ancho real
+            else { gx = a.x + (pair ? 2.6f : 1.6f) * r; tx = a.x + (pair ? 5.3f : 3.4f) * r; }
+            LgGlyph(dl, ImVec2(gx, (a.y + b.y) * 0.5f), r, g0, p, lit, acc);
         }
         dl->PushClipRect(ImVec2(tx, a.y), ImVec2(b.x - 4.0f * k, b.y), true);
         const bool hasSub = !compact && it[i].sub && *it[i].sub;
@@ -2093,7 +2137,8 @@ void MvPhotoHud(ImDrawList* dl, ImVec2 m0, ImVec2 m1, const MvHudIn& in) {
                            { kPadSquare, nullptr, "Avanzar" }, { kLgDpadLR, nullptr, lrT }, { kPadR3, nullptr, dofT }, { kLgL1DpadLR, nullptr, "Reloj" }, { kLgDpadUD, nullptr, "Zoom" },
                            { kPadCircle, nullptr, "Reloj normal" }, { kPadTriangle, nullptr, "Volver" }, { kPadShare, nullptr, "HUD" }, { kPadOptions, nullptr, "Soltar" } };
     const Hint kKbH[] = { { -1, "W A S D", "Mover" }, { -1, "Q E", "Bajar / subir" }, { -1, "Clic der.", "Mirar" }, { -1, "P", "Pausa" },
-                          { -1, "O", "Avanzar" }, { -1, "B", dofT }, { -1, ", .", "Reloj" }, { -1, "N", "Reloj normal" }, { -1, "[ ]", "Velocidad" }, { -1, "Inicio", "Volver" }, { -1, "H", "HUD" } };
+                          in.replay ? Hint{ -1, "I  O", lrT } : Hint{ -1, "O", "Avanzar" },   // (14/11 n) en la repeticion: I atras / O adelante lento
+                          { -1, "B", dofT }, { -1, ", .", "Reloj" }, { -1, "N", "Reloj normal" }, { -1, "[ ]", "Velocidad" }, { -1, "Inicio", "Volver" }, { -1, "H", "HUD" } };
     const Hint* H = in.padMode ? kPadH : kKbH; const int nH = in.padMode ? (int)(sizeof kPadH / sizeof kPadH[0]) : (int)(sizeof kKbH / sizeof kKbH[0]);
     auto hintW = [&](const Hint& hh) {
         const float tw = f->CalcTextSizeA(fsS, FLT_MAX, 0, TRS(hh.t)).x;
@@ -2253,7 +2298,7 @@ bool MvSlowWidget(MvSlowIn& in) {
             { kPadCross, "Pausa / seguir", "congela la repeticion" }, { kPadSquare, "Avanzar despacio", "mantener, en pausa" },
             { kLgL1DpadLR, "Mas lenta / mas rapida", "L1 + cruceta: de 0.02 a x4" }, { kPadCircle, "Velocidad del menu", "deja el modo foto" } };
         static const LgItem kK[] = {   // (14/11) lo mismo con el teclado (con la camara libre prendida)
-            { -1, "Pausa / seguir", "congela la repeticion", "P" }, { -1, "Avanzar despacio", "mantener, en pausa", "O" },
+            { -1, "Pausa / seguir", "congela la repeticion", "P" }, { -1, "Avanzar / retroceder despacio", "mantener O / I", "O I" },
             { -1, "Mas lenta / mas rapida", "de 0.02 a x4", ", ." }, { -1, "Velocidad del menu", "deja el modo foto", "N" } };
         const LgItem* src = in.padUi ? kP : kK;
         LgItem it[4]; for (int i = 0; i < 4; i++) { it[i] = src[i]; it[i].label = TRS(src[i].label); it[i].sub = TRS(src[i].sub); }

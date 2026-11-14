@@ -71,7 +71,45 @@ static int s_logged = 0;
 static const char* s_origen = "";
 
 // (14/11) x344 = 3: solo mientras dura la repeticion (pitchwear.cpp ReplayNow, detector v2 y448); al terminar vuelve la camara del juego
-bool FreeCamActive() { const float v = g_cfg.live[344][0]; return v > 2.5f ? ReplayNow() : v > 0.5f; }
+// (14/11 n) tambien con el visor de repeticiones abierto en pausa (ReplayViewerCalled): antes, si se abria en pausa no se prendia nunca
+bool FreeCamActive() { const float v = g_cfg.live[344][0]; return v > 2.5f ? (ReplayNow() || ReplayViewerCalled()) : v > 0.5f; }
+
+// (14/11 n, Agustin: "la pausa y despausa a veces no funciona") TOQUES QUE NO SE PIERDEN: la camara libre leia el mando y las teclas una
+// vez por cuadro del juego; con el pasto pesado el juego iba a 10 cuadros por segundo y un toque corto de cruz / P (menos de 100 ms)
+// caia entre dos cuadros: no pasaba nada. Mientras la camara libre esta prendida un hilo propio mira el mando (MvPadPoll cuenta cada
+// boton que se aprieta) y las teclas de toque cada ~4 ms; Update usa esas cuentas para los toques (lo mantenido sigue con el estado).
+static const int kTapVk[] = { 'P', 'N', 'B', VK_OEM_COMMA, VK_OEM_PERIOD, VK_TAB, VK_HOME, VK_OEM_4, VK_OEM_6 };
+static std::atomic<uint32_t> s_keyPress[256];
+static uint32_t s_keySeen[256] = {}; static bool s_keyWas[256] = {};
+static uint32_t s_padSeen[kPadCount] = {};
+static std::atomic<bool> s_sampOn{false};
+static std::atomic<int> s_kbRplDir{0};   // teclas I / O en la repeticion: -1 atras lento, 1 adelante lento
+static void SamplerLoop() {
+    bool was[sizeof kTapVk / sizeof kTapVk[0]] = {};
+    for (;;) {
+        if (!FreeCamActive()) { s_sampOn = false; memset(was, 0, sizeof was); Sleep(40); continue; }
+        MvPad p; MvPadPoll(p);   // cuenta los botones apretados (menuvisual.cpp MvPadPresses)
+        for (size_t i = 0; i < sizeof kTapVk / sizeof kTapVk[0]; i++) {
+            const bool d = (GetAsyncKeyState(kTapVk[i]) & 0x8000) != 0;
+            if (d && !was[i]) s_keyPress[kTapVk[i] & 255].fetch_add(1, std::memory_order_relaxed);
+            was[i] = d;
+        }
+        s_sampOn = true;
+        Sleep(4);
+    }
+}
+static DWORD WINAPI SamplerThread(LPVOID) { SamplerLoop(); return 0; }
+static void SamplerEnsure() { static bool s_started = false; if (s_started) return; s_started = true;
+    if (HANDLE h = CreateThread(nullptr, 0, &SamplerThread, nullptr, 0, nullptr)) CloseHandle(h); }
+// toque de una tecla desde el ultimo cuadro (lo contado por el hilo; si el hilo no corre, el flanco de este cuadro). allow = false:
+// el toque se descarta (menu abierto, escribiendo, otra ventana)
+static bool KeyTap(int vk, bool allow) {
+    const int i = vk & 255; const bool d = (GetAsyncKeyState(vk) & 0x8000) != 0;
+    const uint32_t c = s_keyPress[i].load(std::memory_order_relaxed);
+    const bool t = s_sampOn.load(std::memory_order_relaxed) ? c != s_keySeen[i] : (d && !s_keyWas[i]);
+    s_keySeen[i] = c; s_keyWas[i] = d;
+    return allow && t;
+}
 
 // (14/11, Agustin: "que lea el control para un control preciso", "como si fuera un modo foto pero que tiene la opcion de avanzar en
 // el modo repeticion en camara lenta") MANDO EN LA CAMARA LIBRE. overlay.cpp lee el mando cada cuadro (MvPadPoll, la DLL pasa por
@@ -116,7 +154,11 @@ void FreeCamDofToggle(const char* how) {
     g_cfg.camNoDof = g_cfg.camNoDof ? 0 : 1; SaveOption("camara_sin_dof", g_cfg.camNoDof ? "1" : "0");
     Log("camara libre: desenfoque de profundidad %s (%s)", g_cfg.camNoDof ? "APAGADO" : "como el juego", how);
 }
-int FreeCamReplayDpad() { if (!s_padFly.load()) return 0; MvPad p; if (!PadGet(p) || p.b[kPadL1]) return 0; return p.b[kPadRight] ? 1 : p.b[kPadLeft] ? -1 : 0; }
+int FreeCamReplayDpad() {   // (14/11 n) tambien el teclado: O adelante lento, I atras lento (en la repeticion)
+    int d = 0;
+    if (s_padFly.load()) { MvPad p; if (PadGet(p) && !p.b[kPadL1]) d = p.b[kPadRight] ? 1 : p.b[kPadLeft] ? -1 : 0; }
+    return d != 0 ? d : s_kbRplDir.load(std::memory_order_relaxed);
+}
 FreeCamPadInfo FreeCamPadState() {
     FreeCamPadInfo i; i.wanted = FreeCamPadWanted(); i.flying = s_padFly.load(); i.step = s_phStep.load(); i.paused = s_phPause.load();
     i.advancing = s_phAdv.load(); i.scale = FreeCamPhotoScale(); i.given = s_padGive.load(); return i;
@@ -180,10 +222,11 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     if (!FreeCamActive()) {
         if (s_on) { s_on = false; s_follow = false; s_headSeen = false; s_lockNode = nullptr; g_cfg.live[345][3] = -1.0f; Log("camara libre: apagada"); }
         if (s_phStep.load() >= 0 || s_phPause.load()) { PhotoReset(); Log("modo foto: el reloj del juego vuelve a lo del menu"); }
-        s_padFly = false; s_padGive = false; memset(s_pv, 0, sizeof s_pv); memset(s_lv, 0, sizeof s_lv);
+        s_padFly = false; s_padGive = false; memset(s_pv, 0, sizeof s_pv); memset(s_lv, 0, sizeof s_lv); s_kbRplDir = 0;
         return false;
     }
     if (!s_on) {
+        MvPadPresses(s_padSeen); for (int vk : kTapVk) { s_keySeen[vk & 255] = s_keyPress[vk & 255].load(); s_keyWas[vk & 255] = true; }   // (14/11 n) lo apretado antes de prender no cuenta
         TakeFromGame(pos, tgt);
         memcpy(s_homePos, s_pos, 12); memcpy(s_homePiv, s_pivot, 12); s_homeYaw = s_yaw; s_homePitch = s_pitch; s_homeOk = true;
         s_on = true; s_zoomTarget = std::clamp(g_cfg.live[344][2], kZoomMin, 3.0f); s_wheel = 0; s_fovWritten = -1.0f;
@@ -197,19 +240,19 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     double t = Now(); float dt = (float)std::clamp(t - s_t, 0.0, 0.1); s_t = t;
     const bool front = GameInFront();
     const bool typing = g_menuTyping.load();
-    { static bool s_homeWas = false; const bool home = front && Key(VK_HOME);
-      if (home && !s_homeWas) { TakeFromGame(pos, tgt); Log("camara libre: Inicio, se vuelve a la camara del juego"); }
+    SamplerEnsure();
+    { const bool home = KeyTap(VK_HOME, front);
+      if (home) { TakeFromGame(pos, tgt); Log("camara libre: Inicio, se vuelve a la camara del juego"); }
       if (s_gzHome.exchange(0) && s_homeOk) { memcpy(s_pos, s_homePos, 12); memcpy(s_pivot, s_homePiv, 12); s_yaw = s_homeYaw; s_pitch = s_homePitch; s_zoomTarget = 1.0f;
           Log("camara libre: inicio (gizmo del Motor), vuelve a la pose con la que se prendio"); }
-      s_homeWas = home; }
+    }
     float speed = std::clamp(g_cfg.live[344][1], 0.05f, 50.0f);
     if (Key(VK_SHIFT)) speed *= 4.0f;
     if (Key(VK_CONTROL)) speed *= 0.25f;
     const float sens = std::clamp(g_cfg.live[344][3], 0.05f, 10.0f);
     // (14/11) [ y ] cambian la velocidad base en pasos de 10 % (control fino de la velocidad, Agustin)
-    { static bool s_b0 = false, s_b1 = false; const bool b0 = front && !typing && Key(VK_OEM_4), b1 = front && !typing && Key(VK_OEM_6);
-      if ((b0 && !s_b0) || (b1 && !s_b1)) { const float was = std::clamp(g_cfg.live[344][1], 0.05f, 50.0f); g_cfg.live[344][1] = std::clamp(g_cfg.live[344][1] * (b1 ? 1.1f : 1.0f / 1.1f), 0.05f, 50.0f); speed *= g_cfg.live[344][1] / was; }
-      s_b0 = b0; s_b1 = b1; }
+    { const bool b0 = KeyTap(VK_OEM_4, front && !typing), b1 = KeyTap(VK_OEM_6, front && !typing);
+      if (b0 || b1) { const float was = std::clamp(g_cfg.live[344][1], 0.05f, 50.0f); g_cfg.live[344][1] = std::clamp(g_cfg.live[344][1] * (b1 ? 1.1f : 1.0f / 1.1f), 0.05f, 50.0f); speed *= g_cfg.live[344][1] / was; } }
     // --- mando (14/11) ---
     { static bool s_repWas = false; const bool rep = ReplayNow();   // (14/11 k) al terminar la repeticion la pausa del visor no queda en el partido
       if (s_repWas && !rep && s_phPause.load()) { s_phPause = false; Log("camara libre: termino la repeticion, sin pausa"); } s_repWas = rep; }
@@ -217,7 +260,8 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     s_padFly = padOk;
     float padMul = 1.0f;
     if (padOk) {
-        bool ed[kPadCount]; for (int i = 0; i < kPadCount; i++) { ed[i] = pad.b[i] && !s_padWas[i]; s_padWas[i] = pad.b[i]; }
+        bool ed[kPadCount]; uint32_t pc[kPadCount]; MvPadPresses(pc);
+        for (int i = 0; i < kPadCount; i++) { const bool snap = pad.b[i] && !s_padWas[i]; ed[i] = s_sampOn.load() ? pc[i] != s_padSeen[i] : snap; s_padSeen[i] = pc[i]; s_padWas[i] = pad.b[i]; }   // (14/11 n) toques aunque caigan entre cuadros
         // (14/11, Agustin: "lo de la velocidad ... con las flechas del mando izquierda derecha") cruceta izquierda / derecha = velocidad
         // de la camara de a 10 % (mantener: repite cada 0.12 s despues de 0.35 s); con L1 apretado, la cruceta cambia el reloj
         const bool l1 = pad.b[kPadL1];
@@ -247,7 +291,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
         if (ed[kPadTriangle]) { TakeFromGame(pos, tgt); memset(s_pv, 0, sizeof s_pv); Log("camara libre: triangulo, se vuelve a la camara del juego"); }
         // modo foto: el reloj del juego
         auto cur = [] { return g_cfg.live[343][1] > 0.5f && TiempoMatchToo() ? TiempoFactor() : 1.0f; };
-        if (ed[kPadCross]) { if (s_phStep.load() < 0) s_phStep = NearestStep(cur()); s_phPause = !s_phPause.load(); Log("modo foto: %s", s_phPause.load() ? "pausa" : "sigue"); }
+        if (ed[kPadCross]) { if (s_phStep.load() < 0) s_phStep = NearestStep(cur()); s_phPause = !s_phPause.load(); Log("modo foto: %s (cruz del mando)", s_phPause.load() ? "pausa" : "sigue"); }
         if (l1 && (ed[kPadLeft] || ed[kPadRight])) {   // L1 + cruceta izquierda / derecha: reloj del modo foto
             int st = s_phStep.load(); if (st < 0) st = NearestStep(cur());
             st = std::clamp(st + (ed[kPadRight] ? 1 : -1), 0, kPhotoN - 1); s_phStep = st;
@@ -257,25 +301,29 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
         {   // (14/11 i, Agustin: "que cambiar el desenfoque de profundidad sea una opcion en el menu con mando") R3 (soltar sin L3) =
             // desenfoque si / no; L3 + R3 sigue siendo el menu
             static bool s_r3 = false, s_r3Combo = false;
-            if (pad.b[kPadR3]) { if (!s_r3) s_r3Combo = false; if (pad.b[kPadL3]) s_r3Combo = true; s_r3 = true; }
-            else if (s_r3) { s_r3 = false; if (!s_r3Combo) FreeCamDofToggle("R3"); }
+            if (pad.b[kPadR3] || ed[kPadR3]) { if (!s_r3) s_r3Combo = false; if (pad.b[kPadL3] || ed[kPadL3]) s_r3Combo = true; s_r3 = true; }   // (14/11 n) tambien un toque entre cuadros
+            if (!pad.b[kPadR3] && s_r3) { s_r3 = false; if (!s_r3Combo) FreeCamDofToggle("R3"); }
         }
         if (ed[kPadOptions]) { s_padGive = true; Log("camara libre: OPTIONS, el mando vuelve al juego hasta que se apague la camara libre"); }
         s_phAdv = s_phPause.load() && pad.b[kPadSquare];
-    } else { memset(s_padWas, 0, sizeof s_padWas); s_phAdv = false; }
+    } else { memset(s_padWas, 0, sizeof s_padWas); s_phAdv = false; MvPadPresses(s_padSeen); }   // sin volar con el mando: los toques contados se descartan
     // (14/11) modo foto con el teclado: P pausa / sigue, O mantenida avanza, , y . reloj mas lento / rapido, N velocidad del menu
-    if (front && !typing && !g_menuOpen.load() && !MotorPageActive()) {
-        { static bool s_tabWas = false; const bool tab = Key(VK_TAB);   // (14/11 g) siguiendo la cara: Tab = otro sujeto (Shift + Tab, el anterior)
-          if (tab && !s_tabWas && s_follow) s_subjReq = Key(VK_SHIFT) ? -1 : 1; s_tabWas = tab; }
-        static bool s_kw[5] = {}; const int vk[5] = { 'P', 'O', VK_OEM_COMMA, VK_OEM_PERIOD, 'N' }; bool kd[5], ke[5];
-        for (int i = 0; i < 5; i++) { kd[i] = Key(vk[i]); ke[i] = kd[i] && !s_kw[i]; s_kw[i] = kd[i]; }
-        auto cur = [] { return g_cfg.live[343][1] > 0.5f && TiempoMatchToo() ? TiempoFactor() : 1.0f; };
-        if (ke[0]) { if (s_phStep.load() < 0) s_phStep = NearestStep(cur()); s_phPause = !s_phPause.load(); Log("modo foto: %s (P)", s_phPause.load() ? "pausa" : "sigue"); }
-        if (ke[2] || ke[3]) { int st = s_phStep.load(); if (st < 0) st = NearestStep(cur()); st = std::clamp(st + (ke[3] ? 1 : -1), 0, kPhotoN - 1); s_phStep = st; Log("modo foto: reloj x%.2f (teclado)", kPhotoSteps[st]); }
-        if (ke[4]) { PhotoReset(); Log("modo foto: velocidad del menu (N)"); }
-        { static bool s_bWas = false; const bool bk = Key('B'); if (bk && !s_bWas && FreeCamActive()) FreeCamDofToggle("B"); s_bWas = bk; }   // (14/11 i) B = desenfoque si / no
-        if (!padOk) s_phAdv = s_phPause.load() && kd[1];
-        else if (kd[1] && s_phPause.load()) s_phAdv = true;
+    const bool kbOk = front && !typing && !g_menuOpen.load() && !MotorPageActive();
+    {   // (14/11 n) los toques se leen siempre (si no se acepta la tecla, el toque se descarta: no aparece despues al cerrar el menu)
+        const bool tab = KeyTap(VK_TAB, kbOk), kP = KeyTap('P', kbOk), kC = KeyTap(VK_OEM_COMMA, kbOk), kD = KeyTap(VK_OEM_PERIOD, kbOk), kN = KeyTap('N', kbOk), kB = KeyTap('B', kbOk);
+        const bool kO = kbOk && Key('O'), kI = kbOk && Key('I');
+        const bool rep = ReplayNow() || ReplayViewerCalled();
+        s_kbRplDir = (kbOk && rep) ? (kO && !kI ? 1 : kI && !kO ? -1 : 0) : 0;   // (14/11 n) en la repeticion: O adelante lento, I atras lento
+        if (kbOk) {
+            if (tab && s_follow) s_subjReq = Key(VK_SHIFT) ? -1 : 1;   // (14/11 g) siguiendo la cara: Tab = otro sujeto (Shift + Tab, el anterior)
+            auto cur = [] { return g_cfg.live[343][1] > 0.5f && TiempoMatchToo() ? TiempoFactor() : 1.0f; };
+            if (kP) { if (s_phStep.load() < 0) s_phStep = NearestStep(cur()); s_phPause = !s_phPause.load(); Log("modo foto: %s (P)", s_phPause.load() ? "pausa" : "sigue"); }
+            if (kC || kD) { int st = s_phStep.load(); if (st < 0) st = NearestStep(cur()); st = std::clamp(st + (kD ? 1 : -1), 0, kPhotoN - 1); s_phStep = st; Log("modo foto: reloj x%.2f (teclado)", kPhotoSteps[st]); }
+            if (kN) { PhotoReset(); Log("modo foto: velocidad del menu (N)"); }
+            if (kB && FreeCamActive()) FreeCamDofToggle("B");   // (14/11 i) B = desenfoque si / no
+            if (!padOk) s_phAdv = s_phPause.load() && kO;
+            else if (kO && s_phPause.load()) s_phAdv = true;
+        }
     }
     const bool motor = MotorFly();           // dentro del Motor: flechas para el menu, volar solo con el boton derecho
     if (front && !typing) {

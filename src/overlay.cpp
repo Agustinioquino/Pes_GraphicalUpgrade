@@ -30,7 +30,7 @@ static ID3D11RenderTargetView* s_rtv = nullptr;
 static bool s_keyWas = false;
 static std::string s_status;
 static std::string s_btnPending;   // accion de un "button =" del ini (se ejecuta fuera de g_cfgMutex)
-static ImFont* s_fontBig = nullptr; static ImFont* s_fontBold = nullptr;
+static ImFont* s_fontBig = nullptr; static ImFont* s_fontBold = nullptr; static ImFont* s_fontPad = nullptr;   // (14/11 n) s_fontPad: letras de los simbolos del mando
 static ID3D11ShaderResourceView* s_logo = nullptr; static float s_logoAspect = 1.0f;
 // (04/11) el menu se adapta a la resolucion (pedido de Agustin): letras, espacios y anchos crecen con el alto de la pantalla (1080 = 1)
 // y las letras base son mas grandes (19 -> 22 px a 1080). ui_scale queda como ajuste fino encima. Las fuentes se rasterizan al tamano
@@ -57,6 +57,12 @@ static void BuildFonts(float H) {
         if (!io.Fonts->AddFontFromFileTTF(reg.c_str(), std::round(19.0f * k * up), nullptr, io.Fonts->GetGlyphRangesDefault())) io.Fonts->AddFontDefault();
         s_fontBig = io.Fonts->AddFontFromFileTTF(bold.c_str(), std::round(27.0f * k * up), nullptr, io.Fonts->GetGlyphRangesDefault());
         s_fontBold = io.Fonts->AddFontFromFileTTF(bold.c_str(), std::round((ui ? 20.5f : 19.0f) * k * up), nullptr, io.Fonts->GetGlyphRangesDefault());
+        {   // (14/11 n) negrita chica para L1 / R1 / OPTIONS de los simbolos del mando: a su tamano (antes la letra del menu achicada a la mitad)
+            ImFontConfig pc; pc.OversampleH = 3; pc.OversampleV = 2; pc.PixelSnapH = true;
+            static const ImWchar kPadRanges[] = { 0x0020, 0x007E, 0 };
+            s_fontPad = io.Fonts->AddFontFromFileTTF(bold.c_str(), std::round(19.0f * k * up * 0.70f), &pc, kPadRanges);
+            MvSetPadFont(s_fontPad);
+        }
         Log("menu: letra %s", ui ? "Saira Semi Condensed (textures\\pes_ui.ttf)" : "Segoe UI");
     }
     {   // (04/11 n) iconos del menu (Font Awesome Free, recortado): se mezclan en la letra normal y en la negrita
@@ -2747,6 +2753,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
         // repeticion") SHARE / SELECT mantenido 0.6 s: x344 = 3 (camara libre solo en la repeticion: si ya esta en la repeticion vuela
         // enseguida); otra vez mantenido: vuelve a lo que habia. Apretarlo corto sigue mostrando / escondiendo el HUD
         static double s_shT = -1.0; static bool s_shDone = false; static float s_shPrev = 0.0f; static MvPad s_sp;
+        // (14/11 n) en la repeticion el juego no ve SHARE mantenido (su barra no se esconde al prender la camara libre): keyblock.cpp
+        g_shareMask = g_cfg.camShareHold && !g_menuOpen && !MotorPageActive() && GetForegroundWindow() == s_hwnd && (ReplayViewerCalled() || ReplayNow());
         if (g_cfg.camShareHold && !g_menuOpen && !MotorPageActive() && GetForegroundWindow() == s_hwnd && MvPadPoll(s_sp) && s_sp.connected) {
             const double tn = Now();
             if (!s_sp.b[kPadShare]) { s_shT = -1.0; s_shDone = false; }
@@ -2823,15 +2831,43 @@ void OverlayPresent(IDXGISwapChain* sc) {
         const bool camPad = FreeCamPadWanted();   // (14/11) modo foto: el mando mueve la camara libre
         if ((menuShown && (g_cfg.menuPad || g_cfg.menuPadDraw)) || comboOn || s_padHold || camPad) MvPadPoll(s_pad); else s_pad = MvPad();
         if (camPad) FreeCamPadFeed(s_pad);
-        {   // lo ultimo que se toco: el mando (palancas, gatillos o un boton) o el teclado / mouse (mover, clic, rueda, una tecla)
-            bool padIn = s_pad.connected && (fabsf(s_pad.lx) + fabsf(s_pad.ly) + fabsf(s_pad.rx) + fabsf(s_pad.ry) > 0.35f || s_pad.l2 > 0.25f || s_pad.r2 > 0.25f);
-            if (s_pad.connected) for (int i = 0; i < kPadCount; i++) padIn |= s_pad.b[i];
-            bool kbIn = fabsf(io2.MouseDelta.x) + fabsf(io2.MouseDelta.y) > 2.0f || io2.MouseWheel != 0.0f || io2.MouseDown[0] || io2.MouseDown[1];
-            if (!kbIn) for (int kk = ImGuiKey_NamedKey_BEGIN; kk < ImGuiKey_GamepadStart; kk++) if (ImGui::IsKeyDown((ImGuiKey)kk)) { kbIn = true; break; }
+        {   // lo ultimo que se toco: el mando o el teclado / mouse.
+            // (14/11 n, Agustin: "el teclado y el control deberian ser inputs diferentes con switcher o detectores para cambiar y que las
+            // cosas funcionen bien con ambos") en su log cambiaba 8 veces en 3 s: contaba como "teclado" cualquier tecla mantenida y
+            // cualquier movimiento del mouse (tambien el que pone el propio menu o el que manda el mando por Steam / DS4Windows). Ahora
+            // solo cuentan los CAMBIOS: un boton recien apretado o una palanca / gatillo que recien sale del centro = mando; una tecla
+            // recien apretada, un clic, la rueda o el mouse movido de verdad (mas de 24 px en un cuarto de segundo) = teclado y mouse,
+            // y eso no le gana al mando hasta medio segundo despues de soltarlo.
+            static bool s_dB[kPadCount] = {}, s_dStick = false, s_dTrig = false; static bool s_dKey[256] = {}; static POINT s_dCur{ -32000, -32000 };
+            static float s_dMouse = 0.0f; static double s_dPadT = -1.0e9, s_dPrevT = 0.0; static int s_dLogs = 0, s_dQuiet = 0; static double s_dLogT = 0.0;
+            const double tn = Now(); const float dtd = (float)std::clamp(tn - s_dPrevT, 0.0, 0.25); s_dPrevT = tn;
+            bool padEdge = false, padHeld = false;
+            if (s_pad.connected) {
+                for (int i = 0; i < kPadCount; i++) { padEdge |= s_pad.b[i] && !s_dB[i]; padHeld |= s_pad.b[i]; s_dB[i] = s_pad.b[i]; }
+                const bool stick = std::max(std::max(fabsf(s_pad.lx), fabsf(s_pad.ly)), std::max(fabsf(s_pad.rx), fabsf(s_pad.ry))) > 0.5f, trig = s_pad.l2 > 0.5f || s_pad.r2 > 0.5f;
+                padEdge |= (stick && !s_dStick) || (trig && !s_dTrig); padHeld |= stick || trig; s_dStick = stick; s_dTrig = trig;
+            } else { memset(s_dB, 0, sizeof s_dB); s_dStick = s_dTrig = false; }
+            if (padHeld || padEdge) s_dPadT = tn;
+            // teclado y mouse leidos directo de Windows (con el menu cerrado ImGui no recibe las teclas): solo con el juego al frente
+            bool kbEdge = false;
+            if (GetForegroundWindow() == s_hwnd) {
+                static unsigned char s_vkList[160]; static int s_vkN = 0;   // teclas que cuentan: letras, numeros, F1-F12, flechas, edicion, OEM, botones del mouse
+                if (!s_vkN) { auto add = [](int a, int b) { for (int v = a; v <= b && s_vkN < 160; v++) s_vkList[s_vkN++] = (unsigned char)v; };
+                    add(VK_LBUTTON, VK_RBUTTON); add(VK_MBUTTON, VK_XBUTTON2); add(VK_BACK, VK_TAB); add(VK_RETURN, VK_RETURN); add(VK_SHIFT, VK_CONTROL); add(VK_ESCAPE, VK_ESCAPE);
+                    add(VK_SPACE, VK_DOWN); add(VK_INSERT, VK_DELETE); add('0', '9'); add('A', 'Z'); add(VK_NUMPAD0, VK_DIVIDE); add(VK_F1, VK_F12);
+                    add(VK_OEM_1, VK_OEM_3); add(VK_OEM_4, VK_OEM_7); add(VK_OEM_102, VK_OEM_102); }
+                for (int i = 0; i < s_vkN; i++) { const int vk = s_vkList[i]; const bool d = (GetAsyncKeyState(vk) & 0x8000) != 0; kbEdge |= d && !s_dKey[vk]; s_dKey[vk] = d; }
+                POINT cp{}; if (GetCursorPos(&cp)) { if (s_dCur.x != -32000) s_dMouse = s_dMouse * expf(-dtd * 4.0f) + (float)(std::abs(cp.x - s_dCur.x) + std::abs(cp.y - s_dCur.y)); s_dCur = cp; }
+                if (s_dMouse > 24.0f * UIK()) { kbEdge = true; s_dMouse = 0.0f; }
+            } else { memset(s_dKey, 1, sizeof s_dKey); s_dCur.x = -32000; s_dMouse = 0.0f; }   // al volver al juego, lo que ya estaba apretado no cuenta
             const int was = s_lastDev;
-            if (padIn) s_lastDev = 1; else if (kbIn) s_lastDev = 0;
+            if (padEdge) s_lastDev = 1;
+            else if (kbEdge && tn - s_dPadT > 0.5) s_lastDev = 0;
             if (!s_pad.connected) s_lastDev = 0;
-            if (was != s_lastDev) Log("menu: se adapta a %s", s_lastDev ? "el mando" : "teclado y mouse");
+            if (was != s_lastDev) {   // al log: los primeros 12 cambios y despues uno cada 30 s con cuantos hubo
+                if (s_dLogs < 12) { s_dLogs++; Log("menu: se adapta a %s", s_lastDev ? "el mando" : "teclado y mouse"); }
+                else if (++s_dQuiet, tn - s_dLogT > 30.0) { s_dLogT = tn; Log("menu: se adapta a %s (%d cambios mas desde el ultimo aviso)", s_lastDev ? "el mando" : "teclado y mouse", s_dQuiet); s_dQuiet = 0; }
+            }
         }
         {   // (14/11, Agustin: "al abrir el menu con l3+r3 por ejemplo") L3 + R3 juntos abren y cierran el menu
             const bool combo = s_pad.b[kPadL3] && s_pad.b[kPadR3];
@@ -2953,7 +2989,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         dl->AddText(ImVec2(a0.x + pad.x, a0.y + pad.y), IM_COL32(235, 240, 245, (int)(255 * a)), msg.c_str());
     }
     if (gizmo) MotorGizmoDraw();
-    if (repe && !camFree) RepeticionDraw();   // (14/11 k, Agustin: "que no se muestre el menu raro del tiempo de abajo") con la camara libre no se dibuja la barra de la repeticion
+    if (repe) RepeticionDraw(mmCur);   // (14/11 n) solo la marca y el minuto al pasar el mouse sobre la barra DEL JUEGO, con o sin camara libre (antes no se dibujaba nada con la camara libre)
     if (keyHud) KeyHudDraw();
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
