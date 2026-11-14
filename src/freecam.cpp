@@ -214,7 +214,12 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
         const bool l1 = pad.b[kPadL1];
         if (!l1 && pad.b[kPadR1]) padMul *= 3.0f;
         if (l1 && !pad.b[kPadR1] && !pad.b[kPadLeft] && !pad.b[kPadRight]) padMul *= 0.25f;
-        if (s_follow && ed[kPadR3] && !pad.b[kPadL3]) s_subjReq = pad.b[kPadL1] ? -1 : 1;   // (14/11 g) siguiendo la cara: R3 = otro sujeto (L1 + R3, el anterior)
+        {   // (14/11 g, Agustin: "usar los gatillos para cambiar de cara, los gatillos mas otro boton") siguiendo la cara: L1 + R2 = la
+            // cara siguiente (a la derecha), L1 + L2 = la anterior; al apretar el gatillo hasta la mitad
+            static bool s_r2Was = false, s_l2Was = false; const bool r2 = pad.r2 > 0.5f, l2 = pad.l2 > 0.5f;
+            if (s_follow && pad.b[kPadL1]) { if (r2 && !s_r2Was) s_subjReq = 1; else if (l2 && !s_l2Was) s_subjReq = -1; }
+            s_r2Was = r2; s_l2Was = l2;
+        }
         // (14/11 g) en la repeticion la cruceta izquierda / derecha es la del visor (avanzar / retroceder lento con las velocidades de
         // SlowMoServer, rastro.cpp PhotoReplayCtl); fuera de la repeticion, la velocidad de la camara
         if (!ReplayNow()) { static double s_rep = 0.0; const int dir = l1 ? 0 : pad.b[kPadRight] ? 1 : pad.b[kPadLeft] ? -1 : 0;
@@ -373,7 +378,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
             s_dist *= 1.0f + Curve(pad.ly) * 0.9f * dt * sm;
             s_oYaw -= (Curve(pad.lx) + Curve(pad.rx)) * 1.4f * dt * std::min(padMul, 1.5f);
             s_oPitch -= Curve(pad.ry) * 1.1f * dt * std::min(padMul, 1.5f);
-            s_lift += (pad.r2 - pad.l2) * 0.5f * std::clamp(s_dist * tanHalf, 0.05f, 2.0f) * dt * sm;
+            if (!pad.b[kPadL1]) s_lift += (pad.r2 - pad.l2) * 0.5f * std::clamp(s_dist * tanHalf, 0.05f, 2.0f) * dt * sm;
         }
         s_lift = std::clamp(s_lift, -1.2f, 0.8f);
         {   // centro del encuadre = cara + subir / bajar
