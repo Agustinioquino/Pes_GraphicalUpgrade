@@ -1,0 +1,179 @@
+// PES 2021 - vertex shader de las PESTANAS reales de la cara (DrawIdx 312 en la captura de Messi del 04/11; PS f0d74b9c, alfa
+// con dither y G-buffer). Reescrito desde el ensamblador capturado en la PC (04/11 05:54, tools/asm2hlsl.py): skinning de 4
+// huesos (b6, el cuadro anterior en el registro 96 para los vectores de movimiento), vista -> clip, mismas salidas que el juego.
+// PES21 FX (04/11, Agustin: "los parpados y ojos su deteccion ... por hueso"): el juego dibuja las pestanas con este VS propio,
+// sin el parpadeo, la mirada ni las formas del mod; con "Por huesos (real)" la piel del parpado se movia y las pestanas no.
+// Ahora llevan lo mismo que la piel (faab87ee): formas esculpidas pasadas de la piel (PesShapeDelta, expr.cpp), gesto agrandado
+// (PesExprApply) y parpadeo / mirada / forma del ojo (PesBlinkApply) con los parpados que la DLL encuentra en ESTA malla (b12).
+// Sin la regla "expr = 12" (b12 en 99) queda exacto como el juego.
+
+cbuffer cVSScene : register(b2)
+{
+
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_vsScene : packoffset(c0);
+
+}
+
+cbuffer cVSObject : register(b5)
+{
+
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[9];
+  } g_vsObject : packoffset(c0);
+
+}
+
+cbuffer VSBones : register(b6)
+{
+
+  struct
+  {
+    float4x3 m_boneMatrices[32];
+  } g_vsBone : packoffset(c0);
+
+
+  struct
+  {
+    float4x3 m_boneMatrices[32];
+  } g_vsPrevBone : packoffset(c96);
+
+}
+
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+#include "pes_skintone.hlsli"
+#include "pes_expr.hlsli"     // PesShapeDelta / PesExprApply / PesBlinkApply (b12 de la malla: expr.cpp)
+
+
+void main(
+  float4 v0 : POSITION0,
+  float4 v1 : NORMAL0,
+  float4 v2 : TANGENT0,
+  uint4 v3 : BLENDINDICES0,
+  float4 v4 : BLENDWEIGHT0,
+  float2 v5 : TEXCOORD0,
+  float2 v6 : TEXCOORD1,
+  float2 v7 : TEXCOORD2,
+  float2 v8 : TEXCOORD3,
+  uint pesVid : SV_VertexID,
+  out float4 o0 : SV_Position0,
+  out float4 o1 : COLOR0,
+  out float2 o2 : TEXCOORD0,
+  out float2 p2 : TEXCOORD9,
+  out float3 o3 : TEXCOORD5,
+  out float3 o4 : TEXCOORD6,
+  out float3 o5 : TEXCOORD7,
+  out float4 o6 : TEXCOORD8)
+{
+  float4 r0,r1,r2,r3,r4,r5,r6;
+  float3 v0r = v0.xyz;
+  v0.xyz += PesShapeDelta(pesVid);
+  if (g_vsObject.m_useWeightCount.x != 0) {
+    r1.xyzw = g_vsBone.m_boneMatrices[v3.y]._m00_m10_m20_m30 * v4.yyyy;
+    r2.xyzw = g_vsBone.m_boneMatrices[v3.y]._m01_m11_m21_m31 * v4.yyyy;
+    r3.xyzw = g_vsBone.m_boneMatrices[v3.y]._m02_m12_m22_m32 * v4.yyyy;
+    r1.xyzw = g_vsBone.m_boneMatrices[v3.x]._m00_m10_m20_m30 * v4.xxxx + r1.xyzw;
+    r2.xyzw = g_vsBone.m_boneMatrices[v3.x]._m01_m11_m21_m31 * v4.xxxx + r2.xyzw;
+    r3.xyzw = g_vsBone.m_boneMatrices[v3.x]._m02_m12_m22_m32 * v4.xxxx + r3.xyzw;
+    r1.xyzw = g_vsBone.m_boneMatrices[v3.z]._m00_m10_m20_m30 * v4.zzzz + r1.xyzw;
+    r2.xyzw = g_vsBone.m_boneMatrices[v3.z]._m01_m11_m21_m31 * v4.zzzz + r2.xyzw;
+    r3.xyzw = g_vsBone.m_boneMatrices[v3.z]._m02_m12_m22_m32 * v4.zzzz + r3.xyzw;
+    r1.xyzw = g_vsBone.m_boneMatrices[v3.w]._m00_m10_m20_m30 * v4.wwww + r1.xyzw;
+    r2.xyzw = g_vsBone.m_boneMatrices[v3.w]._m01_m11_m21_m31 * v4.wwww + r2.xyzw;
+    r3.xyzw = g_vsBone.m_boneMatrices[v3.w]._m02_m12_m22_m32 * v4.wwww + r3.xyzw;
+    r4.x = dot(v0.xyzw, r1.xyzw);
+    r4.y = dot(v0.xyzw, r2.xyzw);
+    r4.z = dot(v0.xyzw, r3.xyzw);
+    r5.x = dot(v1.xyz, r1.xyz);
+    r5.y = dot(v1.xyz, r2.xyz);
+    r5.z = dot(v1.xyz, r3.xyz);
+    r1.x = dot(v2.xyz, r1.xyz);
+    r1.y = dot(v2.xyz, r2.xyz);
+    r1.z = dot(v2.xyz, r3.xyz);
+    r2.xyzw = g_vsPrevBone.m_boneMatrices[v3.y]._m00_m10_m20_m30 * v4.yyyy;
+    r3.xyzw = g_vsPrevBone.m_boneMatrices[v3.y]._m01_m11_m21_m31 * v4.yyyy;
+    r6.xyzw = g_vsPrevBone.m_boneMatrices[v3.y]._m02_m12_m22_m32 * v4.yyyy;
+    r2.xyzw = g_vsPrevBone.m_boneMatrices[v3.x]._m00_m10_m20_m30 * v4.xxxx + r2.xyzw;
+    r3.xyzw = g_vsPrevBone.m_boneMatrices[v3.x]._m01_m11_m21_m31 * v4.xxxx + r3.xyzw;
+    r6.xyzw = g_vsPrevBone.m_boneMatrices[v3.x]._m02_m12_m22_m32 * v4.xxxx + r6.xyzw;
+    r2.xyzw = g_vsPrevBone.m_boneMatrices[v3.z]._m00_m10_m20_m30 * v4.zzzz + r2.xyzw;
+    r3.xyzw = g_vsPrevBone.m_boneMatrices[v3.z]._m01_m11_m21_m31 * v4.zzzz + r3.xyzw;
+    r6.xyzw = g_vsPrevBone.m_boneMatrices[v3.z]._m02_m12_m22_m32 * v4.zzzz + r6.xyzw;
+    r2.xyzw = g_vsPrevBone.m_boneMatrices[v3.w]._m00_m10_m20_m30 * v4.wwww + r2.xyzw;
+    r3.xyzw = g_vsPrevBone.m_boneMatrices[v3.w]._m01_m11_m21_m31 * v4.wwww + r3.xyzw;
+    r6.xyzw = g_vsPrevBone.m_boneMatrices[v3.w]._m02_m12_m22_m32 * v4.wwww + r6.xyzw;
+    r2.x = dot(v0.xyzw, r2.xyzw);
+    r2.y = dot(v0.xyzw, r3.xyzw);
+    r2.z = dot(v0.xyzw, r6.xyzw);
+    // (04/11) lo mismo que la piel de la cara (faab87ee): gesto agrandado por zona y parpadeo / mirada / forma del ojo del mod
+    PesExprApply(v0, v0r, v3, v4, v1.xyz, v2.xyz, r4.xyz, r2.xyz, r5.xyz, r1.xyz);
+    PesBlinkApply(v0, v0r, v3, v4, v1.xyz, r4.xyz, r2.xyz, r5.xyz);
+  } else {
+    r5.xyz = v1.xyz;
+    r1.xyz = v2.xyz;
+    r4.xyz = v0.xyz;
+    r2.xyz = v0.xyz;
+  }
+  r4.w = v0.w;
+  r0.x = dot(r4.xyzw, g_vsObject.m_viewWorld._m00_m10_m20_m30);
+  r0.y = dot(r4.xyzw, g_vsObject.m_viewWorld._m01_m11_m21_m31);
+  r0.z = dot(r4.xyzw, g_vsObject.m_viewWorld._m02_m12_m22_m32);
+  r0.w = dot(r4.xyzw, g_vsObject.m_viewWorld._m03_m13_m23_m33);
+  r3.x = dot(r0.xyzw, g_vsScene.m_projection._m00_m10_m20_m30);
+  r3.y = dot(r0.xyzw, g_vsScene.m_projection._m01_m11_m21_m31);
+  o0.z = dot(r0.xyzw, g_vsScene.m_projection._m02_m12_m22_m32);
+  r3.w = dot(r0.xyzw, g_vsScene.m_projection._m03_m13_m23_m33);
+  r2.w = v0.w;
+  r0.x = dot(r2.xyzw, g_vsScene.m_shadowProjection._m00_m10_m20_m30);
+  r0.y = dot(r2.xyzw, g_vsScene.m_shadowProjection._m01_m11_m21_m31);
+  r0.z = dot(r2.xyzw, g_vsScene.m_shadowProjection._m02_m12_m22_m32);
+  r0.w = dot(r2.xyzw, g_vsScene.m_shadowProjection._m03_m13_m23_m33);
+  o6.z = dot(r0.xyzw, g_vsScene.m_shadowProjection2._m00_m10_m20_m30);
+  o6.w = dot(r0.xyzw, g_vsScene.m_shadowProjection2._m01_m11_m21_m31);
+  p2.y = dot(r0.xyzw, g_vsScene.m_shadowProjection2._m03_m13_m23_m33);
+  r0.x = dot(r5.xyz, g_vsObject.m_viewWorld._m00_m10_m20);
+  r0.y = dot(r5.xyz, g_vsObject.m_viewWorld._m01_m11_m21);
+  r0.z = dot(r5.xyz, g_vsObject.m_viewWorld._m02_m12_m22);
+  r0.xyz = r0.xyz * rsqrt(dot(r0.xyz, r0.xyz));
+  r2.x = dot(r1.xyz, g_vsObject.m_viewWorld._m00_m10_m20);
+  r2.y = dot(r1.xyz, g_vsObject.m_viewWorld._m01_m11_m21);
+  r2.z = dot(r1.xyz, g_vsObject.m_viewWorld._m02_m12_m22);
+  r1.xyz = r2.xyz * rsqrt(dot(r2.xyz, r2.xyz));
+  r2.xyz = r0.zxy * r1.yzx;
+  r2.xyz = r0.yzx * r1.zxy - r2.xyz;
+  r2.xyz = r2.xyz * rsqrt(dot(r2.xyz, r2.xyz));
+  r2.xyz = r2.xyz * v2.www;
+  o3.xyz = r1.xyz;
+  o4.xyz = r2.xyz;
+  o5.xyz = r0.xyz;
+  o0.xyw = r3.xyw;
+  o1.xyz = float3(1, 1, 1);
+  o1.w = g_vsObject.m_useWeightCount.w;
+  o6.xy = r3.xy;
+  o2.xy = v5.xy;
+  p2.x = r3.w;
+  return;
+}
