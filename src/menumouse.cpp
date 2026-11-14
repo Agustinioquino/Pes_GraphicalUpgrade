@@ -67,6 +67,12 @@ static const uintptr_t kTitleVt = 0x142671970ull, kPadActive = 0x141b58200ull, k
 static const unsigned char kPadActiveSig[14] = { 0x8b,0xd1,0x48,0x8b,0x0d,0x8f,0x6c,0xca,0x01,0x48,0x85,0xc9,0x74,0x07 };
 static const unsigned char kTitleGoSig[14] = { 0x40,0x53,0x48,0x83,0xec,0x20,0xba,0x13,0x00,0x00,0x00,0x48,0x8b,0xd9 };
 static bool s_titleOk = false;
+// (14/11 ythnmm, Agustin: "el video de introduccion no es salteable") video de la intro menu::Movie (vtable 0x142671230): su vf40
+// 0x140a98b80, en el estado 2 (+0xa4, video andando), con el boton aceptar (codigo 0x24) o 0x1b corta el video: si +0xa5 == 0 lo pone
+// en 1 y llama a 0x140e72ee0([pagina+0x90]) (para el video), despues +0xa4 = 3 y +0xa6 = 1. El clic izquierdo hace exactamente eso.
+static const uintptr_t kMovieVt = 0x142671230ull, kMovieStop = 0x140e72ee0ull;
+static const unsigned char kMovieStopSig[14] = { 0x48,0x89,0x5c,0x24,0x08,0x57,0x48,0x83,0xec,0x20,0x48,0x8b,0xd9,0xe8 };
+static bool s_movieOk = false;
 // estado del hilo del menu (los tres ganchos corren ahi)
 static void* s_pendWin = nullptr; static int s_pendAction = -1;
 static void* s_pendDxWin = nullptr; static int s_pendDx = 0;              // (v3) clic sobre una fila con selector: "derecha" / "izquierda" para el juego
@@ -244,6 +250,16 @@ static void Step(void* win) {
     uint8_t* I = P8((uint8_t*)win + 0x88); if (!Ptr(I)) return;
     s_liveT.store(now); s_nStep.fetch_add(1, std::memory_order_relaxed);
     if (!s_m.ok) return;
+    if (s_m.lEdge && s_movieOk && *(uintptr_t*)win == kMovieVt) {        // video de la intro: clic = saltearlo
+        uint8_t* w = (uint8_t*)win;
+        if (w[0xa4] == 2 && Ptr(P8(w + 0x90))) {
+            s_m.lEdge = false; s_moveT.store(now);
+            if (w[0xa5] == 0) { w[0xa5] = 1; ((void (*)(void*))kMovieStop)(P8(w + 0x90)); }
+            w[0xa4] = 3; w[0xa6] = 1;
+            Log("mouse en menus: clic en el video de la intro -> saltearlo (permitido por el juego %d / %d)", (int)w[0xb9], (int)U32(w + 0xa0));
+            return;
+        }
+    }
     if (s_m.lEdge && s_titleOk && *(uintptr_t*)win == kTitleVt) {        // titulo: clic = "apreta cualquier boton"
         uint8_t* w = (uint8_t*)win;
         if (U32(w + 0x9c) != 1 && w[0xd8] != 0) {
@@ -401,6 +417,7 @@ static void Install() {
         Log("mouse en menus: MinHook no pudo prender los ganchos: se omite"); return;
     }
     s_titleOk = SigAt(kPadActive, kPadActiveSig, sizeof kPadActiveSig) && SigAt(kTitleGo, kTitleGoSig, sizeof kTitleGoSig);
+    s_movieOk = SigAt(kMovieStop, kMovieStopSig, sizeof kMovieStopSig);
     if (!s_titleOk) Log("mouse en menus: firma del titulo distinta (0x141b58200 / 0x140a99250): sin clic en el titulo");
     s_ok = true;
     Log("mouse en menus: listo (prueba del puntero 0x140e400d0, direcciones 0x140e3e6b0, acciones 0x140e48f80); mouse_menus = %d (0 lo apaga)", g_cfg.menuMouse);
