@@ -24,7 +24,16 @@ def noise1(n, seed, sig):
     r = np.random.default_rng(seed); g = r.random(n).astype(np.float32)
     g = gaussian_filter(g, sig, mode='wrap'); return (g - g.mean()) / (g.std() + 1e-6)
 
-def make_tuft(nbL, nbS, lenL, lenS, wid, fan, droopR, seed):
+# (08/11 y) fila 1 del atlas: TIPO B de hoja (Agustin: "dos tipos de hojas distintos"): menos hojas, mas anchas y planas, con el
+# nervio marcado como un pliegue (canaleta en V) y torsion a lo largo: hoja de raigras ancho / festuca, contra la fina de la fila 0
+BANDS_B = [
+    ('corto B',  11, 6, (0.40, 0.72), (0.22, 0.40), (0.046, 0.085), 30, (0.04, 0.14), 23),
+    ('medio B',  10, 5, (0.58, 0.98), (0.30, 0.52), (0.052, 0.100), 38, (0.08, 0.30), 29),
+    ('largo B',   9, 4, (0.75, 1.00), (0.35, 0.55), (0.058, 0.110), 42, (0.18, 0.50), 31),
+    ('medio B2', 10, 5, (0.55, 0.95), (0.28, 0.50), (0.050, 0.095), 36, (0.08, 0.32), 37),
+]
+
+def make_tuft(nbL, nbS, lenL, lenS, wid, fan, droopR, seed, typeB=False):
     N = S; rng = np.random.default_rng(seed)
     yy, xx = np.mgrid[0:N, 0:N].astype(np.float32)
     cov = np.zeros((N, N), np.float32); R = np.full((N, N), 0.5, np.float32); G = np.full((N, N), 0.5, np.float32)
@@ -71,15 +80,28 @@ def make_tuft(nbL, nbS, lenL, lenS, wid, fan, droopR, seed):
         s = np.clip(bs / np.maximum(w, 1e-3), -1, 1)
         alpha = np.clip((w - best) / 1.1, 0, 1)
         inside = alpha > 0.02
-        vein = np.exp(-(s / 0.22) ** 2) * 0.16 - (np.abs(s) > 0.75) * (np.abs(s) - 0.75) * 0.5
-        streak = noise1(256, sd, 3.0)[np.clip((s * 0.5 + 0.5) * 255, 0, 255).astype(int)] * 0.045
-        along = noise1(512, sd + 1, 14.0)[np.clip(bt * 511, 0, 511).astype(int)] * 0.05
-        lightness = 0.5 + tone + vein + streak + along + 0.06 * (bt - 0.3)
-        ao = (0.40 + 0.60 * np.clip(bt / 0.55, 0, 1) ** 0.8) * (0.85 + 0.15 * depth_rank[i])   # raiz 0.34 .. punta 1 (antes 0.17: visto desde arriba quedaba todo hundido)
-        gloss = (1.0 - 0.55 * s * s) * (0.55 + 0.45 * np.clip(bt, 0, 1)) * (0.85 + 0.15 * depth_rank[i])
-        nx = -s * 0.55 + np.sign(s) * np.exp(-(s / 0.18) ** 2) * 0.25
-        ny = 0.14 * np.sin(bt * 11.0 + float(sd % 7)) * (0.4 + 0.6 * bt)
-        thick = 1.0 - 0.7 * bt ** 1.2
+        if typeB:
+            # hoja ancha en V: canaleta central oscura y mas honda, lomos a los lados mas claros, torsion lenta (la normal gira a lo largo)
+            tw = np.sin(bt * 5.5 + float(sd % 11) * 0.6) * 0.5
+            vein = -np.exp(-(s / 0.30) ** 2) * 0.14 + np.exp(-((np.abs(s) - 0.55) / 0.20) ** 2) * 0.10 - (np.abs(s) > 0.80) * (np.abs(s) - 0.80) * 0.6
+            streak = noise1(256, sd, 5.0)[np.clip((s * 0.5 + 0.5) * 255, 0, 255).astype(int)] * 0.03
+            along = noise1(512, sd + 1, 20.0)[np.clip(bt * 511, 0, 511).astype(int)] * 0.06
+            lightness = 0.5 + tone + vein + streak + along + 0.05 * (bt - 0.3) + 0.04 * tw * s
+            ao = (0.42 + 0.58 * np.clip(bt / 0.55, 0, 1) ** 0.8) * (0.85 + 0.15 * depth_rank[i]) * (1.0 - 0.10 * np.exp(-(s / 0.30) ** 2))
+            gloss = (1.0 - 0.35 * s * s) * (0.60 + 0.40 * np.clip(bt, 0, 1)) * (0.85 + 0.15 * depth_rank[i]) * (1.0 + 0.15 * np.exp(-((np.abs(s) - 0.55) / 0.20) ** 2))
+            nx = -s * 0.85 + np.sign(s) * np.exp(-(s / 0.30) ** 2) * 0.45 + tw * 0.25
+            ny = 0.10 * np.sin(bt * 7.0 + float(sd % 7)) * (0.4 + 0.6 * bt) + tw * 0.12
+            thick = 1.0 - 0.55 * bt ** 1.3
+        else:
+            vein = np.exp(-(s / 0.22) ** 2) * 0.16 - (np.abs(s) > 0.75) * (np.abs(s) - 0.75) * 0.5
+            streak = noise1(256, sd, 3.0)[np.clip((s * 0.5 + 0.5) * 255, 0, 255).astype(int)] * 0.045
+            along = noise1(512, sd + 1, 14.0)[np.clip(bt * 511, 0, 511).astype(int)] * 0.05
+            lightness = 0.5 + tone + vein + streak + along + 0.06 * (bt - 0.3)
+            ao = (0.40 + 0.60 * np.clip(bt / 0.55, 0, 1) ** 0.8) * (0.85 + 0.15 * depth_rank[i])   # raiz 0.34 .. punta 1 (antes 0.17: visto desde arriba quedaba todo hundido)
+            gloss = (1.0 - 0.55 * s * s) * (0.55 + 0.45 * np.clip(bt, 0, 1)) * (0.85 + 0.15 * depth_rank[i])
+            nx = -s * 0.55 + np.sign(s) * np.exp(-(s / 0.18) ** 2) * 0.25
+            ny = 0.14 * np.sin(bt * 11.0 + float(sd % 7)) * (0.4 + 0.6 * bt)
+            thick = 1.0 - 0.7 * bt ** 1.2
         blend = np.clip(alpha, 0, 1)
         def put(dst, val):
             cur = dst[ym0:ym1, xm0:xm1]; dst[ym0:ym1, xm0:xm1] = np.where(inside, cur * (1 - blend) + val * blend, cur)
@@ -93,8 +115,9 @@ def make_tuft(nbL, nbS, lenL, lenS, wid, fan, droopR, seed):
     return np.stack([R, G, B, cov], -1), np.stack([NX * 0.5 + 0.5, NY * 0.5 + 0.5, T, TH], -1)
 
 tufts = [make_tuft(*b[1:]) for b in BANDS]
-img = np.concatenate([t[0] for t in tufts], 1)
-nrm = np.concatenate([t[1] for t in tufts], 1)
+tuftsB = [make_tuft(*b[1:], typeB=True) for b in BANDS_B]   # (08/11 y) fila 1 del atlas (2048x1024): hoja tipo B
+img = np.concatenate([np.concatenate([t[0] for t in tufts], 1), np.concatenate([t[0] for t in tuftsB], 1)], 0)
+nrm = np.concatenate([np.concatenate([t[1] for t in tufts], 1), np.concatenate([t[1] for t in tuftsB], 1)], 0)
 cov = img[..., 3]
 
 def half(a): return (a[0::2, 0::2] + a[1::2, 0::2] + a[0::2, 1::2] + a[1::2, 1::2]) * 0.25
@@ -137,4 +160,4 @@ write_dds(os.path.join(out, 'pes_grass_blades_n.dds'), mipsN)
 from PIL import Image
 prev = np.concatenate([img[..., :3] * img[..., 3:4] + (1 - img[..., 3:4]) * 0.08, nrm[..., :3]], 0)
 Image.fromarray((np.clip(prev, 0, 1) * 255).astype(np.uint8)).save(os.path.join(out, 'pes_grass_blades_preview.png'))
-print('ok cobertura por banda', [round(float((t[0][..., 3] > 0.3).mean()), 3) for t in tufts])
+print('ok cobertura por banda', [round(float((t[0][..., 3] > 0.3).mean()), 3) for t in tufts], 'tipo B', [round(float((t[0][..., 3] > 0.3).mean()), 3) for t in tuftsB])

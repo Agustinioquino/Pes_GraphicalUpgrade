@@ -486,7 +486,7 @@ static bool SaveReport(int ci, std::string& outPath) {
         const Rule* ru = RuleForHash(h); wchar_t nm[64]; swprintf(nm, 64, L"shaders\\%016llx-ps_replace.txt", (unsigned long long)h);
         bool repl = GetFileAttributesW((g_cfg.baseDir + nm).c_str()) != INVALID_FILE_ATTRIBUTES;
         snprintf(b, sizeof(b), "\n[shader %016llx] %s\n", (unsigned long long)h, repl ? "reemplazado por el mod" : "del juego"); r += b;
-        if (ru) for (auto& a : ru->actions) { const char* k = a.kind == RuleAction::CopyCB ? "copy_cb" : a.kind == RuleAction::RefSRV ? "ref_srv" : a.kind == RuleAction::BindCB ? "cb" : a.kind == RuleAction::BindSRV ? "srv" : a.kind == RuleAction::SetParam ? "param" : a.kind == RuleAction::EventTurf ? "event" : "facegen";
+        if (ru) for (auto& a : ru->actions) { const char* k = a.kind == RuleAction::CopyCB ? "copy_cb" : a.kind == RuleAction::RefSRV ? "ref_srv" : a.kind == RuleAction::BindCB ? "cb" : a.kind == RuleAction::BindSRV ? "srv" : a.kind == RuleAction::SetParam ? "param" : a.kind == RuleAction::EventTurf ? "event" : a.kind == RuleAction::Expr ? "expr" : a.kind == RuleAction::Beard ? "beard" : "facegen";
             snprintf(b, sizeof(b), "regla: %s %d %s %d\n", k, a.slot, a.name.c_str(), a.idx); r += b; }
         if (repl) for (int n : ParamsUsedBy(h)) { snprintf(b, sizeof(b), "param %d: %.4f %.4f %.4f %.4f\n", n, g_cfg.live[n][0], g_cfg.live[n][1], g_cfg.live[n][2], g_cfg.live[n][3]); r += b; }
         std::lock_guard<std::mutex> lk(s_layMx); auto it = s_layers.find(h);
@@ -754,7 +754,7 @@ void InspectDrawOverlay() {
                     ImGui::Text("PS %016llx: %s", (unsigned long long)h, repl ? "REEMPLAZADO por el mod" : "del juego (sin reemplazo)");
                     if (ru) { ImGui::TextUnformatted("Regla (PES21FX_rules.ini):");
                         for (auto& a : ru->actions) {
-                            const char* k = a.kind == RuleAction::CopyCB ? "copy_cb" : a.kind == RuleAction::RefSRV ? "ref_srv" : a.kind == RuleAction::BindCB ? "cb" : a.kind == RuleAction::BindSRV ? "srv" : a.kind == RuleAction::SetParam ? "param" : a.kind == RuleAction::EventTurf ? "event" : "facegen";
+                            const char* k = a.kind == RuleAction::CopyCB ? "copy_cb" : a.kind == RuleAction::RefSRV ? "ref_srv" : a.kind == RuleAction::BindCB ? "cb" : a.kind == RuleAction::BindSRV ? "srv" : a.kind == RuleAction::SetParam ? "param" : a.kind == RuleAction::EventTurf ? "event" : a.kind == RuleAction::Expr ? "expr" : a.kind == RuleAction::Beard ? "beard" : "facegen";
                             if (a.kind == RuleAction::FaceGen) ImGui::BulletText("facegen: quinta textura en t%d / t%d, mapa de pelo en t26, semillas u5/u6", a.slot, a.idx);
                             else if (a.kind == RuleAction::SetParam) ImGui::BulletText("param %d.%d = %s", a.idx, a.comp, a.var.empty() ? std::to_string(a.value).c_str() : a.var.c_str());
                             else ImGui::BulletText("%s %d %s", k, a.slot, a.name.c_str()); } }

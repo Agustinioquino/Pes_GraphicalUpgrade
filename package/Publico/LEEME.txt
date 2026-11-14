@@ -1,0 +1,8 @@
+Publico mejorado (solo texturas, sin DLL). Copiar la carpeta Asset a una raiz de livecpk de Sider (cpk.root). Generado con tools/crowd/mejorar_publico.py.
+Atlas de caras 2048x4096 (x2, nitidez suave), normal 2048, srm 1024, paletas de ropa con mas color. Si falla o no gusta: borrar la carpeta Asset de ese livecpk.
+Modelos: Asset/model/bg/common/audi/#Win/audi_model.fpk = los 14 au*.fmdl con la LOD cercana subdividida (x4 triangulos, suavizado 0.6),
+mismo esqueleto/UV/materiales; LOD media y lejana sin cambios. Generado con tools/crowd/subdividir_publico.py. Si baja el FPS en partidos con estadio lleno: borrar solo ese .fpk.
+(08/11 b) audi_model.fpk lleva ademas los pesos de 3 huesos de la cara (mandibula, cejas) en el COLOR del vertice (tools/crowd/pesos_cara.py):
+los mueve la DLL (publico.cpp, fila 394) con los VS del publico del mod. Sin la DLL los modelos se ven igual que sin pesos (quietos).
+(08/11 d) COLOR.x = 6 o 7 segun donde esta el cachete en la UV del modelo (hinchas sin camiseta: el VS pinta el torso con la piel de la cara).
+(08/11 e) remera en la mano (tools/crowd/remera_mano.py): 2 remeras chicas por modelo en la LOD cercana (una por mano), con la UV del pecho del mismo hincha = colores de su kit. El juego las esconde siempre (COLOR.x 200..203); el VS del mod las muestra solo en hinchas sin camiseta, colgando o revoleadas con ondas de bandera. audi_model.fpk CRC 73011CEA.

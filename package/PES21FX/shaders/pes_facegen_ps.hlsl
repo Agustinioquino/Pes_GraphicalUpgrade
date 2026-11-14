@@ -79,7 +79,10 @@ void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Ta
   float dark = smoothstep(0.62, 0.38, ratio) * smoothstep(0.15, 0.06, lum0) * smoothstep(0.45, 0.20, sat);   // mismo criterio que el shader de cara
   float hf = abs(lum0 - lum3);
   float hairHF = saturate((hf - 0.035) * 10.0) * smoothstep(0.35, 0.12, lum3);
-  float hairA = 1.0 - saturate((dif0.a - 0.90) * 10.0);   // el alpha del color marca las capas de pelo
+  // (31/10) el alpha del color marca las capas de pelo, pero es un recorte duro por texel (bloques en la sien / patilla de las
+  // genericas): se toma del mip 4 (promedio de 16x16 texeles) con una pendiente suave -> el nacimiento del pelo se funde en ~2 cm
+  float a4 = tDiffuse.SampleLevel(sLin, uv, 4.0).a;
+  float hairA = saturate((0.90 - a4) * 8.0);
   float hair = saturate(max(max(dark, hairHF), hairA * 0.8));
   // dentro de la cara (zona central) el alpha no cuenta: solo barba/cejas por color
   float faceZone = Ell(uv, float2(0.5, 0.5), float2(0.33, 0.30), 0.5);
@@ -120,7 +123,29 @@ void main(float4 pos : SV_Position, float2 uv : TEXCOORD0, out float4 o0 : SV_Ta
       // direccion: hacia afuera, levemente hacia arriba (UV: -y) siguiendo el arco; ruido de +-15 grados
       float arch = (abs(cuv.x - 0.5) - 0.105) / 0.105;            // -1 en el entrecejo .. +1 en la cola
       float2 dir = normalize(float2(side, -0.45 + 0.55 * saturate(arch + 0.5)));
-      float ang = (h21(cell + 1.7) - 0.5) * 0.52;
+      // (04/11, Agustin: "que el pelo siga la forma de la textura") direccion de los trazos PINTADOS en la ceja: tensor de
+      // estructura del brillo en el mip 1 (5x5 muestras sobre la celda). El pelo corre a lo largo del trazo = perpendicular al
+      // gradiente; el tensor da la orientacion (sin sentido) y el sentido lo pone el arco (hacia afuera). Donde la pintura no
+      // tiene trazos claros (coherencia baja) queda el arco.
+      {
+        float2 tx = texel * 2.0;
+        float jxx = 0, jyy = 0, jxy = 0;
+        [unroll] for (int sy = -2; sy <= 2; sy++) [unroll] for (int sx = -2; sx <= 2; sx++) {
+          float2 q = cuv + float2(sx, sy) * tx;
+          float lx = dot(tDiffuse.SampleLevel(sLin, q + float2(tx.x, 0), 1.0).xyz - tDiffuse.SampleLevel(sLin, q - float2(tx.x, 0), 1.0).xyz, float3(0.2126, 0.7152, 0.0722));
+          float ly = dot(tDiffuse.SampleLevel(sLin, q + float2(0, tx.y), 1.0).xyz - tDiffuse.SampleLevel(sLin, q - float2(0, tx.y), 1.0).xyz, float3(0.2126, 0.7152, 0.0722));
+          jxx += lx * lx; jyy += ly * ly; jxy += lx * ly;
+        }
+        float tr = jxx + jyy;
+        float dl = sqrt((jxx - jyy) * (jxx - jyy) + 4.0 * jxy * jxy);
+        float coh = tr > 1e-6 ? dl / tr : 0.0;                         // 0 = sin direccion, 1 = trazos paralelos
+        float gAng = 0.5 * atan2(2.0 * jxy, jxx - jyy);                // angulo del gradiente dominante
+        float2 along = float2(-sin(gAng), cos(gAng));                  // a lo largo del trazo
+        if (dot(along, dir) < 0.0) along = -along;                     // sentido: el del arco (de la nariz hacia la sien)
+        float wT = smoothstep(0.25, 0.6, coh) * saturate(tr * 400.0);
+        dir = normalize(lerp(dir, along, wT * 0.85) + 1e-5);
+      }
+      float ang = (h21(cell + 1.7) - 0.5) * 0.3;
       float cs = cos(ang), sn = sin(ang);
       dir = float2(dir.x * cs - dir.y * sn, dir.x * sn + dir.y * cs);
       float len = 0.55 + 0.45 * h21(cell + 5.1);

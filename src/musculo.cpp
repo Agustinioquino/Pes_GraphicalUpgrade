@@ -136,6 +136,12 @@ struct DynState {
     float chQ[4], chR[4];                                // pecho: cuaternion ahora y en reposo
     volatile unsigned char upOk[2], foOk[2], thOk[2], shOk[2], chOk;
     float breath, ex, phase, pos[3]; bool posOk;         // respiracion (m, con signo), agitacion 0..1, fase, ultima posicion
+    // (08/11) momentos de la pierna (LegMoments): velocidad y aceleracion del personaje en el piso, velocidad vertical, rodilla
+    // (flexion, velocidad suavizada, maximo reciente para la patada), tension de cada grupo (x cuadriceps, y isquios, z gemelo)
+    float spd, acc, vy, kf[2], kv[2], kWind[2], kWindT[2], land, act[2][3]; int mom[2];
+    // (08/11 b) momentos del brazo (ArmMoments): codo (flexion, velocidad), brazo afuera (cuanto, velocidad, maximo reciente) y la
+    // tension de cada grupo (x biceps, y triceps, z deltoides, w antebrazo)
+    float ef[2], ev[2], ar[2], rv[2], rWind[2], rWindT[2], aact[2][4]; int amom[2];
 };
 static const int kDynFb = 64;   // esqueletos que no se sabe de que personaje son (por puntero)
 static DynState s_dyn[kCharSlots + kDynFb];
@@ -205,7 +211,11 @@ static void ComputeFactors(const float (*P)[4], bool on, bool ropa, bool trans, 
     if (vec) { Push(f[M_TRAP], 0.6f, 0.8f, 0.0f, 0.012f, delt); Push(f[M_CLAV], 0.7f, 0.5f, 0.3f, 0.010f, delt); Push(f[M_SCAP], 0.5f, 0.3f, -0.6f, 0.008f, delt); }
     f[M_ARM].e = arm;                                  f[M_ARM].t[2] = armB;
     f[M_FORE].e = fore; f[M_FORE2].e = fore2;
-    f[M_ELBOW].e = (trans ? 0.4f * 0.5f * (arm + fore) : 0.0f) + (Gv(C[3]) - 1.0f);   // (24/10 g) + codos (166.w; no es musculo: sin "General")
+    // (02/11 g) Agustin: "el slider de codo modifica mucha area y no la punta del codo": el hueso dsk_elbow pesa en toda la
+    // vuelta del codo. Con los musculos con textura (x305) el slider lo hace el VS de la piel (pes_limbs.hlsli, PesArmBulge: solo
+    // la punta, el olecranon); el hueso queda solo con "Codos y rodillas acompanan". Sin x305, como antes.
+    const float elbowK = g_cfg.live[305][0] > 0.5f ? 0.0f : (Gv(C[3]) - 1.0f);
+    f[M_ELBOW].e = (trans ? 0.4f * 0.5f * (arm + fore) : 0.0f) + elbowK;   // (24/10 g) + codos (166.w; no es musculo: sin "General")
     f[M_WRIST].e = (trans ? 0.3f * fore2 : 0.0f) + (Gv(N[3]) - 1.0f);                 // + munecas (170.w)
     // la ropa solo crece (si se achicara con el musculo, lo que hay debajo y no se achica la atravesaria).
     // (25/10) y255: cuanto del crecimiento del brazo recibe el hueso de la manga. La manga esta mas lejos del eje que la piel
@@ -552,9 +562,11 @@ float MuscleVariantT(uint32_t id, bool* own) {
 
 struct MzOwn { float pos[3]; const Fac* fac; float tv; };   // (26/10) personaje con valores propios (fac, tv = variante) o tapon (nullptr = general)
 static const int kMzEnt = 32, kMzSets = 9;   // tienen que coincidir con pesMusPick (cloth_sim.hlsl)
-static void MuscleClothPresent(const Fac* fac, bool on, const MzOwn* own, int nOwn, float useTv);   // (25/10) tabla para la fisica de la ropa (mas abajo)
+static void MuscleClothPresent(const Fac* fac, bool on, const MzOwn* own, int nOwn, float useTv);
+static void EffortPresent();   // (02/11) venas por esfuerzo (mas abajo)   // (25/10) tabla para la fisica de la ropa (mas abajo)
 static float s_slotTv[kCharSlots] = {};   // (26/10) variante de los personajes con valores propios (para la ropa)
 // (26/10 b) respiracion por personaje (en Present): agitacion por la velocidad del nodo, fase y amplitud
+static void LegMoments(float dt);   // (08/11) apoyo / empuje / frenada / patada / salto / caida por pierna (mas abajo)
 static void UpdateDynamics() {
     const double t = Now();
     static double tPrev = 0; const float dt = tPrev > 0 ? (float)std::clamp(t - tPrev, 0.0, 0.1) : 0.0f; tPrev = t;
@@ -567,8 +579,14 @@ static void UpdateDynamics() {
         float target = 0.0f;
         if (ok && d.posOk && dt > 0.0f) {
             const float dx = pos[0] - d.pos[0], dz = pos[2] - d.pos[2], v = sqrtf(dx * dx + dz * dz) / dt;
-            if (v < 15.0f) target = std::clamp(kag * (v - 1.5f) / 6.0f, 0.0f, 1.0f);   // mas de 15 m/s: corte o teletransporte
-        }
+            if (v < 15.0f) {   // mas de 15 m/s: corte o teletransporte
+                target = std::clamp(kag * (v - 1.5f) / 6.0f, 0.0f, 1.0f);
+                // (08/11) para los momentos de la pierna: velocidad (suavizada 0.1 s), aceleracion (0.15 s) y velocidad vertical
+                const float sp0 = d.spd; d.spd += (v - d.spd) * (1.0f - expf(-dt / 0.10f));
+                d.acc += (std::clamp((d.spd - sp0) / dt, -20.0f, 20.0f) - d.acc) * (1.0f - expf(-dt / 0.15f));
+                d.vy += (std::clamp((pos[1] - d.pos[1]) / dt, -10.0f, 10.0f) - d.vy) * (1.0f - expf(-dt / 0.08f));
+            }
+        } else if (!ok) { d.spd = d.acc = d.vy = 0.0f; }
         d.posOk = ok; if (ok) memcpy(d.pos, pos, sizeof pos);
         if (!ok) target = 0.0f;
         const float tau = target > d.ex ? 3.0f : 14.0f;   // se agita rapido y se calma despacio
@@ -577,6 +595,7 @@ static void UpdateDynamics() {
         d.phase = fmodf(d.phase + 6.2831853f * (0.22f + 0.50f * d.ex) * dt, 6.2831853f);   // 13 a 43 respiraciones por minuto
         d.breath = kb * (0.0025f + 0.0045f * d.ex) * sinf(d.phase);
     }
+    LegMoments(dt);
     for (int i = 0; i < kDynFb; i++) {   // sin personaje conocido: respiracion tranquila
         DynState& d = s_dyn[kCharSlots + i];
         d.ex = 0.0f; d.breath = kb * 0.0025f * sinf(6.2831853f * 0.22f * s_dynT + 1.7f * (float)i);
@@ -598,6 +617,7 @@ static void UpdateFactors() {
     unsigned g = CharTableGen();
     if (g != s_slotGen) { s_slotGen = g; CharSnapshot(s_slotInfo, s_slotAlive); }
     if (s_dynOn) UpdateDynamics();
+    EffortPresent();   // (02/11) venas por esfuerzo (t123)
     // en el menu Fisico del juego, un personaje que no paso por HumanList (si el modelo de Editar se arma por otro lado)
     // usa los valores del jugador que se esta editando
     uint32_t editId = 0;
@@ -690,6 +710,53 @@ static ID3D11Buffer* s_mzBuf = nullptr; static ID3D11Device* s_mzDev = nullptr;
 static float s_mzData[kMzRows][4] = {}; static bool s_mzSent = false;
 static int s_mzZones = 0, s_mzOwnLog = -1; static float s_mzMax = 0.0f;
 ID3D11ShaderResourceView* MuscleClothSRV() { return s_mzSRV.load(std::memory_order_acquire); }
+// (02/11) esfuerzo por jugador para las venas (t123 del VS de la piel 1c02a92a, pes_limbs.hlsli): [0] = (personajes, on, 0, 0);
+// [1 + i] = (posicion del personaje, la misma que la tabla de tonos (NodePos) / agitacion 0..1). El VS elige el mas cercano en el piso.
+// (08/11) [1 + kCharSlots + 2 n + lado] = tension de la pierna (x cuadriceps, y isquios, z gemelo, w momento 0..8) del personaje n
+// (el mismo orden que las filas de posicion; lado 0 = izquierda = +X); cabecera z = 1 si las trae.
+// (08/11 b) [1 + 3 kCharSlots + 2 n + lado] = tension del brazo (x biceps, y triceps, z deltoides, w antebrazo); cabecera w = 1 si las trae.
+static const int kEffRows = 1 + 5 * kCharSlots;
+static std::atomic<ID3D11ShaderResourceView*> s_effSRV{nullptr};
+static ID3D11Buffer* s_effBuf = nullptr; static ID3D11Device* s_effDev = nullptr;
+static float s_effData[kEffRows][4] = {}; static bool s_effSent = false; static double s_effLog = 0;
+ID3D11ShaderResourceView* MuscleEffortSRV() { return s_effSRV.load(std::memory_order_acquire); }
+static void EffortPresent() {
+    ID3D11Device* dev = g_dev.dev; ID3D11DeviceContext* imm = g_dev.imm;
+    if (!dev || !imm) return;
+    if (s_effDev != dev) {
+        s_effDev = dev; s_effBuf = nullptr; s_effSent = false;
+        D3D11_BUFFER_DESC bd{}; bd.ByteWidth = sizeof(s_effData); bd.Usage = D3D11_USAGE_DYNAMIC; bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE; bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; bd.StructureByteStride = 16;
+        ID3D11Buffer* b = nullptr;
+        if (FAILED(dev->CreateBuffer(&bd, nullptr, &b)) || !b) { Log("venas: no se pudo crear la tabla de esfuerzo"); return; }
+        D3D11_SHADER_RESOURCE_VIEW_DESC sd{}; sd.Format = DXGI_FORMAT_UNKNOWN; sd.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+        sd.Buffer.FirstElement = 0; sd.Buffer.NumElements = kEffRows;
+        ID3D11ShaderResourceView* v = nullptr;
+        if (FAILED(dev->CreateShaderResourceView(b, &sd, &v)) || !v) { b->Release(); Log("venas: no se pudo crear la vista de la tabla de esfuerzo"); return; }
+        s_effBuf = b; s_effSRV.store(v, std::memory_order_release);
+    }
+    if (!s_effBuf) return;
+    static float d[kEffRows][4]; memset(d, 0, sizeof d);
+    int n = 0; float mx = 0.0f, sum = 0.0f;
+    if (s_dynOn) {
+        for (int i = 0; i < kCharSlots && n < kCharSlots; i++) {
+            const DynState& ds = s_dyn[i];
+            if (!s_slotAlive[i] || !ds.posOk) continue;
+            for (int sd = 0; sd < 2; sd++) { float* g = d[1 + 3 * kCharSlots + 2 * n + sd]; for (int c = 0; c < 4; c++) g[c] = std::clamp(ds.aact[sd][c], 0.0f, 1.0f); }
+            for (int sd = 0; sd < 2; sd++) { float* g = d[1 + kCharSlots + 2 * n + sd]; for (int c = 0; c < 3; c++) g[c] = std::clamp(ds.act[sd][c], 0.0f, 1.0f); g[3] = (float)ds.mom[sd]; }
+            float* e = d[1 + n++]; e[0] = ds.pos[0]; e[1] = ds.pos[1]; e[2] = ds.pos[2]; e[3] = std::clamp(ds.ex, 0.0f, 1.0f);
+            mx = (std::max)(mx, e[3]); sum += e[3];
+        }
+    }
+    d[0][0] = (float)n; d[0][1] = n > 0 ? 1.0f : 0.0f; d[0][2] = n > 0 ? 1.0f : 0.0f; d[0][3] = n > 0 ? 1.0f : 0.0f;
+    if (s_effSent && !memcmp(d, s_effData, sizeof d)) return;
+    D3D11_MAPPED_SUBRESOURCE m{};
+    if (FAILED(imm->Map(s_effBuf, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) return;
+    memcpy(m.pData, d, sizeof d); imm->Unmap(s_effBuf, 0);
+    memcpy(s_effData, d, sizeof d); s_effSent = true;
+    const double t = Now();
+    if (n > 0 && t > s_effLog) { s_effLog = t + 30.0; Log("venas por esfuerzo (30 s): %d personajes, agitacion media %.0f %%, maxima %.0f %%", n, 100.0f * sum / n, 100.0f * mx); }
+}
 // las zonas de un juego de factores desde la fila "base" (cabecera) de la tabla; devuelve cuantas. (26/10) z de la cabecera = variante
 // del torso de ese juego (cloth_sim: pesTorsoField, la tela con la misma forma grande que la piel)
 static int FillZones(const Fac* fac, float (*d)[4], float& mx, float tv) {
@@ -796,6 +863,14 @@ static float SideFor(const MusCls& C, void* self, const Xf* rb, const Xf* rt, co
     *src = 6; return SideOfCur(self, a2);
 }
 
+// (08/11) reposo del hueso / destino y lado: se leen UNA vez por Eval y los usan DynAdd y Apply (antes cada uno los leia por su cuenta)
+struct EvalCtx { Xf rb{}, rt{}; void* bone = nullptr; void* targ = nullptr; bool okB = false, okT = false, have = false; float side = 1.0f; int src = 0; };
+static void EvalRead(int i, void* self, const float* a2, EvalCtx& e) {
+    if (e.have) return; e.have = true;
+    e.okB = ReadPtr((const char*)self + 0x58, e.bone) && ReadXf((const char*)e.bone + 0x40, e.rb);
+    e.okT = ReadPtr((const char*)self + 0x60, e.targ) && ReadXf((const char*)e.targ + 0x40, e.rt);
+    e.side = SideFor(s_cls[i], self, e.okB ? &e.rb : nullptr, e.okT ? &e.rt : nullptr, a2, &e.src);
+}
 // diagnostico: una vez por clase y lado (reposo del hueso y del destino, base, ancla en ejes del hueso)
 struct DiagRec { int cls, side, src; bool okB, okT; Xf rb, rt; float baseQ[4], baseT[3], u[3], predErr; };
 static const int kDiagMax = 2 * 40;
@@ -826,13 +901,10 @@ static void Diag(int i, void* self, float side, int src, bool okB, const Xf& rb,
 }
 
 static bool Idle(const Fac& f) { return f.e == 0.0f && f.t[0] == 0.0f && f.t[1] == 0.0f && f.t[2] == 0.0f; }
-static void Apply(int i, void* self, const float* a2, float* out, const Fac fc, bool diag) {
+static void Apply(int i, void* self, const float* a2, float* out, const Fac fc, bool diag, EvalCtx& e) {
     const MusCls& C = s_cls[i];
-    Xf rb{}, rt{}; void* bone = nullptr; void* targ = nullptr;
-    bool okB = ReadPtr((const char*)self + 0x58, bone) && ReadXf((const char*)bone + 0x40, rb);
-    bool okT = ReadPtr((const char*)self + 0x60, targ) && ReadXf((const char*)targ + 0x40, rt);
-    int src = 0;
-    float side = SideFor(C, self, okB ? &rb : nullptr, okT ? &rt : nullptr, a2, &src);
+    EvalRead(i, self, a2, e);
+    const Xf& rb = e.rb; const Xf& rt = e.rt; const bool okB = e.okB, okT = e.okT; const int src = e.src; const float side = e.side;
     float u[3] = {};
     if (okB) {   // ancla en los ejes del hueso: u = R_reposo^-1 (ancla - pivote_reposo) / escala_reposo
         float a[3] = { C.ax * side - rb.t[0], C.ay - rb.t[1], C.az - rb.t[2] };
@@ -885,6 +957,108 @@ static float ArmRaise(const DynState& d, int sd) {   // el brazo se aleja del co
     QRotInv(d.chQ, d.upX[sd], ln); QRotInv(d.chR, d.upR[sd], lr); QRotInv(d.chR, down, dn);
     return std::clamp((AngleOf(ln, dn) - AngleOf(lr, dn)) / 1.4f, 0.0f, 1.0f);
 }
+// (08/11, Agustin: "deberias ... hacer que el dll busque esos momentos especificos") MOMENTOS DE LA PIERNA, una vez por cuadro y por
+// personaje conocido. Con la rodilla (flexion medida en los huesos, su velocidad) y el movimiento del personaje (velocidad,
+// aceleracion en el piso, velocidad vertical) se reconoce que esta haciendo cada pierna y que grupo trabaja:
+//   1 apoyo    corriendo, rodilla 15..40 grados y casi quieta          -> cuadriceps (aguanta el peso) y gemelo
+//   2 empuje   corriendo, la rodilla se estira con la pierna abajo      -> cuadriceps, gemelo al maximo (despegue)
+//   3 vuelo    rodilla doblada estirandose rapido (final del vuelo)     -> isquios frenan la canilla
+//   4 frenada  el personaje desacelera fuerte                           -> cuadriceps (excentrico) e isquios
+//   5 arranque el personaje acelera fuerte                              -> cuadriceps y gemelo
+//   6 patada   rodilla cargada (> 55 %) que se estira muy rapido        -> cuadriceps al maximo, despues isquios frenan
+//   7 salto    sube rapido                                              -> gemelo y cuadriceps
+//   8 caida    venia bajando y frena de golpe (aterrizaje)              -> cuadriceps
+// La tension sube rapido (50 ms) y baja despacio (0.3 s). Va a los huesos del muslo y la pantorrilla (DynAdd) y a la tabla t123
+// de los shaders (pes_limbs.hlsli PesLegActDll): el bulto, el relieve, la aspereza (SRM) y la translucidez (TRM) de cada grupo.
+static const char* const kMomName[] = { "quieta", "apoyo", "empuje", "vuelo", "frenada", "arranque", "patada", "salto", "caida" };
+static std::atomic<unsigned> s_momCnt[9];
+static float KneeFlex(const DynState& d, int sd);
+// (08/11 b, Agustin: "que lo haga con los brazos") MOMENTOS DEL BRAZO, igual que la pierna:
+//   1 balanceo   corriendo, el codo ~90 grados va y viene                 -> biceps sostiene, triceps al estirar
+//   2 empuje     brazo adelante/afuera que se estira con fuerza (forcejeo, -> triceps, deltoides, antebrazo
+//                aguantar al rival, cubrir la pelota)
+//   3 arriba     brazo levantado (cabezazo, salto, festejo, reclamo)       -> deltoides, triceps si esta estirado
+//   4 lanzamiento brazo arriba que baja rapido con el codo estirandose     -> triceps y deltoides al maximo (saque de banda, arquero)
+//   5 puno       el codo se dobla muy rapido (festejo, furia)              -> biceps y antebrazo al maximo
+//   6 caida      aterrizaje o caida con el brazo estirado                  -> triceps y deltoides
+//   7 arranque   aceleracion fuerte (los brazos tiran)                     -> biceps y deltoides
+static const char* const kArmMomName[] = { "quieto", "balanceo", "empuje", "arriba", "lanzamiento", "puno", "caida", "arranque" };
+static std::atomic<unsigned> s_armMomCnt[8];
+static float ElbowFlex(const DynState& d, int sd);
+static float ArmRaise(const DynState& d, int sd);
+static void ArmMoments(DynState& d, float dt, float run, float accel, float landK) {
+    for (int sd = 0; sd < 2; sd++) {
+        const bool ok = d.upOk[sd] && d.foOk[sd];
+        const float e = ok ? ElbowFlex(d, sd) : 0.0f, r = ok ? ArmRaise(d, sd) : 0.0f;
+        const float evRaw = ok ? std::clamp((e - d.ef[sd]) / dt, -30.0f, 30.0f) : 0.0f, rvRaw = ok ? std::clamp((r - d.ar[sd]) / dt, -30.0f, 30.0f) : 0.0f;
+        d.ef[sd] = e; d.ar[sd] = r;
+        d.ev[sd] += (evRaw - d.ev[sd]) * (1.0f - expf(-dt / 0.04f));
+        d.rv[sd] += (rvRaw - d.rv[sd]) * (1.0f - expf(-dt / 0.04f));
+        const float ev = d.ev[sd], rv = d.rv[sd];
+        if (r > d.rWind[sd] || d.rWindT[sd] <= 0.0f) { d.rWind[sd] = r; d.rWindT[sd] = 0.5f; } else d.rWindT[sd] -= dt;   // brazo arriba reciente
+        float m[8] = {};
+        m[1] = run * std::clamp((e - 0.25f) / 0.35f, 0.0f, 1.0f) * (1.0f - std::clamp((r - 0.5f) / 0.3f, 0.0f, 1.0f));
+        m[2] = std::clamp((r - 0.2f) / 0.3f, 0.0f, 1.0f) * std::clamp((-ev - 1.5f) / 3.0f, 0.0f, 1.0f) * std::clamp(0.4f + d.ex + (1.0f - run), 0.0f, 1.0f);
+        m[3] = std::clamp((r - 0.55f) / 0.3f, 0.0f, 1.0f);
+        m[4] = std::clamp((d.rWind[sd] - 0.65f) / 0.2f, 0.0f, 1.0f) * std::clamp((-rv - 2.5f) / 3.0f, 0.0f, 1.0f) * std::clamp(0.3f + std::clamp(-ev / 3.0f, 0.0f, 1.0f), 0.0f, 1.0f);
+        m[5] = std::clamp((ev - 4.0f) / 4.0f, 0.0f, 1.0f) * std::clamp(0.3f + d.ex + r, 0.0f, 1.0f);
+        m[6] = landK * std::clamp(1.0f - e * 1.5f, 0.0f, 1.0f);
+        m[7] = accel;
+        const float bal = m[1];
+        float bi = 0.08f + 0.08f * d.ex, tr = 0.06f + 0.06f * d.ex, de = 0.06f + 0.06f * d.ex, fo = 0.08f + 0.10f * d.ex;   // tono base
+        bi = (std::max)({ bi, 0.45f * bal + 0.25f * bal * std::clamp(ev / 3.0f, 0.0f, 1.0f), 0.30f * m[2], 1.00f * m[5], 0.60f * m[7] });
+        tr = (std::max)({ tr, 0.40f * bal * std::clamp(-ev / 3.0f, 0.0f, 1.0f), 0.90f * m[2], 0.55f * m[3] * (1.0f - e), 1.00f * m[4], 0.85f * m[6] });
+        de = (std::max)({ de, 0.30f * bal, 0.70f * m[2], 0.80f * m[3], 0.95f * m[4], 0.70f * m[6], 0.55f * m[7] });
+        fo = (std::max)({ fo, 0.25f * bal, 0.75f * m[2], 0.50f * m[4], 0.90f * m[5], 0.55f * m[6] });
+        const float tgt[4] = { std::clamp(bi, 0.0f, 1.0f), std::clamp(tr, 0.0f, 1.0f), std::clamp(de, 0.0f, 1.0f), std::clamp(fo, 0.0f, 1.0f) };
+        for (int g = 0; g < 4; g++) { const float tau = tgt[g] > d.aact[sd][g] ? 0.05f : 0.30f; d.aact[sd][g] += (tgt[g] - d.aact[sd][g]) * (1.0f - expf(-dt / tau)); }
+        int best = 0; float bv = 0.35f;
+        for (int q = 1; q < 8; q++) if (m[q] > bv) { bv = m[q]; best = q; }
+        if (best != d.amom[sd] && best) s_armMomCnt[best].fetch_add(1, std::memory_order_relaxed);
+        d.amom[sd] = best;
+    }
+}
+static void LegMoments(float dt) {
+    if (dt <= 0.0f) return;
+    for (int i = 0; i < kCharSlots; i++) {
+        DynState& d = s_dyn[i];
+        if (!s_slotAlive[i] || !d.posOk) { memset(d.act, 0, sizeof d.act); memset(d.aact, 0, sizeof d.aact); d.mom[0] = d.mom[1] = d.amom[0] = d.amom[1] = 0; continue; }
+        const float run = std::clamp((d.spd - 1.5f) / 4.5f, 0.0f, 1.0f);
+        const float brake = std::clamp((-d.acc - 2.5f) / 5.0f, 0.0f, 1.0f), accel = std::clamp((d.acc - 2.5f) / 5.0f, 0.0f, 1.0f);
+        const float jump = std::clamp((d.vy - 1.0f) / 2.0f, 0.0f, 1.0f);
+        // aterrizaje: venia cayendo (< -1.5 m/s) y la velocidad vertical se corta
+        if (d.vy < -1.5f) d.land = 1.0f; else if (d.land > 0.5f && d.vy > -0.4f) d.land = 0.45f; else d.land = (std::max)(0.0f, d.land - dt / 0.35f);
+        const float landK = d.land < 0.5f ? std::clamp(d.land / 0.45f, 0.0f, 1.0f) : 0.0f;
+        ArmMoments(d, dt, run, accel, landK);
+        for (int sd = 0; sd < 2; sd++) {
+            const bool ok = d.thOk[sd] && d.shOk[sd];
+            const float k = ok ? KneeFlex(d, sd) : 0.0f;
+            const float kvRaw = ok ? std::clamp((k - d.kf[sd]) / dt, -30.0f, 30.0f) : 0.0f;   // 1/s: + dobla, - estira
+            d.kf[sd] = k; d.kv[sd] += (kvRaw - d.kv[sd]) * (1.0f - expf(-dt / 0.04f));
+            const float kv = d.kv[sd];
+            if (k > d.kWind[sd] || d.kWindT[sd] <= 0.0f) { d.kWind[sd] = k; d.kWindT[sd] = 0.45f; } else d.kWindT[sd] -= dt;   // rodilla cargada reciente
+            const float ext = std::clamp(-kv / 4.0f, 0.0f, 1.0f), stz = (k - 0.22f) / 0.16f, band = expf(-stz * stz);
+            float m[9] = {};
+            m[1] = run * band * (1.0f - std::clamp(fabsf(kv) / 3.0f, 0.0f, 1.0f));
+            m[2] = run * ext * (k < 0.5f ? 1.0f : 0.3f);
+            m[3] = std::clamp(-kv / 3.0f, 0.0f, 1.0f) * std::clamp((k - 0.35f) / 0.25f, 0.0f, 1.0f);
+            m[4] = brake * std::clamp(0.4f + k, 0.0f, 1.0f);
+            m[5] = accel;
+            m[6] = std::clamp((-kv - 5.0f) / 4.0f, 0.0f, 1.0f) * std::clamp((d.kWind[sd] - 0.55f) / 0.2f, 0.0f, 1.0f);
+            m[7] = jump; m[8] = landK;
+            float qa = 0.10f + 0.10f * d.ex, ha = 0.08f + 0.08f * d.ex, ca = 0.12f + 0.10f * d.ex;   // tono base (mas con agitacion)
+            qa = (std::max)({ qa, 0.65f * m[1], 0.85f * m[2], 0.80f * m[4], 0.70f * m[5], 1.00f * m[6], 0.60f * m[7], 0.95f * m[8] });
+            ha = (std::max)({ ha, 0.85f * m[3], 0.55f * m[4], 0.45f * m[6] + 0.5f * m[3], 0.35f * m[5] });
+            ca = (std::max)({ ca, 0.45f * m[1], 1.00f * m[2], 0.80f * m[5], 0.95f * m[7], 0.50f * m[8] });
+            const float tgt[3] = { std::clamp(qa, 0.0f, 1.0f), std::clamp(ha, 0.0f, 1.0f), std::clamp(ca, 0.0f, 1.0f) };
+            for (int g = 0; g < 3; g++) { const float tau = tgt[g] > d.act[sd][g] ? 0.05f : 0.30f; d.act[sd][g] += (tgt[g] - d.act[sd][g]) * (1.0f - expf(-dt / tau)); }
+            int best = 0; float bv = 0.35f;
+            for (int q = 1; q < 9; q++) if (m[q] > bv) { bv = m[q]; best = q; }
+            if (best != d.mom[sd] && best) s_momCnt[best].fetch_add(1, std::memory_order_relaxed);
+            d.mom[sd] = best;
+        }
+    }
+}
 static int s_iArm = -2, s_iFore = -1, s_iThigh = -1, s_iKnee = -1, s_iPect = -1;
 static void DynFindClasses() {
     if (s_iArm != -2) return;
@@ -892,15 +1066,12 @@ static void DynFindClasses() {
     s_iFore = find("antebrazo"); s_iThigh = find("muslo"); s_iKnee = find("rodilla"); s_iPect = find("pectoral"); s_iArm = find("brazo");
 }
 static std::atomic<unsigned> s_dynMeas{0}, s_dynMeasFail{0};
-static void DynAdd(int i, void* self, const float* a2, const void* skel, int slot, Fac& fc) {
+static void DynAdd(int i, void* self, const float* a2, const void* skel, int slot, Fac& fc, EvalCtx& e) {
     DynFindClasses();
     const MusCls& C = s_cls[i];
     DynState& d = s_dyn[DynIndex(slot, skel)];
-    Xf rb{}, rt{}; void* bone = nullptr; void* targ = nullptr;
-    const bool okB = ReadPtr((const char*)self + 0x58, bone) && ReadXf((const char*)bone + 0x40, rb);
-    const bool okT = ReadPtr((const char*)self + 0x60, targ) && ReadXf((const char*)targ + 0x40, rt);
-    int src = 0;
-    const float side = SideFor(C, self, okB ? &rb : nullptr, okT ? &rt : nullptr, a2, &src);
+    EvalRead(i, self, a2, e);
+    const Xf& rt = e.rt; void* targ = e.targ; const bool okT = e.okT; const float side = e.side;
     const int sd = side > 0.0f ? 0 : 1;
     // medicion: el destino de estas restricciones es el hueso principal del miembro (o el pecho)
     if (okT && (i == s_iArm || i == s_iFore || i == s_iThigh || i == s_iKnee || i == s_iPect)) {
@@ -918,14 +1089,23 @@ static void DynAdd(int i, void* self, const float* a2, const void* skel, int slo
     }
     const float kc = s_dynK[0], b = d.breath, ex = d.ex;
     switch (C.mus) {
-    case M_ARM: if (kc > 0.0f) { const float g = kc * 0.08f * ElbowFlex(d, sd); fc.e += g; fc.t[2] += kArmR * 0.5f * g; } break;   // biceps adelante
-    case M_SLEEVE: if (kc > 0.0f && s_ropaOn) { const float g = s_sleeveK * kc * 0.08f * ElbowFlex(d, sd); fc.e += g; fc.t[2] += kArmR * 0.5f * g; } break;
-    case M_FORE: if (kc > 0.0f) fc.e += kc * 0.04f * ElbowFlex(d, sd); break;
-    case M_DELT: if (kc > 0.0f) fc.e += kc * 0.07f * ArmRaise(d, sd); break;
-    case M_TRAP: if (kc > 0.0f) Push(fc, 0.0f, 1.0f, 0.0f, 0.006f * kc, ArmRaise(d, sd)); Push(fc, 0.0f, 1.0f, 0.0f, 0.5f * b * ex, 1.0f); break;
-    case M_THIGH: if (kc > 0.0f) { const float k = KneeFlex(d, sd); fc.e += kc * 0.035f * k; fc.t[2] -= kThighR * 0.5f * kc * 0.07f * k; } break;   // isquios atras
-    case M_HEM: if (kc > 0.0f && s_ropaOn) { const float k = KneeFlex(d, sd); fc.e += 0.7f * kc * 0.035f * k; fc.t[2] -= 0.8f * kThighR * 0.5f * kc * 0.07f * k; } break;
-    case M_CALF: if (kc > 0.0f) fc.e += kc * 0.03f * KneeFlex(d, sd); break;
+    // (08/11 b) brazo por la TENSION de cada grupo (ArmMoments): biceps adelante, triceps atras; antes solo el angulo del codo
+    case M_ARM: if (kc > 0.0f) { const float bi = d.aact[sd][0], tr = d.aact[sd][1], fl = ElbowFlex(d, sd);
+        fc.e += kc * (0.020f * fl + 0.065f * (std::max)(bi, 0.8f * tr)); fc.t[2] += kArmR * 0.5f * kc * (0.07f * bi + 0.015f * fl - 0.045f * tr); } break;
+    case M_SLEEVE: if (kc > 0.0f && s_ropaOn) { const float bi = d.aact[sd][0], tr = d.aact[sd][1], fl = ElbowFlex(d, sd);
+        fc.e += s_sleeveK * kc * (0.020f * fl + 0.065f * (std::max)(bi, 0.8f * tr)); fc.t[2] += s_sleeveK * kArmR * 0.5f * kc * (0.07f * bi + 0.015f * fl - 0.045f * tr); } break;
+    // (08/11 j, costuras en la muneca / el tobillo) antebrazo y pantorrilla con el mismo tope que antes de los momentos (4 % y 3 %): el
+    // hueso del antebrazo tambien pesa cerca de la muneca y la mano (otra malla) no lo sigue
+    case M_FORE: if (kc > 0.0f) fc.e += kc * (0.010f * ElbowFlex(d, sd) + 0.030f * d.aact[sd][3]); break;
+    case M_DELT: if (kc > 0.0f) fc.e += kc * (0.020f * ArmRaise(d, sd) + 0.060f * d.aact[sd][2]); break;
+    case M_TRAP: if (kc > 0.0f) Push(fc, 0.0f, 1.0f, 0.0f, 0.006f * kc, (std::max)(ArmRaise(d, sd), d.aact[sd][2])); Push(fc, 0.0f, 1.0f, 0.0f, 0.5f * b * ex, 1.0f); break;
+    // (08/11) muslo y pantorrilla por la TENSION de su grupo (LegMoments: apoyo, empuje, frenada, patada...), no solo por la rodilla
+    // doblada (asi el muslo se hinchaba justo cuando el cuadriceps esta flojo). El cuadriceps corre el muslo hacia adelante, los isquios atras.
+    case M_THIGH: if (kc > 0.0f) { const float k = KneeFlex(d, sd), qa = d.act[sd][0], ha = d.act[sd][1];
+        fc.e += kc * (0.010f * k + 0.040f * (std::max)(qa, ha)); fc.t[2] += kThighR * 0.5f * kc * (0.05f * qa - 0.06f * ha - 0.02f * k); } break;
+    case M_HEM: if (kc > 0.0f && s_ropaOn) { const float k = KneeFlex(d, sd), qa = d.act[sd][0], ha = d.act[sd][1];
+        fc.e += 0.7f * kc * (0.010f * k + 0.040f * (std::max)(qa, ha)); fc.t[2] += 0.8f * kThighR * 0.5f * kc * (0.05f * qa - 0.06f * ha - 0.02f * k); } break;
+    case M_CALF: if (kc > 0.0f) fc.e += kc * (0.008f * KneeFlex(d, sd) + 0.022f * d.act[sd][2]); break;
     case M_PECT: Push(fc, 0.10f, 0.35f, 1.0f, b, 1.0f); break;            // respiracion: el pecho sube y sale
     case M_CLAV: Push(fc, 0.0f, 1.0f, 0.6f, 0.8f * b, 1.0f); break;
     case M_RIB: Push(fc, 1.0f, 0.0f, 0.2f, 0.5f * b, 1.0f); break;       // las costillas se abren
@@ -942,6 +1122,7 @@ template<int I> static void __fastcall hk_Eval(void* self, void* a2, float* out)
     if (!self || !out) return;
     const int mus = s_cls[I].mus;
     Fac fc = s_fac[mus];
+    if (mus == M_NECK) ExprBonesFrame(*(void* const volatile*)((const char*)self + 0x10));   // (01/11) expresiones por huesos: una vez por personaje y cuadro
     // por jugador: el esqueleto de la restriccion (+ 0x10) -> personaje -> sus factores (si tiene valores propios)
     const bool own = s_anyOwn.load(std::memory_order_relaxed), dyn = s_dynOn;
     void* skel = nullptr; int slot = -1;
@@ -951,10 +1132,11 @@ template<int I> static void __fastcall hk_Eval(void* self, void* a2, float* out)
         if ((nc & 255) == 0) (slot >= 0 ? s_skHit : s_skMiss).fetch_add(1, std::memory_order_relaxed);
         if (own && slot >= 0 && s_slotUse[slot].load(std::memory_order_acquire)) fc = s_slotFac[slot][mus];
     }
-    if (dyn) DynAdd(I, self, (const float*)a2, skel, slot, fc);   // (26/10 b) contraccion y respiracion
+    EvalCtx ec;   // (08/11) reposo y lado leidos una sola vez
+    if (dyn) DynAdd(I, self, (const float*)a2, skel, slot, fc, ec);   // (26/10 b) contraccion y respiracion
     bool diag = s_diagCnt[I].load(std::memory_order_relaxed) < (s_cls[I].side == 0 ? 1 : 2);
     if (!diag && (!s_on || Idle(fc))) return;
-    Apply(I, self, (const float*)a2, out, fc, diag);
+    Apply(I, self, (const float*)a2, out, fc, diag, ec);
 }
 template<int... Is> struct HookList { static void* const v[sizeof...(Is)]; };
 template<int... Is> void* const HookList<Is...>::v[sizeof...(Is)] = { (void*)&hk_Eval<Is>... };
@@ -1083,6 +1265,16 @@ void MuscleHookPresent() {
             Log("musculatura viva (contraccion %.2f, respiracion %.2f): %u huesos medidos, %u sin transformacion actual | %s: codo %.0f/%.0f %%, rodilla %.0f/%.0f %%, brazo afuera %.0f/%.0f %% (izq/der), agitacion %.0f %%, respiracion %.1f mm",
                 s_dynK[0], s_dynK[1], ms, mf, s_slotInfo[k].name[0] ? s_slotInfo[k].name : "personaje", 100.0f * ElbowFlex(d, 0), 100.0f * ElbowFlex(d, 1),
                 100.0f * KneeFlex(d, 0), 100.0f * KneeFlex(d, 1), 100.0f * ArmRaise(d, 0), 100.0f * ArmRaise(d, 1), 100.0f * d.ex, 1000.0f * d.breath);
+            unsigned c[9]; for (int q = 1; q < 9; q++) c[q] = s_momCnt[q].exchange(0);
+            Log("piernas (30 s): momentos apoyo %u empuje %u vuelo %u frenada %u arranque %u patada %u salto %u caida %u | %s %.1f m/s acel %.1f: izq %s (cuadriceps %.0f isquios %.0f gemelo %.0f %%), der %s (%.0f %.0f %.0f %%)",
+                c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], s_slotInfo[k].name[0] ? s_slotInfo[k].name : "personaje", d.spd, d.acc,
+                kMomName[std::clamp(d.mom[0], 0, 8)], 100.0f * d.act[0][0], 100.0f * d.act[0][1], 100.0f * d.act[0][2],
+                kMomName[std::clamp(d.mom[1], 0, 8)], 100.0f * d.act[1][0], 100.0f * d.act[1][1], 100.0f * d.act[1][2]);
+            unsigned a[8]; for (int q = 1; q < 8; q++) a[q] = s_armMomCnt[q].exchange(0);
+            Log("brazos (30 s): momentos balanceo %u empuje %u arriba %u lanzamiento %u puno %u caida %u arranque %u | izq %s (biceps %.0f triceps %.0f deltoides %.0f antebrazo %.0f %%), der %s (%.0f %.0f %.0f %.0f %%)",
+                a[1], a[2], a[3], a[4], a[5], a[6], a[7],
+                kArmMomName[std::clamp(d.amom[0], 0, 7)], 100.0f * d.aact[0][0], 100.0f * d.aact[0][1], 100.0f * d.aact[0][2], 100.0f * d.aact[0][3],
+                kArmMomName[std::clamp(d.amom[1], 0, 7)], 100.0f * d.aact[1][0], 100.0f * d.aact[1][1], 100.0f * d.aact[1][2], 100.0f * d.aact[1][3]);
         } else Log("musculatura viva (contraccion %.2f, respiracion %.2f): %u huesos medidos, %u sin transformacion actual, ningun personaje conocido medido", s_dynK[0], s_dynK[1], ms, mf);
     }
     {
@@ -1351,7 +1543,7 @@ void MuscleDrawPlayerPanel() {
                             if (ImGui::IsItemHovered()) { ImGui::BeginTooltip(); ImGui::PushTextWrapPos(380); ImGui::TextUnformatted(U8(sl.help).c_str()); ImGui::PopTextWrapPos(); ImGui::EndTooltip(); }
                         }
                         ImGui::SetNextItemWidth(w - 70);
-                        if (ImGui::SliderFloat("##p", &val, sl.lo, sl.hi, sl.fmt.c_str())) ProfDirty();
+                        if (ImGui::SliderFloat("##p", &val, sl.lo, sl.hi, sl.fmt.c_str(), ImGuiSliderFlags_AlwaysClamp)) ProfDirty();
                         ImGui::SameLine();
                         if (ImGui::SmallButton("<")) { val = gen; ProfDirty(); }
                         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Volver al valor general (%.2f)", gen);

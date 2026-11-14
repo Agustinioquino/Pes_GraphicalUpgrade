@@ -1,0 +1,3 @@
+Pone aca tu imagen de fondo para el modo Editar con el nombre fondo.png (o fondo.jpg).
+Despues, en el menu del mod (Insert) > Cara > Luz de prueba en el editor > "Fondo del editor", elegi "Imagen propia".
+Sin imagen el fondo queda negro. Para volver al fondo del juego elegi "El del juego".

@@ -87,6 +87,8 @@ void main(
   bool haveL = dot(Lv, Lv) > 1e-6;
   float3 sunW = float3(0, 1, 0);
   if (haveL) { Lv = normalize(Lv); sunW = normalize(float3(dot(Lv, vX), dot(Lv, vY), dot(Lv, vZ))); if (sunW.y < 0.0) sunW = -sunW; }
+  // (26/10) el sol del cielo no gira con la luz de cada toma de la repeticion: disco, resplandor y nubes con el sol estable
+  if (haveL) sunW = PESSunStable(sunW);
   bool sunny = IniParams.Load(int2(114, 0)).w > 0.5;
   // (x159, de dia) el brillo del cielo alrededor del sol sale del sol real, no de la direccion fija del archivo del cielo:
   // el resplandor queda donde esta el disco y de donde vienen las sombras
@@ -155,7 +157,10 @@ void main(
         float disk = (1.0 - smoothstep(radA - aaA, radA + aaA, ang)) * limb;
         float psf = (0.35 / pow(1.0 + ang / radA, 2.2)) * saturate(SP.z);
         float haze = exp(-ang / (radA * 22.0)) * 0.12 * saturate(SP.w);
-        add = colN * (disk * 14.0 + psf * 1.5 + haze * 0.6);                         // el bloom del juego agrega el resto
+        // (06/11, Agustin: "el sol no lo veo adecuadamente como una textura o modelo que brille") aureola: la luz que la atmosfera
+        // dispersa hacia adelante alrededor del disco (unos 2-3 diametros), para que se lea como una fuente que brilla y no un punto
+        float aure = exp(-ang / (radA * 4.0)) * 0.45 + exp(-ang / (radA * 9.0)) * 0.12;
+        add = colN * (disk * 20.0 + psf * 2.0 + aure + haze * 0.6);                  // el bloom del juego agrega el resto
       } else {
         float radS = 0.019 * max(SN.x, 0.1);
         float diskS = 1.0 - smoothstep(radS * 0.8, radS, ang);

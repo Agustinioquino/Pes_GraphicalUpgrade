@@ -100,6 +100,9 @@
 #define PES_BODY_RADIUS    0.025  // (m) piel a buscar alrededor de cada punto de tela
 #define PES_BODY_LATERAL   0.03   // (m) el plano tangente de un vertice de la piel vale hasta esta distancia al costado
 #define PES_BODY_WALK      40     // vertices por celda como maximo
+#define PES_BODY_SMOOTH    1      // (27/10) normal de la piel promediada con la vecina (planos que no saltan entre cuadros)
+#define PES_BODY_LIFT      1      // (27/10) el reposo de la tela se corre afuera de la piel (anclaje y piel ya no se pelean)
+#define PES_BODY_LIFT_MAX  0.025  // (m) cuanto se puede correr el reposo como maximo
 #define PES_BODY_DIAG      0      // contadores para el log de la DLL en u8. (25/10 d) APAGADO: con un UAV en u8 el mod de ropa
                                   // compilaba el simulador pero no lo despachaba nunca (la ropa quedaba sin fisica)
 #if !PES_CLOTH_FX
@@ -254,6 +257,9 @@ static float3 s_kick;
 static float3 s_grav;   // PES21 FX: gravedad en el espacio de la prenda (para el deslizamiento)
 static float3 s_omega;  // PES21 FX: velocidad angular de la prenda (rad/s, espacio de la prenda)
 static float3 s_center; // PES21 FX: origen de la prenda
+static float  s_windLen; // PES21 FX (13/11): largo del viento de cloth.ini (fijo en el partido): marca la velocidad de la onda de turbulencia
+static bool   s_pesWindOn;   // PES21 FX (14/11): esta prenda usa el viento unico de la DLL (fila 494)
+static float  s_windHem;     // PES21 FX (14/11): z509 (w508) = cuanto viento le llega por debajo al borde libre (faldon de la remera)
 static bool   s_menu;   // PES21 FX (25/10): escena de menu (editor, presentacion): sin empujes por movimiento del cuerpo
 static float3 s_ref;    // PES21 FX (25/10): punto cerca de la prenda; las sumas en enteros van relativas a el
 COH RWByteAddressBuffer             g_outPos    : register(u0);
@@ -620,6 +626,13 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
     xPrev = gx[p];
     float3 vBody = (rest1 - restPrev) / h;
     if (pin >= 0.999) { gx[p] = rest1; vel = vBody; return; }
+    // cloth-mod 0.9.9: salto del cuerpo (> 50 m/s, teletransporte / cambio de pose): la tela viaja con el cuerpo, sin velocidad
+    if (dot(vBody, vBody) > 50.0 * 50.0) {
+        gx[p] += rest1 - restPrev;
+        xPrev = gx[p];
+        vel = 0;
+        return;
+    }
     float3 v = vel + grav * h;
     if (s == 0) v += s_kick;
     float sleeveW = float((g_rest[p].skin.w >> 8) & 255) / 255.0;
@@ -642,7 +655,7 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
     v = vBody + vRel;
     float3 n = rnrm1;
     float3 wind = 0;
-    float k = g_airDrag;
+    float k = g_airDrag, kW = 0.0, pesWs = 0.0;
     if (any(windBase != 0)) {
         float  ws = length(windBase);
         float3 wd = windBase / ws;
@@ -651,7 +664,7 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
         float3 up = cross(side, wd);
         float3 r = g_rest[p].posPin.xyz;
         float  tt = g_time + float(s) * h;
-        float  sp = clamp(ws * 0.6, 1.0, 4.0);
+        float  sp = clamp(s_windLen * 0.6, 1.0, 4.0);   // (13/11) velocidad fija de la onda: con el viento unico ws cambia cada cuadro y la fase (tiempo x sp) saltaba
         float  a1 = dot(r, wd) * 30.0 - tt * 30.0 * sp * 0.25 + dot(r, side) * 9.0;
         float  a2 = dot(r, wd) * 21.0 - tt * 21.0 * sp * 0.25 + dot(r, up) * 13.0 + 1.7;
         float  a3 = dot(r, side) * 26.0 + dot(r, up) * 11.0 - tt * 17.0;
@@ -661,7 +674,7 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
         float  T = g_windTurbulence;
         float3 slow = windBase * max(0.0, gust);
         wind = slow + ws * T * (wd * 0.5 * e1 + side * 0.6 * e2 + up * 0.35 * e3);
-        k += g_windResponse;
+        if (s_pesWindOn) { kW = g_windResponse; pesWs = ws; } else k += g_windResponse;
     }
     // PES21 FX: resistencia del aire con la velocidad del cuerpo (correr pega la tela; frenar la deja flamear)
     float pesSpeed = length(vBody);
@@ -674,7 +687,28 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
             v += (side / sl) * sin(ph) * PES_SHORTS_FLUTTER * saturate(pesSpeed * 0.3) * saturate(1.0 - pin * 2.0);
         }
     }
-    v -= n * dot(v - wind, n) * min(k * h, 1.0);
+    if (!s_pesWindOn) v -= n * dot(v - wind, n) * min(k * h, 1.0);
+    else {
+        // PES21 FX (14/11, Agustin: "que el viento no le quite los valores de inercia y demas") con el viento unico la resistencia
+        // del aire es la de siempre (g_airDrag + la de correr) pero contra el aire que se mueve, y la respuesta al viento
+        // (wind_response) es de UN solo lado: acelera la tela hasta la velocidad del aire y nunca la frena. Antes wind_response
+        // se sumaba al freno y apagaba la inercia, el giro y el rebote de la tela en cuanto soplaba algo.
+        const float wn = dot(wind, n);
+        v -= n * (dot(v, n) - wn) * min(k * h, 1.0);
+        float dn = wn - dot(v, n);
+        if (dn * wn > 0.0) v += n * dn * min(kW * h, 1.0);
+        // (14/11, Agustin: "que el viento tambien afecte a la remera en la parte de abajo") el borde libre (faldon, punos) no
+        // solo recibe el viento de frente: el aire que pasa lo arrastra de costado, se mete por debajo y lo hace aletear.
+        // Solo donde la tela esta suelta (pin bajo) y con la fuerza del viento; tampoco frena lo que ya va mas rapido que el aire.
+        const float fr = saturate(1.0 - pin * 2.0) * s_windHem;
+        if (fr > 0.0 && pesWs > 0.05) {
+            const float3 wt = wind - n * wn, vt = v - n * dot(v, n), dt3 = wt - vt;
+            if (dot(dt3, wt) > 0.0) v += dt3 * min(0.35 * kW * h, 1.0) * fr;
+            const float ph = g_time * 13.0 + dot(g_rest[p].posPin.xyz, float3(19.0, 23.0, 31.0)) + float(s) * h * 13.0;
+            v += n * (sin(ph) * 0.7 + sin(ph * 1.71 + 1.3) * 0.3) * (3.0 * pesWs) * fr * h;   // aleteo: ~1 cm a 5 m/s
+            v.y += 0.15 * pesWs * fr * h;                                                     // el aire que entra por debajo lo levanta un poco
+        }
+    }
     vel = v;
     gx[p] += v * h;
 }
@@ -724,7 +758,10 @@ void pesBodyVertex(uint v, out float3 y, out float3 n, out float3 u)
 // huesos de la propia prenda (reposo de la prenda -> modelo en ese momento); se guardan hasta dos planos tangentes (el mas
 // cercano y el mejor con otra orientacion: axila, costado contra el brazo) en el reposo de la prenda, mas lo que la piel se
 // mueve por su cuenta respecto de la prenda (un brazo que se acerca al torso), para seguirlos en los sub-pasos.
-void pesBodyQuery(uint p, uint k, float3 x)
+// (01/11) xr = reposo de la prenda (anclaje, junto a la piel): si la tela ya se metio en el cuerpo mas que PES_BODY_RADIUS (espalda
+// con la fisica: la libertad z256 la deja entrar hasta 2 cm mas), alrededor de x no hay piel y el punto quedaba sin choque para
+// siempre. Entonces se busca la piel alrededor del reposo: su plano la vuelve a sacar (empuje acotado por w256 en cada sub-paso).
+void pesBodyQuery(uint p, uint k, float3 x, float3 xr)
 {
     s_bv[k][0] = uint2(0, 0); s_bv[k][1] = uint2(0, 0);
     if (s_bodyTab == 0xffffffffu || g_legCount > 0) return;
@@ -733,16 +770,19 @@ void pesBodyQuery(uint p, uint k, float3 x)
     float det;
     float3x3 Ai = inverse3((float3x3)A, det);
     if (!(abs(det) > 1e-9)) return;
-    float3 b = mul(Ai, x - float3(A[0].w, A[1].w, A[2].w));
     bool prevC = s_bodyTc < 0.5;
     float3x4 B0 = pesSkinModel(r, prevC);
     float3x4 Bp = pesSkinModel(r, true), B1 = pesSkinModel(r, false);
-    float3 xm = xform(B0, b);
-    if (!all(isfinite(xm))) return;
-    int3 c0 = (int3)floor(xm / PES_BODY_CELL) - 1;
     uint tb = s_bodyTab * PES_BODY_STRIDE + 16;
     const float R2 = PES_BODY_RADIUS * PES_BODY_RADIUS;
     float dA = R2, dB = R2; uint vA = 0, vB = 0; float3 nA = 0, nB = 0;
+    float3 xm = 0; int3 c0 = 0;
+    [loop] for (uint qp = 0; qp < 2 && vA == 0; ++qp) {
+    if (qp == 1 && !(all(isfinite(xr)) && dot(xr, xr) > 1e-8)) break;   // reposo no calculado: nada
+    float3 b = mul(Ai, (qp == 0 ? x : xr) - float3(A[0].w, A[1].w, A[2].w));
+    xm = xform(B0, b);
+    if (!all(isfinite(xm))) return;
+    c0 = (int3)floor(xm / PES_BODY_CELL) - 1;
     [loop] for (uint ci = 0; ci < 27; ++ci) {
         int3 c = c0 + int3(ci % 3, (ci / 3) % 3, ci / 9);
         uint e = g_bodyTab[tb + pesBodyHash(c)];
@@ -760,7 +800,31 @@ void pesBodyQuery(uint p, uint k, float3 x)
             e = g_bodyNext[v];
         }
     }
+    }   // qp (primero x, despues el reposo)
     if (vA == 0) return;
+#if PES_BODY_SMOOTH
+    // (27/10) normal y movimiento promediados con la piel vecina del mismo lado (peso (1 - d2/R2)^2): el vertice mas cercano
+    // cambia de un cuadro al otro y con el su normal, y el plano saltaba (mangas que vibraban). El punto sigue siendo el del
+    // vertice mas cercano (el promedio de posiciones queda adentro de una superficie curva).
+    float3 sNA = 0, sUA = 0, sNB = 0, sUB = 0; float wA = 0, wB = 0;
+    [loop] for (uint cj = 0; cj < 27; ++cj) {
+        int3 c = c0 + int3(cj % 3, (cj / 3) % 3, cj / 9);
+        uint e = g_bodyTab[tb + pesBodyHash(c)];
+        [loop] for (uint it = 0; it < PES_BODY_WALK && e != 0; ++it) {
+            uint v = e - 1;
+            float3 y, n, u;
+            pesBodyVertex(v, y, n, u);
+            float3 dv = xm - y;
+            float d2 = dot(dv, dv);
+            if (d2 < R2) {
+                float w = 1.0 - d2 / R2; w *= w;
+                if (dot(nA, n) >= 0.7) { sNA += n * w; sUA += u * w; wA += w; }
+                else if (vB != 0 && dot(nB, n) >= 0.7) { sNB += n * w; sUB += u * w; wB += w; }
+            }
+            e = g_bodyNext[v];
+        }
+    }
+#endif
     float det0;
     float3x3 B0i = inverse3((float3x3)B0, det0);
     if (!(abs(det0) > 1e-9)) return;
@@ -770,6 +834,10 @@ void pesBodyQuery(uint p, uint k, float3 x)
         if (e == 0) continue;
         float3 y, n, u;
         pesBodyVertex(e - 1, y, n, u);
+#if PES_BODY_SMOOTH
+        if (j == 0 && wA > 1e-6 && dot(sNA, sNA) > 1e-10) { n = normalize(sNA); u = sUA / wA; }
+        if (j == 1 && wB > 1e-6 && dot(sNB, sNB) > 1e-10) { n = normalize(sNB); u = sUB / wB; }
+#endif
         float3 qb = mul(B0i, y - float3(B0[0].w, B0[1].w, B0[2].w));          // en el reposo de la prenda
         float3 nb = normalize(mul(transpose((float3x3)B0), n) + 1e-12);
         float3 rv = u - (xform(B1, qb) - xform(Bp, qb));                        // la piel respecto de la prenda, por cuadro
@@ -782,6 +850,35 @@ void pesBodyQuery(uint p, uint k, float3 x)
         s_bq[k][j] = float4(qb, asfloat(o.x | (o.y << 16)));
         s_bv[k][j] = uint2(hv.x | (hv.y << 16), hv.z | 0x10000u);
     }
+}
+// (27/10) el punto de reposo de la tela (adonde la tira el anclaje) afuera de la piel: la camiseta del juego esta hecha para
+// el cuerpo de Konami y en TorsoBody (mas grueso, y con la musculatura) su reposo queda adentro del torso / del brazo. El
+// anclaje tiraba la tela hacia adentro y la piel la empujaba hacia afuera en cada sub-paso: la manga vibraba y, donde el
+// anclaje es fuerte (escote, punos, costuras cosidas), el cuerpo atravesaba la tela. Se corre el reposo por los mismos
+// planos de la piel (sin limite por sub-paso: no es un empuje, es el lugar adonde va la tela).
+float3 pesBodyLift(uint p, uint k, float t, float3 y0)
+{
+    if (((s_bv[k][0].y | s_bv[k][1].y) & 0x10000u) == 0) return y0;
+    ParticleRest r = g_rest[p];
+    float3x4 A = skinC(r.skin.z, r.skin.x, r.skin.y);
+    float3 T = float3(A[0].w, A[1].w, A[2].w);
+    float3 c0 = cross(A[1].xyz, A[2].xyz), c1 = cross(A[2].xyz, A[0].xyz), c2 = cross(A[0].xyz, A[1].xyz);
+    float sg = dot(A[0].xyz, c0) < 0.0 ? -1.0 : 1.0;
+    float m = clamp(s_bodyPrm.y * 0.001, 0.0, 0.03);
+    float3 y = y0;
+    [unroll] for (uint j = 0; j < 2; ++j) {
+        if ((s_bv[k][j].y & 0x10000u) == 0) continue;
+        uint on = asuint(s_bq[k][j].w);
+        float3 nb = pesOctDec(float2(on & 0xffff, on >> 16) / 65535.0 * 2.0 - 1.0);
+        float3 rv = f16tof32(uint3(s_bv[k][j].x & 0xffff, s_bv[k][j].x >> 16, s_bv[k][j].y & 0xffff));
+        float3 q = mul((float3x3)A, s_bq[k][j].xyz) + T + rv * (t - s_bodyTc);
+        float3 n = normalize(float3(dot(c0, nb), dot(c1, nb), dot(c2, nb)) * sg + 1e-12);
+        float3 dq = y - q;
+        float d = dot(dq, n);
+        float3 lat = dq - n * d;
+        if (dot(lat, lat) < PES_BODY_LATERAL * PES_BODY_LATERAL && d < m) y += n * min(m - d, PES_BODY_LIFT_MAX);
+    }
+    return y;
 }
 // en cada sub-paso: la tela no queda mas cerca de la piel que la separacion (empuje acotado, sin velocidad nueva)
 void pesBodyCollide(uint p, uint k, float t, inout float3 x, inout float3 xPrev, inout float contactD)
@@ -824,7 +921,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
     if (pin < 0.999) {
         float3 x = gx[p];
 #if PES_BODY
-        if (s == 0) pesBodyQuery(p, k, x);   // (25/10) la piel cercana, una vez por cuadro
+        if (s == 0) pesBodyQuery(p, k, x, rest1);   // (25/10) la piel cercana, una vez por cuadro
         bool pesBodyHas = ((s_bv[k][0].y | s_bv[k][1].y) & 0x10000u) != 0;
 #if PES_BODY_DIAG
         if (s == 0 && pesBodyHas) { uint dg; InterlockedAdd(gBodyCnt[0], 1u, dg); }
@@ -882,6 +979,37 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         // delgado: el punto de reposo baja con la gravedad -> la remera cuelga mas larga (solo tela libre)
         float3 restT = rest1;
         if (pesFit > 0.0) { float gl = length(s_grav); if (gl > 1e-4) restT += (s_grav / gl) * pesFit * PES_FIT_HANG * fitFree; }
+        // (02/11) fila 352 (Agustin: en la vida real las mangas van mas pegadas al brazo): el REPOSO de la manga se cierra hacia
+        // el eje de su tramo (centro de la tela de ese tramo, como el brazo como volumen): x352 = cuanto del exceso sobre el radio
+        // minimo del tramo se saca, y352 = maximo en cm. Solo cambia adonde la tira el anclaje: la manga sigue igual de libre
+        // (mismo pin, misma correa) y la piel real la frena (el levantado de abajo corre el reposo afuera de la piel). Se apaga
+        // junto al hombro y junto al puno (el puno es otra malla que sigue al esqueleto: sin escalon).
+        float3 restS = rest1;
+        { float4 SL = IniParams.Load(int2(352, 0));
+          if (SL.w > 0.5 && SL.x > 0.0 && g_legCount == 0 && s_tOk) {
+            float3 r0s = rest1 - rnrm1 * g_rest[p].nrm.w;
+            float sws = pesLimbW(p, r0s);
+            if (sws > 0.2) {
+                uint sdS = dot(r0s - s_tC, s_tSide) < 0.0 ? 0u : 1u;
+                if (s_armOk[sdS]) {
+                    uint bS = (uint)clamp((sws - 0.2) / 0.8 * PES_ARM_BANDS, 0.0, PES_ARM_BANDS - 1.0);
+                    uint bS2 = bS + 1 < PES_ARM_BANDS ? bS + 1 : bS - 1;
+                    float3 axS = normalize(s_armC[sdS][bS2] - s_armC[sdS][bS] + 1e-6);
+                    float3 dvS = rest1 - s_armC[sdS][bS]; float3 radV = dvS - axS * dot(dvS, axS);
+                    float radS = length(radV);
+                    float wS = smoothstep(0.2, 0.35, sws) * (1.0 - smoothstep(0.8, 0.95, sws));
+                    float inS = min(saturate(SL.x) * max(radS - s_armR[sdS][bS], 0.0), clamp(SL.y, 0.0, 5.0) * 0.01) * wS;
+                    if (radS > 1e-4 && inS > 0.0 && all(isfinite(radV))) restS = rest1 - radV / radS * inS;
+                }
+            }
+          } }
+        restT += restS - rest1;
+#if PES_BODY && PES_BODY_LIFT
+        float3 restB = restS;   // (27/10) reposo afuera de la piel real (tambien para las costuras cosidas, mas abajo)
+        if (pesBodyHas) { restB = pesBodyLift(p, k, t, restS); restT += restB - restS; }
+#else
+        float3 restB = rest1;
+#endif
         x += (restT - x) * (1.0 / (1.0 + alpha / hh));
         float3 off = x - restT;
         float maxD0 = g_tetherRadius * (1.0 - pin);
@@ -1166,7 +1294,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
             }
             seamK = saturate(seamK * PES_SEAM_LOCK);
             if (seamK > 0.001) {
-                float3 dS = (rest1 - x) * seamK;
+                float3 dS = (restB - x) * seamK;   // (27/10) el reposo corrido afuera de la piel: la costura no mete la tela en el cuerpo
                 x += dS; xPrev += dS;
             }
         }
@@ -1351,6 +1479,23 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
               s_center = (s_flags & 32) ? float3(s_W[0].w, s_W[1].w, s_W[2].w) : 0;
             }
             float3 windBase = mul(transpose(W), g_wind.xyz);
+            s_windLen = length(windBase);   // (13/11) antes de cambiarlo por el viento unico: la fase de la onda no salta cada cuadro
+            // PES21 FX (13/11) viento unico: si la DLL publica la fila 494 (z > 0) y z353 = 1, la tela usa ese viento (rumbo y
+            // velocidad de este cuadro, con sus rachas) en vez del fijo de cloth.ini; la componente vertical sigue siendo la de cloth.ini.
+            // Sin DLL (fila en cero) o con el viento del mod apagado (menus), todo queda como antes.
+            float4 pesWU = IniParams.Load(int2(494, 0));
+            // (14/11, Agustin: "en las cinematicas mantenga este valor") ya no hace falta que cloth.ini tenga viento en este cuadro
+            // (el mod de ropa lo apaga fuera del partido y en las cinematicas): alcanza con que no sea un menu (s_menu, w255 de la
+            // DLL); en el vestuario y el tunel el viento ya lo baja la DLL (bajo techo, y500)
+            bool pesWOn = PES_CLOTH_FX && pesWU.z > 0.0 && IniParams.Load(int2(353, 0)).z > 0.5 && !s_menu;
+            // (13/11 etapa 2b / 14/11) fila 509 (la escribe la DLL, w = 1): y = cuanto viento le llega a la ropa ya con la altura
+            // (w503 x perfil por altura de la fila 508), z = viento por debajo del borde (w508). Sin DLL nueva: w503 y 1 como antes
+            float4 pesEff = IniParams.Load(int2(509, 0));
+            const bool pesEffOk = pesEff.w > 0.5;
+            // x511 (la escribe la DLL) = viento vertical en m/s (+ = desde abajo); hoy solo lo usa "Probar el viento" del menu
+            if (pesWOn) { const float kC = pesEffOk ? pesEff.y : IniParams.Load(int2(503, 0)).w; pesWU.z *= kC;
+                          windBase = mul(transpose(W), float3(pesWU.x * pesWU.z, g_wind.y + IniParams.Load(int2(511, 0)).x * kC, pesWU.y * pesWU.z)); }
+            s_pesWindOn = pesWOn; s_windHem = pesEffOk ? pesEff.z : 1.0;
             // PES21 FX (25/10): el cuerpo real de este personaje (cuerpo.cpp): de las tablas que la DLL armo en el ultimo Present (una
             // por personaje, con la piel del cuadro anterior), la que tiene su origen en el mundo mas cerca del de la prenda
             s_bodyTab = 0xffffffffu; s_bodyTc = 0.0;
@@ -1388,7 +1533,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             for (uint s = 0; s < s_substeps; ++s) {
                 float t = float(s + 1) / float(s_substeps);
                 float tg = g_time + float(s) * h;
-                float gust = 1.0 + g_wind.w * sin(tg * 1.7) * sin(tg * 0.63);
+                float gust = pesWOn ? 1.0 : 1.0 + g_wind.w * sin(tg * 1.7) * sin(tg * 0.63);   // (13/11) las rachas ya vienen en la fila 494
                 fillBoneCache(gi, t);
                 DeviceMemoryBarrierWithGroupSync();
                 if (gi < g_capsuleCount && gi < MAXCAPS) {
@@ -1678,7 +1823,13 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             float3 tRest = mul(A, tB);
             float3 n = g_pnrm[s_pnrmBase + (p)].xyz;
             float strainO = PES_STRAIN_ENC ? saturate(g_pnrm[s_pnrmBase + (p)].w) : 0.0;   // PES21 FX: compresion (0..1)
-            if (g_mapped) {
+            // cloth-mod 0.9.9: kits demasiado grandes (arbitros, arqueros con manga larga): el cuello / la manga de abajo
+            // vienen marcados con w = 0xffffffff y se mueven con el cuerpo como en el juego original
+            if (g_mapped && g_rmap[i].w == 0xffffffffu) {
+                x = mul(A, v) + tr;
+                n = nRest;
+                strainO = 0.0;
+            } else if (g_mapped) {
                 uint4 rm = g_rmap[i];
                 float w0 = float(rm.w & 0xffff) / 65535.0, w1 = float(rm.w >> 16) / 65535.0, w2 = max(1.0 - w0 - w1, 0.0);
                 uint3 pp = min(rm.xyz, MAXP - 1);
@@ -1708,7 +1859,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             float3x3 Ai = inverse3(A, det);
             float3 outV = v;
             uint4 outNT = nt;
-            if (abs(det) > 1e-8 && all(isfinite(x))) {
+            if (abs(det) > 1e-3 && all(isfinite(x))) {   // cloth-mod 0.10.0: umbral 1e-3 (antes 1e-8)
                 outV = mul(Ai, x - tr);
                 float3 nb = normalize(mul(Ai, n)) * (1.0 + strainO);   // PES21 FX: largo de la normal = 1 + compresion (lo lee el shader de kit)
                 float3 tb = normalize(mul(Ai, t));

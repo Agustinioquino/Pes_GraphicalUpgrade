@@ -514,3 +514,20 @@ tools/fox/sim/rast.c -lm`). Ej.: `python3 compare.py PES21FX.log <carpeta fmdl> 
   sin la mascara de TODAS las mallas que leen la textura. Medido en las mallas sin shaders: la costura del hombro esta cerrada
   (52 vertices a 0 mm, mismos pesos de huesos, normales de malla a 1..4 grados) y el color de torso_N_bsm / arm_N_bsm coincide
   en la costura (mediana 0.98..1.02, p90 1.05..1.12), normal maps a 2..5 grados: lo que se ve viene de PES21FX.
+
+## Sol, hora del dia, clima y sombras (02/11, Ghidra sobre el volcado vivo)
+
+Documento completo para Agustin: /mnt/project-files/luz/mapa_exe_sol_hora_clima_20261102.md. Resumen:
+
+| Que | Donde |
+|---|---|
+| Contexto del partido -> TimeOfDay (time_zone +0xbc, clima +0x148, estacion +0x154, fecha +0x170 de `*(ajustes+0x10)`) | `TOD_FeedContext` 0x1419b51b0 -> 0x14191c370 (manager+0x18: modo, fase, fecha/hora en shorts +0x20..+0x2a) |
+| Manager TimeOfDay: bomba (sucio +0x80 / forzar +0x400) -> Merge -> BuildEffective (manager+0x190) -> Apply1 (sombras) -> Apply2 (cielo) -> Dispatch | 0x14191c7b0 / 0x14191cf70 / 0x14191be80 / 0x14191d1c0 / 0x14191c8f0 / 0x14191d410; ranura +0x70, reloj +0x78, ranuras +0x90[32] |
+| Clases registradas (nombres en .idata 0x142a7b000..): TimeOfDaySettings (sunLux +0x148, exposicion +0x158.., tonemap +0x190.., niebla +0x1f0.., SAO +0x250.., modelIntensity +0x26c..), TppAtmosphere (latitude +0x208, longitude +0x20c, year/month/day, shadowRange +0x214.., selfShadowBias +0x228, sunLux +0x23c, fixedLightDirSunRise +0xb0, cloudiness +0x264), GrShadowSettings (method +0x70, depthBias +0x8c), PesExposureSettings, TppTonemap | 0x141923f90 / 0x141943ea0 / 0x14183de90 / 0x141919830 / 0x14194e180 (`tools/re/props.py salida.c` saca las tablas) |
+| Atmosfera en tiempo real (manager 0x1437d59e8: +0xd8 n, +0xe0 punteros): +0xc0 long, +0xc4 lat, +0xcc northAngle, +0x130 dir del sol (w = signo), +0x140 sunLux, +0x150 luna, +0x160 moonLux, +0x170 fecha/hora (6 shorts), +0x188 luz direccional, +0x1a0 id, +0x1b0 skyLightSunScale, +0x1c0/+0x1c4 intensidad sol/luna, +0x1d4 GMT, +0x3d0 sucio | Sky_SetDateTime 0x141949440, Sky_SetSunLux 0x1419498c0 (+0x160 moon 0x1419495e0, +0x1b0 0x141949720) |
+| Sol astronomico (J2000 0x142a4b6f8; T = (JD - 2451545)/36525; sidereo, oblicuidad, series solar y lunar) | 0x141959330 -> 0x1419591d0 (serie solar 0x141958ec0, marco local 0x141958180); Sky_UpdA 0x141959e80 (northAngle), Sky_UpdB 0x14195af70 (guarda +0x130/+0x150); Atmo_Update 0x14195a680 (RTMM lo engancha en +0x18: los 29 primeros bytes del volcado son el salto) |
+| Atmosfera -> luz direccional: debajo de -7.9 grados usa fixedLightDirSunRise/Set (+0xd0/+0xe0); intensidad = sunLux x rampa; luz+0x110 dir, luz+0x1c4 lux*pi*escala, luz+0x1d0 color, luz+0x1dc 1; sombra 0x1416ba530(luz+0x10, b) | `Atmo_SolALuz` 0x14195aac0 |
+| Bloques por hora del archivo de luz (timeSpans): objeto 0x1437d4a20, +0x64 segundos del dia, +0x10/+0x18 spans de 0x60 B, interpola (t - t0)/(t1 - t0) | TODLight_SetTime 0x141936e40, TODLight_Apply 0x141937450 (lo llama Atmo_Update con h*3600+m*60+s de atmosfera+0x176) |
+| Luz -> cbuffer: luz+0x70 dir mundo, +0x40 color/pi, +0x64 banderas, +0x80 -> id 0x63, +0xd0 -> 0x73, +0x90..+0xcc x inv(camara) -> 0x95/0xa5/0xc5, +0xdc/+0xe0 -> 0xb5; Light_Loop pisa 0x95..0xc5 con la sombra de nubes/techo (0x1417533c0, matriz 0x141032a40) y 0xd5 | 0x14171e220 / 0x1416ee820 |
+| Tabla "match" para Lua: time_zone, random_time_zone +0xd68, weather +0xd6c, random_weather +0xd6d, match_skip +0xd70, season_num +0xd74, competition_id +0xd76 | 0x1410ba4f0 |
+| Hooks de mods en el volcado: Daylight cueva 0x13ffd0000 (0x140a92a10/a80/ad0/e20/e40/bbd: reloj ofuscado imul 0x2d22b2e3); RTMM cueva 0x13ffe0000 (0x14191c430, 0x14191cfe4, 0x14195a698, 0x1419194df, 0x141949507, 0x1416f651a, 0x14087a36d); Sider 0x13ffa0000/0x13ffc0000/0x13fff0000 | buscar E8/E9 con destino fuera de la imagen |

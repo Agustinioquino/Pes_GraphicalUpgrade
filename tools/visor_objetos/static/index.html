@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><title>Visor de objetos</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#15181d;--panel:#1d2128;--linea:#2c323c;--txt:#dfe4ea;--suave:#8b95a3;--acento:#4fb3ff;--ok:#5ccf8a;--mal:#ff7a6b}
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font:13px/1.4 "Segoe UI",system-ui,sans-serif}
+#app{display:grid;grid-template-columns:340px 1fr;height:100%}
+#izq{display:flex;flex-direction:column;border-right:1px solid var(--linea);background:var(--panel);min-height:0}
+#buscar{margin:10px;padding:8px 10px;border-radius:6px;border:1px solid var(--linea);background:var(--bg);color:var(--txt);font:inherit}
+#filtros{display:flex;gap:6px;padding:0 10px 8px;flex-wrap:wrap}
+#lista{overflow:auto;flex:1;padding-bottom:10px}
+.grupo>summary{cursor:pointer;padding:6px 10px;color:var(--suave);font-weight:600;position:sticky;top:0;background:var(--panel)}
+.grupo>summary span{float:right;font-weight:400}
+.m{padding:3px 10px 3px 22px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.m:hover{background:#262c35}.m.sel{background:#1f3a52;color:#fff}
+.m i{font-style:normal;color:var(--suave);font-size:11px;margin-left:6px}
+#der{position:relative;min-width:0}
+#vista{position:absolute;inset:0}
+#barra{position:absolute;top:10px;left:10px;right:10px;display:flex;gap:6px;flex-wrap:wrap;pointer-events:none}
+#barra>*{pointer-events:auto}
+button,.chip{background:#262c35;color:var(--txt);border:1px solid var(--linea);border-radius:6px;padding:6px 10px;font:inherit;cursor:pointer}
+button.on,.chip.on{background:#1f3a52;border-color:var(--acento)}
+#titulo{position:absolute;left:10px;bottom:10px;right:10px;pointer-events:none}
+#titulo b{font-size:15px}#titulo div{color:var(--suave)}
+#info{position:absolute;top:52px;right:10px;width:360px;max-height:calc(100% - 110px);overflow:auto;background:rgba(29,33,40,.94);border:1px solid var(--linea);border-radius:8px;padding:10px;display:none}
+#info.ver{display:block}
+#info h4{margin:8px 0 4px;color:var(--suave);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.t{font-size:12px;word-break:break-all;margin:2px 0}.t .ok{color:var(--ok)}.t .mal{color:var(--mal)}
+#estado{padding:6px 10px;color:var(--suave);border-top:1px solid var(--linea);font-size:12px}
+#ayuda{color:var(--suave);font-size:12px;align-self:center;background:rgba(21,24,29,.7);padding:4px 8px;border-radius:6px}
+</style></head><body>
+<div id="app">
+ <div id="izq">
+  <input id="buscar" placeholder="Buscar modelo (nombre o carpeta)…">
+  <div id="filtros"><span class="chip on" data-f="todos">Todos</span><span class="chip" data-f="obj">Solo objetos (sin huesos)</span></div>
+  <div id="lista">Cargando catálogo…</div>
+  <div id="estado">…</div>
+ </div>
+ <div id="der">
+  <div id="vista"></div>
+  <div id="barra">
+   <button id="bTex" class="on">Texturas</button><button id="bAlambre">Malla</button><button id="bLuz">Luz: día</button>
+   <button id="bFondo">Fondo</button><button id="bCentrar">Centrar</button><button id="bGirar">Girar solo</button><button id="bInfo">Detalle</button>
+   <span id="ayuda">Mouse: izq. gira · rueda acerca · der. mueve · ↑ ↓ cambia de modelo</span>
+  </div>
+  <div id="info"></div>
+  <div id="titulo"></div>
+ </div>
+</div>
+<script src="lib/three.min.js"></script><script src="lib/OrbitControls.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+const api=(u)=>fetch(u).then(r=>r.ok?r.json():r.json().then(e=>{throw new Error(e.error||r.status)}));
+// ---------------------------------------------------------------- escena
+const vista=$('#vista');
+const ren=new THREE.WebGLRenderer({antialias:true});ren.setPixelRatio(devicePixelRatio);
+ren.outputEncoding=THREE.sRGBEncoding;vista.appendChild(ren.domElement);
+const esc=new THREE.Scene();const fondos=[0x15181d,0x6b7480,0xe9edf1];let fondo=0;esc.background=new THREE.Color(fondos[0]);
+const cam=new THREE.PerspectiveCamera(40,1,0.001,5000);cam.position.set(2,1.5,3);
+const ctl=new THREE.OrbitControls(cam,ren.domElement);ctl.enableDamping=true;
+const hemi=new THREE.HemisphereLight(0xdfe9ff,0x40362c,0.75);esc.add(hemi);
+const sol=new THREE.DirectionalLight(0xffffff,1.1);sol.position.set(3,5,4);esc.add(sol);
+const contra=new THREE.DirectionalLight(0x9fc4ff,0.45);contra.position.set(-4,2,-3);esc.add(contra);
+const luces=[['día',.75,1.1,.45],['estudio',1.1,.6,.2],['contraluz',.35,.4,1.4]];let luz=0;
+const piso=new THREE.GridHelper(10,20,0x3a414c,0x262c35);esc.add(piso);
+let grupoModelo=null,girar=false;
+function tam(){const r=vista.getBoundingClientRect();ren.setSize(r.width,r.height);cam.aspect=r.width/r.height;cam.updateProjectionMatrix()}
+addEventListener('resize',tam);tam();
+(function bucle(){requestAnimationFrame(bucle);if(girar&&grupoModelo)grupoModelo.rotation.y+=0.006;ctl.update();ren.render(esc,cam)})();
+// ---------------------------------------------------------------- texturas (PNG decodificado por el servidor)
+const cargaTex=new THREE.TextureLoader();const cacheTex={};
+function tex(k,srgb){const id=k+(srgb?'#s':'');if(!cacheTex[id]){cacheTex[id]=new Promise(ok=>cargaTex.load('/api/textura?k='+encodeURIComponent(k),t=>{t.flipY=false;t.wrapS=t.wrapT=THREE.RepeatWrapping;if(srgb)t.encoding=THREE.sRGBEncoding;t.anisotropy=8;ok(t)},undefined,()=>ok(null)))}return cacheTex[id]}
+function b64(s,T){const b=atob(s),u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return new T(u.buffer)}
+const BASE=/^(base_tex|diffuse|albedo)/i,NORMAL=/^normalmap/i;
+// ---------------------------------------------------------------- modelo
+let actual=null,verTex=true,alambre=false;
+function limpiar(){if(!grupoModelo)return;grupoModelo.traverse(o=>{if(o.geometry)o.geometry.dispose();if(o.material)o.material.dispose()});esc.remove(grupoModelo);grupoModelo=null}
+async function abrir(r,el){
+  document.querySelectorAll('.m.sel').forEach(e=>e.classList.remove('sel'));if(el){el.classList.add('sel');el.scrollIntoView({block:'nearest'})}
+  actual=r;$('#titulo').innerHTML='<b>'+esc_(r.split('\\').pop())+'</b><div>cargando…</div>';
+  let d;try{d=await api('/api/modelo?r='+encodeURIComponent(r))}catch(e){$('#titulo').innerHTML='<b>'+esc_(r.split('\\').pop())+'</b><div style="color:var(--mal)">'+esc_(e.message)+'</div>';return}
+  if(actual!==r)return;limpiar();
+  const g=new THREE.Group();const caja=new THREE.Box3();
+  for(const m of d.mallas){
+    const geo=new THREE.BufferGeometry();
+    geo.setAttribute('position',new THREE.BufferAttribute(b64(m.pos,Float32Array),3));
+    if(m.nrm)geo.setAttribute('normal',new THREE.BufferAttribute(b64(m.nrm,Float32Array),3));
+    if(m.uv)geo.setAttribute('uv',new THREE.BufferAttribute(b64(m.uv,Float32Array),2));
+    geo.setIndex(new THREE.BufferAttribute(b64(m.caras,Uint32Array),1));
+    if(!m.nrm)geo.computeVertexNormals();
+    const info=d.materiales[m.mat]||{texturas:[]};
+    const mat=new THREE.MeshStandardMaterial({color:0xbfc5cc,roughness:.75,metalness:0,side:THREE.DoubleSide,wireframe:alambre});
+    mat.userData.info=info;
+    const base=info.texturas.find(t=>BASE.test(t.ranura)&&t.ruta);
+    if(base&&m.uv){tex(base.ruta,true).then(t=>{if(!t)return;mat.userData.map=t;if(verTex){mat.map=t;mat.color.set(0xffffff)}
+      if(/_alp/i.test(base.archivo)){mat.alphaTest=.5}mat.needsUpdate=true})}
+    const malla=new THREE.Mesh(geo,mat);g.add(malla);geo.computeBoundingBox();caja.union(geo.boundingBox);
+  }
+  grupoModelo=g;esc.add(g);centrar(caja);
+  const sinTex=d.materiales.reduce((a,m)=>a+m.texturas.filter(t=>!t.ruta).length,0),conTex=d.materiales.reduce((a,m)=>a+m.texturas.filter(t=>t.ruta).length,0);
+  const tv=d.mallas.reduce((a,m)=>a+m.nvert,0),tc=d.mallas.reduce((a,m)=>a+m.ncaras,0);
+  $('#titulo').innerHTML='<b>'+esc_(r.split('\\').pop())+'</b><div>'+esc_(r)+'</div><div>'+d.mallas.length+' mallas · '+tv.toLocaleString()+' vértices · '+tc.toLocaleString()+' triángulos · '+(d.huesos?d.huesos+' huesos':'sin huesos')+' · texturas '+conTex+' encontradas'+(sinTex?', '+sinTex+' faltan':'')+'</div>';
+  let h='<h4>Materiales</h4>';
+  d.materiales.forEach((m,i)=>{h+='<div class="t"><b>'+i+'. '+esc_(m.nombre)+'</b> <span style="color:var(--suave)">'+esc_(m.shader)+' / '+esc_(m.tecnica)+'</span></div>';
+    m.texturas.forEach(t=>{h+='<div class="t">&nbsp;&nbsp;'+esc_(t.ranura)+': '+esc_(t.archivo)+' '+(t.ruta?'<span class="ok">✓ '+esc_(t.como)+'</span><br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--suave)">'+esc_(t.ruta)+'</span>':'<span class="mal">✗ '+esc_(t.como)+'</span>')+'</div>'})});
+  if(d.avisos.length)h+='<h4>Avisos</h4>'+d.avisos.map(a=>'<div class="t mal">'+esc_(a)+'</div>').join('');
+  $('#info').innerHTML=h;
+}
+function centrar(caja){
+  if(!grupoModelo)return;caja=caja||new THREE.Box3().setFromObject(grupoModelo);if(caja.isEmpty())return;
+  const c=caja.getCenter(new THREE.Vector3()),s=caja.getSize(new THREE.Vector3()).length()||1;
+  ctl.target.copy(c);cam.near=s/1000;cam.far=s*100;cam.updateProjectionMatrix();
+  cam.position.copy(c).add(new THREE.Vector3(.55,.35,1).normalize().multiplyScalar(s*1.2));
+  piso.position.set(c.x,caja.min.y,c.z);piso.scale.setScalar(Math.max(s/4,0.05));
+}
+function esc_(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+// ---------------------------------------------------------------- botones
+$('#bTex').onclick=e=>{verTex=!verTex;e.target.classList.toggle('on',verTex);grupoModelo&&grupoModelo.traverse(o=>{if(o.material){o.material.map=verTex?o.material.userData.map||null:null;o.material.color.set(o.material.map?0xffffff:0xbfc5cc);o.material.needsUpdate=true}})};
+$('#bAlambre').onclick=e=>{alambre=!alambre;e.target.classList.toggle('on',alambre);grupoModelo&&grupoModelo.traverse(o=>{if(o.material)o.material.wireframe=alambre})};
+$('#bLuz').onclick=e=>{luz=(luz+1)%luces.length;const l=luces[luz];hemi.intensity=l[1];sol.intensity=l[2];contra.intensity=l[3];e.target.textContent='Luz: '+l[0]};
+$('#bFondo').onclick=()=>{fondo=(fondo+1)%fondos.length;esc.background.set(fondos[fondo])};
+$('#bCentrar').onclick=()=>centrar();
+$('#bGirar').onclick=e=>{girar=!girar;e.target.classList.toggle('on',girar)};
+$('#bInfo').onclick=e=>{$('#info').classList.toggle('ver');e.target.classList.toggle('on')};
+// ---------------------------------------------------------------- lista
+let datos=null,filtro='todos';
+function pintar(){
+  const q=$('#buscar').value.trim().toLowerCase();const L=$('#lista');L.innerHTML='';let n=0;
+  for(const g of datos.grupos){
+    const ms=g.modelos.filter(m=>(filtro!=='obj'||m.h===0)&&(!q||m.r.toLowerCase().includes(q)));if(!ms.length)continue;
+    const det=document.createElement('details');det.className='grupo';det.open=!!q;
+    det.innerHTML='<summary>'+esc_(g.nombre)+'<span>'+ms.length+'</span></summary>';
+    for(const m of ms){const e=document.createElement('div');e.className='m';e.title=m.r;e.dataset.r=m.r;
+      e.innerHTML=esc_(m.r.split('\\').pop())+(m.h===0?'<i>objeto</i>':'');e.onclick=()=>abrir(m.r,e);det.appendChild(e);n++}
+    L.appendChild(det);
+  }
+  if(!n)L.innerHTML='<div style="padding:10px;color:var(--suave)">Nada coincide.</div>';
+}
+$('#buscar').oninput=pintar;
+document.querySelectorAll('#filtros .chip').forEach(c=>c.onclick=()=>{document.querySelectorAll('#filtros .chip').forEach(x=>x.classList.remove('on'));c.classList.add('on');filtro=c.dataset.f;pintar()});
+addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||!['ArrowDown','ArrowUp'].includes(e.key))return;e.preventDefault();
+  const todos=[...document.querySelectorAll('.m')];if(!todos.length)return;let i=todos.findIndex(x=>x.classList.contains('sel'));
+  i=e.key==='ArrowDown'?Math.min(todos.length-1,i+1):Math.max(0,i-1);const el=todos[i];el.parentElement.open=true;abrir(el.dataset.r,el)});
+api('/api/lista').then(d=>{datos=d;if(d.error){$('#lista').innerHTML='<div style="padding:10px;color:var(--mal)">'+esc_(d.error)+'</div>';return}pintar()});
+(async function est(){try{const s=await api('/api/estado');const total=datos?datos.total:0;
+  $('#estado').textContent=(total?total+' modelos · ':'')+(s.indice==='listo'?s.texturas.toLocaleString()+' texturas del juego indexadas':'Texturas: '+s.indice);
+  if(s.indice!=='listo'&&!String(s.indice).startsWith('error'))setTimeout(est,1000);else if(actual&&s.indice==='listo'){const el=document.querySelector('.m.sel');abrir(actual,el)}}catch(e){setTimeout(est,2000)}})();
+</script></body></html>

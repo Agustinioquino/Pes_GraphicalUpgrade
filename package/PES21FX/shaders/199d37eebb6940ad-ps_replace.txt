@@ -304,6 +304,11 @@ void main(
   r1.xyz = ((r1.xyzx * r1.xyzx)).xyz;
   r1.xyz = ((r4.xyzx * r1.xyzx)).xyz;
   float3 pesAlb = r1.xyz; float pesBoost = r0.z;
+  // (13/11 sk9ema) red mojada con lluvia (x114 = cancha mojada, y499 cuanto) y menos cielo dentro del arco (z499): la pared del
+  // fondo y los costados quedan bajo el techo de la red y detras del travesano. Eje largo de la cancha = x, arco desde |x| 52.5.
+  float4 pesRN = IniParams.Load(int2(499,0));
+  float pesWet = (pesOn && pesNet) ? saturate(IniParams.Load(int2(114,0)).x * pesRN.y) : 0.0;
+  float pesDeep = (pesOn && pesNet) ? saturate((abs(v4.x) - 52.55) / 1.8) * saturate(1.0 - (v4.y - 2.44) * 2.0) : 0.0;
   r2.xyz = ((r2.xyzx * r0.zzzz + r3.xyzx)).xyz;
   r1.xyz = ((r1.xyzx * r2.xyzx)).xyz;
   if (pesOn) {
@@ -315,12 +320,13 @@ void main(
       // nylon al sol: brillo a lo largo de la hebra (Kajiya-Kay) y trenzado helicoidal de cerca (periodo 4 mm)
       float3 H = normalize(-cb3[0].xyz + pesV);
       float th = dot(pesT, H);
-      r1.xyz += pesSunL * (pow(sqrt(saturate(1.0 - th * th)), 40.0) * 0.12 * saturate(FL.w));
+      r1.xyz += pesSunL * (pow(sqrt(saturate(1.0 - th * th)), lerp(40.0, 90.0, pesWet)) * 0.12 * (1.0 + 2.5 * pesWet) * saturate(FL.w));   // mojada: brillo mas fino y fuerte
       float fib = saturate(1.0 - pesFoot / 0.0015) * saturate(FL.w);
       float tw = dot(v4.xyz, pesT) / 0.004 + pesS * 0.5;
       r1.xyz *= lerp(1.0, 0.8 + 0.2 * (0.5 + 0.5 * sin(6.2831853 * tw)), fib);
     }
   }
+  if (pesOn && pesNet) r1.xyz *= (1.0 - 0.28 * pesWet) * (1.0 - 0.3 * saturate(pesRN.z) * pesDeep);   // nylon empapado mas oscuro; menos cielo adentro
   r0.z = ((r1.wwww * v4.wwww)).z;
   if (pesOn && pesNet) r0.z = saturate(r0.z * (1.0 + 0.1 * max(pesLod, 0.0)));   // la red no desaparece a lo lejos (el mip promedia el alfa)
   r1.xyz = ((r1.xyzx * cb2[23].zzzz)).xyz;
