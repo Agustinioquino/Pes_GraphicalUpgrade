@@ -278,6 +278,9 @@ static bool s_rail = false;                       // barra lateral solo con icon
 static bool s_slim = false;                       // botones de arriba solo con iconos (ventana muy angosta)
 static int s_winReq = -1;                         // 0 ventana, 1 grande, 2 panel a la derecha: se aplica al proximo Begin
 static MvPad s_pad;                               // (14/11) el mando de este cuadro (menuvisual.cpp)
+// (14/11, Agustin: "el menu debe reconocer si esta usando mando o teclado para adaptarse con lo ultimo tocado") 0 teclado / mouse, 1 mando
+static int s_lastDev = 0;
+static bool PadUi() { return s_lastDev == 1 && s_pad.connected; }
 static double s_menuMsAvg = 0.0;                  // (14/11) tiempo de CPU que lleva armar el menu (promedio)
 static double MenuCpuMs() { return s_menuMsAvg; }
 static std::set<std::string> s_moreOpen;          // tarjetas largas con "mas opciones" desplegado
@@ -1127,7 +1130,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
         for (int i = 0; i < 8; i++) ci.keys[i] = front && (GetAsyncKeyState(kVk[i]) & 0x8000) != 0;
         ci.rmb = front && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
         ci.anim = Anim(); ci.k = UIK(); ci.now = Now();
-        ci.pad = s_pad; ci.padOn = &g_cfg.camPad; ci.padFly = FreeCamPadWanted() && s_pad.connected; ci.padGiven = FreeCamPadState().given;   // (14/11) iconos del mando con su funcion
+        ci.pad = s_pad; ci.padOn = &g_cfg.camPad; ci.padFly = FreeCamPadWanted() && s_pad.connected; ci.padGiven = FreeCamPadState().given; ci.padUi = PadUi();   // (14/11) iconos del mando con su funcion
         const int padWas = g_cfg.camPad;
         if (MvCamWidget(ci)) PushRecent(g.title);
         if (g_cfg.camPad != padWas) { SaveOption("camara_mando", g_cfg.camPad ? "1" : "0"); if (g_cfg.camPad) FreeCamPadTake(); }
@@ -1136,7 +1139,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
         ImGui::Spacing();
         auto& L = g_cfg.live; MvSlowIn si2; si2.on = &L[343][1]; si2.speed = &L[343][0]; si2.where = &L[343][2]; si2.editorSteps = L[343][3];
         si2.replay = ReplayNow(); si2.anim = Anim(); si2.k = UIK(); si2.now = Now();
-        { const FreeCamPadInfo pi = FreeCamPadState(); si2.pad = s_pad; si2.padFly = pi.wanted && s_pad.connected; si2.photoStep = pi.step; si2.photoPaused = pi.paused;   // (14/11) modo foto
+        { const FreeCamPadInfo pi = FreeCamPadState(); si2.pad = s_pad; si2.padFly = pi.wanted && s_pad.connected; si2.padUi = PadUi(); si2.photoStep = pi.step; si2.photoPaused = pi.paused;   // (14/11) modo foto
           si2.photoAdv = pi.advancing; si2.photoScale = pi.scale; si2.steps = FreeCamPhotoSteps(&si2.nSteps); }
         if (MvSlowWidget(si2)) PushRecent(g.title);
     }
@@ -2251,7 +2254,7 @@ static void DrawMenu() {
         if (ImGui::GetContentRegionAvail().x - ImGui::GetItemRectMax().x + ImGui::GetWindowPos().x > 210.0f * UIK()) ImGui::SameLine();   // (08/11) si no entra, el buscador baja a su propia fila
         if (s_focusSearch) { ImGui::SetKeyboardFocusHere(); s_focusSearch = false; }
         ImGui::SetNextItemWidth(std::max(140.0f * UIK(), ImGui::GetContentRegionAvail().x - (s_search[0] ? ImGui::GetFrameHeight() + 6.0f * UIK() : 0.0f)));
-        ImGui::InputTextWithHint("##buscar", IcoL(kIcoSearch, TRS(s_pad.connected && g_cfg.menuPad ? "Buscar opcion (OPTIONS: teclado del mando)" : "Buscar opcion (Ctrl+F)")).c_str(), s_search, sizeof(s_search));
+        ImGui::InputTextWithHint("##buscar", IcoL(kIcoSearch, TRS(PadUi() && g_cfg.menuPad ? "Buscar opcion (OPTIONS: teclado del mando)" : "Buscar opcion (Ctrl+F)")).c_str(), s_search, sizeof(s_search));
         // (14/11) con el mando: elegir el buscador (cruz / triangulo) abre el teclado en pantalla; mientras esta abierto el campo se suelta
         if (ImGui::IsItemActivated() && s_pad.connected && g_cfg.menuPad && GImGui->NavInputSource == ImGuiInputSource_Gamepad) MvVkOpen();
         if (MvVkIsOpen() && ImGui::IsItemActive()) ImGui::ClearActiveID();
@@ -2425,7 +2428,7 @@ static void DrawMenu() {
         ImGui::TextDisabled("%s", msg.c_str());
         const char* hint = TRS("Ctrl+Z deshacer   Ctrl+S guardar   Ctrl+F buscar   Insert cerrar");
         const float hw = ImGui::CalcTextSize(hint).x;
-        if (s_pad.connected && g_cfg.menuPad) {   // (14/11) con un mando: la ayuda con los simbolos de los botones (estilo PlayStation)
+        if (PadUi() && g_cfg.menuPad) {   // (14/11) con un mando (lo ultimo tocado): la ayuda con los simbolos de los botones (estilo PlayStation)
             const float pw = std::min(560.0f * UIK(), ImGui::GetWindowWidth() * 0.6f);
             if (ImGui::GetWindowWidth() - pw - 30.0f * UIK() > ImGui::CalcTextSize(msg.c_str()).x + 40.0f * UIK()) {
                 ImGui::SameLine(ImGui::GetWindowWidth() - pw - ImGui::GetStyle().WindowPadding.x);
@@ -2755,6 +2758,16 @@ void OverlayPresent(IDXGISwapChain* sc) {
         const bool camPad = FreeCamPadWanted();   // (14/11) modo foto: el mando mueve la camara libre
         if ((menuShown && (g_cfg.menuPad || g_cfg.menuPadDraw)) || comboOn || s_padHold || camPad) MvPadPoll(s_pad); else s_pad = MvPad();
         if (camPad) FreeCamPadFeed(s_pad);
+        {   // lo ultimo que se toco: el mando (palancas, gatillos o un boton) o el teclado / mouse (mover, clic, rueda, una tecla)
+            bool padIn = s_pad.connected && (fabsf(s_pad.lx) + fabsf(s_pad.ly) + fabsf(s_pad.rx) + fabsf(s_pad.ry) > 0.35f || s_pad.l2 > 0.25f || s_pad.r2 > 0.25f);
+            if (s_pad.connected) for (int i = 0; i < kPadCount; i++) padIn |= s_pad.b[i];
+            bool kbIn = fabsf(io2.MouseDelta.x) + fabsf(io2.MouseDelta.y) > 2.0f || io2.MouseWheel != 0.0f || io2.MouseDown[0] || io2.MouseDown[1];
+            if (!kbIn) for (int kk = ImGuiKey_NamedKey_BEGIN; kk < ImGuiKey_GamepadStart; kk++) if (ImGui::IsKeyDown((ImGuiKey)kk)) { kbIn = true; break; }
+            const int was = s_lastDev;
+            if (padIn) s_lastDev = 1; else if (kbIn) s_lastDev = 0;
+            if (!s_pad.connected) s_lastDev = 0;
+            if (was != s_lastDev) Log("menu: se adapta a %s", s_lastDev ? "el mando" : "teclado y mouse");
+        }
         {   // (14/11, Agustin: "al abrir el menu con l3+r3 por ejemplo") L3 + R3 juntos abren y cierran el menu
             const bool combo = s_pad.b[kPadL3] && s_pad.b[kPadR3];
             if (comboOn && combo && !s_comboWas && !MotorPageActive()) { g_menuOpen = !g_menuOpen; Log("menu: %s con L3 + R3", g_menuOpen.load() ? "abierto" : "cerrado"); }
@@ -2789,7 +2802,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         ImGuiIO& mio = ImGui::GetIO();
         static float s_curA = 1.0f; static double s_mMoveT = 0.0;   // con el mando: si el mouse no se mueve en 2.5 s el cursor se va
         if (mio.MouseDelta.x != 0.0f || mio.MouseDelta.y != 0.0f || ImGui::IsAnyMouseDown()) s_mMoveT = Now();
-        const bool idle = s_pad.connected && Now() - s_mMoveT > 2.5;
+        const bool idle = PadUi() || (s_pad.connected && Now() - s_mMoveT > 2.5);   // (14/11) con el mando como ultimo, sin flecha
         s_curA = std::clamp(s_curA + (idle ? -1.0f : 1.0f) * mio.DeltaTime * (idle ? 3.0f : 10.0f), 0.0f, 1.0f);
         if (ImGui::IsMousePosValid()) {
             const ImGuiMouseCursor mc = ImGui::GetMouseCursor();
@@ -2800,7 +2813,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         }
     }
     if (menuShown) { const double ms = (Now() - menuT0) * 1000.0; s_menuMsAvg = s_menuMsAvg <= 0.0 ? ms : s_menuMsAvg + (ms - s_menuMsAvg) * 0.05; }
-    if (menuShown && s_pad.connected && g_cfg.menuPadDraw && s_menuVis > 0.01f) {   // (14/11) el mando chico y transparente, abajo (del lado contrario al panel)
+    if (menuShown && PadUi() && g_cfg.menuPadDraw && s_menuVis > 0.01f) {   // (14/11) el mando chico y transparente, abajo (del lado contrario al panel)
         const float k = UIK(); const ImVec2 ds2 = ImGui::GetIO().DisplaySize, sz = MvPadSize(k);
         const float anyIn = [&] { float a = 0; for (int i = 0; i < kPadCount; i++) a = std::max(a, s_pad.b[i] ? 1.0f : 0.0f); return std::max(a, std::max(fabsf(s_pad.lx) + fabsf(s_pad.ly), fabsf(s_pad.rx) + fabsf(s_pad.ry)) > 0.2f ? 1.0f : a); }();
         static float s_padA = 0.0f; const float dtp = ImGui::GetIO().DeltaTime;
@@ -2828,7 +2841,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         s_hudC += ((idle ? 1.0f : 0.0f) - s_hudC) * std::min(1.0f, dth * 6.0f);
         s_hudA += ((s_hudHide ? 0.0f : 1.0f) - s_hudA) * std::min(1.0f, dth * 8.0f);
         if (s_hudA > 0.01f) {
-            MvHudIn h; h.pad = s_pad; h.padMode = pi.flying && s_pad.connected; h.freeCam = camFree;
+            MvHudIn h; h.pad = s_pad; h.padMode = PadUi(); h.freeCam = camFree;
             h.status = TRS(ReplayNow() ? "REPETICION" : "EN VIVO"); h.speed = g_cfg.live[344][1]; h.zoom = g_cfg.live[344][2]; h.follow = g_cfg.live[346][2] > 0.5f;
             h.photo = pi.scale > 0.0f; h.clock = pi.scale > 0.0f ? pi.scale : camSlow; h.paused = pi.paused; h.adv = pi.advancing; h.step = pi.step; h.steps = FreeCamPhotoSteps(&h.nSteps);
             h.compact = s_hudC; h.k = UIK(); h.alpha = s_hudA; h.anim = Anim(); h.now = tn;

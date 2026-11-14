@@ -1663,7 +1663,7 @@ static void KeyCap(ImDrawList* dl, ImVec2 a, float w, float h, const char* t, bo
 // el simbolo del boton (con el estilo PS5 / PS4 / Xbox elegido) y lo que hace; se ilumina mientras se aprieta. Los sticks se dibujan
 // con la perilla donde esta el stick de verdad y los gatillos se llenan con lo apretado.
 enum { kLgStickL = 100, kLgStickR, kLgDpadUD, kLgDpadLR, kLgL2R2, kLgL1R1, kLgL3R3, kLgL1, kLgR1, kLgL1DpadLR };
-struct LgItem { int g; const char* label; const char* sub; };
+struct LgItem { int g; const char* label; const char* sub; const char* key = nullptr; };   // key: tecla (modo teclado) en vez del simbolo
 static float LgLit(int g, const MvPad& p) {
     switch (g) {
     case kLgStickL: return Sat(sqrtf(p.lx * p.lx + p.ly * p.ly));
@@ -1758,26 +1758,39 @@ static bool LgHeader(const char* title, const char* state, bool stateOn, int* to
     return ch;
 }
 // grilla de filas "simbolo + que hace"; cols columnas; dim = la seccion no esta en uso (se ve, mas apagada)
-static void LgGrid(const LgItem* it, int n, const MvPad& p, int cols, float k, ImVec4 acc, bool anim, bool dim) {
+static void LgGrid(const LgItem* it, int n, const MvPad& p, int cols, float k, ImVec4 acc, bool anim, bool dim, bool compact = true) {
+    // (14/11, Agustin: "mas minimalista") compacto: una fila de 28 px por boton, la explicacion larga al pasar el mouse
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float avail = ImGui::GetContentRegionAvail().x, g = 6.0f * k, cw = (avail - (cols - 1) * g) / cols, ch = 38.0f * k;
+    const float avail = ImGui::GetContentRegionAvail().x, g = 5.0f * k, cw = (avail - (cols - 1) * g) / cols, ch = (compact ? 28.0f : 38.0f) * k;
     const ImVec2 o = ImGui::GetCursorScreenPos(); const int rows = (n + cols - 1) / cols;
+    ImFont* f = ImGui::GetFont(); const float fsK = ImGui::GetFontSize() * 0.80f;
     for (int i = 0; i < n; i++) {
         const int cx = i % cols, cy = i / cols; const ImVec2 a(o.x + cx * (cw + g), o.y + cy * (ch + g)), b(a.x + cw, a.y + ch);
-        const float lit0 = p.connected ? LgLit(it[i].g, p) : 0.0f;
+        const float lit0 = it[i].key ? 0.0f : p.connected ? LgLit(it[i].g, p) : 0.0f;
         const float lit = Follow(ImGui::GetID(it[i].label), lit0, 14.0f, anim);
-        dl->AddRectFilled(a, b, ColA(Lerp4(ImVec4(1, 1, 1, dim ? 0.025f : 0.045f), ImVec4(acc.x, acc.y, acc.z, 0.24f), lit), 1), 8.0f * k);
-        dl->AddRect(a, b, ColA(Lerp4(ImVec4(1, 1, 1, 0.10f), ImVec4(acc.x, acc.y, acc.z, 0.9f), lit), 1), 8.0f * k, 0, 1.0f);
-        const bool pair = it[i].g == kLgL2R2 || it[i].g == kLgL1R1 || it[i].g == kLgL3R3 || it[i].g == kLgL1DpadLR;
-        const float gx = a.x + (pair ? 34.0f : 23.0f) * k;
-        LgGlyph(dl, ImVec2(gx, (a.y + b.y) * 0.5f), 13.0f * k, it[i].g, p, lit, acc);
-        const float tx = a.x + (pair ? 68.0f : 46.0f) * k;
+        dl->AddRectFilled(a, b, ColA(Lerp4(ImVec4(1, 1, 1, dim ? 0.02f : 0.04f), ImVec4(acc.x, acc.y, acc.z, 0.24f), lit), 1), 7.0f * k);
+        if (lit > 0.02f) dl->AddRect(a, b, ColA(acc, 0.9f * lit), 7.0f * k, 0, 1.0f);
+        float tx;
+        if (it[i].key) {   // tecla
+            const float kw = f->CalcTextSizeA(fsK, FLT_MAX, 0, it[i].key).x + 12.0f * k; const float cyy = (a.y + b.y) * 0.5f;
+            const ImVec2 ka(a.x + 6.0f * k, cyy - 9.0f * k), kb(ka.x + kw, cyy + 9.0f * k);
+            dl->AddRectFilled(ImVec2(ka.x, ka.y + 2.0f * k), ImVec2(kb.x, kb.y + 2.0f * k), Col(0, 0, 0, 0.4f), 4.0f * k);
+            dl->AddRectFilled(ka, kb, Col(0.92f, 0.93f, 0.96f, 0.14f), 4.0f * k); dl->AddRect(ka, kb, Col(1, 1, 1, 0.28f), 4.0f * k);
+            dl->AddText(f, fsK, ImVec2(ka.x + 6.0f * k, cyy - fsK * 0.5f), Col(1, 1, 1, 1), it[i].key);
+            tx = kb.x + 7.0f * k;
+        } else {
+            const bool pair = it[i].g == kLgL2R2 || it[i].g == kLgL1R1 || it[i].g == kLgL3R3 || it[i].g == kLgL1DpadLR || it[i].g == kPadOptions || it[i].g == kPadShare;
+            const float r = (compact ? 10.0f : 13.0f) * k, gx = a.x + (pair ? 2.6f : 1.6f) * r;
+            LgGlyph(dl, ImVec2(gx, (a.y + b.y) * 0.5f), r, it[i].g, p, lit, acc);
+            tx = a.x + (pair ? 5.3f : 3.4f) * r;
+        }
         dl->PushClipRect(ImVec2(tx, a.y), ImVec2(b.x - 4.0f * k, b.y), true);
-        const bool hasSub = it[i].sub && *it[i].sub;
+        const bool hasSub = !compact && it[i].sub && *it[i].sub;
         const ImU32 tc = dim ? Col(0.72f, 0.75f, 0.80f, 1) : Col(0.95f, 0.96f, 0.98f, 1);
         dl->AddText(ImVec2(tx, hasSub ? a.y + 4.0f * k : a.y + (ch - ImGui::GetFontSize()) * 0.5f), lit > 0.5f ? Col(1, 1, 1, 1) : tc, it[i].label);
         if (hasSub) dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.82f, ImVec2(tx, a.y + ch * 0.52f), ColA(Lerp4(ImVec4(0.58f, 0.62f, 0.68f, 1), ImVec4(0.6f, 0.95f, 0.75f, 1), lit), 1), it[i].sub);
         dl->PopClipRect();
+        if (compact && it[i].sub && *it[i].sub && ImGui::IsMouseHoveringRect(a, b) && ImGui::IsWindowHovered()) ImGui::SetTooltip("%s", it[i].sub);
     }
     ImGui::Dummy(ImVec2(avail, rows * ch + (rows - 1) * g));
 }
@@ -1817,29 +1830,28 @@ bool MvCamWidget(MvCamIn& in) {
     { static const char* kN[4] = { "Apagada", "Prendida", "Sin bloquear teclado", "Solo repeticiones" };
       static const char* kTip[4] = { "La camara del juego, como siempre.", "Camara propia: W A S D, Q / E, mouse con el boton derecho. El juego no ve el teclado mientras tanto.",
                                      "Igual que prendida, pero el juego sigue viendo el teclado.", "Se prende sola cuando empieza una repeticion y al terminar vuelve la del juego." };
-      const float bw = (avail - 3 * 6.0f * k) / 4.0f, h = 54.0f * k;
+      const float bw = (avail - 3 * 5.0f * k) / 4.0f, h = 32.0f * k;   // (14/11 "mas minimalista") fila fina: icono + nombre
       for (int i = 0; i < 4; i++) {
-          if (i) ImGui::SameLine(0, 6.0f * k);
+          if (i) ImGui::SameLine(0, 5.0f * k);
           ImGui::PushID(i); const ImVec2 p = ImGui::GetCursorScreenPos();
           if (ImGui::InvisibleButton("##cmode", ImVec2(bw, h)) && in.mode) { *in.mode = (float)i; changed = true; }
           const bool hv = ImGui::IsItemHovered(), cur = mode == i;
           const float ha = Follow(ImGui::GetItemID(), hv ? 1.0f : 0.0f, 12.0f, in.anim), oa = Follow(ImGui::GetItemID() + 1, cur ? 1.0f : 0.0f, 10.0f, in.anim);
-          const ImVec4 top = Lerp4(ImVec4(1, 1, 1, 0.07f + 0.05f * ha), ImVec4(acc.x, acc.y, acc.z, 0.38f), oa), bot = Lerp4(ImVec4(1, 1, 1, 0.03f), ImVec4(acc.x * 0.6f, acc.y * 0.6f, acc.z * 0.6f, 0.30f), oa);
-          dl->AddRectFilledMultiColor(p, ImVec2(p.x + bw, p.y + h), ColA(top, 1), ColA(top, 1), ColA(bot, 1), ColA(bot, 1));
-          dl->AddRect(p, ImVec2(p.x + bw, p.y + h), ColA(Lerp4(ImVec4(1, 1, 1, 0.16f + 0.25f * ha), ImVec4(acc.x, acc.y, acc.z, 1), oa), 1), 8.0f * k, 0, (1.0f + oa) * k);
+          dl->AddRectFilled(p, ImVec2(p.x + bw, p.y + h), ColA(Lerp4(ImVec4(1, 1, 1, 0.05f + 0.04f * ha), ImVec4(acc.x, acc.y, acc.z, 0.30f), oa), 1), h * 0.5f);
+          dl->AddRect(p, ImVec2(p.x + bw, p.y + h), ColA(Lerp4(ImVec4(1, 1, 1, 0.12f + 0.2f * ha), ImVec4(acc.x, acc.y, acc.z, 1), oa), 1), h * 0.5f, 0, (1.0f + oa) * k);
           const ImU32 ic = ColA(Lerp4(ImVec4(0.80f, 0.83f, 0.88f, 1), ImVec4(1, 1, 1, 1), oa), 1);
-          CamGlyph(dl, ImVec2(p.x + bw * 0.5f, p.y + h * 0.36f), 26.0f * k, i, ic, in.anim && (cur || hv) ? (float)fmod(t, 3600.0) : 0.0f);
-          const char* nm = TRS(kN[i]); const float fs = ImGui::GetFontSize() * 0.86f; const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0, nm);
-          dl->PushClipRect(p, ImVec2(p.x + bw, p.y + h), true);
-          dl->AddText(ImGui::GetFont(), fs, ImVec2(p.x + std::max(4.0f * k, (bw - ts.x) * 0.5f), p.y + h * 0.68f), cur ? Col(1, 1, 1, 1) : Col(0.80f, 0.83f, 0.88f, 1), nm);
+          CamGlyph(dl, ImVec2(p.x + 20.0f * k, p.y + h * 0.5f), 20.0f * k, i, ic, in.anim && (cur || hv) ? (float)fmod(t, 3600.0) : 0.0f);
+          const char* nm = TRS(kN[i]); const float fs = ImGui::GetFontSize() * 0.86f;
+          dl->PushClipRect(p, ImVec2(p.x + bw - 8.0f * k, p.y + h), true);
+          dl->AddText(ImGui::GetFont(), fs, ImVec2(p.x + 36.0f * k, p.y + (h - fs) * 0.5f), cur ? Col(1, 1, 1, 1) : Col(0.80f, 0.83f, 0.88f, 1), nm);
           dl->PopClipRect();
           if (hv) ImGui::SetTooltip("%s", TRS(kTip[i]));
           ImGui::PopID();
       }
       ImGui::Dummy(ImVec2(0, 4.0f * k)); }
     // --- 2) visor (izquierda) + teclas y tiras (derecha) ---
-    const bool wide = avail >= 560.0f * k;
-    const float VW = wide ? avail * 0.52f : avail, VH = VW * 0.56f;
+    const bool wide = avail >= 520.0f * k;
+    const float VW = wide ? std::min(avail * 0.42f, 320.0f * k) : avail, VH = VW * 0.52f;   // (14/11) visor mas chico
     const ImVec2 v0 = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton("##camvisor", ImVec2(VW, VH));
     const bool hovV = ImGui::IsItemHovered(), actV = ImGui::IsItemActive();
@@ -1898,19 +1910,21 @@ bool MvCamWidget(MvCamIn& in) {
     }
     // derecha: teclas que se iluminan + mouse, y las tiras
     { const float rx = wide ? v0.x + VW + 14.0f * k : v0.x, ry = wide ? v0.y : v0.y + VH + 10.0f * k, rw = wide ? avail - VW - 14.0f * k : avail;
-      const float kw = std::min(30.0f * k, (rw - 60.0f * k) / 5.0f), kh = kw, g = 4.0f * k;
+      const float kw = std::min(24.0f * k, (rw - 60.0f * k) / 5.0f), kh = kw, g = 4.0f * k;
       ImGui::SetCursorScreenPos(ImVec2(rx, ry)); ImGui::BeginGroup();   // (el grupo deja la columna alineada en rx)
-      ImGui::TextDisabled("%s", TRS("Moverse")); const float ky = ImGui::GetCursorScreenPos().y + 2.0f * k;
-      KeyCap(dl, ImVec2(rx, ky), kw, kh, "Q", in.keys[4], k, acc); KeyCap(dl, ImVec2(rx + (kw + g), ky), kw, kh, "W", in.keys[0], k, acc); KeyCap(dl, ImVec2(rx + 2 * (kw + g), ky), kw, kh, "E", in.keys[5], k, acc);
-      KeyCap(dl, ImVec2(rx, ky + kh + g), kw, kh, "A", in.keys[1], k, acc); KeyCap(dl, ImVec2(rx + (kw + g), ky + kh + g), kw, kh, "S", in.keys[2], k, acc); KeyCap(dl, ImVec2(rx + 2 * (kw + g), ky + kh + g), kw, kh, "D", in.keys[3], k, acc);
-      // mouse con el boton derecho
-      { const float mx = rx + 3 * (kw + g) + 14.0f * k, mw = kw * 1.1f, mh = kh * 2 + g; const ImVec2 ma(mx, ky), mb(mx + mw, ky + mh);
-        dl->AddRectFilled(ImVec2(ma.x, ma.y + 2.5f * k), ImVec2(mb.x, mb.y + 2.5f * k), Col(0, 0, 0, 0.45f), mw * 0.5f);
-        dl->AddRectFilled(ma, mb, Col(1, 1, 1, 0.10f), mw * 0.5f); dl->AddRect(ma, mb, Col(1, 1, 1, 0.22f), mw * 0.5f, 0, 1.0f);
-        dl->AddRectFilled(ImVec2(ma.x + mw * 0.5f, ma.y + 1), ImVec2(mb.x - 1, ma.y + mh * 0.42f), in.rmb ? ColA(acc, 0.85f) : Col(1, 1, 1, 0.06f), mw * 0.5f, ImDrawFlags_RoundCornersTopRight);
-        dl->AddLine(ImVec2(ma.x + mw * 0.5f, ma.y + 2), ImVec2(ma.x + mw * 0.5f, ma.y + mh * 0.42f), Col(1, 1, 1, 0.25f), 1.0f); dl->AddLine(ImVec2(ma.x + 2, ma.y + mh * 0.42f), ImVec2(mb.x - 2, ma.y + mh * 0.42f), Col(1, 1, 1, 0.25f), 1.0f);
-        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.8f, ImVec2(mb.x + 6.0f * k, ma.y + mh * 0.3f), Col(0.66f, 0.70f, 0.76f, 1), TRS("girar")); }
-      ImGui::SetCursorScreenPos(ImVec2(rx, ky + 2 * kh + g + 10.0f * k));
+      if (!in.padUi) {   // (14/11) teclas y mouse solo si lo ultimo que se toco fue el teclado / mouse
+          ImGui::TextDisabled("%s", TRS("Moverse")); const float ky = ImGui::GetCursorScreenPos().y + 2.0f * k;
+          KeyCap(dl, ImVec2(rx, ky), kw, kh, "Q", in.keys[4], k, acc); KeyCap(dl, ImVec2(rx + (kw + g), ky), kw, kh, "W", in.keys[0], k, acc); KeyCap(dl, ImVec2(rx + 2 * (kw + g), ky), kw, kh, "E", in.keys[5], k, acc);
+          KeyCap(dl, ImVec2(rx, ky + kh + g), kw, kh, "A", in.keys[1], k, acc); KeyCap(dl, ImVec2(rx + (kw + g), ky + kh + g), kw, kh, "S", in.keys[2], k, acc); KeyCap(dl, ImVec2(rx + 2 * (kw + g), ky + kh + g), kw, kh, "D", in.keys[3], k, acc);
+          // mouse con el boton derecho
+          { const float mx = rx + 3 * (kw + g) + 14.0f * k, mw = kw * 1.1f, mh = kh * 2 + g; const ImVec2 ma(mx, ky), mb(mx + mw, ky + mh);
+            dl->AddRectFilled(ImVec2(ma.x, ma.y + 2.5f * k), ImVec2(mb.x, mb.y + 2.5f * k), Col(0, 0, 0, 0.45f), mw * 0.5f);
+            dl->AddRectFilled(ma, mb, Col(1, 1, 1, 0.10f), mw * 0.5f); dl->AddRect(ma, mb, Col(1, 1, 1, 0.22f), mw * 0.5f, 0, 1.0f);
+            dl->AddRectFilled(ImVec2(ma.x + mw * 0.5f, ma.y + 1), ImVec2(mb.x - 1, ma.y + mh * 0.42f), in.rmb ? ColA(acc, 0.85f) : Col(1, 1, 1, 0.06f), mw * 0.5f, ImDrawFlags_RoundCornersTopRight);
+            dl->AddLine(ImVec2(ma.x + mw * 0.5f, ma.y + 2), ImVec2(ma.x + mw * 0.5f, ma.y + mh * 0.42f), Col(1, 1, 1, 0.25f), 1.0f); dl->AddLine(ImVec2(ma.x + 2, ma.y + mh * 0.42f), ImVec2(mb.x - 2, ma.y + mh * 0.42f), Col(1, 1, 1, 0.25f), 1.0f);
+            dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.8f, ImVec2(mb.x + 6.0f * k, ma.y + mh * 0.3f), Col(0.66f, 0.70f, 0.76f, 1), TRS("girar")); }
+          ImGui::SetCursorScreenPos(ImVec2(rx, ky + 2 * kh + g + 8.0f * k));
+      }
       const float sw = rw;
       if (in.speed) {   // (14/11, Agustin: "control preciso de la velocidad") tira logaritmica 0.05 .. 50 m/s, - / + de 10 %, valores de un clic
           const bool pl1 = in.pad.b[kPadL1] && !in.pad.b[kPadR1], pr1 = in.pad.b[kPadR1] && !in.pad.b[kPadL1];
@@ -1944,20 +1958,33 @@ bool MvCamWidget(MvCamIn& in) {
             if (Chip("##cf", kFi[i], TRS(kF[i]), TRS(kFs[i]), f == i, cw, k, t, in.anim)) { *in.follow = (float)i; changed = true; }
             ImGui::PopID(); }
     }
-    // --- 4) (14/11) el mando: iconos con lo que hace cada boton, se iluminan al apretar ---
-    {   ImGui::Dummy(ImVec2(0, 6.0f * k));
-        const bool on = in.padOn && *in.padOn;
-        const char* st = TRS(!on ? "apagado" : !in.pad.connected ? "sin mando conectado" : in.padGiven ? "devuelto al juego (OPTIONS)" : in.padFly ? "activo: cerrar el menu y volar" : mode == 2 ? "no vuela en este modo" : mode == 0 ? "prende la camara libre" : mode == 3 && !in.active ? "esperando repeticion" : "listo");
-        if (LgHeader(TRS("Mando"), st, on && in.padFly, in.padOn, k, acc, in.anim)) changed = true;
-        static const LgItem kIt[] = {
-            { kLgStickL, "Moverse", "adelante, atras y costados" }, { kLgStickR, "Mirar", "girar la camara" },
-            { kLgL2R2, "Bajar / subir", "segun cuanto se apriete" }, { kLgDpadUD, "Zoom", "acercar / alejar" },
-            { kLgL1, "Preciso", "todo a 1/4, para apuntar fino" }, { kLgR1, "Rapido", "x3 mientras se mantiene" },
-            { kLgDpadLR, "Velocidad", "de a 10 %, mantener sigue" }, { kPadTriangle, "Volver", "a la camara del juego" },
-            { kLgL3R3, "Menu", "abrir y cerrar el Insert" }, { kPadOptions, "Soltar el mando", "el juego lo vuelve a ver" } };
-        LgItem it[10]; for (int i = 0; i < 10; i++) { it[i] = kIt[i]; it[i].label = TRS(kIt[i].label); it[i].sub = TRS(kIt[i].sub); }
-        const float aw = ImGui::GetContentRegionAvail().x;
-        LgGrid(it, 10, in.pad, 2, k, acc, in.anim, !on || !in.pad.connected);
+    // --- 4) (14/11) controles del aparato que se toco por ultimo (mando o teclado): iconos con lo que hace cada uno, se iluminan ---
+    {   ImGui::Dummy(ImVec2(0, 4.0f * k));
+        const float aw = ImGui::GetContentRegionAvail().x; const int cols = aw >= 620.0f * k ? 4 : aw >= 420.0f * k ? 3 : 2;
+        if (in.padUi) {
+            const bool on = in.padOn && *in.padOn;
+            const char* st = TRS(!on ? "apagado" : !in.pad.connected ? "sin mando conectado" : in.padGiven ? "devuelto al juego (OPTIONS)" : in.padFly ? "activo: cerrar el menu y volar" : mode == 2 ? "no vuela en este modo" : mode == 0 ? "prende la camara libre" : mode == 3 && !in.active ? "esperando repeticion" : "listo");
+            if (LgHeader(TRS("Mando"), st, on && in.padFly, in.padOn, k, acc, in.anim)) changed = true;
+            static const LgItem kIt[] = {
+                { kLgStickL, "Moverse", "adelante, atras y costados" }, { kLgStickR, "Mirar", "girar la camara" },
+                { kLgL2R2, "Bajar / subir", "segun cuanto se apriete" }, { kLgDpadUD, "Zoom", "acercar / alejar" },
+                { kLgDpadLR, "Velocidad", "de a 10 %, mantener sigue" }, { kLgL1, "Preciso", "todo a 1/4, para apuntar fino" },
+                { kLgR1, "Rapido", "x3 mientras se mantiene" }, { kPadTriangle, "Volver", "a la camara del juego" },
+                { kPadShare, "HUD", "mostrar / esconder" }, { kPadOptions, "Soltar", "el juego vuelve a ver el mando" },
+                { kLgL3R3, "Menu", "abrir y cerrar el Insert" } };
+            const int n = (int)(sizeof kIt / sizeof kIt[0]); LgItem it[16];
+            for (int i = 0; i < n; i++) { it[i] = kIt[i]; it[i].label = TRS(kIt[i].label); it[i].sub = TRS(kIt[i].sub); }
+            LgGrid(it, n, in.pad, cols, k, acc, in.anim, !on || !in.pad.connected);
+        } else {
+            LgHeader(TRS("Teclado y mouse"), nullptr, false, nullptr, k, acc, in.anim);
+            static const LgItem kIt[] = {
+                { -1, "Moverse", "", "W A S D" }, { -1, "Bajar / subir", "", "Q E" }, { -1, "Mirar", "mantener y mover el mouse", "Clic der." },
+                { -1, "Zoom", "o Re Pag / Av Pag", "Rueda" }, { -1, "Velocidad", "de a 10 %", "[ ]" }, { -1, "Rapido / lento", "mientras se mantiene", "Shift / Ctrl" },
+                { -1, "Volver", "a la camara del juego", "Inicio" }, { -1, "HUD", "mostrar / esconder", "H" } };
+            const int n = (int)(sizeof kIt / sizeof kIt[0]); LgItem it[16];
+            for (int i = 0; i < n; i++) { it[i] = kIt[i]; it[i].label = TRS(kIt[i].label); it[i].sub = TRS(kIt[i].sub); }
+            LgGrid(it, n, in.pad, cols, k, acc, in.anim, false);
+        }
     }
     ImGui::Dummy(ImVec2(0, 2.0f * k));
     return changed;
@@ -2002,14 +2029,14 @@ void MvPhotoHud(ImDrawList* dl, ImVec2 m0, ImVec2 m1, const MvHudIn& in) {
     // --- barra completa, abajo al centro ---
     const float fa = al * (1.0f - Sat(in.compact)); if (fa <= 0.01f) return;
     const float slide = (1.0f - Sat(1.0f - in.compact)) * 12.0f * k;   // al achicarse baja un poco
-    const float h = 44.0f * k, maxW = std::min((m1.x - m0.x) - 40.0f * k, 1100.0f * k);
+    const float h = 34.0f * k, maxW = std::min((m1.x - m0.x) - 40.0f * k, 920.0f * k);   // (14/11 "mas minimalista")
     // contenido: [estado | velocidad zoom] [reloj + riel] [ayudas...]; las ayudas que no entran se sacan desde el final
     struct Hint { int g; const char* key; const char* t; };
     static const Hint kPadH[] = { { kLgStickL, nullptr, "Mover" }, { kLgStickR, nullptr, "Mirar" }, { kLgL2R2, nullptr, "Bajar / subir" }, { kPadCross, nullptr, "Pausa" },
                                   { kPadSquare, nullptr, "Avanzar" }, { kLgL1DpadLR, nullptr, "Reloj" }, { kLgDpadLR, nullptr, "Velocidad" }, { kLgDpadUD, nullptr, "Zoom" }, { kPadTriangle, nullptr, "Volver" },
                                   { kPadShare, nullptr, "HUD" }, { kPadOptions, nullptr, "Soltar" } };
-    static const Hint kKbH[] = { { -1, "W A S D", "Mover" }, { -1, "Q E", "Bajar / subir" }, { -1, "Clic der.", "Mirar" }, { -1, "Shift / Ctrl", "Rapido / lento" },
-                                 { -1, "[ ]", "Velocidad" }, { -1, "Rueda", "Zoom" }, { -1, "Inicio", "Volver" }, { -1, "H", "HUD" } };
+    static const Hint kKbH[] = { { -1, "W A S D", "Mover" }, { -1, "Q E", "Bajar / subir" }, { -1, "Clic der.", "Mirar" }, { -1, "P", "Pausa" },
+                                 { -1, "O", "Avanzar" }, { -1, ", .", "Reloj" }, { -1, "[ ]", "Velocidad" }, { -1, "Inicio", "Volver" }, { -1, "H", "HUD" } };
     const Hint* H = in.padMode ? kPadH : kKbH; const int nH = in.padMode ? (int)(sizeof kPadH / sizeof kPadH[0]) : (int)(sizeof kKbH / sizeof kKbH[0]);
     auto hintW = [&](const Hint& hh) {
         const float tw = f->CalcTextSizeA(fsS, FLT_MAX, 0, TRS(hh.t)).x;
@@ -2025,7 +2052,7 @@ void MvPhotoHud(ImDrawList* dl, ImVec2 m0, ImVec2 m1, const MvHudIn& in) {
     float used = 16.0f * k + wState + wClock; int shown = 0;
     if (in.freeCam) for (; shown < nH; shown++) { const float hw = hintW(H[shown]); if (used + hw > maxW) break; used += hw; }
     const float W = used + 6.0f * k;
-    const ImVec2 a(m0.x + ((m1.x - m0.x) - W) * 0.5f, m1.y - 26.0f * k - h + slide), b(a.x + W, a.y + h);
+    const ImVec2 a(m0.x + ((m1.x - m0.x) - W) * 0.5f, m1.y - 18.0f * k - h + slide), b(a.x + W, a.y + h);
     HudPill(dl, a, b, fa);
     float x = a.x + 16.0f * k; const float cy = (a.y + b.y) * 0.5f;
     // estado
@@ -2056,14 +2083,14 @@ void MvPhotoHud(ImDrawList* dl, ImVec2 m0, ImVec2 m1, const MvHudIn& in) {
         for (int i = 0; i < shown; i++) {
             const Hint& hh = H[i]; const char* t = TRS(hh.t);
             if (hh.g < 0) {
-                const float kw = f->CalcTextSizeA(fsS, FLT_MAX, 0, hh.key).x + 12.0f * k; const ImVec2 ka(x, cy - 10.0f * k), kb(x + kw, cy + 10.0f * k);
+                const float kw = f->CalcTextSizeA(fsS, FLT_MAX, 0, hh.key).x + 12.0f * k; const ImVec2 ka(x, cy - 9.0f * k), kb(x + kw, cy + 9.0f * k);
                 dl->AddRectFilled(ImVec2(ka.x, ka.y + 2.0f * k), ImVec2(kb.x, kb.y + 2.0f * k), Col(0, 0, 0, 0.4f * fa), 4.0f * k);
                 dl->AddRectFilled(ka, kb, Col(0.92f, 0.93f, 0.96f, 0.16f * fa), 4.0f * k); dl->AddRect(ka, kb, Col(1, 1, 1, 0.3f * fa), 4.0f * k);
                 dl->AddText(f, fsS, ImVec2(x + 6.0f * k, cy - fsS * 0.5f), Col(1, 1, 1, fa), hh.key); x += kw + 6.0f * k;
             } else {
                 const bool pair = hh.g == kLgL2R2 || hh.g == kLgL1R1 || hh.g == kLgL3R3 || hh.g == kLgL1DpadLR || hh.g == kPadShare || hh.g == kPadOptions; const float gw = (pair ? 40.0f : 22.0f) * k;
                 const float lit = in.pad.connected ? LgLit(hh.g, in.pad) : 0.0f;
-                LgGlyph(dl, ImVec2(x + gw * 0.5f, cy), 10.0f * k, hh.g, in.pad, lit, acc); x += gw + 5.0f * k;
+                LgGlyph(dl, ImVec2(x + gw * 0.5f, cy), 9.0f * k, hh.g, in.pad, lit, acc); x += gw + 5.0f * k;
             }
             dl->AddText(f, fsS, ImVec2(x, cy - fsS * 0.5f), Col(0.86f, 0.89f, 0.93f, fa), t); x += f->CalcTextSizeA(fsS, FLT_MAX, 0, t).x + 14.0f * k;
         }
@@ -2083,7 +2110,7 @@ bool MvSlowWidget(MvSlowIn& in) {
       for (int row = 0; row < 2; row++) {
           const int i0 = row == 0 ? 0 : 6, n = row == 0 ? 6 : 5;
           ImGui::TextDisabled("%s", TRS(row == 0 ? "Mas lenta" : "Normal y mas rapida"));
-          const float bw = (avail - (n - 1) * 6.0f * k) / n, h = 46.0f * k;
+          const float bw = (avail - (n - 1) * 5.0f * k) / n, h = 36.0f * k;   // (14/11 "mas minimalista")
           for (int j = 0; j < n; j++) {
               const int i = i0 + j;
               if (j) ImGui::SameLine(0, 6.0f * k); ImGui::PushID(i + 40);
@@ -2099,12 +2126,13 @@ bool MvSlowWidget(MvSlowIn& in) {
               dl->PushClipRect(p, ImVec2(p.x + bw, p.y + h), true);
               const float run = in.anim ? fmodf((float)t * 0.35f * std::min(kV[i], 4.0f) * 3.0f, 1.0f) : 0.5f, x = p.x + 10.0f * k + (bw - 20.0f * k) * run;
               const ImU32 ic = cur ? Col(1, 1, 1, 1) : Col(0.80f, 0.83f, 0.88f, 1);
-              if (i < 6) SmallIcon(dl, ImVec2(x, p.y + h * 0.33f), 20.0f * k, kSiSnail, ic, 0.0f);
-              else { if (i > 6) for (int s2 = 1; s2 <= 3; s2++) dl->AddLine(ImVec2(x - (4.0f + 5.0f * s2) * k, p.y + h * 0.36f + (s2 - 2) * 2.5f * k), ImVec2(x - (8.0f + 8.0f * s2 + 3.0f * (i - 6)) * k, p.y + h * 0.36f + (s2 - 2) * 2.5f * k), ColA(tint, 0.6f - 0.15f * s2), 1.3f * k);
-                     dl->AddCircleFilled(ImVec2(x, p.y + h * 0.36f), 4.5f * k, ic, 12); }
-              dl->AddLine(ImVec2(p.x + 6 * k, p.y + h * 0.57f), ImVec2(p.x + bw - 6 * k, p.y + h * 0.57f), Col(1, 1, 1, 0.12f), 1.0f);
+              const float ly = p.y + h - 8.0f * k;   // el caracol / la pelota corre por la linea de abajo
+              dl->AddLine(ImVec2(p.x + 6 * k, ly + 4.0f * k), ImVec2(p.x + bw - 6 * k, ly + 4.0f * k), Col(1, 1, 1, 0.10f), 1.0f);
+              if (i < 6) SmallIcon(dl, ImVec2(x, ly), 13.0f * k, kSiSnail, ColA(ImGui::ColorConvertU32ToFloat4(ic), 0.75f), 0.0f);
+              else { if (i > 6) for (int s2 = 1; s2 <= 3; s2++) dl->AddLine(ImVec2(x - (3.0f + 4.0f * s2) * k, ly + (s2 - 2) * 2.0f * k), ImVec2(x - (6.0f + 6.0f * s2 + 2.5f * (i - 6)) * k, ly + (s2 - 2) * 2.0f * k), ColA(tint, 0.6f - 0.15f * s2), 1.2f * k);
+                     dl->AddCircleFilled(ImVec2(x, ly), 3.2f * k, ic, 10); }
               const char* nm = (i == 0 || i == 6) ? TRS(kN[i]) : kN[i]; const ImVec2 ts = ImGui::CalcTextSize(nm);
-              dl->AddText(ImVec2(p.x + std::max(3.0f * k, (bw - ts.x) * 0.5f), p.y + h * 0.62f), cur ? Col(1, 1, 1, 1) : Col(0.82f, 0.85f, 0.90f, 1), nm);
+              dl->AddText(ImVec2(p.x + std::max(3.0f * k, (bw - ts.x) * 0.5f), p.y + 4.0f * k), cur ? Col(1, 1, 1, 1) : Col(0.82f, 0.85f, 0.90f, 1), nm);
               dl->PopClipRect();
               ImGui::PopID();
           }
@@ -2136,19 +2164,19 @@ bool MvSlowWidget(MvSlowIn& in) {
     // MODO FOTO: con la camara libre volando con el mando, el mando tambien maneja el reloj del juego
     {   ImGui::Dummy(ImVec2(0, 6.0f * k));
         char st[96];
-        if (!in.pad.connected) snprintf(st, sizeof st, "%s", TRS("sin mando conectado"));
-        else if (!in.padFly) snprintf(st, sizeof st, "%s", TRS("con la camara libre volando con el mando"));
+        if (in.padUi && !in.pad.connected) snprintf(st, sizeof st, "%s", TRS("sin mando conectado"));
+        else if (in.padUi && !in.padFly) snprintf(st, sizeof st, "%s", TRS("con la camara libre volando con el mando"));
         else if (in.photoPaused) snprintf(st, sizeof st, "%s", TRS(in.photoAdv ? "avanzando despacio" : "en pausa"));
         else if (in.photoScale > 0.0f) snprintf(st, sizeof st, "%s x%.2f", TRS("reloj"), in.photoScale);
         else snprintf(st, sizeof st, "%s", TRS("velocidad del menu"));
-        LgHeader(TRS("Modo foto"), st, in.padFly && (in.photoPaused || in.photoScale > 0.0f), nullptr, k, acc, in.anim);
+        LgHeader(TRS("Modo foto"), st, in.photoPaused || in.photoScale > 0.0f, nullptr, k, acc, in.anim);
         // riel con los pasos del modo foto (el actual encendido)
         if (in.steps && in.nSteps > 1) {
-            const ImVec2 p = ImGui::GetCursorScreenPos(); const float w2 = ImGui::GetContentRegionAvail().x, h2 = 30.0f * k;
+            const ImVec2 p = ImGui::GetCursorScreenPos(); const float w2 = ImGui::GetContentRegionAvail().x, h2 = 26.0f * k;
             const float x0 = p.x + 14.0f * k, x1 = p.x + w2 - 14.0f * k, y = p.y + 9.0f * k;
             dl->AddLine(ImVec2(x0, y), ImVec2(x1, y), Col(1, 1, 1, 0.18f), 2.0f * k);
             for (int i = 0; i < in.nSteps; i++) {
-                const float x = x0 + (x1 - x0) * i / (in.nSteps - 1); const bool cur = in.padFly && in.photoStep == i, nrm = fabsf(in.steps[i] - 1.0f) < 1e-3f;
+                const float x = x0 + (x1 - x0) * i / (in.nSteps - 1); const bool cur = in.photoStep == i, nrm = fabsf(in.steps[i] - 1.0f) < 1e-3f;
                 const ImVec4 tint = in.steps[i] > 1.01f ? ImVec4(1.0f, 0.68f, 0.30f, 1) : acc;
                 const float pr = Follow(ImGui::GetID((int)(900 + i)), cur ? 1.0f : 0.0f, 12.0f, in.anim);
                 if (pr > 0.01f) dl->AddCircleFilled(ImVec2(x, y), (6.0f + 4.0f * pr) * k, ColA(tint, 0.25f * pr), 16);
@@ -2157,7 +2185,7 @@ bool MvSlowWidget(MvSlowIn& in) {
                 const float fs = ImGui::GetFontSize() * 0.74f; const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0, lb);
                 dl->AddText(ImGui::GetFont(), fs, ImVec2(x - ts.x * 0.5f, y + 7.0f * k), cur ? Col(1, 1, 1, 1) : Col(0.62f, 0.66f, 0.72f, 1), lb);
             }
-            if (in.padFly && in.photoPaused) {   // pausa: dos barras sobre el paso actual
+            if (in.photoPaused) {   // pausa: dos barras sobre el paso actual
                 const int st2 = std::clamp(in.photoStep, 0, in.nSteps - 1); const float x = x0 + (x1 - x0) * st2 / (in.nSteps - 1);
                 const ImU32 pc = in.photoAdv ? ColA(acc, 1) : Col(1, 1, 1, 0.95f);
                 if (in.photoAdv) dl->AddTriangleFilled(ImVec2(x - 3.0f * k, y - 15.0f * k), ImVec2(x - 3.0f * k, y - 7.0f * k), ImVec2(x + 4.0f * k, y - 11.0f * k), pc);
@@ -2165,11 +2193,16 @@ bool MvSlowWidget(MvSlowIn& in) {
             }
             ImGui::Dummy(ImVec2(w2, h2));
         }
-        static const LgItem kIt[] = {
+        static const LgItem kP[] = {
             { kPadCross, "Pausa / seguir", "congela la repeticion" }, { kPadSquare, "Avanzar despacio", "mantener, en pausa" },
             { kLgL1DpadLR, "Mas lenta / mas rapida", "L1 + cruceta: de 0.02 a x4" }, { kPadCircle, "Velocidad del menu", "deja el modo foto" } };
-        LgItem it[4]; for (int i = 0; i < 4; i++) { it[i] = kIt[i]; it[i].label = TRS(kIt[i].label); it[i].sub = TRS(kIt[i].sub); }
-        LgGrid(it, 4, in.pad, 2, k, acc, in.anim, !in.padFly);
+        static const LgItem kK[] = {   // (14/11) lo mismo con el teclado (con la camara libre prendida)
+            { -1, "Pausa / seguir", "congela la repeticion", "P" }, { -1, "Avanzar despacio", "mantener, en pausa", "O" },
+            { -1, "Mas lenta / mas rapida", "de 0.02 a x4", ", ." }, { -1, "Velocidad del menu", "deja el modo foto", "N" } };
+        const LgItem* src = in.padUi ? kP : kK;
+        LgItem it[4]; for (int i = 0; i < 4; i++) { it[i] = src[i]; it[i].label = TRS(src[i].label); it[i].sub = TRS(src[i].sub); }
+        const float aw = ImGui::GetContentRegionAvail().x;
+        LgGrid(it, 4, in.pad, aw >= 720.0f * k ? 4 : 2, k, acc, in.anim, in.padUi && !in.padFly);
     }
     ImGui::Dummy(ImVec2(0, 2.0f * k));
     return changed;

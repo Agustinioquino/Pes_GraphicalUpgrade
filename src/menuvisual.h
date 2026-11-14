@@ -101,6 +101,7 @@ struct MvCamIn {
     int* padOn = nullptr;       // camara_mando (0 / 1)
     bool padFly = false;        // vuela con el mando ahora
     bool padGiven = false;      // OPTIONS: el mando se le devolvio al juego
+    bool padUi = false;         // lo ultimo que se toco fue el mando: se muestran sus controles (si no, teclado y mouse)
     bool anim = true; float k = 1.0f; double now = 0.0;
 };
 bool MvCamWidget(MvCamIn& in);
@@ -110,7 +111,7 @@ struct MvSlowIn {
     float* where = nullptr;     // z343 0 editor, 1 partido y repeticiones, 2 solo repeticiones
     float editorSteps = 0;      // w343 (pasos frenados del visor por segundo)
     bool replay = false;
-    MvPad pad; bool padFly = false;                        // (14/11) modo foto con el mando
+    MvPad pad; bool padFly = false, padUi = false;         // (14/11) modo foto con el mando; padUi = lo ultimo tocado fue el mando
     const float* steps = nullptr; int nSteps = 0;          // pasos del modo foto
     int photoStep = -1; bool photoPaused = false, photoAdv = false; float photoScale = -1.0f;
     bool anim = true; float k = 1.0f; double now = 0.0;

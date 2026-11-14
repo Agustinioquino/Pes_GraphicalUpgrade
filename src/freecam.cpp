@@ -237,6 +237,17 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
         if (ed[kPadOptions]) { s_padGive = true; Log("camara libre: OPTIONS, el mando vuelve al juego hasta que se apague la camara libre"); }
         s_phAdv = s_phPause.load() && pad.b[kPadSquare];
     } else { memset(s_padWas, 0, sizeof s_padWas); s_phAdv = false; }
+    // (14/11) modo foto con el teclado: P pausa / sigue, O mantenida avanza, , y . reloj mas lento / rapido, N velocidad del menu
+    if (front && !typing && !g_menuOpen.load() && !MotorPageActive()) {
+        static bool s_kw[5] = {}; const int vk[5] = { 'P', 'O', VK_OEM_COMMA, VK_OEM_PERIOD, 'N' }; bool kd[5], ke[5];
+        for (int i = 0; i < 5; i++) { kd[i] = Key(vk[i]); ke[i] = kd[i] && !s_kw[i]; s_kw[i] = kd[i]; }
+        auto cur = [] { return g_cfg.live[343][1] > 0.5f && TiempoMatchToo() ? TiempoFactor() : 1.0f; };
+        if (ke[0]) { if (s_phStep.load() < 0) s_phStep = NearestStep(cur()); s_phPause = !s_phPause.load(); Log("modo foto: %s (P)", s_phPause.load() ? "pausa" : "sigue"); }
+        if (ke[2] || ke[3]) { int st = s_phStep.load(); if (st < 0) st = NearestStep(cur()); st = std::clamp(st + (ke[3] ? 1 : -1), 0, kPhotoN - 1); s_phStep = st; Log("modo foto: reloj x%.2f (teclado)", kPhotoSteps[st]); }
+        if (ke[4]) { PhotoReset(); Log("modo foto: velocidad del menu (N)"); }
+        if (!padOk) s_phAdv = s_phPause.load() && kd[1];
+        else if (kd[1] && s_phPause.load()) s_phAdv = true;
+    }
     const bool motor = MotorFly();           // dentro del Motor: flechas para el menu, volar solo con el boton derecho
     if (front && !typing) {
         const float rot = 1.2f * dt;   // flechas: ~70 grados por segundo
