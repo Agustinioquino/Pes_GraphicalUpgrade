@@ -1582,6 +1582,9 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         // (31/10) torso bajo la camiseta preciso: mapa de lo que asoma (cuerpo.cpp) en t124 del VS de la piel y de su sombra
         // (08/11) gestos del publico: buffer pes_crowdface en t30 de los 6 VS del publico (sin tocar PES21FX_rules.ini)
         if (ID3D11ShaderResourceView* cf = PublicoSRVFor(vs->hash)) { Remember(c, d, false, true, 30); c->VSSetShaderResources(30, 1, &cf); }
+        // (14/11 sk9ema) banderin del corner: la tela simulada (pes_flag) en t111 de sus dos VS; sin tela (opcion apagada) no se enlaza nada
+        // y el reemplazo hace lo del juego
+        if (ID3D11ShaderResourceView* bf = BanderinSRVFor(vs->hash)) { Remember(c, d, false, true, 111); c->VSSetShaderResources(111, 1, &bf); }
         if (vs->hash == 0x1c02a92ab4ae3362ULL || vs->hash == 0xc6ef0c7519ec95a5ULL) if (ID3D11ShaderResourceView* nv = TorsoNeedSRV()) { Remember(c, d, false, true, 124); c->VSSetShaderResources(124, 1, &nv); }
         if (arm && vs->hash == 0x1c02a92ab4ae3362ULL) {   // (02/11) grupos musculares del brazo
             if (ID3D11ShaderResourceView* an = ArmAnatTexture(0)) { Remember(c, d, true, true, 26); c->PSSetShaderResources(26, 1, &an); }
@@ -2365,6 +2368,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     FaceInjectPresent();   // (09/11) matrices del rig: donde se arma la cara (solo mide, expr_inyeccion)
     SolEditorPresent();   // (09/11) sol real del editor: ganchos (primer Present), aplicar pendiente, log cada 10 s
     RedesPresent();     // (13/11 sk9ema) redes de los arcos con el viento unico (ganchos en el primer Present)
+    BanderinPresent();  // (14/11 sk9ema) banderin del corner: simula la tela y sube pes_flag (despues de UpdateTimeParams: filas 494 / 157 de este cuadro)
     CamHookPresent();   // (23/10) camara del motor: ganchos (primer Present), cortes de camara -> 160, log
     MotorPagePresent();   // (11/11) Motor en tiempo real: filas nativas en el estudio 3D (motorpage.cpp)
     MenuMousePresent();   // (11/11 3icxbh) mouse en los menus nativos del juego: ganchos (primer Present), log
