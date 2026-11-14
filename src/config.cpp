@@ -139,6 +139,11 @@ static bool LoadConfigLocked() {
             if (kl == "menu_key") c.menuKey = VkFromName(v);
             else if (kl == "tutorials") c.tutorials = atoi(v.c_str()) != 0;
             else if (kl == "bloquear_teclado") c.blockKeys = std::clamp(atoi(v.c_str()), 0, 2);
+            else if (kl == "bloquear_mando") c.blockPad = std::clamp(atoi(v.c_str()), 0, 1);       // (14/11) el juego no ve el mando con el menu abierto
+            else if (kl == "camara_hud") c.camHud = std::clamp(atoi(v.c_str()), 0, 2);              // (14/11) HUD de la camara libre / modo foto
+            else if (kl == "camara_mando") c.camPad = std::clamp(atoi(v.c_str()), 0, 1);           // (14/11) el mando mueve la camara libre (modo foto)
+            else if (kl == "menu_cursor") c.menuCursor = std::clamp(atoi(v.c_str()), 0, 2);           // (14/11) cursor del menu
+            else if (kl == "menu_mando_abrir") c.menuPadOpen = atoi(v.c_str()) != 0;             // (14/11) L3 + R3 abre / cierra el menu
             else if (kl == "mouse_menus") c.menuMouse = atoi(v.c_str()) != 0 ? 1 : 0;   // (11/11) mouse en los menus nativos del juego
             else if (kl == "mouse_menus_retraso") c.menuMouseDelay = std::clamp(atoi(v.c_str()), 0, 4);
             else if (kl == "mouse_menus_cerca") c.menuMouseNear = atoi(v.c_str()) != 0 ? 1 : 0;
@@ -161,7 +166,12 @@ static bool LoadConfigLocked() {
             else if (kl == "menu_avanzado") c.menuAdvanced = atoi(v.c_str()) != 0;                // (08/11) todas las opciones de las tarjetas largas a la vista
             else if (kl == "menu_columnas") c.menuCols = atoi(v.c_str()) != 0;                    // (08/11) dos columnas de tarjetas en ventanas anchas
             else if (kl == "menu_tamano") c.menuSize = std::clamp(atoi(v.c_str()), 0, 2);          // (08/11) 0 ventana, 1 grande, 2 panel a la derecha
-            else if (kl == "menu_opacidad") c.menuAlpha = std::clamp((float)atof(v.c_str()), 0.5f, 1.0f);
+            else if (kl == "menu_opacidad") c.menuAlpha = std::clamp((float)atof(v.c_str()), 0.15f, 1.0f);   // (14/11) desde 0.15 (Agustin: "bajar la opacidad del menu")
+            else if (kl == "menu_vistas") c.menuVisual = atoi(v.c_str()) != 0;                   // (14/11) tarjetas con dibujos que se tocan y animaciones
+            else if (kl == "menu_mando") c.menuPad = atoi(v.c_str()) != 0;                       // (14/11) leer el mando en el menu
+            else if (kl == "menu_mando_dibujo") c.menuPadDraw = atoi(v.c_str()) != 0;            // (14/11) dibujo del mando al abrir el menu
+            else if (kl == "menu_mando_estilo") c.menuPadStyle = std::clamp(atoi(v.c_str()), 0, 3);   // (14/11 d) 0 como los iconos del juego, 1 PS5, 2 PS4, 3 Xbox
+            else if (kl == "menu_mando_color") { std::string h = v; if (!h.empty() && h[0] == '#') h = h.substr(1); c.menuPadColor = h.size() == 6 ? (unsigned)strtoul(h.c_str(), nullptr, 16) : 0u; }   // (14/11 d) color del cuerpo RRGGBB
             else if (kl == "menu_vidrio") c.menuGlass = atoi(v.c_str()) != 0;                     // (08/11) fondo de vidrio (juego desenfocado)
             else if (kl == "menu_autoguardar") c.menuAutoSave = std::clamp(atoi(v.c_str()), 0, 2);    // (08/11) guardado automatico de los cambios del menu
             else if (kl == "menu_letra") c.menuFont = atoi(v.c_str()) != 0;                       // (08/11) letra Saira (textures\pes_ui.ttf)
@@ -217,6 +227,7 @@ static bool LoadConfigLocked() {
             else if (kl == "desc") grp->desc = v;
             else if (kl == "section") grp->section = v;
             else if (kl == "special") grp->special = Lower(v);
+            else if (kl == "icon" || kl == "icono") grp->icon = Lower(v);
             else if (kl == "toggle") { int i2, c2; if (ParseParamName(v, i2, c2)) { grp->tIdx = i2; grp->tComp = c2; } }
             else if (kl == "button") {
                 std::vector<std::string> parts; std::string cur2;
@@ -531,9 +542,10 @@ bool SaveCloth() {
 // [sim] wind_x / wind_y / wind_z / wind_gust a partir del viento base del usuario (el de cloth.ini al abrir el juego):
 // rumbo al azar, fuerza x de noche 0.7, lluvia 1.6, invierno 1.25, verano 0.9, y un azar de partido (y353 = cuanto, 0..1).
 // x353 escala total, w353 on. El pelo toma la misma direccion (SaveCloth). wind_response (cuanto reacciona la tela) no se toca.
+MatchWindOut g_matchWind;
 void MatchWind(const MatchInfo& m, unsigned long long seed) {
     Config& c = g_cfg;
-    if (c.live[353][3] < 0.5f || !c.clothFound) return;
+    if (c.live[353][3] < 0.5f) return;
     static bool haveBase = false; static float bx = 2.0f, by = 1.5f, bz = 0.0f, bg = 3.0f;
     if (!haveBase) {
         auto get = [&](const char* k, float d) { auto it = c.clothLoaded.find(k); return it != c.clothLoaded.end() ? it->second : d; };
@@ -548,6 +560,9 @@ void MatchWind(const MatchInfo& m, unsigned long long seed) {
     k *= (float)(1.0 + var * (r1 * 1.3 - 0.55));   // 0.45 .. 1.75 con var = 1
     k *= sc;
     const float sp = sqrtf(bx * bx + bz * bz) * k, ang = (float)(r2 * 6.283185307);
+    // (13/11 sk9ema) el viento unico usa esto aunque no haya mod de ropa o su viento base sea 0 (PC de Agustin: base 0 -> todo en 0)
+    g_matchWind.valid = true; g_matchWind.k = k; g_matchWind.ang = ang;
+    if (!c.clothFound) { Log("viento del partido (sin mod de ropa): fuerza x%.2f, rumbo %.0f grados", k, ang * 57.2958f); return; }
     const float gust = bg * (m.weather == 1 ? 1.4f : 1.0f) * (float)(1.0 + var * (r3 * 0.6 - 0.3));
     c.clothVals["sim.wind_x"] = roundf(sp * cosf(ang) * 100.0f) / 100.0f;
     c.clothVals["sim.wind_z"] = roundf(sp * sinf(ang) * 100.0f) / 100.0f;
@@ -563,7 +578,9 @@ void MatchWind(const MatchInfo& m, unsigned long long seed) {
 // para que (1) nunca se guarden ni arranquen prendidas, (2) "Apagar todo el debug" las apague de una y (3) la prueba automatica
 // fotografie cada vista. minOn = desde que valor (absoluto) es depuracion; safe = valor al apagarla (z314: 2 = depuracion, 1 = normal prendido)
 static const float kV12[] = { 2, 3, 4, 5, 6, 7, -3 }, kV380[] = { 1, 2, 3, 4, 5 }, kV107[] = { 1, 2, 3, 4, 5 }, kV75[] = { 1, 2 }, kV27[] = { 1, 2 }, kV1[] = { 1 }, kV2[] = { 2 }, kV429[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+static const float kV510[] = { 1, 2, 3, 4, 5, 6 };   // (14/11 sk9ema) "Probar el viento"
 static const DebugParam kDebugParams[] = {
+    { 510, 0, 0.5f, 0.0f, "Viento: prueba (leve de costado, desde abajo, tormenta maxima, racha cada 3 s, calma, a mano)", "Viento", kV510, 6 },   // (14/11 sk9ema) wind.cpp
     { 12, 3, 0.5f, 0.0f, "Vista de diagnostico (rebote, sol y piel, contacto, nubes, cascadas, sombra, resolucion)", "Diagnostico", kV12, 7 },
     { 380, 3, 0.5f, 0.0f, "Vista de prueba de la luz del editor", "Editor", kV380, 5 },
     { 393, 0, 0.5f, 0.0f, "Pasto del mod bajo el jugador (editor, experimento)", "Editor", kV1, 1 },
@@ -850,6 +867,109 @@ static void UpdatePhysSky(float (*p)[4]) {
 }
 } // namespace
 
+// ---------------------------------------------------------------- (13/11 tanda 2) fila 498: movimiento de la CAMARA (no va al ini)
+// Cuanto se corre la imagen por la camara entre dos cuadros, en px por cuadro a 1080 lineas: x / y = el centro de la pantalla (ndc: x a la
+// derecha, y arriba), z = el mayor de una grilla de 3 x 3 (ndc +-0.7), w = 1 valida (0 = sin cuadro anterior, copias a mas de 3 cuadros, corte
+// de camara, menos de 5 puntos o un salto imposible). Sin el viento, los jugadores ni la pelota: la leen 18afff (x436) y la pasada final
+// 0f5c2b99 (w454) en vez de la velocidad por pixel, que en las hojas tambien es el viento. La vista sale de m_projectionView y m_projection
+// (V = P^-1 PV, el mismo armado que headshadow.cpp: w = z, z positiva hacia adelante), no de m_view ni de m_eyepos (no coincidian con la
+// proyeccion). Cada punto de la grilla se lleva al suelo (y = 0, hasta 150 m; sin suelo, a 40 m), se proyecta con la camara del cuadro
+// anterior y la diferencia en ndc pasa a pixeles. Se ignoran P2 / P6 / P3 / P7 (jitter del TAA y corrimientos del centro).
+// Prueba en el log cada 10 s (puntos validos, ida y vuelta con la camara de este cuadro < 1e-3, y la velocidad del TAA en el centro: en un
+// paneo de mas de 3 px tiene que tener el mismo signo por eje y |v| = |centro| x alto / 1080 +- 20 %; si el signo no da, se corrige ACA)
+static void CamaraFrame(float (*p)[4], double t) {
+    static bool havePrev = false; static int lastSf = -1;
+    static float VVp[3][4] = {}, P0p = 1.0f, P5p = 1.0f;
+    static float logC[2] = {}, logMax = 0.0f, logRt = 0.0f; static int logN = 0;   // ultimo calculo (log)
+    static double logT = 0.0, pendT = -1.0; static bool tvArmed = false;   // tvArmed: se pidio el texel en esta prueba
+    float* o = p[498];
+    std::vector<float> S; int sf = -1;
+    const bool ok = NamedCBRead("SceneCB", S, &sf) && S.size() >= 88 && sf >= 0;
+    const int age = NamedAge("SceneCB");
+    if (!ok || age < 0 || age > 3) { o[0] = o[1] = o[2] = o[3] = 0.0f; havePrev = false; lastSf = -1; if (pendT >= 0.0) TaaVelProbeCancel(); pendT = -1.0; return; }
+    if (sf != lastSf) {   // copia nueva de SceneCB (si es la misma, queda lo de antes)
+        const float* PV = &S[0]; const float* P = &S[16];
+        float VV[3][4];
+        for (int i = 0; i < 4; i++) {
+            VV[2][i] = PV[12 + i];
+            VV[0][i] = (PV[i] - P[2] * PV[12 + i] - (i == 3 ? P[3] : 0.0f)) / (fabsf(P[0]) > 1e-6f ? P[0] : 1e-6f);
+            VV[1][i] = (PV[4 + i] - P[6] * PV[12 + i] - (i == 3 ? P[7] : 0.0f)) / (fabsf(P[5]) > 1e-6f ? P[5] : 1e-6f);
+        }
+        const float P0 = P[0], P5 = P[5];
+        // R = 3 x 3 de la vista, tv = su columna 3: R^-1 por la adjunta (puede ser un reflejo, det -1) y el ojo en el mundo = -R^-1 tv
+        const float a = VV[0][0], b = VV[0][1], c = VV[0][2], d = VV[1][0], e = VV[1][1], f = VV[1][2], g = VV[2][0], h = VV[2][1], k = VV[2][2];
+        const float cA = e * k - f * h, cB = f * g - d * k, cC = d * h - e * g, det = a * cA + b * cB + c * cC;
+        const bool can = std::isfinite(det) && fabsf(det) > 1e-8f && fabsf(P0) > 1e-6f && fabsf(P5) > 1e-6f;
+        const int gap = sf - lastSf;
+        int n = 0; float cx = 0.0f, cy = 0.0f, mx = 0.0f, rt = 0.0f; bool cOk = false;
+        if (can) {
+            const float id = 1.0f / det;
+            const float Ri[3][3] = { { cA * id, (c * h - b * k) * id, (b * f - c * e) * id },
+                                     { cB * id, (a * k - c * g) * id, (c * d - a * f) * id },
+                                     { cC * id, (b * g - a * h) * id, (a * e - b * d) * id } };
+            const float tv[3] = { VV[0][3], VV[1][3], VV[2][3] };
+            float eye[3]; for (int r = 0; r < 3; r++) eye[r] = -(Ri[r][0] * tv[0] + Ri[r][1] * tv[1] + Ri[r][2] * tv[2]);
+            const float ax = 0.5f * 1080.0f * fabsf(P5 / P0), ay = 0.5f * 1080.0f;   // ndc -> px a 1080 lineas (ancho = 1080 x aspecto)
+            for (int j = 0; j < 3; j++) for (int i = 0; i < 3; i++) {
+                const float gx = -0.7f + 0.7f * (float)i, gy = -0.7f + 0.7f * (float)j;
+                const float dv[3] = { gx / P0, gy / P5, 1.0f };   // rayo en la vista (adelante = +z)
+                float dw[3]; for (int r = 0; r < 3; r++) dw[r] = Ri[r][0] * dv[0] + Ri[r][1] * dv[1] + Ri[r][2] * dv[2];   // en el mundo
+                const float tt = (dw[1] < -1e-3f && eye[1] > 0.0f) ? (std::min)(-eye[1] / dw[1], 150.0f) : 40.0f;
+                const float W[3] = { eye[0] + tt * dw[0], eye[1] + tt * dw[1], eye[2] + tt * dw[2] };
+                { const float qx = VV[0][0] * W[0] + VV[0][1] * W[1] + VV[0][2] * W[2] + VV[0][3];   // ida y vuelta: con esta camara da g
+                  const float qy = VV[1][0] * W[0] + VV[1][1] * W[1] + VV[1][2] * W[2] + VV[1][3];
+                  const float qz = VV[2][0] * W[0] + VV[2][1] * W[1] + VV[2][2] * W[2] + VV[2][3];
+                  const float er = qz > 1e-4f ? (std::max)(fabsf(P0 * qx / qz - gx), fabsf(P5 * qy / qz - gy)) : 1.0f;
+                  rt = (std::max)(rt, std::isfinite(er) ? er : 1.0f); }
+                if (!havePrev) continue;
+                const float vx = VVp[0][0] * W[0] + VVp[0][1] * W[1] + VVp[0][2] * W[2] + VVp[0][3];
+                const float vy = VVp[1][0] * W[0] + VVp[1][1] * W[1] + VVp[1][2] * W[2] + VVp[1][3];
+                const float vz = VVp[2][0] * W[0] + VVp[2][1] * W[1] + VVp[2][2] * W[2] + VVp[2][3];
+                if (!(vz > 0.05f)) continue;   // detras de la camara anterior
+                const float dx = (gx - P0p * vx / vz) * ax, dy = (gy - P5p * vy / vz) * ay;
+                if (!std::isfinite(dx) || !std::isfinite(dy)) continue;
+                n++; mx = (std::max)(mx, sqrtf(dx * dx + dy * dy));
+                if (i == 1 && j == 1) { cx = dx; cy = dy; cOk = true; }
+            }
+        }
+        const float gk = (gap >= 1 && gap <= 3) ? 1.0f / (float)gap : 0.0f;   // copias a 2-3 cuadros: por cuadro
+        cx *= gk; cy *= gk; mx *= gk;
+        // corte de camara (camhook.cpp) entre las dos copias: la copia sf es de hace lagP Presents (anillo de 1-3) y x160 (cuadros desde el
+        // corte) se escribe despues de esta funcion, vale lo del Present anterior. Un corte en el cuadro C cae en este par si sf - C esta en
+        // 1..gap, o sea x160 = lagP + (sf - C) - 1 < lagP + gap; + 1 por si el gancho de la camara va un cuadro antes que SceneCB. Antes
+        // (x160 < 2) con copias de 2-3 cuadros de atraso el par del corte no se marcaba. Marca de mas uno o dos cuadros despues (sin dano)
+        const int lagP = PresentNo() - sf;
+        const bool cut = p[160][3] > 0.5f && p[160][0] < (float)(lagP + gap + 1);
+        const bool valid = can && havePrev && gk > 0.0f && !cut && n >= 5 && cOk && mx < 500.0f;
+        o[0] = valid ? cx : 0.0f; o[1] = valid ? cy : 0.0f; o[2] = valid ? mx : 0.0f; o[3] = valid ? 1.0f : 0.0f;
+        logC[0] = cx; logC[1] = cy; logMax = mx; logRt = rt; logN = n;
+        if (can) { memcpy(VVp, VV, sizeof(VVp)); P0p = P0; P5p = P5; havePrev = true; } else havePrev = false;
+        lastSf = sf;
+    }
+    // prueba cada 10 s: se pide la velocidad del TAA en el centro y se anota cuando llega (2-3 Presents despues; sin TAA, a 3 s sin dato)
+    if (pendT < 0.0 && t - logT >= 10.0) {
+        logT = t; pendT = t;
+        // sin copia de TaaCB todavia (la primera prueba: la copia recien se pide) no se pide el texel: con escala 1 y resolucion dinamica no
+        // seria el centro. Queda para la prueba siguiente (esa copia ya esta)
+        float sc = 1.0f; std::vector<float> Y; tvArmed = NamedCBRead("TaaCB", Y);
+        if (tvArmed && Y.size() >= 48 && Y[44] > 0.0f) sc = Y[44];   // cb5[11].x del TAA: escala de la uv
+        if (tvArmed) TaaVelProbeArm(sc);
+    }
+    if (pendT >= 0.0) {
+        float tv[2] = {}, hAct = 0.0f; int fmt = 0; const bool got = tvArmed && TaaVelProbeRead(tv, &hAct, &fmt);
+        if (got || !tvArmed || t - pendT > 3.0) {
+            pendT = -1.0;
+            if (!got) TaaVelProbeCancel();   // sin esto, una copia tardia salia en la prueba siguiente como si fuera de ese momento
+            char ex[160];
+            if (!got) snprintf(ex, sizeof(ex), "sin dato (%s)", tvArmed ? "sin dibujo del TAA" : "sin copia de TaaCB");
+            else if (hAct > 0.5f) snprintf(ex, sizeof(ex), "de %.0f lineas = (%.2f, %.2f) a 1080, formato %d", hAct, tv[0] * 1080.0f / hAct, tv[1] * 1080.0f / hAct, fmt);
+            else snprintf(ex, sizeof(ex), "formato %d", fmt);
+            Log("camara: centro (%.2f, %.2f) px, max %.2f px, valida %d, puntos %d/9, ida y vuelta %.1e | TAA centro (%.2f, %.2f) px %s",
+                logC[0], logC[1], logMax, o[3] > 0.5f ? 1 : 0, logN, logRt, tv[0], tv[1], ex);
+        }
+    }
+}
+
 void UpdateTimeParams() {
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     double t = Now();
@@ -920,6 +1040,7 @@ void UpdateTimeParams() {
           } } }
       cloudT += adv; if (cloudT > 100000.0) cloudT -= 100000.0;
       p[157][0] = (float)cloudT; p[157][1] = 1.0f; p[157][2] = (good > 120) ? rateS : 1.0f; p[157][3] = (good > 120) ? 1.0f : 0.0f; }
+    CamaraFrame(p, t);   // (13/11 tanda 2) fila 498: movimiento de la camara (x436 de 18afff, w454 de la pasada final)
     { extern float g_tongueTap; p[396][2] = std::clamp(g_tongueTap, 0.0f, 1.0f); }
     { extern float g_ownSmileEng; p[391][3] = std::clamp(g_ownSmileEng, 0.0f, 1.0f); }   // (09/11 e) sonrisa medida de la cara esculpida (exprbones.cpp); w391 la escribe la DLL   // (09/11 d) lengua contra el paladar (exprbones.cpp); z396 reservada, nunca se guarda
     // 19/10: pupila reactiva: brillo de la escena por la luz del sol/focos (m_lightColor0 de cPSLight), adaptado en el tiempo
@@ -1016,6 +1137,7 @@ void UpdateTimeParams() {
       }
       int ground = 0; if (g_cfg.match.known && g_cfg.match.weather == 1) ground = 1;
       p[114][0] = (float)ground; p[114][2] = g_cfg.match.known ? (float)g_cfg.match.season : -1.0f; }
+    WindFrame(p, t);       // (13/11 sk9ema) viento unico: filas 494 / 495 (usa el reloj del juego de la fila 157)
     SolLibreFrame(p, t);   // (12/11 hefeaf) sol libre: filas 452 / 453 y la direccion para el motor
     UpdatePhysSky(p);   // (21/10) cielo fisico: color de la luz del cielo para la sombra y la luz de cielo (150)
     SudorFrame(p, t);   // (13/11) sudor 2: tabla por jugador (filas 460..492)

@@ -35,6 +35,7 @@ namespace fx {
 std::atomic<int> g_simTick{-1};   // (12/11) tick del partido para el desgaste real (pitchwear.cpp), lo escribe hk_rel al final de cada tick
 std::atomic<unsigned long long> g_replayMs{0};   // (12/11 16:45) visor de repeticiones reproduciendo (ver hk_rpl)
 std::atomic<int> g_replayHook{0}, g_replayCalls{0}, g_replayPlay{0};
+std::atomic<int> g_replayCallsV2{0}, g_replayPlayV2{0}, g_replayMoveV2{0};   // (13/11 tanda 2) y448: llamadas / estado 5 / con el cursor avanzando (log "repeticiones v2" de pitchwear.cpp)
 
 std::string ModOff(void* p);
 
@@ -56,9 +57,24 @@ const uintptr_t kReplayCtl = 0x14217c0b0ull;
 const unsigned char kReplaySig[18] = { 0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x18,0x57,0x48,0x83,0xec,0x40,0x48,0x8b,0xf9 };
 using RplFn = uint64_t(*)(void*, unsigned, unsigned char);
 RplFn o_rpl = nullptr;
+// (13/11 tanda 2) y448 REPETICIONES v2: en su log todas las llamadas del partido en vivo venian con el estado 5 (~54 por segundo, el tick
+// del partido), asi que "reproduciendo" no distinguia nada. Con y448 solo cuenta si el cursor (+0x14) cambio desde la llamada anterior
+// del mismo objeto o el paso (+0x18) no es cero [offsets del decompilado: a confirmar con el log "repeticiones v2"]. y448 0 = como antes
+struct RplCur { const void* obj; unsigned cur; };
+RplCur s_rplCur[4] = {}; int s_rplCurNext = 0;
+bool RplCursorMoved(const void* obj, unsigned cur) {
+    for (int i = 0; i < 4; i++) if (s_rplCur[i].obj == obj) { const bool m = s_rplCur[i].cur != cur; s_rplCur[i].cur = cur; return m; }
+    s_rplCur[s_rplCurNext].obj = obj; s_rplCur[s_rplCurNext].cur = cur; s_rplCurNext = (s_rplCurNext + 1) & 3; return false;   // primera vez: sin dato
+}
 uint64_t hk_rpl(void* obj, unsigned pad, unsigned char p3) {
-    g_replayCalls.fetch_add(1, std::memory_order_relaxed);
-    __try { if (obj && *(const int*)obj == 5) { g_replayMs.store(GetTickCount64(), std::memory_order_relaxed); g_replayPlay.fetch_add(1, std::memory_order_relaxed); } } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    g_replayCalls.fetch_add(1, std::memory_order_relaxed); g_replayCallsV2.fetch_add(1, std::memory_order_relaxed);
+    const bool v2 = GrassLive(448, 1) > 0.5f;
+    __try { if (obj && *(const int*)obj == 5) {
+        if (!v2) { g_replayMs.store(GetTickCount64(), std::memory_order_relaxed); g_replayPlay.fetch_add(1, std::memory_order_relaxed); }   // y448 0: como antes
+        const unsigned cur = *(const unsigned*)((const char*)obj + 0x14), stp = *(const unsigned*)((const char*)obj + 0x18);
+        const bool mv = RplCursorMoved(obj, cur) || (stp & 0x7fffffffu) != 0u;
+        g_replayPlayV2.fetch_add(1, std::memory_order_relaxed); if (mv) g_replayMoveV2.fetch_add(1, std::memory_order_relaxed);
+        if (v2 && mv) { g_replayMs.store(GetTickCount64(), std::memory_order_relaxed); g_replayPlay.fetch_add(1, std::memory_order_relaxed); } } } __except (EXCEPTION_EXECUTE_HANDLER) {}
     return o_rpl(obj, pad, p3);
 }
 

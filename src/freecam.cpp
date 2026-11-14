@@ -26,6 +26,8 @@
 #include <cstring>
 #include <atomic>
 #include <algorithm>
+#include <mutex>
+#include "menuvisual.h"
 
 namespace fx {
 
@@ -67,7 +69,53 @@ static std::atomic<int> s_applies{0}, s_editorCalls{0}, s_editorApplied{0};
 static int s_logged = 0;
 static const char* s_origen = "";
 
-bool FreeCamActive() { return g_cfg.live[344][0] > 0.5f; }
+// (14/11) x344 = 3: solo mientras dura la repeticion (pitchwear.cpp ReplayNow, detector v2 y448); al terminar vuelve la camara del juego
+bool FreeCamActive() { const float v = g_cfg.live[344][0]; return v > 2.5f ? ReplayNow() : v > 0.5f; }
+
+// (14/11, Agustin: "que lea el control para un control preciso", "como si fuera un modo foto pero que tiene la opcion de avanzar en
+// el modo repeticion en camara lenta") MANDO EN LA CAMARA LIBRE. overlay.cpp lee el mando cada cuadro (MvPadPoll, la DLL pasa por
+// los ganchos de keyblock.cpp) y lo deja aca; el juego no lo ve mientras la camara libre vuela con el mando (g_blockGamePad).
+//   stick izquierdo moverse, stick derecho mirar (curva suave: poco recorrido = movimiento fino), L2 / R2 bajar / subir (gatillo
+//   analogico), L1 preciso (/4), R1 rapido (x3), cruceta arriba / abajo zoom, cruceta izquierda / derecha = velocidad (y344, pasos
+//   de 10 %), triangulo = volver a la camara del juego. MODO FOTO (reloj del juego, tiempo.cpp lo aplica mientras la camara libre
+//   esta prendida): cruz pausa / sigue, cuadrado mantenido avanza despacio, L1 + cruceta izquierda / derecha mas lenta / mas rapida
+//   (los pasos de kPhotoSteps), circulo vuelve a la velocidad del menu. OPTIONS le devuelve el mando al juego (salir de la
+//   repeticion) hasta que la camara libre se apague (o se vuelva a prender el interruptor de la tarjeta).
+static std::mutex s_padMx; static MvPad s_padIn; static double s_padT = -1.0;
+void FreeCamPadFeed(const MvPad& p) { std::lock_guard<std::mutex> lk(s_padMx); s_padIn = p; s_padT = Now(); }
+static bool PadGet(MvPad& p) {
+    std::lock_guard<std::mutex> lk(s_padMx);
+    if (s_padT < 0.0 || Now() - s_padT > 0.25) return false;
+    p = s_padIn; return p.connected;
+}
+static const float kPhotoSteps[] = { 0.02f, 0.05f, 0.1f, 0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f };
+static const int kPhotoN = (int)(sizeof kPhotoSteps / sizeof kPhotoSteps[0]), kPhotoNormal = 6;
+static std::atomic<int> s_phStep{-1}; static std::atomic<bool> s_phPause{false}, s_phAdv{false}, s_padFly{false};
+static std::atomic<bool> s_padGive{false};   // OPTIONS: el mando vuelve al juego (para salir de la repeticion) hasta que la camara libre se apague
+const float* FreeCamPhotoSteps(int* n) { if (n) *n = kPhotoN; return kPhotoSteps; }
+static int NearestStep(float v) { int b = kPhotoNormal; float bd = 1e9f; for (int i = 0; i < kPhotoN; i++) { const float d = fabsf(logf(kPhotoSteps[i]) - logf(std::max(0.01f, v))); if (d < bd) { bd = d; b = i; } } return b; }
+bool FreeCamPadWanted() {
+    if (!g_cfg.camPad || s_padGive.load() || !FreeCamActive() || MotorPageActive()) return false;
+    return lroundf(g_cfg.live[344][0]) != 2;   // "sin bloquear el teclado": el juego sigue con todo, el mando no vuela
+}
+// reloj del juego pedido por el modo foto (-1 = no pide nada: queda lo del menu)
+float FreeCamPhotoScale() {
+    if (!FreeCamActive()) return -1.0f;
+    const int st = s_phStep.load();
+    if (st < 0 || st >= kPhotoN) return -1.0f;
+    const float sp = kPhotoSteps[st];
+    if (s_phPause.load()) return s_phAdv.load() ? (sp > 0.99f ? 0.25f : std::max(sp, 0.1f)) : 0.02f;
+    return sp;
+}
+FreeCamPadInfo FreeCamPadState() {
+    FreeCamPadInfo i; i.wanted = FreeCamPadWanted(); i.flying = s_padFly.load(); i.step = s_phStep.load(); i.paused = s_phPause.load();
+    i.advancing = s_phAdv.load(); i.scale = FreeCamPhotoScale(); i.given = s_padGive.load(); return i;
+}
+void FreeCamPadTake() { s_padGive = false; }
+static void PhotoReset() { s_phStep = -1; s_phPause = false; s_phAdv = false; }
+static float s_pv[3] = {}, s_lv[2] = {};   // velocidad / giro del mando, suavizados (arranca y frena sin saltos)
+static bool s_padWas[kPadCount] = {};
+static float Curve(float x) { return x * (0.25f + 0.75f * fabsf(x)); }   // fino cerca del centro, todo al fondo
 // (11/11, Agustin 23:33 / 23:36: el Motor "que venga con la camara libre", manejada como en Blender) Dentro del estudio del Motor
 // (MotorPageActive) la camara libre se maneja como en un editor: las teclas W A S D Q E y el giro con el mouse valen SOLO con el
 // boton derecho apretado (mientras tanto el juego no ve el teclado); las flechas quedan para el menu del juego. El gizmo de ejes
@@ -77,7 +125,7 @@ static float s_pivot[3] = {}; static bool s_pivotOk = false;
 static float s_homePos[3] = {}, s_homePiv[3] = {}, s_homeYaw = 0, s_homePitch = 0; static bool s_homeOk = false;   // pose al prender (el visor no reescribe su camara: "inicio" vuelve aca)
 static std::atomic<int> s_gzAxis{-1}; static std::atomic<int> s_gzHome{0};
 static std::mutex s_gzMx; static float s_gzDYaw = 0, s_gzDPitch = 0;
-static bool MotorFly() { return MotorPageActive() && g_cfg.live[344][0] > 0.5f; }
+static bool MotorFly() { return MotorPageActive() && FreeCamActive(); }
 void FreeCamGizmoOrbit(float dyaw, float dpitch) { std::lock_guard<std::mutex> lk(s_gzMx); s_gzDYaw += dyaw; s_gzDPitch += dpitch; }
 void FreeCamGizmoAxis(int a) { s_gzAxis.store(a); }      // 0 +X, 1 -X, 2 +Y, 3 -Y, 4 +Z, 5 -Z: la camara se pone de ese lado del pivote
 void FreeCamGizmoHome() { s_gzHome.store(1); }
@@ -94,8 +142,8 @@ bool FreeCamBlocksKeys() {
     // motor") con el estudio del Motor abierto el juego no ve el teclado: el Motor se maneja con el mouse (y el mando sigue
     // andando); Esc = salir lo pone menumouse.cpp. [PES21FX] motor_teclado = 0 lo deja como antes
     if (g_cfg.motorKeys != 0 && MotorPageActive()) return true;
-    if (v > 0.5f && MotorPageActive()) return (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;   // en el Motor: solo mientras se vuela
-    return v > 0.5f && v < 1.5f;
+    if (FreeCamActive() && MotorPageActive()) return (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;   // en el Motor: solo mientras se vuela
+    return FreeCamActive() && (v < 1.5f || v > 2.5f);   // 1 y 3 (solo en la repeticion) bloquean el teclado mientras vuela
 }
 
 static bool Key(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
@@ -121,6 +169,8 @@ static void TakeFromGame(const float* pos, const float* tgt) {
 static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, const char* origen, const float* extra) {
     if (!FreeCamActive()) {
         if (s_on) { s_on = false; s_follow = false; s_headSeen = false; s_lockNode = nullptr; g_cfg.live[345][3] = -1.0f; Log("camara libre: apagada"); }
+        if (s_phStep.load() >= 0 || s_phPause.load()) { PhotoReset(); Log("modo foto: el reloj del juego vuelve a lo del menu"); }
+        s_padFly = false; s_padGive = false; memset(s_pv, 0, sizeof s_pv); memset(s_lv, 0, sizeof s_lv);
         return false;
     }
     if (!s_on) {
@@ -146,6 +196,58 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     if (Key(VK_SHIFT)) speed *= 4.0f;
     if (Key(VK_CONTROL)) speed *= 0.25f;
     const float sens = std::clamp(g_cfg.live[344][3], 0.05f, 10.0f);
+    // (14/11) [ y ] cambian la velocidad base en pasos de 10 % (control fino de la velocidad, Agustin)
+    { static bool s_b0 = false, s_b1 = false; const bool b0 = front && !typing && Key(VK_OEM_4), b1 = front && !typing && Key(VK_OEM_6);
+      if ((b0 && !s_b0) || (b1 && !s_b1)) { const float was = std::clamp(g_cfg.live[344][1], 0.05f, 50.0f); g_cfg.live[344][1] = std::clamp(g_cfg.live[344][1] * (b1 ? 1.1f : 1.0f / 1.1f), 0.05f, 50.0f); speed *= g_cfg.live[344][1] / was; }
+      s_b0 = b0; s_b1 = b1; }
+    // --- mando (14/11) ---
+    MvPad pad; const bool padOk = front && !typing && !g_menuOpen.load() && FreeCamPadWanted() && PadGet(pad);
+    s_padFly = padOk;
+    float padMul = 1.0f;
+    if (padOk) {
+        bool ed[kPadCount]; for (int i = 0; i < kPadCount; i++) { ed[i] = pad.b[i] && !s_padWas[i]; s_padWas[i] = pad.b[i]; }
+        // (14/11, Agustin: "lo de la velocidad ... con las flechas del mando izquierda derecha") cruceta izquierda / derecha = velocidad
+        // de la camara de a 10 % (mantener: repite cada 0.12 s despues de 0.35 s); con L1 apretado, la cruceta cambia el reloj
+        const bool l1 = pad.b[kPadL1];
+        if (!l1 && pad.b[kPadR1]) padMul *= 3.0f;
+        if (l1 && !pad.b[kPadR1] && !pad.b[kPadLeft] && !pad.b[kPadRight]) padMul *= 0.25f;
+        { static double s_rep = 0.0; const int dir = l1 ? 0 : pad.b[kPadRight] ? 1 : pad.b[kPadLeft] ? -1 : 0;
+          const bool edge = !l1 && (ed[kPadLeft] || ed[kPadRight]);
+          if (edge) s_rep = t + 0.35;
+          if (dir != 0 && (edge || t >= s_rep)) {
+              if (!edge) s_rep = t + 0.12;
+              const float was = std::clamp(g_cfg.live[344][1], 0.05f, 50.0f);
+              g_cfg.live[344][1] = std::clamp(g_cfg.live[344][1] * (dir > 0 ? 1.1f : 1.0f / 1.1f), 0.05f, 50.0f);
+              speed *= std::clamp(g_cfg.live[344][1], 0.05f, 50.0f) / was;
+              if (edge) Log("camara libre: velocidad %.2f m/s (cruceta)", g_cfg.live[344][1]);
+          } }
+        // zoom con la cruceta arriba / abajo (suave, como Re Pag / Av Pag)
+        if (pad.b[kPadUp]) s_zoomTarget *= 1.0f - 0.45f * dt;
+        if (pad.b[kPadDown]) s_zoomTarget *= 1.0f + 0.45f * dt;
+        if (ed[kPadTriangle]) { TakeFromGame(pos, tgt); memset(s_pv, 0, sizeof s_pv); Log("camara libre: triangulo, se vuelve a la camara del juego"); }
+        // modo foto: el reloj del juego
+        auto cur = [] { return g_cfg.live[343][1] > 0.5f && TiempoMatchToo() ? TiempoFactor() : 1.0f; };
+        if (ed[kPadCross]) { if (s_phStep.load() < 0) s_phStep = NearestStep(cur()); s_phPause = !s_phPause.load(); Log("modo foto: %s", s_phPause.load() ? "pausa" : "sigue"); }
+        if (l1 && (ed[kPadLeft] || ed[kPadRight])) {   // L1 + cruceta izquierda / derecha: reloj del modo foto
+            int st = s_phStep.load(); if (st < 0) st = NearestStep(cur());
+            st = std::clamp(st + (ed[kPadRight] ? 1 : -1), 0, kPhotoN - 1); s_phStep = st;
+            Log("modo foto: reloj x%.2f", kPhotoSteps[st]);
+        }
+        if (ed[kPadCircle]) { PhotoReset(); Log("modo foto: velocidad del menu"); }
+        if (ed[kPadOptions]) { s_padGive = true; Log("camara libre: OPTIONS, el mando vuelve al juego hasta que se apague la camara libre"); }
+        s_phAdv = s_phPause.load() && pad.b[kPadSquare];
+    } else { memset(s_padWas, 0, sizeof s_padWas); s_phAdv = false; }
+    // (14/11) modo foto con el teclado: P pausa / sigue, O mantenida avanza, , y . reloj mas lento / rapido, N velocidad del menu
+    if (front && !typing && !g_menuOpen.load() && !MotorPageActive()) {
+        static bool s_kw[5] = {}; const int vk[5] = { 'P', 'O', VK_OEM_COMMA, VK_OEM_PERIOD, 'N' }; bool kd[5], ke[5];
+        for (int i = 0; i < 5; i++) { kd[i] = Key(vk[i]); ke[i] = kd[i] && !s_kw[i]; s_kw[i] = kd[i]; }
+        auto cur = [] { return g_cfg.live[343][1] > 0.5f && TiempoMatchToo() ? TiempoFactor() : 1.0f; };
+        if (ke[0]) { if (s_phStep.load() < 0) s_phStep = NearestStep(cur()); s_phPause = !s_phPause.load(); Log("modo foto: %s (P)", s_phPause.load() ? "pausa" : "sigue"); }
+        if (ke[2] || ke[3]) { int st = s_phStep.load(); if (st < 0) st = NearestStep(cur()); st = std::clamp(st + (ke[3] ? 1 : -1), 0, kPhotoN - 1); s_phStep = st; Log("modo foto: reloj x%.2f (teclado)", kPhotoSteps[st]); }
+        if (ke[4]) { PhotoReset(); Log("modo foto: velocidad del menu (N)"); }
+        if (!padOk) s_phAdv = s_phPause.load() && kd[1];
+        else if (kd[1] && s_phPause.load()) s_phAdv = true;
+    }
     const bool motor = MotorFly();           // dentro del Motor: flechas para el menu, volar solo con el boton derecho
     if (front && !typing) {
         const float rot = 1.2f * dt;   // flechas: ~70 grados por segundo
@@ -172,6 +274,13 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     POINT m; GetCursorPos(&m);
     const bool look = front && !g_menuOpen.load() && Key(VK_RBUTTON);
     if (look && s_mouseWas && !s_follow) { s_yaw -= (m.x - s_mouse.x) * 0.0025f * sens; s_pitch -= (m.y - s_mouse.y) * 0.0025f * sens; }
+    {   // (14/11) stick derecho: mirar, con la velocidad de giro suavizada (~0.1 s) para que se pueda apuntar fino
+        const float ks = std::clamp(sens, 0.3f, 3.0f) * (padOk && pad.b[kPadL1] && !pad.b[kPadR1] ? 0.4f : 1.0f);
+        const float ty = padOk && !s_follow ? -Curve(pad.rx) * 1.9f * ks : 0.0f, tp = padOk && !s_follow ? -Curve(pad.ry) * 1.4f * ks : 0.0f;
+        const float kk = 1.0f - expf(-dt / 0.10f);
+        s_lv[0] += (ty - s_lv[0]) * kk; s_lv[1] += (tp - s_lv[1]) * kk;
+        if (!s_follow) { s_yaw += s_lv[0] * dt; s_pitch += s_lv[1] * dt; }
+    }
     s_pitch = std::clamp(s_pitch, -1.55f, 1.55f);
     if (motor && !s_follow && s_pivotOk) {   // pedidos del gizmo de ejes: orbitar alrededor del pivote / mirar desde un eje
         float dy = 0, dp = 0; { std::lock_guard<std::mutex> lk(s_gzMx); dy = s_gzDYaw; dp = s_gzDPitch; s_gzDYaw = s_gzDPitch = 0; }
@@ -250,6 +359,13 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
             const float lv = 0.5f * std::clamp(s_dist * tanHalf, 0.05f, 2.0f) * dt * (speed / base);
             if (Key('E')) s_lift += lv; if (Key('Q')) s_lift -= lv;
         }
+        if (padOk) {   // (14/11) mando: stick izquierdo arriba / abajo acerca / aleja, de costado y el derecho giran, L2 / R2 bajan / suben
+            const float base = std::clamp(g_cfg.live[344][1], 0.05f, 50.0f), sm = (speed / base) * padMul;
+            s_dist *= 1.0f + Curve(pad.ly) * 0.9f * dt * sm;
+            s_oYaw -= (Curve(pad.lx) + Curve(pad.rx)) * 1.4f * dt * std::min(padMul, 1.5f);
+            s_oPitch -= Curve(pad.ry) * 1.1f * dt * std::min(padMul, 1.5f);
+            s_lift += (pad.r2 - pad.l2) * 0.5f * std::clamp(s_dist * tanHalf, 0.05f, 2.0f) * dt * sm;
+        }
         s_lift = std::clamp(s_lift, -1.2f, 0.8f);
         {   // centro del encuadre = cara + subir / bajar
             const float* L = s_followMode == 1 ? U : nullptr;
@@ -278,6 +394,17 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
         if (Key('E')) mv[1] += 1.0f;
         if (Key('Q')) mv[1] -= 1.0f;
         for (int i = 0; i < 3; i++) s_pos[i] += mv[i] * speed * dt;
+    }
+    {   // (14/11) mando: stick izquierdo adelante / atras / costados (hacia donde mira), L2 / R2 bajar / subir; velocidad suavizada
+        float tv[3] = {};
+        if (padOk && !s_follow) {
+            const float fw = -Curve(pad.ly), sd = Curve(pad.lx), vy = pad.r2 * pad.r2 - pad.l2 * pad.l2;
+            const float sp2 = speed * padMul;
+            for (int i = 0; i < 3; i++) tv[i] = (f[i] * fw + r[i] * sd) * sp2;
+            tv[1] += vy * sp2;
+        }
+        const float kk = 1.0f - expf(-dt / 0.12f);
+        for (int i = 0; i < 3; i++) { s_pv[i] += (tv[i] - s_pv[i]) * kk; if (!s_follow) s_pos[i] += s_pv[i] * dt; }
     }
     s_mouse = m; s_mouseWas = look;
     g_cfg.live[346][2] = s_follow ? 1.0f : 0.0f; g_cfg.live[346][3] = haveHead ? (float)age : -1.0f;

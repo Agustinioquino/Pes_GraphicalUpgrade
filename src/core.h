@@ -1,6 +1,7 @@
 // PES21 FX - mod grafico para PES 2021 (DX11). Lo carga Sider (PES21FX.lua) y reemplaza a 3DMigoto.
 #pragma once
 #include <windows.h>
+#include <intrin.h>
 #include <d3d11.h>
 #include <dxgi.h>
 #include <atomic>
@@ -26,7 +27,7 @@ void ScanRefsInto(uintptr_t base, uintptr_t end, const char* dllName);   // quie
 extern void* g_overlayOldProc;
 
 // ---------------------------------------------------------------- parametros (lo que en 3DMigoto era IniParams)
-constexpr int kParamCount = 494;   // (13/11 5iuz5z) 493 = x cuanto pesa la estamina del juego en el sudor (y..w los escribe la DLL); 457..459 = sudor 2 (457: x on, y cantidad, z gotas, w velocidad; 458: x secado, y lluvia en la piel, z gotas de lluvia, w camiseta; 459: x / y sudor / lluvia de prueba, z diagnostico, w peso del clima), 460..492 = tabla de sudor por jugador (la escribe la DLL, sudor.cpp; no va al ini); (12/11 yo8viw) 456 = color del pasto elegible (x tono, y cuanto, z / w tono y saturacion personalizados); (12/11 hefeaf) 455 = sol libre (x color segun la altura, y recorrido del dia grados/s, z nubes que pasan); (13/11 yo8viw) 454 = TAA (x detalle en movimiento, y menos titileo en paneos, z caja pareja quieta, w nitidez extra solo quieta); 449 = desenfoque de movimiento (x menos en camara lenta, y en paneos, z en zoom, w velocidad de desenfoque completo); 447 = x sombra con el mismo verde, w sombra real en las puntas; 450 = sol libre (x sombras que lo siguen, y azimut desde el sol del partido, z temperatura K, w giro grados/s), 451 = x copiar el sol del partido, 452 / 453 = direccion y tinte del sol libre (los escribe la DLL, no van al ini); (12/11 yo8viw) 445 = x sombras de las matas con el sol bajo, y borde de las sombras con hojas, z halo de contraluz, w polen y motas a contraluz; 444 = x brillo con el sol a la espalda (oposicion), y mezcla de variedades del pasto; 443 = x pasto delante de la pelota (pelota asentada), y delante de los botines, z lineas gastadas por el juego, w franjas que se borran donde se juega; 442 = el pasto reacciona a la pelota (x empuja y arrastra, y rastro peinado, z rebote de las hojas 3D, w onda al picar); 441 = x desgaste solo en la repeticion (para grabar), y pisadas en la posicion real del botin, z exagerar las pisadas; 439 = x hojas sueltas mas altas, y cuanto mas altas, z base menos saturada, w pelota asentada en el pasto; 440 = x sombra del estadio en las hojas (con x290 = 1), y definicion del TAA, z luz del cielo en la pelota y los botines; 438 = x reparto natural de las hojas (sin filas); 436 = x brillo estable al mover la camara, y color del cielo en el pasto, z el sol pinta las puntas, w pelota y botines dentro del pasto; 437 = x prueba del desgaste ya; (12/11 4wp0pj) 435 = arriba del mundo en espacio de vista (la escribe la DLL, no va al ini); (12/11 4wp0pj) 434 = botines sucios a prueba (x tierra, y pasto forzados en el momento; 0 = lo del partido); (12/11 yo8viw) 432 = hojas 3D angostas (x desde donde, y ancho, z cantidad) y w alto parejo; 433 = x brillo del natural, y / z translucidez y mojado a distancia, w viento nuevo; 431 = desgaste real (x on, y diferencia por accion); (11/11 4wp0pj) 430 = botines sucios por jugador (x cantidad, y relieve, z pasto pegado, w se desprende); (10/11 a31psl) 427 / 428 = arrugas por jugador; (11/11 3icxbh) 429 = vistas del Motor en tiempo real (x vista de G-buffer, y alambre, z corte de pantalla, w escala de profundidad; nunca se guarda)
+constexpr int kParamCount = 512;   // (14/11 sk9ema) 508 = viento por altura (x perfil, y minimo al ras del suelo, z tope arriba, w viento por debajo de la remera); 509 = la escribe la DLL (x pasto, y ropa con la altura, z borde, w = 1); 510 = probar el viento (x prueba, nunca se guarda; y m/s, z rumbo, w desde abajo a mano); 511 = la escribe la DLL (x viento vertical m/s); (13/11 pasto, build siguiente) 505 colision del botin (x fuerza, y distancia m, z pies a la vez, w s acostado; la DLL elige los pies en compute -> pes_feet en t10 del VS del pasto, pitchwear.cpp), 506 sol en las puntas / rayos, 507 x el pasto acompana a la pelota; (13/11 sk9ema etapa 2b, menu "Viento") 501 = x preajuste (0 segun el partido, 1 calmo, 2 brisa, 3 ventoso, 4 tormenta), y rumbo fijo, z rumbo grados, w cambio durante el partido; 502 = x rachas, y largo de las rachas, z turbulencia, w giro del rumbo; 503 = x reparo manual, y reparo, z viento en el pasto, w viento en la ropa; 504 = viento de dentro de 2 s (la escribe la DLL: x, y rumbo, z m/s, w racha); 499 = x viento en la red, y red mojada con lluvia, z menos cielo dentro del arco (199d37), w libre, 500 = x viento bajo techo (0 auto, 1 siempre afuera), y viento que queda bajo techo (z / w libres) (redes.cpp, wind.cpp; la fisica de la red va por Sider: PES21FX_redes.lua); (13/11 tanda 2 pasto) 496 luz de cerca (x un sol, y puntas, z profundidad), 497 TAA del pasto, 498 camara (la escribe la DLL, no va al ini); 446 pelota, y447 cielo en la sombra, z447 pisadas v2, 448 pisadas de lejos / repeticiones / pisadas lentas; (13/11 sk9ema) 494 / 495 = viento unico (wind.cpp; los escribe la DLL, no van al ini; z353 lo prende); (13/11 5iuz5z) 493 = x cuanto pesa la estamina del juego en el sudor (y..w los escribe la DLL); 457..459 = sudor 2 (457: x on, y cantidad, z gotas, w velocidad; 458: x secado, y lluvia en la piel, z gotas de lluvia, w camiseta; 459: x / y sudor / lluvia de prueba, z diagnostico, w peso del clima), 460..492 = tabla de sudor por jugador (la escribe la DLL, sudor.cpp; no va al ini); (12/11 yo8viw) 456 = color del pasto elegible (x tono, y cuanto, z / w tono y saturacion personalizados); (12/11 hefeaf) 455 = sol libre (x color segun la altura, y recorrido del dia grados/s, z nubes que pasan); (13/11 yo8viw) 454 = TAA (x detalle en movimiento, y menos titileo en paneos, z caja pareja quieta, w nitidez extra solo quieta); 449 = desenfoque de movimiento (x menos en camara lenta, y en paneos, z en zoom, w velocidad de desenfoque completo); 447 = x sombra con el mismo verde, w sombra real en las puntas; 450 = sol libre (x sombras que lo siguen, y azimut desde el sol del partido, z temperatura K, w giro grados/s), 451 = x copiar el sol del partido, 452 / 453 = direccion y tinte del sol libre (los escribe la DLL, no van al ini); (12/11 yo8viw) 445 = x sombras de las matas con el sol bajo, y borde de las sombras con hojas, z halo de contraluz, w polen y motas a contraluz; 444 = x brillo con el sol a la espalda (oposicion), y mezcla de variedades del pasto; 443 = x pasto delante de la pelota (pelota asentada), y delante de los botines, z lineas gastadas por el juego, w franjas que se borran donde se juega; 442 = el pasto reacciona a la pelota (x empuja y arrastra, y rastro peinado, z rebote de las hojas 3D, w onda al picar); 441 = x desgaste solo en la repeticion (para grabar), y pisadas en la posicion real del botin, z exagerar las pisadas; 439 = x hojas sueltas mas altas, y cuanto mas altas, z base menos saturada, w pelota asentada en el pasto; 440 = x sombra del estadio en las hojas (con x290 = 1), y definicion del TAA, z luz del cielo en la pelota y los botines; 438 = x reparto natural de las hojas (sin filas); 436 = x brillo estable al mover la camara, y color del cielo en el pasto, z el sol pinta las puntas, w pelota y botines dentro del pasto; 437 = x prueba del desgaste ya; (12/11 4wp0pj) 435 = arriba del mundo en espacio de vista (la escribe la DLL, no va al ini); (12/11 4wp0pj) 434 = botines sucios a prueba (x tierra, y pasto forzados en el momento; 0 = lo del partido); (12/11 yo8viw) 432 = hojas 3D angostas (x desde donde, y ancho, z cantidad) y w alto parejo; 433 = x brillo del natural, y / z translucidez y mojado a distancia, w viento nuevo; 431 = desgaste real (x on, y diferencia por accion); (11/11 4wp0pj) 430 = botines sucios por jugador (x cantidad, y relieve, z pasto pegado, w se desprende); (10/11 a31psl) 427 / 428 = arrugas por jugador; (11/11 3icxbh) 429 = vistas del Motor en tiempo real (x vista de G-buffer, y alambre, z corte de pantalla, w escala de profundidad; nunca se guarda)
 // antes 427:           // float4 x 348 -> t120 en los shaders (IniParams.Load(int2(i,0))). (20/10: era 128 y los parametros 128+ se perdian; 25/10: 256 -> 320, la ropa contra el cuerpo usa 256 / 257; 27/10: 320 -> 336: la fila 320 (torso bajo la camiseta) quedaba fuera y el ini la descartaba; 31/10: 340 -> 344 (expresiones 340 / 341); 01/11: 344 -> 346: 343 camara lenta, 344 / 345 camara libre; 01/11 b: 346 -> 347: 346 seguir la cara; 347 -> 348: 347 abrir la boca / nariz; 348 -> 349: 348 musculos virtuales; 01/11 c: 349 -> 351: 349 torso, 350 boca por huesos; 351 torso bajo la camiseta ajustada; 352 mangas mas pegadas al brazo; 353 viento por partido; 03/11: 354 -> 355: 354 ojos en circulos (expresiones); 355 -> 356: 355 gestos enojo / sonrisa / asombro / hablar; 04/11: 356 -> 357: 356 grito, puchero, perfiles por cara; 04/11 b: 357 -> 359: 357 / 358 teselacion de la cara; 04/11 c: 359 -> 360: 359 relieve de la teselacion; 04/11 d: 360 -> 361: 360 prueba de la teselacion; 04/11 e: 361 / 362 sliders por hueso (expresiones); 363 -> 364: 363 caja de las piernas del atlas de sombras (grosor de la piel))   // (04/11 g) 364 = teselacion del cuerpo -> 365; (04/11 h) 365 = angulo de las cejas (expresiones), 366 = borde del ojo -> 367; (04/11 i) 367 = color de las cejas del jugador -> 368; 368 = pestanas con hebras -> 369; (04/11 l) 369 = color de ceja a contraluz, 370 = hebras extra por jugador -> 371   // (04/11 m) 371 / 372 = teselacion por jugador -> 373; (05/11) 373 cejas de todos, 374 mascara de la boca (kd63zh) -> 375; (kd63zh 07/11) 375 medidor GPU, 376 teselacion, 377..381 luz del editor -> 382; (ew7o8w 07/11) 382 ceja pintada -> 383; (07/11) 383 = clip .gani de la cara -> 384; (08/11) 384 = reservada (parches de sombras del motor, rama publica d5597d), 385 = luz volumetrica del editor, 386 = kelvin, relleno y recorte en Manual -> 387; (08/11 0dlnmc) 387 GTAO corto alcance + sombra de contacto, 388 sombra de los dientes -> 389; (08/11 pasto) 389 huellas / terrones, 390 reaccion / tamano / polvo / calidad -> 391; (08/11) 391 = abrir / cerrar los ojos (expresiones) -> 392; (08/11 c) 392 libre (reservada), 393 = pasto del mod en el editor (experimento) -> 394; (08/11 7nx0cr) 394 = gestos del publico (huesos de la cara por hincha) -> 395; (08/11 vamwp7) 395 / 396 = animaciones realistas (vida, respiracion, esfuerzo, asimetria, concentracion), 397 = suavizado de los gestos del juego + transicion de los clips .gani; (08/11 fnal0z) 398..401 = escudo bordado / impreso y color de la camiseta de local y visitante (los escribe la DLL desde match.ini, no van al ini) -> 402; (08/11 vl85zs) 402 barba, 403 grosor de cejas, 404..406 opciones de hebras; (08/11 y kd63zh) 407 = tipo de cesped, humedad, variedad de matas y rebote en la pelota, 408 = rachas y direccion del viento + tamano de matas, 409 = color y largo de las puntas al sol, 410 = FPS objetivo / densidad minima en vistas cercanas, (0qtsss) 411 = calidad maxima del editor (SSGI completo, AO), 412 = hojas anchas (segundo tipo de hoja), (08/11 aa) 413 = rebote tras la pisada / sombra entre hojas por tipo / transmision con el sol, (08/11 ab) 414 = el sol pinta el pasto (cuanto, saturacion, hoja encendida de costado; w414 fuerza del sol de hora pico, la escribe la DLL), (08/11 ac) 415 = reloj del sol de la DLL (x hora, y altura, z sube / baja, w sol bajo: amanecer / atardecer) -> 416; (08/11 ffer05 n) (416 = hebras v3 vl85zs) 417 manos, 418 dedos, 419 brazos, 420 piernas: teselacion del cuerpo por parte -> 421; (08/11 qk2yxa) 424 = fondo del visor del editor (x 0 original / 1 negro / 2 imagen de PES21FX\fondos\) -> 425   // (08/11 vamwp7) 421 / 422 = por huesos: control total; (ffer05) 417..420 teselacion por parte, 423 desplazamiento HD; (qk2yxa) 424 fondo del editor; (vl85zs) 416 hebras v3 -> 425; (08/11 z3 vl85zs) 425 = hebras modo mixto (borde semitransparente) -> 426; (09/11 6nmngk) 426 = vista del esqueleto en Diagnostico (x, nunca se guarda) -> 427
 // (26/10) filas de t120 ocupadas por tablas que escribe la DLL en cada cuadro (no usarlas para el ini): 194..254 tonos de piel por
 // jugador (skintone.cpp), 257 cuadro de la ropa contra el cuerpo (cuerpo.cpp). 300..304 son de las manos (manos.cpp + pes_hands.hlsli; 303 = manos relajadas, 304 = unas de los jugadores con textura propia, pes_nailfix.hlsli en el PS aa7d1833; v12.6).
@@ -110,6 +111,7 @@ struct MenuGroup {
     std::vector<MenuSlider> sliders;
     std::vector<MenuButton> buttons;
     std::string special;                 // (24/10) tarjeta dibujada por el codigo: "musculatura_jugador"
+    std::string icon;                    // (14/11) icono dibujado al lado del titulo: "sol" / "viento" (menuvisual.cpp)
 };
 
 // ---------------------------------------------------------------- reglas por shader (lo que eran [ShaderOverride])
@@ -169,7 +171,7 @@ struct Config {
     std::string menuSection;                   // (04/11 n) ultima pagina del menu ([PES21FX] menu_seccion: sec:<seccion>, fav, chg, rec, presets, tools, settings)
     float uiScale = 1.0f;                      // 19/10: tamano del menu ([PES21FX] ui_scale)
     bool compact = false;                      // 19/10: grupos contraidos por defecto ([PES21FX] compacto)
-    int menuHelp = 1; bool menuAdvanced = false, menuCols = true; int menuSize = 0; float menuAlpha = 0.85f; bool menuGlass = true, menuFont = true; int menuAutoSave = 0;   // (08/11) menu_autoguardar 0 no, 1 al soltar (1 s), 2 cada 10 s; [PES21FX] menu_ayuda / menu_avanzado / menu_columnas / menu_tamano / menu_opacidad / menu_vidrio / menu_letra (overlay.cpp)
+    int menuHelp = 1; bool menuAdvanced = false, menuCols = true; int menuSize = 0; float menuAlpha = 0.85f; bool menuGlass = true, menuFont = true; int menuAutoSave = 0; bool menuVisual = true, menuPad = true, menuPadDraw = true; int menuPadStyle = 0; unsigned menuPadColor = 0;   /* (14/11 d) menu_mando_estilo 0 automatico (segun los iconos del juego) 1 PS5 2 PS4 3 Xbox; menu_mando_color RRGGBB (vacio = el de cada mando) */   /* (14/11) [PES21FX] menu_vistas (tarjetas con dibujos que se tocan + animaciones), menu_mando (leer el mando en el menu), menu_mando_dibujo (dibujo del mando al abrir el menu) */   // (08/11) menu_autoguardar 0 no, 1 al soltar (1 s), 2 cada 10 s; [PES21FX] menu_ayuda / menu_avanzado / menu_columnas / menu_tamano / menu_opacidad / menu_vidrio / menu_letra (overlay.cpp)
     int menuMouse = 1;                         // (11/11) mouse en los menus nativos del juego (menumouse.cpp): 0 apagado, 1 prendido ([PES21FX] mouse_menus)
     int menuMouseDelay = 2;                    // (11/11 v2) cuadros de retraso de la flecha, para que vaya junto con la fila marcada ([PES21FX] mouse_menus_retraso, 0..4)
     int menuMouseNear = 1;                     // (11/11 v2) en los huecos entre filas de un grupo vale la mas cercana ([PES21FX] mouse_menus_cerca)
@@ -177,6 +179,8 @@ struct Config {
     int keyHud = 4;                            // (11/11) cuadrito con la ultima tecla apretada: 0 apagado, 1..4 esquina ([PES21FX] ultima_tecla)
     int motorHelpBar = 0; int motorBg = 1, motorCam = 1, motorGizmo = 1, motorKeys = 1; float motorPanelX = 0, motorPanelY = 0; int motorPage = 1;                         // (11/11) motorpage.cpp: el estudio del Motor con filas nativas del juego ([PES21FX] motor_pagina)
     int motorDress = 1;                        // (11/11) motorpage.cpp: vestir al jugador del estudio por la via nativa ([PES21FX] motor_vestir)
+    int blockPad = 1; bool menuPadOpen = true; int menuCursor = 1; int camPad = 1; int camHud = 1;   // camara_hud: 0 escondido, 1 se achica solo, 2 siempre completo; camara_mando: el mando mueve la camara libre (modo foto)
+      // menu_cursor: 0 sin cursor, 1 cursor nuevo, 2 el clasico de ImGui   // (14/11) [PES21FX] bloquear_mando 0 nunca / 1 con el menu abierto; menu_mando_abrir: L3 + R3 abre y cierra el menu
     int blockKeys = 1;                         // (31/10) teclas del juego con el menu: 0 nunca se bloquean, 1 al escribir en un campo, 2 con el menu abierto ([PES21FX] bloquear_teclado)
     int lang = 0;                              // (27/10) idioma del menu: 0 espanol, 1 ingles ([PES21FX] language = es / en)
     bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150; bool autoCapAB = false; bool exeDump = true; bool motorPatch = true; bool motorSunFix = true; int motorShadowFix = 1; int motorShadowRes = 0; float motorCascadeScale = 0.0f;   // [Motor]: parches en memoria (exepatch.cpp)   // exe_dump: volcado del exe desempaquetado (una vez por version)   // auto_captura_ab: pares A (todo) / B (un grupo del menu apagado 3 cuadros)
@@ -233,6 +237,8 @@ bool ReadPreset(const std::wstring& path, PresetFile& out);
 bool ApplyPresetFile(const std::string& file);
 void ClearPreset();
 void ScanPresets(std::vector<PresetFile>& out);
+struct MatchWindOut { bool valid = false; float k = 1.0f, ang = 0.0f; };   // (13/11 sk9ema) fuerza y rumbo del partido de MatchWind (para wind.cpp)
+extern MatchWindOut g_matchWind;
 void MatchWind(const MatchInfo& m, unsigned long long seed);   // (02/11) viento por partido (fila 353) -> cloth.ini, con g_cfgMutex tomado
 void PollMatch();                               // cada ~1 s: match.ini -> preset del estadio
 bool SavePresetForMatch(const std::string& name, const std::string& author, bool onlyThisTime, std::string& outFile);
@@ -276,6 +282,7 @@ extern std::atomic<bool> g_recordOn;
 void CatalogRecord(bool on);                     // "Grabar partido": volcados periodicos numerados en catalog\rec                        // "Volcar pasto": mide las parcelas de pasto de un cuadro
 // pasto extendido (grass.cpp)
 void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntry* ps, UINT count, UINT start, INT base); bool GrassSkipGameDraw(); void GrassClearSkip();   // (2/11) x178: omitir el dibujo del pasto del juego
+void GrassCaptureEarly(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntry* ps);   // (13/11 tanda 2) D10: estado y pelota del pasto del juego ANTES de la emision pendiente de la base (hk_DrawIdx)
 void GrassOnBaseDraw(ID3D11DeviceContext* c);
 void GrassEditorAfterFace(ID3D11DeviceContext* c);   // (08/11 c) x393: pasto del mod bajo el jugador en el editor, tras el dibujo de la cara    // (25/10) v3: al terminar la base de la cancha (PS 5e92 / c956)
 void GrassDiagState(ID3D11DeviceContext* c, uint64_t psHash);   // (26/10 f) log del stencil de las pasadas del sol y de la base de la cancha
@@ -356,6 +363,10 @@ ID3D11ShaderResourceView* FileTextureAny(const std::string& rel);   // hooks.cpp
 void EnsureComInit();
 bool NamedCBRead(const std::string& name, std::vector<float>& out, int* frameOut = nullptr);   // frameOut: cuadro de la copia leida   // hooks.cpp (Present)
 int NamedAge(const std::string& name);                                // hooks.cpp: cuadros desde la ultima copia (-1 = nunca)
+// (13/11 tanda 2) D2: prueba de la fila 498 (camara) contra la velocidad del TAA del juego (1a753492, t2) en el centro de la pantalla (hooks.cpp)
+void TaaVelProbeArm(float uvScale);                        // config.cpp cada 10 s: copiar el texel del centro en el proximo dibujo del TAA
+bool TaaVelProbeRead(float v[2], float* hAct, int* fmt);   // Present: true una vez cuando esta (px por cuadro, alto del area usada, formato)
+void TaaVelProbeCancel();                                   // config.cpp al rendirse (3 s sin dato, SceneCB vieja): nada pendiente ni copiado
 const Rule* RuleForHash(uint64_t h);
 extern std::atomic<int> g_drawOrder; extern std::atomic<int> g_aliasDraws;
 std::string NamedOrigin(ID3D11ShaderResourceView* v);     // hooks.cpp: "archivo: textures\x.dds" o recurso con nombre
@@ -376,9 +387,9 @@ extern std::atomic<unsigned long long> g_replayMs;                        // (12
 extern std::atomic<int> g_replayHook, g_replayCalls, g_replayPlay;       // (12/11) gancho puesto / llamadas / llamadas reproduciendo (log del desgaste)
 extern std::atomic<int> g_matchIniGen;                                     // (12/11) sube cada vez que Sider reescribe match.ini (partido nuevo)
 void PublicoPresent(); ID3D11ShaderResourceView* PublicoSRVFor(uint64_t vsHash); void PublicoMatchTick(int tick, int phase, int type, int restart, int foul);   // (08/11 b) eventos del partido (rastro.cpp, final del tick)   // (08/11) gestos del publico: hilo de la CPU + buffer pes_crowdface (publico.cpp, fila 394)
-void PitchWearNotePlayer(ID3D11DeviceContext* c); void PitchWearPresent(); void PitchWearReloadShaders();   // desgaste de la cancha en vivo
+void PitchWearNotePlayer(ID3D11DeviceContext* c); void PitchWearPresent(UINT flags); void PitchWearReloadShaders();   // desgaste de la cancha en vivo
 void PitchClipsDraw(ID3D11DeviceContext* c, int frame);
-void PitchBallNote(ID3D11DeviceContext* c, int frame); ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts); bool PitchClipDrawActive();   // (2/11) dibujo de los recortes en curso (atlas pes_debris en t8/t9)   // (2/11) dibujo de la pelota (aadffecf): b12 con las manchas o nullptr   // (20/10) capsula de la pelota del VS del pasto -> pasto aplastado   // recortes de pasto volando (desde el dibujo del pasto)
+void PitchBallNote(ID3D11DeviceContext* c, int frame); ID3D11Buffer* PitchBallDrawNote(ID3D11DeviceContext* c, UINT verts); ID3D11ShaderResourceView* PitchFeetSRV(bool* want); bool PitchClipDrawActive();   // (2/11) dibujo de los recortes en curso (atlas pes_debris en t8/t9)   // (2/11) dibujo de la pelota (aadffecf): b12 con las manchas o nullptr   // (20/10) capsula de la pelota del VS del pasto -> pasto aplastado   // recortes de pasto volando (desde el dibujo del pasto)
 // (20/10) LOD de caras (lod.cpp): diagnostico (x118) y LOD0 forzado por sustitucion de geometria (y118)
 struct LodIA {
     ID3D11Buffer* vb[4] = {}; UINT stride[4] = {}, offset[4] = {};
@@ -427,7 +438,18 @@ void SolEditorPresent();
 // (12/11 hefeaf) sol libre v2 (solibre.cpp): mueve el sol del motor (x450) para que las sombras lo sigan
 void SolLibreShadow(void* plugin);   // PluginShadow::vf7 despues del original
 void SolLibreSun();                  // PluginSunlight::vf8 antes del original
-void SolLibreFrame(float (*p)[4], double t);   // UpdateTimeParams
+void RedesPresent();   // (13/11 sk9ema) redes de los arcos: viento en cada punto, despertar con viento, mas vida en el gol (redes.cpp, filas 499 / 500)
+extern std::atomic<int> g_grassSeenFrame;   // (13/11 sk9ema) ultimo cuadro con el pasto de la cancha (grass.cpp; wind.cpp lo usa para bajo techo)
+// (13/11 etapa 2b) el viento de este cuadro para el panel "Viento ahora" del menu (lo llena WindFrame)
+struct WindNow { bool on = false; float speed = 0, dirDeg = 0, gust = 0, turb = 0, outside = 1, base = 0, shelter = 0.5f, soonSpeed = 0, soonDirDeg = 0, hour = -1;
+                 int preset = 0, stadium = -1, season = -1, src = 0, test = 0; float up = 0, grassK = 1, clothK = 1; bool fixedDir = false, shelterManual = false, rain = false, fromCloth = false; };
+extern WindNow g_windNow;
+struct WindHeight { float prof = 0.5f, ground = 0.3f, top = 2.0f; };   // (14/11 sk9ema) perfil por altura (fila 508)
+extern WindHeight g_windHeight;
+float WindHeightK(const WindHeight& hp, float h);   // viento a la altura h (m) / viento a 1.8 m
+void WindFrame(float (*p)[4], double tReal);   // (13/11 sk9ema) viento unico: filas 494 / 495 (wind.cpp), despues de la fila 157
+void SolLibreFrame(float (*p)[4], double t);
+bool SolLibreRealSun(float& azDeg, float& elDeg);   // (14/11) sol del partido para el menu (con g_cfgMutex tomado)   // UpdateTimeParams
 void SudorFrame(float (*p)[4], double t);      // (13/11) sudor 2 por jugador (sudor.cpp): filas 460..492; UpdateTimeParams
 float SudorMedio();                            // sudor medio 0..1 de los personajes (tela mojada)
 void* SolEditorBody();   // cuerpo validado por vtable; nullptr si no hay sol en el editor o se destruyo
@@ -452,10 +474,21 @@ void RelWatchPresent();
 void FreeCamWheel(int delta);
 bool FreeCamWantsHead();   // (1/11) camara libre prendida con "seguir la cara": hace falta la cabeza (expr.cpp)   // (1/11) rueda del mouse (WM_MOUSEWHEEL / raw input) -> zoom   // (1/11) gancho a la camara del visor del editor (primer Present) + log
 bool FreeCamActive();
+bool ReplayNow();                                 // (14/11) pitchwear.cpp: repeticion en curso (detector v2, y448)
 bool FreeCamBlocksKeys();                         // x344 = 1: el juego no ve el teclado mientras la camara libre esta prendida
+// (14/11) mando en la camara libre y modo foto (freecam.cpp): overlay.cpp le pasa el mando de cada cuadro
+struct MvPad;
+void FreeCamPadFeed(const MvPad& p);
+bool FreeCamPadWanted();                          // camara libre prendida, camara_mando = 1, fuera del Motor y no en el modo 2
+float FreeCamPhotoScale();                        // reloj del juego pedido por el modo foto (-1 = nada: queda el del menu)
+const float* FreeCamPhotoSteps(int* n);           // pasos de velocidad del modo foto (0.02 .. 4)
+struct FreeCamPadInfo { bool wanted = false, flying = false, paused = false, advancing = false, given = false; int step = -1; float scale = -1.0f; };
+FreeCamPadInfo FreeCamPadState();
+void FreeCamPadTake();                            // la tarjeta prendio el mando: si se lo habia devuelto al juego, lo vuelve a tomar
 // (31/10) camara lenta (tiempo.cpp): gancho al reloj de juego del motor (0x14035dcb0), 343 (ini: x velocidad, y prendida; DLL: z, w)
 void TiempoPresent();
 bool TiempoHooked();
+bool TiempoMatchToo();   // (14/11) la camara lenta tambien frena el partido ahora (z343 = 1, o 2 y hay repeticion)
 float TiempoFactor();   // (1/11) velocidad pedida por el menu (1 = apagada) para el aviso en pantalla
 // (09/11) sol real del motor en el editor: soleditor.cpp (hilo de descompilacion) encuentra / escribe la DirectionalLight
 // zfx_SolEditor del EditFace; solluz.cpp decide el sol (w378 sol de partido, w392 ciclo de dia y noche) y escribe z393
@@ -626,7 +659,36 @@ ID3D11ShaderResourceView* MouthMaskSRV(); void MouthMaskPresent(); void MouthMas
 enum { kGzSSSS, kGzGTAO, kGzSSGI, kGzLightMeter, kGzBody, kGzPitchWear, kGzGrass, kGzFaceGen, kGzCarasHd, kGzRing, kGzFrameCopy, kGzOverlay, kGzGlass, kGpuZoneN };
 void GpuMeterHookDevice(ID3D11Device* d); void GpuMeterPresent(); std::string GpuMeterSummary(); void GpuMeterCrashInfo(FILE* f, EXCEPTION_POINTERS* ep);
 int GpuZoneBegin(ID3D11DeviceContext* c, int zone); void GpuZoneEnd(ID3D11DeviceContext* c, int idx);
+// (13/11) perfil por shader (gpumeter.cpp); (13/11 v3) con cadena de marcas por contexto (listas diferidas incluidas)
+struct SpCtx { int slot = -1, last = -1, gen = -1; uint64_t key = 0; };
+void GpuShaderProfDraw(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEntry* vs, SpCtx& x); void GpuShaderProfExec(ID3D11DeviceContext* c, SpCtx& x);
+void GpuShaderProfFinish(ID3D11DeviceContext* c, SpCtx& x); void GpuShaderProfKick(); void GpuShaderProfHold(bool on); int GpuShaderProfRuns(); std::string GpuShaderProfReport();
+// (13/11) rendimiento del cuadro y del equipo (perfrec.cpp): reparto del cuadro, CPU / hilos, placa en %, VRAM, RAM, disco, tirones
+extern std::atomic<bool> g_perfOn; extern thread_local uint64_t t_perfCall; extern thread_local int t_perfDepth;
+void PerfDrawDone(uint64_t t0, uint64_t c0, bool imm, bool draw); void PerfExecTicks(uint64_t ticks); void PerfFinishList();
+void PerfPresent(IDXGISwapChain* sc, UINT sync, uint64_t tEntry, uint64_t tBefore, uint64_t tAfter);
+struct PerfWin { int64_t f0 = 0, f1 = 0; double t0 = 0, t1 = 0; };
+struct PerfTop { DWORD tid = 0; float pct = 0; char name[112] = {}; };
+struct PerfRun {
+    int frames = 0, samples = 0, stutters = 0, over50 = 0, over100 = 0, nThreads = 0; DWORD renderTid = 0;
+    float frameMs = 0, fps = 0, p50 = 0, p90 = 0, p95 = 0, p99 = 0, maxMs = 0, low1Fps = 0, jitterMs = 0;
+    float waitMs = 0, modPresMs = 0, modImmMs = 0, modDefMs = 0, hookImmMs = 0, hookDefMs = 0, drvImmMs = 0, drvDefMs = 0, execMs = 0, gameRtMs = 0, drawsImm = 0, drawsDef = 0, lists = 0;
+    float procCpu = 0, sysCpu = 0, cores = 0, wsMB = 0, privMB = 0, sysRamPct = 0, sysRamUsedMB = 0, sysRamTotMB = 0, pfPerS = 0;
+    float rdMBs = 0, rdOps = 0, wrMBs = 0, rdPeakMBs = 0, vramMB = 0, vramBudMB = 0, vramPeakMB = 0, sharedMB = 0, gpu3d = -1, gpuCopy = -1, gpu3dAll = 0;
+    PerfTop top[5];
+};
+void PerfUse(bool on); PerfWin PerfBegin(); void PerfEnd(PerfWin& w); PerfRun PerfCompute(const PerfWin& w);
+const char* PerfVerdict(const PerfRun& s, char* b, size_t n); std::string PerfHardwareText(); std::string PerfStatsText(const PerfRun& s, const char* title);
+std::string PerfCsvHeader(); std::string PerfCsvRow(const char* date, const char* scene, const char* what, const PerfRun& s); void PerfAppendAll(const std::string& rows);
+const char* PerfSceneName(int i); int PerfSceneCount(); bool PerfRecordActive(); const std::string& PerfRecordStatus(); void PerfRecordStart(int scene, double seconds); void PerfRecordStop();
+extern std::atomic<int> g_grassLevelOff;   // (13/11) prueba automatica: bits 0..2 = no emitir el nivel 0 / 1 / 2 del pasto del mod, bit 3 = sin hojas 3D (grass.cpp)
 struct GpuZoneScope { ID3D11DeviceContext* c; int i; GpuZoneScope(ID3D11DeviceContext* c_, int z) : c(c_), i(GpuZoneBegin(c_, z)) {} ~GpuZoneScope() { GpuZoneEnd(c, i); } };
+// (13/11) CPU de cada gancho de dibujo (perfrec.cpp): total del gancho menos lo que tarda la llamada original (t_perfCall, la mide FX_DRAW).
+// Solo cuenta el gancho de afuera: los dibujos que el mod manda desde adentro de otro gancho (pasto) quedan en el del dibujo del juego.
+// draw = false: otros ganchos (SetShader, render targets, Dispatch...), sin separar el driver (cuesta casi nada)
+struct PerfDrawScope { uint64_t t0 = 0, c0 = 0; bool imm = false, in = false, draw = true;
+    explicit PerfDrawScope(ID3D11DeviceContext* c, bool isDraw = true) { if (g_perfOn.load(std::memory_order_relaxed)) { in = true; if (t_perfDepth++ == 0) { t0 = __rdtsc(); c0 = t_perfCall; imm = c == g_dev.imm; draw = isDraw; } } }
+    ~PerfDrawScope() { if (in) { --t_perfDepth; if (t0) PerfDrawDone(t0, c0, imm, draw); } } };
 void HeadShadowPresent(); int HeadShadowSlots(); bool HeadShadowBodyOn(); ID3D11ShaderResourceView* HeadShadowSRV(); ID3D11DepthStencilView* HeadShadowDSV();
 ID3D11Buffer* HeadShadowCB(int i); void HeadShadowViewport(int i, D3D11_VIEWPORT& vp); bool HeadShadowIsGameShadow(ID3D11DepthStencilView* v); bool HeadShadowIsGameRes(ID3D11DepthStencilView* v);
 bool HeadShadowIsNearCascade(ID3D11DeviceContext* c, ID3D11DepthStencilView* gameDSV, int kind); ID3D11DepthStencilView* HeadShadowBind(UINT n, ID3D11RenderTargetView* const* rt, ID3D11DepthStencilView* dsv); void HeadShadowOnClear(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, float depth);
@@ -635,7 +697,7 @@ ID3D11Resource* NamedSRVResource(const std::string& name);   // hooks.cpp: recur
 ID3D11ShaderResourceView* SSSSBeforeComposition(ID3D11DeviceContext* c); ID3D11ShaderResourceView* SSSSSpecSRV(); void SSSSReloadShaders(); double SSSSEditorLightAge(); void SSSSRenderSize(unsigned& w, unsigned& h); extern std::atomic<int> g_ssssDraws;   // ssss.cpp
 // prueba automatica del menu (menutest.cpp)
 void MenuTestPresent(IDXGISwapChain* sc, ID3D11Texture2D* frame);
-void MenuTestStart(); void MenuTestStop(); bool MenuTestActive(); void MenuHangStart(); bool MenuHangActive(); void MenuHangStartGroup(int tIdx, int tComp);   // (11/11) buscar el cuelgue (TDR)
+void MenuTestStart(int scene = 0, bool withBypass = false); void MenuTestStop(); bool MenuTestActive(); void MenuHangStart(); bool MenuHangActive(); void MenuHangStartGroup(int tIdx, int tComp);   // (11/11) buscar el cuelgue (TDR)
 int MenuTestCount(int what); float MenuTestNoise(); const std::string& MenuTestStatus();
 size_t MenuTestResults(); bool MenuTestResult_(size_t i, std::string& group, std::string& section, float& diff, int& state, float& cpuMs, float& gpuMs);
 float MenuTestProgress(); const std::wstring& MenuTestDir();
@@ -692,6 +754,7 @@ bool PelvisDetailFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView*
 bool TiltTexturesFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView* out[3]);   // (26/10 d) manos.cpp: tope del relieve (t31..t33, x307)
 float MuscleVariantT(uint32_t id, bool* own);   // (26/10) musculo.cpp: variante del jugador (-1 robusto .. 1 atletico; propia o la general)
 extern std::atomic<bool> g_menuOpen;
+extern std::atomic<bool> g_blockGamePad;    // (14/11) keyblock.cpp: el juego no ve el mando (XInput / DirectInput) mientras esta prendido
 extern std::atomic<bool> g_blockGameKeys;   // (31/10) keyblock.cpp: el juego no ve el teclado mientras esta prendido
 extern std::atomic<bool> g_menuTyping;      // (31/10) overlay.cpp: hay un campo de texto del menu activo (la camara libre no lee W A S D)
 void KeyBlockInstall();
