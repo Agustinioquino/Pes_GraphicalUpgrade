@@ -9,6 +9,8 @@
 #include <imgui_impl_win32.h>
 #include <DDSTextureLoader.h>
 #include "menuvisual.h"   // (14/11) tarjetas visuales, iconos dibujados y el mando
+#include "siderui.h"     // (14/11) pagina Sider
+#include <filesystem>
 #include <psapi.h>
 #include <cstring>
 
@@ -464,7 +466,7 @@ enum : unsigned {
     kIcoCamera = 0xf030, kIcoPad = 0xf11b, kIcoDiag = 0xf0f1, kIcoLayers = 0xf5fd, kIcoStar = 0xf005, kIcoPen = 0xf304, kIcoHistory = 0xf1da,
     kIcoSliders = 0xf1de, kIcoTools = 0xf7d9, kIcoGear = 0xf013, kIcoWarn = 0xf071, kIcoSave = 0xf0c7, kIcoUndo = 0xf2ea, kIcoRedo = 0xf2f9,
     kIcoRevert = 0xf0e2, kIcoEye = 0xf06e, kIcoEyeSlash = 0xf070, kIcoReload = 0xf021, kIcoSearch = 0xf002, kIcoX = 0xf00d, kIcoCompress = 0xf066, kIcoExpand = 0xf065,
-    kIcoFilter = 0xf0b0, kIcoDot = 0xf111, kIcoHelp = 0xf059, kIcoDown = 0xf078, kIcoRight = 0xf054, kIcoKeys = 0xf11c, kIcoMuscle = 0xf44b, kIcoSeedling = 0xf4d8, kIcoPointer = 0xf245,
+    kIcoFilter = 0xf0b0, kIcoDot = 0xf111, kIcoHelp = 0xf059, kIcoDown = 0xf078, kIcoRight = 0xf054, kIcoKeys = 0xf11c, kIcoMuscle = 0xf44b, kIcoSeedling = 0xf4d8, kIcoPointer = 0xf245, kIcoPlug = 0xf1e6,
 };
 // categoria (0 escena, 1 jugadores, 2 otros), orden dentro de ella e icono de cada seccion (la clave es la seccion en espanol)
 static void SecInfo(const std::string& s, int& cat, int& ord, unsigned& ico) {
@@ -1489,6 +1491,23 @@ static void NavHeader(const char* txt) {
     ImGui::TextUnformatted(txt);
     ImGui::PopStyleColor();
 }
+static std::wstring GameDir();
+// (14/11) carpeta de Sider: la carpeta del juego que tiene sider.ini ("Dream Patch Sider" primero); vacia si no hay
+static std::filesystem::path SiderDir() {
+    const std::wstring game = GameDir();
+    if (GetFileAttributesW((game + L"Dream Patch Sider\\sider.ini").c_str()) != INVALID_FILE_ATTRIBUTES) return std::filesystem::path(game + L"Dream Patch Sider");
+    if (GetFileAttributesW((game + L"sider.ini").c_str()) != INVALID_FILE_ATTRIBUTES) return std::filesystem::path(game);
+    WIN32_FIND_DATAW fd; HANDLE h = FindFirstFileW((game + L"*").c_str(), &fd); std::filesystem::path r;
+    if (h != INVALID_HANDLE_VALUE) {
+        do { if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == L'.') continue;
+             const std::wstring d = game + fd.cFileName + L"\\";
+             if (GetFileAttributesW((d + L"sider.ini").c_str()) != INVALID_FILE_ATTRIBUTES) { r = std::filesystem::path(game + fd.cFileName); break; }
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    Log("pagina Sider: carpeta %ls", r.empty() ? L"(no hay)" : r.c_str());
+    return r;
+}
 static void NavItem(const std::string& key, unsigned ico, const std::string& label, const std::string& right, bool dot) {
     const bool sel = s_sel == key;
     ImGui::PushID(key.c_str());
@@ -1980,6 +1999,9 @@ static void DrawSettingsPage() {
         if (ImGui::Combo(TRS("Cursor del menu"), &cc, cn, 3)) { g_cfg.menuCursor = cc; char b[8]; snprintf(b, sizeof(b), "%d", cc); SaveOption("menu_cursor", b); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Tambien con el boton Cursor de arriba. Con un mando conectado el cursor nuevo se esconde solo si no moves el mouse."));
     }
+    { static const char* kH[3] = { "Escondido", "Se achica solo (3 s sin tocar nada)", "Siempre completo" };   // (14/11) HUD de la camara libre / modo foto
+      int hv = std::clamp(g_cfg.camHud, 0, 2); ImGui::SetNextItemWidth(280.0f * UIK());
+      if (ImGui::BeginCombo(TRS("HUD de la camara libre"), TRS(kH[hv]))) { for (int i = 0; i < 3; i++) if (ImGui::Selectable(TRS(kH[i]), hv == i)) { g_cfg.camHud = i; SaveOption("camara_hud", std::to_string(i).c_str()); } ImGui::EndCombo(); } }
     if (ImGui::Checkbox(TRS("L3 + R3 abre y cierra el menu"), &g_cfg.menuPadOpen)) SaveOption("menu_mando_abrir", g_cfg.menuPadOpen ? "1" : "0");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Apretar los dos analogicos juntos (L3 + R3) abre el menu y lo cierra, como la tecla Insert."));
     { bool bp = g_cfg.blockPad != 0;
@@ -2260,7 +2282,7 @@ static void DrawMenu() {
         // pagina elegida (la de la ultima vez; si ya no existe, la primera seccion)
         if (s_sel.empty()) s_sel = g_cfg.menuSection;
         {
-            bool ok = s_sel == "fav" || s_sel == "chg" || s_sel == "rec" || s_sel == "presets" || s_sel == "tools" || s_sel == "settings" || (s_sel == "errors" && nErr > 0);
+            bool ok = s_sel == "fav" || s_sel == "chg" || s_sel == "rec" || s_sel == "presets" || s_sel == "sider" || s_sel == "tools" || s_sel == "settings" || (s_sel == "errors" && nErr > 0);
             for (auto& s : secs) ok |= s_sel == "sec:" + s.key;
             if (!ok) s_sel = secs.empty() ? "presets" : "sec:" + secs[0].key;
         }
@@ -2290,6 +2312,7 @@ static void DrawMenu() {
         }
         NavHeader(TRS("SISTEMA"));
         NavItem("presets", kIcoSliders, TRS("Presets por estadio"), g_cfg.presetActive.file.empty() ? "" : "ON", false);
+        NavItem("sider", kIcoPlug, TRS("Sider"), SdPendingCount() ? std::to_string(SdPendingCount()) : "", SdPendingCount() > 0);   // (14/11) modulos de Sider en tarjetas
         NavItem("tools", kIcoTools, TRS("Herramientas"), g_catalogActive || g_recordOn ? "REC" : "", false);
         NavItem("settings", kIcoGear, TRS("Ajustes"), "", false);
         if (nErr) NavItem("errors", kIcoWarn, TRS("Errores"), std::to_string(nErr), true);
@@ -2368,6 +2391,12 @@ static void DrawMenu() {
             ImGui::BeginChild("cards_presets", ImVec2(0, 0), ImGuiChildFlags_None);
             DrawTutorial("Presets", "Presets");
             DrawPresetsTab();
+            ImGui::EndChild();
+        } else if (s_sel == "sider") {   // (14/11, Agustin) los modulos lua de sider.ini en tarjetas; los nuestros con interfaz propia
+            PageTitle(kIcoPlug, TRS("Sider"), TRS("Los modulos de sider.ini en tarjetas: que hacen, sus teclas y sus ajustes. Los nuestros traen interfaz propia."));
+            ImGui::BeginChild("cards_sider", ImVec2(0, 0), ImGuiChildFlags_None);
+            { static bool s_dirSet = false; if (!s_dirSet) { s_dirSet = true; SdSetDir(SiderDir()); } }
+            SdPage(UIK(), Anim(), Now());
             ImGui::EndChild();
         } else if (s_sel == "tools") {
             ImGui::BeginChild("cards_tools", ImVec2(0, 0), ImGuiChildFlags_None);
@@ -2471,39 +2500,6 @@ static void DrawPhysiqueHint() {
 
 // (1/11) aviso en pantalla de la camara libre / camara lenta (pedido de Agustin: saber cuando estan activas y ver las teclas).
 // A la izquierda, arriba de los iconos de controles del editor; no recibe entrada.
-static void DrawCamaraHud(bool freeCam, float slow) {
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    // a la izquierda, arriba de los iconos de controles del editor (Agustin 1/11)
-    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + 28, vp->Pos.y + vp->Size.y * 0.84f), ImGuiCond_Always, ImVec2(0, 1));
-    ImGui::SetNextWindowBgAlpha(0.72f);
-    ImGui::Begin("##camara_aviso", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize |
-        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
-    const ImVec4 gold(0.85f, 0.68f, 0.28f, 1);
-    if (freeCam) {
-        if (s_fontBold) ImGui::PushFont(s_fontBold);
-        ImGui::TextColored(gold, "%s", TRS("CAMARA LIBRE"));
-        if (s_fontBold) ImGui::PopFont();
-        ImGui::SameLine(); ImGui::TextDisabled("  zoom x%.2f   %.1f m/s", g_cfg.live[344][2], g_cfg.live[344][1]);
-        ImGui::TextUnformatted(TRS("W / S adelante y atras   A / D izquierda y derecha   Q / E bajar y subir"));
-        ImGui::TextUnformatted(TRS("Flechas o mouse (boton derecho): girar   Rueda o Re Pag / Av Pag: zoom   Shift: rapido   Ctrl: lento"));
-        ImGui::TextUnformatted(TRS("Inicio: volver a la camara del juego   Alt+Shift+V: apagar"));
-        if (g_cfg.live[346][0] > 0.5f) {
-            if (g_cfg.live[346][2] > 0.5f) ImGui::TextColored(gold, "%s", TRS("Siguiendo la cara: W / S acercan, A / D giran alrededor, Q / E suben y bajan   Alt+Shift+F: soltar"));
-            else ImGui::TextDisabled("%s", TRS("Seguir la cara: esperando ver la cara en el visor del editor   Alt+Shift+F: soltar"));
-        } else ImGui::TextDisabled("%s", TRS("Alt+Shift+F: seguir la cara"));
-    }
-    if (slow != 1.0f) {
-        if (freeCam) ImGui::Separator();
-        if (s_fontBold) ImGui::PushFont(s_fontBold);
-        ImGui::TextColored(gold, "%s", TRS("CAMARA LENTA"));
-        if (s_fontBold) ImGui::PopFont();
-        ImGui::SameLine(); ImGui::TextDisabled("  x%.2f", slow);
-        ImGui::TextUnformatted(TRS("Alt+Shift+L: 1/2, 1/4, 1/10, normal   (Insert > Camara)"));
-        if (g_cfg.live[343][3] <= 0.0f && g_cfg.live[343][2] <= 0.5f) ImGui::TextDisabled("%s", TRS("(el visor no esta corriendo: entra al modo editar)"));
-    }
-    ImGui::End();
-}
-
 // (1/11) iconos de la luz de prueba del editor (filas 297 / 298 / 319, pes_ssss_inc.hlsli): pedido de Agustin, ver donde esta
 // la luz. La luz es direccional y la camara del visor es casi ortografica (tele): visto desde el jugador, la direccion de la luz
 // en vista (x a la derecha, y arriba) se dibuja como un punto alrededor de la cara; delante del jugador = icono lleno y grande,
@@ -2723,7 +2719,10 @@ void OverlayPresent(IDXGISwapChain* sc) {
     float mmx = 0, mmy = 0; const bool mmCur = !g_menuOpen && MenuMouseCursor(&mmx, &mmy);   // (11/11) flecha del mouse sobre los menus del juego
     const bool keyHud = KeyHudPoll();   // (11/11) cuadrito con la ultima tecla apretada
     const bool gizmo = MotorGizmoPoll();   // (11/11) gizmo de camara del Motor (motorgizmo.cpp)
-    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo) return;
+    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo) {
+        g_blockGamePad = false;   // (14/11) sin menu ni camara libre no se dibuja nada (ni se lee el mando): el juego vuelve a ver el mando
+        return;
+    }
     if (!s_rtv) {
         ID3D11Texture2D* bb = nullptr;
         if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
@@ -2811,7 +2810,32 @@ void OverlayPresent(IDXGISwapChain* sc) {
         MvPadDraw(ImGui::GetForegroundDrawList(), ImVec2(x, y), k, s_pad, s_padA * e, g_cfg.menuVisual, Now());
     }
     else if (hint) DrawPhysiqueHint();
-    if (camHud) DrawCamaraHud(camFree, camSlow);
+    if (camHud && g_cfg.camHud > 0) {   // (14/11, Agustin: "interfaz o hud adaptable, y mostrar lo mas posible de la pantalla del propio juego")
+        // HUD fino abajo; sin tocar nada 3 s se achica a una pastilla en la esquina (camara_hud = 1); CREATE / SHARE o H lo esconden
+        static double s_hudT = 0.0, s_hudLast = 0.0; static float s_hudC = 0.0f, s_hudA = 0.0f; static bool s_hudHide = false, s_shWas = false, s_hWas = false;
+        const double tn = Now(); const float dth = (float)std::clamp(tn - s_hudLast, 0.0, 0.1); s_hudLast = tn;
+        const FreeCamPadInfo pi = FreeCamPadState();
+        const bool front = GetForegroundWindow() == s_hwnd;
+        bool input = false;
+        if (pi.flying && s_pad.connected) { input = fabsf(s_pad.lx) + fabsf(s_pad.ly) + fabsf(s_pad.rx) + fabsf(s_pad.ry) > 0.15f || s_pad.l2 > 0.1f || s_pad.r2 > 0.1f; for (int i = 0; i < kPadCount; i++) input |= s_pad.b[i]; }
+        if (front) { static const int kVk[] = { 'W', 'A', 'S', 'D', 'Q', 'E', VK_RBUTTON, VK_PRIOR, VK_NEXT, VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_OEM_4, VK_OEM_6, VK_HOME };
+                     for (int v : kVk) input |= (GetAsyncKeyState(v) & 0x8000) != 0; }
+        if (input || s_hudT == 0.0) s_hudT = tn;
+        { const bool sh = pi.flying && s_pad.b[kPadShare], hk = front && camFree && (GetAsyncKeyState('H') & 0x8000) != 0;
+          if ((sh && !s_shWas) || (hk && !s_hWas)) { s_hudHide = !s_hudHide; s_hudT = tn; Log("camara libre: HUD %s", s_hudHide ? "escondido" : "a la vista"); }
+          s_shWas = sh; s_hWas = hk; }
+        const bool idle = g_cfg.camHud == 1 && tn - s_hudT > 3.0 && !pi.paused;
+        s_hudC += ((idle ? 1.0f : 0.0f) - s_hudC) * std::min(1.0f, dth * 6.0f);
+        s_hudA += ((s_hudHide ? 0.0f : 1.0f) - s_hudA) * std::min(1.0f, dth * 8.0f);
+        if (s_hudA > 0.01f) {
+            MvHudIn h; h.pad = s_pad; h.padMode = pi.flying && s_pad.connected; h.freeCam = camFree;
+            h.status = TRS(ReplayNow() ? "REPETICION" : "EN VIVO"); h.speed = g_cfg.live[344][1]; h.zoom = g_cfg.live[344][2]; h.follow = g_cfg.live[346][2] > 0.5f;
+            h.photo = pi.scale > 0.0f; h.clock = pi.scale > 0.0f ? pi.scale : camSlow; h.paused = pi.paused; h.adv = pi.advancing; h.step = pi.step; h.steps = FreeCamPhotoSteps(&h.nSteps);
+            h.compact = s_hudC; h.k = UIK(); h.alpha = s_hudA; h.anim = Anim(); h.now = tn;
+            const ImGuiViewport* vp = ImGui::GetMainViewport();
+            MvPhotoHud(ImGui::GetForegroundDrawList(), vp->Pos, ImVec2(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y), h);
+        }
+    }
     if (lightIcons) DrawEditorLightIcons();
     if (sunCompass && !g_menuOpen) DrawSunCompass();
     if (g_cfg.live[426][0] > 0.5f) DrawSkeletonView();   // (09/11 f) vista del esqueleto (Diagnostico)

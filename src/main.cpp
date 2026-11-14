@@ -1,4 +1,5 @@
 // PES21 FX - punto de entrada. Sider llama a PES21FX_Init(carpeta) desde PES21FX.lua (LuaJIT FFI).
+#include "siderui.h"
 #include "core.h"
 #include <algorithm>
 #include <vector>
@@ -533,6 +534,7 @@ BOOL APIENTRY DllMain(HMODULE h, DWORD reason, LPVOID reserved) {
         fx::CoverFlush();   // (08/11 h) ultimo volcado de la cobertura
         fx::RastroFlush(true);
         fx::RastroV4Flush(true);   // (10/11 d)   // (08/11 i) rastro del motor
+        { std::string m; if (fx::SdApplyPending(&m)) fprintf(fx::g_log, "pagina Sider: %s\n", m.c_str()); else if (!m.empty()) fprintf(fx::g_log, "pagina Sider: NO se aplicaron los cambios pendientes: %s\n", m.c_str()); }   // (14/11) modulos prendidos / apagados desde el Insert
         fprintf(fx::g_log, "--- fin del proceso (%s)\n", reserved ? "el juego salio" : "DLL descargada");
         fflush(fx::g_log);
     }

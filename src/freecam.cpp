@@ -76,10 +76,10 @@ bool FreeCamActive() { const float v = g_cfg.live[344][0]; return v > 2.5f ? Rep
 // el modo repeticion en camara lenta") MANDO EN LA CAMARA LIBRE. overlay.cpp lee el mando cada cuadro (MvPadPoll, la DLL pasa por
 // los ganchos de keyblock.cpp) y lo deja aca; el juego no lo ve mientras la camara libre vuela con el mando (g_blockGamePad).
 //   stick izquierdo moverse, stick derecho mirar (curva suave: poco recorrido = movimiento fino), L2 / R2 bajar / subir (gatillo
-//   analogico), L1 preciso (/4), R1 rapido (x3), cruceta arriba / abajo zoom, L1 + R1 + cruceta arriba / abajo = velocidad base
-//   (y344, pasos de 10 %), triangulo = volver a la camara del juego. MODO FOTO (reloj del juego, tiempo.cpp lo aplica mientras la
-//   camara libre esta prendida): cruz pausa / sigue, cuadrado mantenido avanza despacio, cruceta izquierda / derecha mas lenta /
-//   mas rapida (los pasos de kPhotoSteps), circulo vuelve a la velocidad del menu. OPTIONS le devuelve el mando al juego (salir de la
+//   analogico), L1 preciso (/4), R1 rapido (x3), cruceta arriba / abajo zoom, cruceta izquierda / derecha = velocidad (y344, pasos
+//   de 10 %), triangulo = volver a la camara del juego. MODO FOTO (reloj del juego, tiempo.cpp lo aplica mientras la camara libre
+//   esta prendida): cruz pausa / sigue, cuadrado mantenido avanza despacio, L1 + cruceta izquierda / derecha mas lenta / mas rapida
+//   (los pasos de kPhotoSteps), circulo vuelve a la velocidad del menu. OPTIONS le devuelve el mando al juego (salir de la
 //   repeticion) hasta que la camara libre se apague (o se vuelva a prender el interruptor de la tarjeta).
 static std::mutex s_padMx; static MvPad s_padIn; static double s_padT = -1.0;
 void FreeCamPadFeed(const MvPad& p) { std::lock_guard<std::mutex> lk(s_padMx); s_padIn = p; s_padT = Now(); }
@@ -198,7 +198,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     const float sens = std::clamp(g_cfg.live[344][3], 0.05f, 10.0f);
     // (14/11) [ y ] cambian la velocidad base en pasos de 10 % (control fino de la velocidad, Agustin)
     { static bool s_b0 = false, s_b1 = false; const bool b0 = front && !typing && Key(VK_OEM_4), b1 = front && !typing && Key(VK_OEM_6);
-      if ((b0 && !s_b0) || (b1 && !s_b1)) { g_cfg.live[344][1] = std::clamp(g_cfg.live[344][1] * (b1 ? 1.1f : 1.0f / 1.1f), 0.05f, 50.0f); speed = std::clamp(g_cfg.live[344][1], 0.05f, 50.0f); }
+      if ((b0 && !s_b0) || (b1 && !s_b1)) { const float was = std::clamp(g_cfg.live[344][1], 0.05f, 50.0f); g_cfg.live[344][1] = std::clamp(g_cfg.live[344][1] * (b1 ? 1.1f : 1.0f / 1.1f), 0.05f, 50.0f); speed *= g_cfg.live[344][1] / was; }
       s_b0 = b0; s_b1 = b1; }
     // --- mando (14/11) ---
     MvPad pad; const bool padOk = front && !typing && !g_menuOpen.load() && FreeCamPadWanted() && PadGet(pad);
@@ -206,22 +206,29 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     float padMul = 1.0f;
     if (padOk) {
         bool ed[kPadCount]; for (int i = 0; i < kPadCount; i++) { ed[i] = pad.b[i] && !s_padWas[i]; s_padWas[i] = pad.b[i]; }
-        const bool both = pad.b[kPadL1] && pad.b[kPadR1];
-        if (!both) { if (pad.b[kPadL1]) padMul *= 0.25f; if (pad.b[kPadR1]) padMul *= 3.0f; }
-        if (both && (ed[kPadUp] || ed[kPadDown])) {   // L1 + R1 + cruceta: velocidad base fina
-            g_cfg.live[344][1] = std::clamp(g_cfg.live[344][1] * (ed[kPadUp] ? 1.1f : 1.0f / 1.1f), 0.05f, 50.0f);
-            speed = std::clamp(g_cfg.live[344][1], 0.05f, 50.0f);
-            Log("camara libre: velocidad %.2f m/s (L1 + R1 + cruceta)", g_cfg.live[344][1]);
-        }
-        if (!both) {   // zoom con la cruceta arriba / abajo (suave, como Re Pag / Av Pag)
-            if (pad.b[kPadUp]) s_zoomTarget *= 1.0f - 0.45f * dt;
-            if (pad.b[kPadDown]) s_zoomTarget *= 1.0f + 0.45f * dt;
-        }
+        // (14/11, Agustin: "lo de la velocidad ... con las flechas del mando izquierda derecha") cruceta izquierda / derecha = velocidad
+        // de la camara de a 10 % (mantener: repite cada 0.12 s despues de 0.35 s); con L1 apretado, la cruceta cambia el reloj
+        const bool l1 = pad.b[kPadL1];
+        if (!l1 && pad.b[kPadR1]) padMul *= 3.0f;
+        if (l1 && !pad.b[kPadR1] && !pad.b[kPadLeft] && !pad.b[kPadRight]) padMul *= 0.25f;
+        { static double s_rep = 0.0; const int dir = l1 ? 0 : pad.b[kPadRight] ? 1 : pad.b[kPadLeft] ? -1 : 0;
+          const bool edge = !l1 && (ed[kPadLeft] || ed[kPadRight]);
+          if (edge) s_rep = t + 0.35;
+          if (dir != 0 && (edge || t >= s_rep)) {
+              if (!edge) s_rep = t + 0.12;
+              const float was = std::clamp(g_cfg.live[344][1], 0.05f, 50.0f);
+              g_cfg.live[344][1] = std::clamp(g_cfg.live[344][1] * (dir > 0 ? 1.1f : 1.0f / 1.1f), 0.05f, 50.0f);
+              speed *= std::clamp(g_cfg.live[344][1], 0.05f, 50.0f) / was;
+              if (edge) Log("camara libre: velocidad %.2f m/s (cruceta)", g_cfg.live[344][1]);
+          } }
+        // zoom con la cruceta arriba / abajo (suave, como Re Pag / Av Pag)
+        if (pad.b[kPadUp]) s_zoomTarget *= 1.0f - 0.45f * dt;
+        if (pad.b[kPadDown]) s_zoomTarget *= 1.0f + 0.45f * dt;
         if (ed[kPadTriangle]) { TakeFromGame(pos, tgt); memset(s_pv, 0, sizeof s_pv); Log("camara libre: triangulo, se vuelve a la camara del juego"); }
         // modo foto: el reloj del juego
         auto cur = [] { return g_cfg.live[343][1] > 0.5f && TiempoMatchToo() ? TiempoFactor() : 1.0f; };
         if (ed[kPadCross]) { if (s_phStep.load() < 0) s_phStep = NearestStep(cur()); s_phPause = !s_phPause.load(); Log("modo foto: %s", s_phPause.load() ? "pausa" : "sigue"); }
-        if (ed[kPadLeft] || ed[kPadRight]) {
+        if (l1 && (ed[kPadLeft] || ed[kPadRight])) {   // L1 + cruceta izquierda / derecha: reloj del modo foto
             int st = s_phStep.load(); if (st < 0) st = NearestStep(cur());
             st = std::clamp(st + (ed[kPadRight] ? 1 : -1), 0, kPhotoN - 1); s_phStep = st;
             Log("modo foto: reloj x%.2f", kPhotoSteps[st]);

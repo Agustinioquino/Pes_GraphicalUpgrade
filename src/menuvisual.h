@@ -116,6 +116,18 @@ struct MvSlowIn {
     bool anim = true; float k = 1.0f; double now = 0.0;
 };
 bool MvSlowWidget(MvSlowIn& in);
+// (14/11, Agustin: "una interfaz o hud adaptable, y mostrar lo mas posible de la pantalla del propio juego") HUD DE LA CAMARA
+// LIBRE / MODO FOTO: una barra fina abajo (estado, velocidad, zoom, reloj con los pasos y los botones con su funcion); los botones
+// que no entran se sacan; sin tocar nada se achica a una pastilla en la esquina (compact 0..1); hidden = no se dibuja.
+struct MvHudIn {
+    MvPad pad; bool padMode = false;            // volando con el mando: simbolos del mando; si no, teclas
+    bool freeCam = false; const char* status = "";   // "EN VIVO" / "REPETICION"
+    float speed = 1.0f, zoom = 1.0f; bool follow = false;
+    float clock = 1.0f; bool photo = false, paused = false, adv = false; int step = -1; const float* steps = nullptr; int nSteps = 0;
+    float compact = 0.0f;                       // 0 barra completa, 1 pastilla
+    float k = 1.0f, alpha = 1.0f; bool anim = true; double now = 0.0;
+};
+void MvPhotoHud(ImDrawList* dl, ImVec2 scrMin, ImVec2 scrMax, const MvHudIn& in);
 // (14/11) teclado en pantalla para escribir con el mando (buscador del menu). Cruceta / stick mueven, cruz escribe, cuadrado borra,
 // triangulo = espacio, L1 borra todo, circulo u OPTIONS cierran. Tambien con el mouse.
 // (14/11) cursor propio del menu: flecha con sombra y filo de luz; sobre algo que se toca se pinta con el verde del menu y crece un poco,

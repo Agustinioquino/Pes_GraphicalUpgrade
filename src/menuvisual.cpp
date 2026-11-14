@@ -1662,7 +1662,7 @@ static void KeyCap(ImDrawList* dl, ImVec2 a, float w, float h, const char* t, bo
 // (14/11, Agustin: "que muestres los iconos de el control y su funcion") LEYENDA DEL MANDO de las tarjetas de camara: cada fila es
 // el simbolo del boton (con el estilo PS5 / PS4 / Xbox elegido) y lo que hace; se ilumina mientras se aprieta. Los sticks se dibujan
 // con la perilla donde esta el stick de verdad y los gatillos se llenan con lo apretado.
-enum { kLgStickL = 100, kLgStickR, kLgDpadUD, kLgDpadLR, kLgL2R2, kLgL1R1, kLgL3R3, kLgL1, kLgR1 };
+enum { kLgStickL = 100, kLgStickR, kLgDpadUD, kLgDpadLR, kLgL2R2, kLgL1R1, kLgL3R3, kLgL1, kLgR1, kLgL1DpadLR };
 struct LgItem { int g; const char* label; const char* sub; };
 static float LgLit(int g, const MvPad& p) {
     switch (g) {
@@ -1674,6 +1674,7 @@ static float LgLit(int g, const MvPad& p) {
     case kLgL1R1: return (p.b[kPadL1] && p.b[kPadR1]) ? 1.0f : 0.0f;
     case kLgL3R3: return (p.b[kPadL3] && p.b[kPadR3]) ? 1.0f : 0.0f;
     case kLgL1: return p.b[kPadL1] && !p.b[kPadR1] ? 1.0f : 0.0f;
+    case kLgL1DpadLR: return p.b[kPadL1] && (p.b[kPadLeft] || p.b[kPadRight]) ? 1.0f : 0.0f;
     case kLgR1: return p.b[kPadR1] && !p.b[kPadL1] ? 1.0f : 0.0f;
     default: return g >= 0 && g < kPadCount && p.b[g] ? 1.0f : 0.0f;
     }
@@ -1717,6 +1718,7 @@ static void LgGlyph(ImDrawList* dl, ImVec2 c, float r, int g, const MvPad& p, fl
     case kLgL1R1: MvPadGlyph(dl, ImVec2(c.x - r * 1.18f, c.y), r * 0.74f, kPadL1, 1.0f, p.b[kPadL1] ? 1.0f : 0.0f); MvPadGlyph(dl, ImVec2(c.x + r * 1.18f, c.y), r * 0.74f, kPadR1, 1.0f, p.b[kPadR1] ? 1.0f : 0.0f); return;
     case kLgL3R3: MvPadGlyph(dl, ImVec2(c.x - r * 1.18f, c.y), r * 0.74f, kPadL3, 1.0f, p.b[kPadL3] ? 1.0f : 0.0f); MvPadGlyph(dl, ImVec2(c.x + r * 1.18f, c.y), r * 0.74f, kPadR3, 1.0f, p.b[kPadR3] ? 1.0f : 0.0f); return;
     case kLgL1: MvPadGlyph(dl, c, r * 0.86f, kPadL1, 1.0f, lit); return;
+    case kLgL1DpadLR: MvPadGlyph(dl, ImVec2(c.x - r * 1.18f, c.y), r * 0.74f, kPadL1, 1.0f, p.b[kPadL1] ? 1.0f : 0.0f); LgDpad(dl, ImVec2(c.x + r * 1.0f, c.y), r * 0.85f, false, p, acc); return;
     case kLgR1: MvPadGlyph(dl, c, r * 0.86f, kPadR1, 1.0f, lit); return;
     default: MvPadGlyph(dl, c, r * 0.80f, g, 1.0f, lit); return;
     }
@@ -1766,7 +1768,7 @@ static void LgGrid(const LgItem* it, int n, const MvPad& p, int cols, float k, I
         const float lit = Follow(ImGui::GetID(it[i].label), lit0, 14.0f, anim);
         dl->AddRectFilled(a, b, ColA(Lerp4(ImVec4(1, 1, 1, dim ? 0.025f : 0.045f), ImVec4(acc.x, acc.y, acc.z, 0.24f), lit), 1), 8.0f * k);
         dl->AddRect(a, b, ColA(Lerp4(ImVec4(1, 1, 1, 0.10f), ImVec4(acc.x, acc.y, acc.z, 0.9f), lit), 1), 8.0f * k, 0, 1.0f);
-        const bool pair = it[i].g == kLgL2R2 || it[i].g == kLgL1R1 || it[i].g == kLgL3R3;
+        const bool pair = it[i].g == kLgL2R2 || it[i].g == kLgL1R1 || it[i].g == kLgL3R3 || it[i].g == kLgL1DpadLR;
         const float gx = a.x + (pair ? 34.0f : 23.0f) * k;
         LgGlyph(dl, ImVec2(gx, (a.y + b.y) * 0.5f), 13.0f * k, it[i].g, p, lit, acc);
         const float tx = a.x + (pair ? 68.0f : 46.0f) * k;
@@ -1951,7 +1953,7 @@ bool MvCamWidget(MvCamIn& in) {
             { kLgStickL, "Moverse", "adelante, atras y costados" }, { kLgStickR, "Mirar", "girar la camara" },
             { kLgL2R2, "Bajar / subir", "segun cuanto se apriete" }, { kLgDpadUD, "Zoom", "acercar / alejar" },
             { kLgL1, "Preciso", "todo a 1/4, para apuntar fino" }, { kLgR1, "Rapido", "x3 mientras se mantiene" },
-            { kLgL1R1, "Velocidad base", "mantener + cruceta arriba / abajo" }, { kPadTriangle, "Volver", "a la camara del juego" },
+            { kLgDpadLR, "Velocidad", "de a 10 %, mantener sigue" }, { kPadTriangle, "Volver", "a la camara del juego" },
             { kLgL3R3, "Menu", "abrir y cerrar el Insert" }, { kPadOptions, "Soltar el mando", "el juego lo vuelve a ver" } };
         LgItem it[10]; for (int i = 0; i < 10; i++) { it[i] = kIt[i]; it[i].label = TRS(kIt[i].label); it[i].sub = TRS(kIt[i].sub); }
         const float aw = ImGui::GetContentRegionAvail().x;
@@ -1959,6 +1961,113 @@ bool MvCamWidget(MvCamIn& in) {
     }
     ImGui::Dummy(ImVec2(0, 2.0f * k));
     return changed;
+}
+
+
+// ------------------------------------------------------------------------------------------------------------------------------
+// (14/11) HUD de la camara libre / modo foto (ver menuvisual.h)
+static void HudPill(ImDrawList* dl, ImVec2 a, ImVec2 b, float al) {
+    const float r = (b.y - a.y) * 0.5f;
+    dl->AddRectFilled(ImVec2(a.x, a.y + 2), ImVec2(b.x, b.y + 3), Col(0, 0, 0, 0.30f * al), r);
+    dl->AddRectFilled(a, b, Col(0.05f, 0.06f, 0.08f, 0.62f * al), r);
+    dl->AddRectFilledMultiColor(ImVec2(a.x + r * 0.5f, a.y + 1), ImVec2(b.x - r * 0.5f, a.y + (b.y - a.y) * 0.45f), Col(1, 1, 1, 0.06f * al), Col(1, 1, 1, 0.06f * al), Col(1, 1, 1, 0), Col(1, 1, 1, 0));
+    dl->AddRect(a, b, Col(1, 1, 1, 0.14f * al), r, 0, 1.0f);
+}
+static void HudClockIcon(ImDrawList* dl, ImVec2 c, float s, bool paused, bool adv, ImU32 col) {
+    if (paused && !adv) { dl->AddRectFilled(ImVec2(c.x - s * 0.45f, c.y - s * 0.5f), ImVec2(c.x - s * 0.12f, c.y + s * 0.5f), col, 1.0f); dl->AddRectFilled(ImVec2(c.x + s * 0.12f, c.y - s * 0.5f), ImVec2(c.x + s * 0.45f, c.y + s * 0.5f), col, 1.0f); }
+    else dl->AddTriangleFilled(ImVec2(c.x - s * 0.38f, c.y - s * 0.5f), ImVec2(c.x - s * 0.38f, c.y + s * 0.5f), ImVec2(c.x + s * 0.5f, c.y), col);
+}
+void MvPhotoHud(ImDrawList* dl, ImVec2 m0, ImVec2 m1, const MvHudIn& in) {
+    const float k = in.k, al = in.alpha; if (al <= 0.01f) return;
+    const ImVec4 acc = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark), orange(1.0f, 0.68f, 0.30f, 1);
+    ImFont* f = ImGui::GetFont(); const float fs = ImGui::GetFontSize(), fsS = fs * 0.86f;
+    const float blink = in.anim ? 0.55f + 0.45f * sinf((float)in.now * 5.0f) : 1.0f;
+    const bool clockOn = in.photo || fabsf(in.clock - 1.0f) > 1e-3f;
+    char clk[32]; if (in.paused && !in.adv) snprintf(clk, sizeof clk, "%s", TRS("pausa")); else snprintf(clk, sizeof clk, "x%.2f", in.clock);
+    const ImVec4 clkCol = in.clock > 1.01f ? orange : acc;
+    // --- pastilla (compacta), abajo a la izquierda ---
+    const float ca = al * Sat(in.compact);
+    if (ca > 0.01f) {
+        const float h = 26.0f * k; float w = 14.0f * k;
+        const char* st = in.freeCam ? in.status : TRS("CAMARA LENTA");
+        w += 14.0f * k + f->CalcTextSizeA(fsS, FLT_MAX, 0, st).x; if (clockOn) w += 30.0f * k + f->CalcTextSizeA(fsS, FLT_MAX, 0, clk).x;
+        const ImVec2 a(m0.x + 22.0f * k, m1.y - 22.0f * k - h), b(a.x + w, a.y + h);
+        HudPill(dl, a, b, ca);
+        float x = a.x + 12.0f * k; const float cy = (a.y + b.y) * 0.5f;
+        if (in.freeCam) dl->AddCircleFilled(ImVec2(x + 3.0f * k, cy), 4.0f * k, Col(1.0f, 0.28f, 0.28f, (0.35f + 0.65f * blink) * ca), 12);
+        else SmallIcon(dl, ImVec2(x + 4.0f * k, cy), 14.0f * k, kSiSnail, Col(1, 1, 1, ca), 0.0f);
+        x += 14.0f * k; dl->AddText(f, fsS, ImVec2(x, cy - fsS * 0.5f), Col(0.95f, 0.96f, 0.98f, ca), st); x += f->CalcTextSizeA(fsS, FLT_MAX, 0, st).x + 12.0f * k;
+        if (clockOn) { HudClockIcon(dl, ImVec2(x + 5.0f * k, cy), 9.0f * k, in.paused, in.adv, ColA(clkCol, ca)); x += 16.0f * k; dl->AddText(f, fsS, ImVec2(x, cy - fsS * 0.5f), ColA(clkCol, ca), clk); }
+    }
+    // --- barra completa, abajo al centro ---
+    const float fa = al * (1.0f - Sat(in.compact)); if (fa <= 0.01f) return;
+    const float slide = (1.0f - Sat(1.0f - in.compact)) * 12.0f * k;   // al achicarse baja un poco
+    const float h = 44.0f * k, maxW = std::min((m1.x - m0.x) - 40.0f * k, 1100.0f * k);
+    // contenido: [estado | velocidad zoom] [reloj + riel] [ayudas...]; las ayudas que no entran se sacan desde el final
+    struct Hint { int g; const char* key; const char* t; };
+    static const Hint kPadH[] = { { kLgStickL, nullptr, "Mover" }, { kLgStickR, nullptr, "Mirar" }, { kLgL2R2, nullptr, "Bajar / subir" }, { kPadCross, nullptr, "Pausa" },
+                                  { kPadSquare, nullptr, "Avanzar" }, { kLgL1DpadLR, nullptr, "Reloj" }, { kLgDpadLR, nullptr, "Velocidad" }, { kLgDpadUD, nullptr, "Zoom" }, { kPadTriangle, nullptr, "Volver" },
+                                  { kPadShare, nullptr, "HUD" }, { kPadOptions, nullptr, "Soltar" } };
+    static const Hint kKbH[] = { { -1, "W A S D", "Mover" }, { -1, "Q E", "Bajar / subir" }, { -1, "Clic der.", "Mirar" }, { -1, "Shift / Ctrl", "Rapido / lento" },
+                                 { -1, "[ ]", "Velocidad" }, { -1, "Rueda", "Zoom" }, { -1, "Inicio", "Volver" }, { -1, "H", "HUD" } };
+    const Hint* H = in.padMode ? kPadH : kKbH; const int nH = in.padMode ? (int)(sizeof kPadH / sizeof kPadH[0]) : (int)(sizeof kKbH / sizeof kKbH[0]);
+    auto hintW = [&](const Hint& hh) {
+        const float tw = f->CalcTextSizeA(fsS, FLT_MAX, 0, TRS(hh.t)).x;
+        if (hh.g < 0) return f->CalcTextSizeA(fsS, FLT_MAX, 0, hh.key).x + 12.0f * k + 6.0f * k + tw + 14.0f * k;
+        const bool pair = hh.g == kLgL2R2 || hh.g == kLgL1R1 || hh.g == kLgL3R3 || hh.g == kLgL1DpadLR || hh.g == kPadShare || hh.g == kPadOptions;
+        return (pair ? 40.0f : 22.0f) * k + 5.0f * k + tw + 14.0f * k;
+    };
+    const char* st = in.freeCam ? in.status : TRS("CAMARA LENTA");
+    char sp[48]; if (in.freeCam) snprintf(sp, sizeof sp, "%.2f m/s   x%.2f", in.speed, in.zoom); else sp[0] = 0;
+    const float wState = 20.0f * k + f->CalcTextSizeA(fs, FLT_MAX, 0, st).x + 10.0f * k + f->CalcTextSizeA(fsS, FLT_MAX, 0, sp).x + 16.0f * k;
+    const bool rail = clockOn && in.steps && in.nSteps > 1;
+    const float wClock = clockOn ? 22.0f * k + f->CalcTextSizeA(fs, FLT_MAX, 0, clk).x + (rail ? 8.0f * k + 110.0f * k : 0.0f) + 18.0f * k : 0.0f;
+    float used = 16.0f * k + wState + wClock; int shown = 0;
+    if (in.freeCam) for (; shown < nH; shown++) { const float hw = hintW(H[shown]); if (used + hw > maxW) break; used += hw; }
+    const float W = used + 6.0f * k;
+    const ImVec2 a(m0.x + ((m1.x - m0.x) - W) * 0.5f, m1.y - 26.0f * k - h + slide), b(a.x + W, a.y + h);
+    HudPill(dl, a, b, fa);
+    float x = a.x + 16.0f * k; const float cy = (a.y + b.y) * 0.5f;
+    // estado
+    if (in.freeCam) dl->AddCircleFilled(ImVec2(x + 4.0f * k, cy), 4.5f * k, Col(1.0f, 0.28f, 0.28f, (0.35f + 0.65f * blink) * fa), 12);
+    else SmallIcon(dl, ImVec2(x + 4.0f * k, cy), 16.0f * k, kSiSnail, Col(1, 1, 1, fa), 0.0f);
+    x += 16.0f * k; dl->AddText(f, fs, ImVec2(x, cy - fs * 0.5f), Col(0.97f, 0.98f, 1, fa), st); x += f->CalcTextSizeA(fs, FLT_MAX, 0, st).x + 10.0f * k;
+    if (sp[0]) { dl->AddText(f, fsS, ImVec2(x, cy - fsS * 0.5f), Col(0.70f, 0.74f, 0.80f, fa), sp); x += f->CalcTextSizeA(fsS, FLT_MAX, 0, sp).x; }
+    x += 8.0f * k;
+    auto sep = [&] { dl->AddLine(ImVec2(x, a.y + 10.0f * k), ImVec2(x, b.y - 10.0f * k), Col(1, 1, 1, 0.14f * fa), 1.0f); x += 10.0f * k; };
+    // reloj
+    if (clockOn) {
+        sep();
+        HudClockIcon(dl, ImVec2(x + 6.0f * k, cy), 11.0f * k, in.paused, in.adv, ColA(clkCol, fa)); x += 18.0f * k;
+        dl->AddText(f, fs, ImVec2(x, cy - fs * 0.5f), ColA(clkCol, fa), clk); x += f->CalcTextSizeA(fs, FLT_MAX, 0, clk).x + 8.0f * k;
+        if (rail) {
+            const float rx0 = x, rx1 = x + 110.0f * k; dl->AddLine(ImVec2(rx0, cy), ImVec2(rx1, cy), Col(1, 1, 1, 0.16f * fa), 2.0f * k);
+            int curI = in.step; if (curI < 0) { float bd = 1e9f; for (int i = 0; i < in.nSteps; i++) { const float d = fabsf(logf(in.steps[i]) - logf(std::max(0.01f, in.clock))); if (d < bd) { bd = d; curI = i; } } }
+            for (int i = 0; i < in.nSteps; i++) { const float px = rx0 + (rx1 - rx0) * i / (in.nSteps - 1); const bool cur = i == curI, nrm = fabsf(in.steps[i] - 1.0f) < 1e-3f;
+                const ImVec4 tc = in.steps[i] > 1.01f ? orange : acc;
+                dl->AddCircleFilled(ImVec2(px, cy), (cur ? 4.5f : nrm ? 3.0f : 2.2f) * k, cur ? ColA(tc, fa) : Col(0.7f, 0.73f, 0.78f, (nrm ? 0.9f : 0.6f) * fa), 10); }
+            x = rx1 + 8.0f * k;
+        }
+        x += 4.0f * k;
+    }
+    // ayudas
+    if (shown > 0) {
+        sep();
+        for (int i = 0; i < shown; i++) {
+            const Hint& hh = H[i]; const char* t = TRS(hh.t);
+            if (hh.g < 0) {
+                const float kw = f->CalcTextSizeA(fsS, FLT_MAX, 0, hh.key).x + 12.0f * k; const ImVec2 ka(x, cy - 10.0f * k), kb(x + kw, cy + 10.0f * k);
+                dl->AddRectFilled(ImVec2(ka.x, ka.y + 2.0f * k), ImVec2(kb.x, kb.y + 2.0f * k), Col(0, 0, 0, 0.4f * fa), 4.0f * k);
+                dl->AddRectFilled(ka, kb, Col(0.92f, 0.93f, 0.96f, 0.16f * fa), 4.0f * k); dl->AddRect(ka, kb, Col(1, 1, 1, 0.3f * fa), 4.0f * k);
+                dl->AddText(f, fsS, ImVec2(x + 6.0f * k, cy - fsS * 0.5f), Col(1, 1, 1, fa), hh.key); x += kw + 6.0f * k;
+            } else {
+                const bool pair = hh.g == kLgL2R2 || hh.g == kLgL1R1 || hh.g == kLgL3R3 || hh.g == kLgL1DpadLR || hh.g == kPadShare || hh.g == kPadOptions; const float gw = (pair ? 40.0f : 22.0f) * k;
+                const float lit = in.pad.connected ? LgLit(hh.g, in.pad) : 0.0f;
+                LgGlyph(dl, ImVec2(x + gw * 0.5f, cy), 10.0f * k, hh.g, in.pad, lit, acc); x += gw + 5.0f * k;
+            }
+            dl->AddText(f, fsS, ImVec2(x, cy - fsS * 0.5f), Col(0.86f, 0.89f, 0.93f, fa), t); x += f->CalcTextSizeA(fsS, FLT_MAX, 0, t).x + 14.0f * k;
+        }
+    }
 }
 
 // (14/11) TARJETA DE LA CAMARA LENTA: velocidades de un clic con el caracol (que camina a esa velocidad) y donde frena
@@ -2058,7 +2167,7 @@ bool MvSlowWidget(MvSlowIn& in) {
         }
         static const LgItem kIt[] = {
             { kPadCross, "Pausa / seguir", "congela la repeticion" }, { kPadSquare, "Avanzar despacio", "mantener, en pausa" },
-            { kLgDpadLR, "Mas lenta / mas rapida", "pasos de 0.02 a x4" }, { kPadCircle, "Velocidad del menu", "deja el modo foto" } };
+            { kLgL1DpadLR, "Mas lenta / mas rapida", "L1 + cruceta: de 0.02 a x4" }, { kPadCircle, "Velocidad del menu", "deja el modo foto" } };
         LgItem it[4]; for (int i = 0; i < 4; i++) { it[i] = kIt[i]; it[i].label = TRS(kIt[i].label); it[i].sub = TRS(kIt[i].sub); }
         LgGrid(it, 4, in.pad, 2, k, acc, in.anim, !in.padFly);
     }

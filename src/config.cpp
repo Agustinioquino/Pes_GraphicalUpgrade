@@ -140,6 +140,7 @@ static bool LoadConfigLocked() {
             else if (kl == "tutorials") c.tutorials = atoi(v.c_str()) != 0;
             else if (kl == "bloquear_teclado") c.blockKeys = std::clamp(atoi(v.c_str()), 0, 2);
             else if (kl == "bloquear_mando") c.blockPad = std::clamp(atoi(v.c_str()), 0, 1);       // (14/11) el juego no ve el mando con el menu abierto
+            else if (kl == "camara_hud") c.camHud = std::clamp(atoi(v.c_str()), 0, 2);              // (14/11) HUD de la camara libre / modo foto
             else if (kl == "camara_mando") c.camPad = std::clamp(atoi(v.c_str()), 0, 1);           // (14/11) el mando mueve la camara libre (modo foto)
             else if (kl == "menu_cursor") c.menuCursor = std::clamp(atoi(v.c_str()), 0, 2);           // (14/11) cursor del menu
             else if (kl == "menu_mando_abrir") c.menuPadOpen = atoi(v.c_str()) != 0;             // (14/11) L3 + R3 abre / cierra el menu
