@@ -2020,7 +2020,7 @@ static void DrawSettingsPage() {
         if (ImGui::Checkbox(TRS("Repeticion en camara lenta"), &rs)) { g_cfg.replaySlow = rs ? 1 : 0; SaveOption("repeticion_lenta", rs ? "1" : "0"); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("La reproduccion normal de la repeticion (despues de despausar) va a la velocidad lenta de la flecha derecha del visor: la de SlowMoServer si esta prendido, si no la mitad."));
     }
-    { static const char* kH[3] = { "Escondido", "Se achica solo (3 s sin tocar nada)", "Siempre completo" };   // (14/11) HUD de la camara libre / modo foto
+    { static const char* kH[3] = { "Escondido", "Se apaga solo (3 s sin tocar nada)", "Siempre completo" };   // (14/11) HUD de la camara libre / modo foto
       int hv = std::clamp(g_cfg.camHud, 0, 2); ImGui::SetNextItemWidth(280.0f * UIK());
       if (ImGui::BeginCombo(TRS("HUD de la camara libre"), TRS(kH[hv]))) { for (int i = 0; i < 3; i++) if (ImGui::Selectable(TRS(kH[i]), hv == i)) { g_cfg.camHud = i; SaveOption("camara_hud", std::to_string(i).c_str()); } ImGui::EndCombo(); } }
     if (ImGui::Checkbox(TRS("L3 + R3 abre y cierra el menu"), &g_cfg.menuPadOpen)) SaveOption("menu_mando_abrir", g_cfg.menuPadOpen ? "1" : "0");
@@ -2869,16 +2869,21 @@ void OverlayPresent(IDXGISwapChain* sc) {
         const FreeCamPadInfo pi = FreeCamPadState();
         const bool front = GetForegroundWindow() == s_hwnd;
         bool input = false;
-        if (pi.flying && s_pad.connected) input = fabsf(s_pad.lx) + fabsf(s_pad.ly) + fabsf(s_pad.rx) + fabsf(s_pad.ry) > 0.15f || s_pad.l2 > 0.1f || s_pad.r2 > 0.1f;   // sticks y gatillos; la cruceta no
+        if (pi.flying && s_pad.connected) { input = fabsf(s_pad.lx) + fabsf(s_pad.ly) + fabsf(s_pad.rx) + fabsf(s_pad.ry) > 0.15f || s_pad.l2 > 0.1f || s_pad.r2 > 0.1f;   // sticks, gatillos y botones; la cruceta no
+                                            for (int i = 0; i < kPadUp; i++) if (i != kPadShare) input |= s_pad.b[i]; }
         if (front) { static const int kVk[] = { 'W', 'A', 'S', 'D', 'Q', 'E', VK_RBUTTON, VK_PRIOR, VK_NEXT, VK_OEM_4, VK_OEM_6, VK_HOME };
                      for (int v : kVk) input |= (GetAsyncKeyState(v) & 0x8000) != 0; }
         if (input || s_hudT == 0.0) s_hudT = tn;
         { const bool sh = pi.flying && s_pad.b[kPadShare], hk = front && camFree && (GetAsyncKeyState('H') & 0x8000) != 0;
           if ((sh && !s_shWas) || (hk && !s_hWas)) { s_hudHide = !s_hudHide; s_hudT = tn; Log("camara libre: HUD %s", s_hudHide ? "escondido" : "a la vista"); }
           s_shWas = sh; s_hWas = hk; }
-        const bool idle = g_cfg.camHud == 1 && tn - s_hudT > 3.0 && !pi.paused;
-        s_hudC += ((idle ? 1.0f : 0.0f) - s_hudC) * std::min(1.0f, dth * 6.0f);
-        s_hudA += ((s_hudHide ? 0.0f : 1.0f) - s_hudA) * std::min(1.0f, dth * 8.0f);
+        // (14/11 i, Agustin: "que el menu se apague de la camara libre con mando pasados unos tres segundos sin presionar nada")
+        // 3 s sin tocar nada: se APAGA del todo (antes se achicaba). camara_hud 1 vuelve al tocar algo; camara_hud 0 (mostrado con
+        // CREATE / SHARE o H) queda escondido hasta el proximo CREATE / SHARE; camara_hud 2 queda siempre a la vista
+        const bool idle = g_cfg.camHud != 2 && tn - s_hudT > 3.0;
+        if (idle && g_cfg.camHud == 0 && !s_hudHide) { s_hudHide = true; Log("camara libre: HUD escondido (3 s sin tocar nada)"); }
+        s_hudC = 0.0f;
+        s_hudA += ((s_hudHide || idle ? 0.0f : 1.0f) - s_hudA) * std::min(1.0f, dth * (idle ? 4.0f : 8.0f));
         if (s_hudA > 0.01f) {
             MvHudIn h; h.pad = s_pad; h.padMode = PadUi(); h.freeCam = camFree;
             h.status = TRS(ReplayNow() ? "REPETICION" : "EN VIVO"); h.speed = g_cfg.live[344][1]; h.zoom = g_cfg.live[344][2]; h.follow = g_cfg.live[346][2] > 0.5f;
