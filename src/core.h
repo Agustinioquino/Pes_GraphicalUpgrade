@@ -175,6 +175,8 @@ struct Config {
     int menuMouse = 1;                         // (11/11) mouse en los menus nativos del juego (menumouse.cpp): 0 apagado, 1 prendido ([PES21FX] mouse_menus)
     int menuMouseDelay = 2;                    // (11/11 v2) cuadros de retraso de la flecha, para que vaya junto con la fila marcada ([PES21FX] mouse_menus_retraso, 0..4)
     int menuMouseNear = 1;                     // (11/11 v2) en los huecos entre filas de un grupo vale la mas cercana ([PES21FX] mouse_menus_cerca)
+    int mouseHint = 1;                         // (14/11 d) [PES21FX] ayuda_mouse: clic izq. / der. abajo a la derecha al usar el mouse en los menus del juego
+    int cursorKey = VK_F1;                     // (14/11 c) tecla que prende / apaga el cursor ([PES21FX] tecla_cursor = F1, 0 = ninguna)
     int menuMouseKey = 0;                      // (11/11 v2) tecla que saca / pone el mouse en los menus (0 = ninguna, de fabrica: Agustin 22:23 no la necesita) ([PES21FX] tecla_mouse_menus = F8...)
     int keyHud = 4;                            // (11/11) cuadrito con la ultima tecla apretada: 0 apagado, 1..4 esquina ([PES21FX] ultima_tecla)
     int motorHelpBar = 0; int motorBg = 1, motorCam = 1, motorGizmo = 1, motorKeys = 1; float motorPanelX = 0, motorPanelY = 0; int motorPage = 1;                         // (11/11) motorpage.cpp: el estudio del Motor con filas nativas del juego ([PES21FX] motor_pagina)
@@ -761,7 +763,7 @@ void KeyBlockInstall();
 // (11/11 3icxbh) mouse en los menus nativos del juego (menumouse.cpp): ganchos en el primer Present; la rueda llega por la ventana; cursor para overlay.cpp
 void MotorPagePresent();   // (11/11) motorpage.cpp: filas nativas del Motor en el estudio 3D
 void MotorPageSeen(void* win); bool MotorPageActive(); bool MotorPageIs(void* win); bool MotorPageDrag(void* win, float mx, float my, bool down, bool edge, float tx, float ty, float tw);   // el estudio del Motor esta abierto (lo confirma menumouse.cpp en cada cuadro)
-void MenuMousePresent(); void MenuMouseWheel(int delta); bool MenuMouseCursor(float* x, float* y); HWND OverlayHwnd(); bool MotorPanelOpen();
+void MenuMousePresent(); void MenuMouseWheel(int delta); bool MenuMouseCursor(float* x, float* y); bool MenuMouseOverRow(); HWND OverlayHwnd(); bool MotorPanelOpen();
 extern std::atomic<int> g_replacedCount, g_failedCount;
 extern std::vector<std::string> g_compileErrors;
 extern std::mutex g_errMutex;

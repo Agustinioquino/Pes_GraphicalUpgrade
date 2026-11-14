@@ -1570,12 +1570,7 @@ bool MvVirtualKeyboard(char* buf, int cap, const MvPad& p, float k, float alpha,
 // asi como el cursor de windows, asi como en las partes donde se pueda escribir que cambie, que se muestre arriba del menu insert")
 // flecha clasica de Windows; sobre lo que se toca: MANO con el dedo arriba y un brillo suave del color del menu que respira; sobre un
 // campo de texto: barra I. Al apretar se achica apenas (sin ondas). Se dibuja en la capa de arriba de todo (foreground).
-static void CurShape(ImDrawList* dl, const ImVec2* p, int n, ImU32 fillTop, ImU32 fillBot, ImU32 edge, float edgeW, ImVec2 g0, ImVec2 g1) {
-    const int v0 = dl->VtxBuffer.Size; dl->AddConcavePolyFilled(p, n, IM_COL32_WHITE);
-    ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, g0, g1, fillTop, fillBot);
-    dl->AddPolyline(p, n, edge, ImDrawFlags_Closed, edgeW);
-}
-void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float alpha, bool anim) {
+void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float alpha, bool anim, int style) {
     if (alpha <= 0.0f) return;
     const ImVec4 acc = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
     const float dt = ImGui::GetIO().DeltaTime; const double now = ImGui::GetTime();
@@ -1594,41 +1589,99 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
         }
         return;
     }
-    const float sc = k * (1.0f - 0.08f * s_dn);
+    (void)style; (void)grey;
     if (kind == 1) {
-        // brillo: halo del color del menu que respira, mas fuerte al entrar
-        const float breath = anim ? 0.5f + 0.5f * sinf((float)now * 3.2f) : 0.5f, gl = s_hov * (0.55f + 0.25f * breath) + 0.6f * s_flash;
-        const ImVec2 hc(m.x + 3.5f * sc, m.y + 10.0f * sc);
-        for (int i = 5; i >= 1; i--) dl->AddCircleFilled(hc, (5.0f + i * 3.4f) * k, ColA(acc, 0.055f * gl * alpha), 28);
-        // mano con el indice arriba (la punta del dedo es el punto del mouse)
+        // (14/11 d, Agustin: "la mano ... en la punta del dedo indice un pequeno brillo en color verde pequeno con baja opacidad pero
+        // con animacion") MANO sobre lo que se puede tocar: la punta del indice es el punto del mouse; ahi un brillito verde chico,
+        // tenue, que late (y destella corto al entrar). Sin halo grande.
+        const float sc = k * (1.0f - 0.08f * s_dn);
+        const float breath = anim ? 0.5f + 0.5f * sinf((float)now * 4.2f) : 0.5f;
+        const float gl = (0.55f + 0.45f * breath) * s_hov + 0.8f * s_flash;
+        const ImVec2 tip(m.x, m.y + 0.8f * sc);
         auto R = [&](float x0, float y0, float x1, float y1) { return std::make_pair(ImVec2(m.x + x0 * sc, m.y + y0 * sc), ImVec2(m.x + x1 * sc, m.y + y1 * sc)); };
         struct Part { float x0, y0, x1, y1, r; };
         static const Part parts[5] = { { -1.7f, 0.0f, 1.7f, 11.5f, 1.7f }, { 1.5f, 5.2f, 4.6f, 12.0f, 1.5f }, { 4.4f, 6.0f, 7.4f, 12.4f, 1.5f }, { 7.2f, 7.4f, 9.8f, 12.8f, 1.3f }, { -1.7f, 9.0f, 9.8f, 17.6f, 3.0f } };
-        // sombra
         for (const Part& q : parts) { auto r = R(q.x0, q.y0, q.x1, q.y1); dl->AddRectFilled(ImVec2(r.first.x + 1.6f * k, r.first.y + 2.2f * k), ImVec2(r.second.x + 1.6f * k, r.second.y + 2.2f * k), Col(0, 0, 0, 0.22f * alpha), q.r * sc); }
-        // borde (todo un poco mas grande en oscuro) + pulgar
-        const float e = 1.1f * k;
-        for (const Part& q : parts) { auto r = R(q.x0, q.y0, q.x1, q.y1); dl->AddRectFilled(ImVec2(r.first.x - e, r.first.y - e), ImVec2(r.second.x + e, r.second.y + e), edge, q.r * sc + e); }
+        // (14/11 f, Agustin: "un borde verde con sombra") borde verde del menu, con un filo oscuro afuera para que se lea sobre cualquier fondo
         const ImVec2 t0(m.x - 1.0f * sc, m.y + 14.2f * sc), t1(m.x - 4.6f * sc, m.y + 9.6f * sc);
-        dl->AddLine(t0, t1, edge, 3.4f * sc + 2 * e); dl->AddCircleFilled(t1, 1.7f * sc + e, edge, 12);
-        // relleno: blanco que se tine apenas del verde del menu
-        const ImU32 top = ColA(Lerp4(ImVec4(1, 1, 1, 1), ImVec4(0.90f, 1.0f, 0.95f, 1), 0.6f * s_hov), alpha), bot = ColA(Lerp4(ImVec4(0.86f, 0.89f, 0.93f, 1), Lerp4(acc, ImVec4(1, 1, 1, 1), 0.45f), 0.7f * s_hov), alpha);
+        const ImU32 green = ColA(Lerp4(acc, ImVec4(1, 1, 1, 1), 0.10f + 0.25f * s_flash), alpha);
+        for (int pass = 0; pass < 2; pass++) {
+            const float e = pass == 0 ? 1.55f * k : 0.85f * k;   /* (14/11 f) borde verde mas fino */ const ImU32 c = pass == 0 ? Col(0.02f, 0.05f, 0.04f, 0.75f * alpha) : green;
+            for (const Part& q : parts) { auto r = R(q.x0, q.y0, q.x1, q.y1); dl->AddRectFilled(ImVec2(r.first.x - e, r.first.y - e), ImVec2(r.second.x + e, r.second.y + e), c, q.r * sc + e); }
+            dl->AddLine(t0, t1, c, 3.4f * sc + 2 * e); dl->AddCircleFilled(t1, 1.7f * sc + e, c, 16);
+        }
+        const ImU32 top = white, bot = Col(0.84f, 0.87f, 0.91f, alpha);
         dl->AddLine(t0, t1, top, 3.4f * sc); dl->AddCircleFilled(t1, 1.7f * sc, top, 12);
         for (const Part& q : parts) { auto r = R(q.x0, q.y0, q.x1, q.y1); const int v0 = dl->VtxBuffer.Size; dl->AddRectFilled(r.first, r.second, IM_COL32_WHITE, q.r * sc);
             ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, ImVec2(m.x, m.y), ImVec2(m.x, m.y + 18.0f * sc), top, bot); }
-        // lineas de los dedos y la una
-        dl->AddLine(ImVec2(m.x + 1.6f * sc, m.y + 9.5f * sc), ImVec2(m.x + 1.6f * sc, m.y + 12.0f * sc), Col(0.35f, 0.38f, 0.44f, 0.8f * alpha), 1.0f * k);
-        dl->AddLine(ImVec2(m.x + 4.5f * sc, m.y + 9.8f * sc), ImVec2(m.x + 4.5f * sc, m.y + 12.2f * sc), Col(0.35f, 0.38f, 0.44f, 0.8f * alpha), 1.0f * k);
-        dl->AddLine(ImVec2(m.x + 7.3f * sc, m.y + 10.2f * sc), ImVec2(m.x + 7.3f * sc, m.y + 12.6f * sc), Col(0.35f, 0.38f, 0.44f, 0.8f * alpha), 1.0f * k);
-        dl->AddLine(ImVec2(m.x - 0.6f * sc, m.y + 1.2f * sc), ImVec2(m.x - 0.6f * sc, m.y + 7.0f * sc), Col(1, 1, 1, 0.9f * alpha), 1.0f * k);   // brillo del indice
-        (void)grey; return;
+        const ImU32 ln = Col(0.35f, 0.38f, 0.44f, 0.8f * alpha);
+        dl->AddLine(ImVec2(m.x + 1.6f * sc, m.y + 9.5f * sc), ImVec2(m.x + 1.6f * sc, m.y + 12.0f * sc), ln, 1.0f * k);
+        dl->AddLine(ImVec2(m.x + 4.5f * sc, m.y + 9.8f * sc), ImVec2(m.x + 4.5f * sc, m.y + 12.2f * sc), ln, 1.0f * k);
+        dl->AddLine(ImVec2(m.x + 7.3f * sc, m.y + 10.2f * sc), ImVec2(m.x + 7.3f * sc, m.y + 12.6f * sc), ln, 1.0f * k);
+        dl->AddLine(ImVec2(m.x - 0.6f * sc, m.y + 1.6f * sc), ImVec2(m.x - 0.6f * sc, m.y + 7.0f * sc), Col(1, 1, 1, 0.9f * alpha), 1.0f * k);
+        // la una del indice, con un toque del verde cuando late
+        dl->AddRectFilled(ImVec2(m.x - 1.0f * sc, m.y + 0.6f * sc), ImVec2(m.x + 1.0f * sc, m.y + 2.4f * sc), ColA(Lerp4(ImVec4(1, 1, 1, 1), acc, 0.35f * gl), alpha), 0.8f * sc);
+        {   // (14/11 f, Agustin: "el brillo me referia como un lens flare") DESTELLO en la punta del indice: nucleo chico y brillante, dos
+            // rayos finos (horizontal largo, vertical corto) que se apagan hacia las puntas y un halo suave; late y gira apenas. Sin anillos.
+            const float pulse = 0.65f + 0.35f * breath, fl = std::min(1.0f, (0.55f * s_hov + 0.9f * s_flash) * pulse) * alpha;
+            const ImVec4 hot = Lerp4(acc, ImVec4(1, 1, 1, 1), 0.55f);
+            for (int i = 10; i >= 1; i--) { const float u = i / 10.0f; dl->AddCircleFilled(tip, 5.5f * k * u, ColA(acc, 0.045f * fl * (1.0f - u * 0.7f)), 24); }
+            const float rot = anim ? 0.10f * sinf((float)now * 1.3f) : 0.0f;
+            auto Ray = [&](float ang, float len, float th, float a0) {
+                const ImVec2 d(cosf(ang), sinf(ang)); const int n = 10;
+                for (int sgn = -1; sgn <= 1; sgn += 2) for (int i = 0; i < n; i++) {
+                    const float u0 = (float)i / n, u1 = (float)(i + 1) / n, fa = (1.0f - u0) * (1.0f - u0);
+                    dl->AddLine(ImVec2(tip.x + d.x * sgn * len * u0, tip.y + d.y * sgn * len * u0), ImVec2(tip.x + d.x * sgn * len * u1, tip.y + d.y * sgn * len * u1),
+                                ColA(hot, a0 * fa * fl), th * (1.0f - 0.6f * u0));
+                }
+            };
+            Ray(rot, (8.0f + 3.0f * breath) * k, 1.3f * k, 0.75f);
+            Ray(rot + 1.5708f, (5.0f + 2.0f * breath) * k, 1.1f * k, 0.6f);
+            Ray(rot + 0.7854f, 2.8f * k, 0.9f * k, 0.30f); Ray(rot - 0.7854f, 2.8f * k, 0.9f * k, 0.30f);
+            dl->AddCircleFilled(tip, 1.7f * k, ColA(ImVec4(1, 1, 1, 1), 0.85f * fl), 16);
+            dl->AddCircleFilled(tip, 2.6f * k, ColA(hot, 0.35f * fl), 16);
+        }
+        return;
     }
-    // flecha clasica (como la de Windows): blanca con borde negro y sombra suave
-    static const float P[7][2] = { { 0, 0 }, { 0, 16.0f }, { 3.9f, 12.3f }, { 6.6f, 18.4f }, { 9.0f, 17.4f }, { 6.4f, 11.4f }, { 11.4f, 11.4f } };
-    ImVec2 pts[7], sh[7]; for (int i = 0; i < 7; i++) { pts[i] = ImVec2(m.x + P[i][0] * sc, m.y + P[i][1] * sc); sh[i] = ImVec2(pts[i].x + 1.5f * k, pts[i].y + 2.0f * k); }
-    dl->AddConcavePolyFilled(sh, 7, Col(0, 0, 0, 0.25f * alpha));
-    CurShape(dl, pts, 7, white, grey, edge, 1.3f * k, m, ImVec2(m.x, m.y + 18.0f * sc));
-    dl->AddLine(ImVec2(pts[0].x + 1.3f * k, pts[0].y + 3.0f * k), ImVec2(pts[1].x + 1.3f * k, pts[1].y - 4.0f * k), Col(1, 1, 1, 0.9f * alpha), 1.0f * k);
+    // (14/11 c / d, Agustin: "el dardo esta bien en todos lados") DARDO: flecha moderna sin cola, se achica apenas al apretar; sin ondas
+    const float sd = k * 1.12f * (1.0f - 0.10f * s_dn);   // (14/11 f) un poco mas grande: mas nitido
+    static const float D[5][2] = { { 0, 0 }, { 0.6f, 17.0f }, { 5.0f, 12.6f }, { 6.2f, 12.3f }, { 12.4f, 12.0f } };
+    ImVec2 pts[5]; for (int i = 0; i < 5; i++) pts[i] = ImVec2(m.x + D[i][0] * sd, m.y + D[i][1] * sd);
+    { ImVec2 sp[5]; for (int j = 0; j < 5; j++) sp[j] = ImVec2(pts[j].x + 1.4f * k, pts[j].y + 2.0f * k);   // (14/11 e) una sola sombra suave (sin escalones)
+      dl->AddConcavePolyFilled(sp, 5, Col(0, 0, 0, 0.22f * alpha)); }
+    const int v0 = dl->VtxBuffer.Size;
+    dl->AddConcavePolyFilled(pts, 5, Col(1, 1, 1, alpha));
+    ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, m, ImVec2(m.x + 6.0f * sd, m.y + 20.0f * sd), white, Col(0.80f, 0.83f, 0.88f, alpha));
+    dl->AddPolyline(pts, 5, edge, ImDrawFlags_Closed, 1.3f * k);
+    // (14/11 f, Agustin: "esa linea esta rara en el dardo") sin las lineas de brillo adentro: cuerpo limpio con degradado y borde
+}
+
+// (14/11 d, Agustin: "al usar el mouse que se muestre un pequeno texto ... abajo a la derecha en pequeno los botones del mouse: clic
+// izquierdo seleccionar / avanzar, clic derecho volver") Dos mouses chicos con el boton que corresponde en verde y su texto. br = esquina
+// de abajo a la derecha. Devuelve el alto usado (para apilar otro aviso arriba).
+float MvMouseHint(ImDrawList* dl, ImVec2 br, float k, float alpha, const char* left, const char* right) {
+    if (alpha <= 0.01f) return 0.0f;
+    const ImVec4 acc = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+    const float fs = ImGui::GetFontSize() * 0.82f * std::max(1.0f, k * 0.9f); ImFont* f = ImGui::GetFont();
+    const float mw = 13.0f * k, mh = 19.0f * k, gap = 6.0f * k, sep = 16.0f * k, pad = 9.0f * k;   // (14/11 f) iconos mas grandes (pedido de Agustin)
+    const ImVec2 tl = f->CalcTextSizeA(fs, FLT_MAX, 0, left), tr = f->CalcTextSizeA(fs, FLT_MAX, 0, right);
+    const float h = std::max(mh, fs) + pad * 1.2f, w = pad * 2 + mw * 2 + gap * 2 + tl.x + tr.x + sep;
+    const ImVec2 a(br.x - w, br.y - h);
+    dl->AddRectFilled(a, br, Col(0.05f, 0.07f, 0.09f, 0.55f * alpha), 6.0f * k);
+    auto Mouse = [&](float x, int btn) {
+        const ImVec2 p0(x, a.y + (h - mh) * 0.5f), p1(x + mw, p0.y + mh); const float r = mw * 0.5f;
+        dl->AddRectFilled(p0, p1, Col(1, 1, 1, 0.12f * alpha), r);
+        const float my = p0.y + mh * 0.42f, cx = x + mw * 0.5f;
+        if (btn == 0) dl->AddRectFilled(p0, ImVec2(cx - 0.5f * k, my), ColA(acc, 0.9f * alpha), r, ImDrawFlags_RoundCornersTopLeft);
+        else dl->AddRectFilled(ImVec2(cx + 0.5f * k, p0.y), ImVec2(p1.x, my), ColA(acc, 0.9f * alpha), r, ImDrawFlags_RoundCornersTopRight);
+        dl->AddRect(p0, p1, Col(0.85f, 0.88f, 0.92f, 0.85f * alpha), r, 0, 1.0f * k);
+        dl->AddLine(ImVec2(p0.x, my), ImVec2(p1.x, my), Col(0.85f, 0.88f, 0.92f, 0.6f * alpha), 1.0f * k);
+        dl->AddLine(ImVec2(cx, p0.y), ImVec2(cx, my), Col(0.85f, 0.88f, 0.92f, 0.6f * alpha), 1.0f * k);
+    };
+    float x = a.x + pad; const float ty = a.y + (h - fs) * 0.5f; const ImU32 tc = Col(0.90f, 0.93f, 0.96f, 0.92f * alpha);
+    Mouse(x, 0); x += mw + gap; dl->AddText(f, fs, ImVec2(x, ty), tc, left); x += tl.x + sep;
+    Mouse(x, 1); x += mw + gap; dl->AddText(f, fs, ImVec2(x, ty), tc, right);
+    return h;
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------
