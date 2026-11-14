@@ -57,9 +57,20 @@ bool Check() {
     return ok;
 }
 // linea -> objeto match::Replay (la linea esta en +0x50); solo vale el visor de repeticiones
+// (14/11 08:20, v2: en su PC la barra no aparecio; el log decia "listos" pero nunca un salto) se acepta tambien una linea cuyo anillo
+// tiene el largo de la repeticion (FUN_140a8a710 = [0x143703554] o 660) con primero / ultimo dentro; la vtable leida va al log
+int RingLen() { __try { const int v = *(const int*)0x143703554ull; return v ? v : 660; } __except (EXCEPTION_EXECUTE_HANDLER) { return 660; } }
 bool IsReplayLine(const void* line) {
-    __try { const uintptr_t vt = *(const uintptr_t*)((const char*)line - 0x50); return vt == kReplayVt; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    static int s_logged = 0;
+    __try {
+        const unsigned char* L = (const unsigned char*)line;
+        const uintptr_t vt = *(const uintptr_t*)(L - 0x50);
+        const int n = *(const unsigned short*)(L + 0x23a), a = *(const unsigned short*)(L + 0x23c), b = *(const unsigned short*)(L + 0x240);
+        const bool vtOk = vt == kReplayVt, ringOk = n == (RingLen() & 0xffff) && a < n && b < n;
+        if (s_logged < 3) { s_logged++; Log("repeticion: linea del visor %p: vtable %p (%s), anillo %d (esperado %d), primero %d, ultimo %d, estado %d -> %s",
+            line, (void*)vt, vtOk ? "match::Replay" : "otra", n, RingLen(), a, b, *(const int*)L, (vtOk || ringOk) ? "SE USA" : "no se usa"); }
+        return vtOk || ringOk;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 const unsigned char* Frames(int n) {
     __try {
@@ -204,7 +215,11 @@ bool RepeticionPresent(IDXGISwapChain* sc) {
         }
     } else if (!live && s_tex[0] && now - s_cutT > 5.0) FreeTex();
     if (!blur) s_haveOld = s_haveOld && now - s_cutT < dur;
-    const bool open = live && ViewerOpen();
+    // (v2) visor abierto por el estado de la pantalla, o (si esa lectura no anduviera) el mouse movido hace < 3 s con la repeticion andando
+    const bool vOpen = live && ViewerOpen();
+    const bool open = live && (vOpen || now - s_moveT < 3.0 || s_drag);
+    { static int s_vLog = -1; const int st = !live ? 0 : vOpen ? 2 : 1;
+      if (st != s_vLog) { s_vLog = st; Log("repeticion: %s", st == 0 ? "sin repeticion" : st == 2 ? "visor abierto (barra a la vista)" : "repeticion andando, visor no abierto segun el estado (la barra sale al mover el mouse)"); } }
     if (open && !s_openWas) s_openT = now;
     s_openWas = open;
     const bool bar = open && g_cfg.replayBar && !g_menuOpen.load();
