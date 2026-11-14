@@ -1,0 +1,49 @@
+INSTALL: wind (height profile, shirt hem, cutscenes, wind tester, under-roof fix), nets fix + PES21FX_redes.lua 1.1, final Insert menu
+fixes (cursor, F1, mouse help, icons), replay bar click. On top of DLL BB417D03 (07:20 UTC). Plus cloth.ini [lod] reach (Agustin OK
+"dale cambialo vos" 07:42 UTC in the wind thread).
+APPROVAL: Agustin asked for these installs; he must write "juego cerrado" for THIS install; also check no PES2021.exe is running.
+Do NOT touch the mouth (63fab7735eee149c 496271CA, mouth.fmdl, pes_oral_*.dds, pes_mouthmask_ps.hlsl C419F51D): CRC before/after.
+sider.ini (B3E670FC) NOT edited. Do not copy visor\PesExplorerNEM.exe or anything not listed.
+
+SOURCE: build-claude/project-thread-yo8viw commit 30b7d10 ("build 86917a32883715504a28681b5a3ff7984a86df18").
+tools/ini_merge.py from claude/project-thread-yo8viw at 86917a3 (05D31C60, 8234 B).
+patch script: /mnt/project-files/mods/pasto_natural/viento509_20261114/patch_cloth_sim_viento509.py
+
+STEP 1 CHECK (change nothing). live must be -> new:
+d3d11.dll                     BB417D03 -> 0CEA2932 (4602880 B)
+d3d11.map                     8F199661 -> 7F6A41C6 (5187090 B)
+PES21FX\PES21FX_menu_en.ini   53E67770 -> E96EF3F2 (226314 B)
+PES21FX\PES21FX_menu_pt.ini   E126D895 -> 770BA818 (231983 B)
+PES21FX\shaders\498b30bad256e8ed-vs_replace.txt  E2BBE076 -> 764CD15F (142381 B)
+<Sider>\modules\PES21FX_redes.lua  (record live; expected 1.0 = 91AFE192) -> E0F87DE7 (15068 B, from build sider\PES21FX_redes.lua)
+PES21FX\PES21FX.ini: his (last 25617411 or newer), merged in step 3.
+cloth-mod\shaders\cloth_sim.hlsl: expected 84AB9074, patched in step 5. If different: still try the patch (it refuses safely if anchors differ).
+cloth-mod cloth.ini: record CRC and the [lod] lines.
+Mismatch on dll/map/menus/498b30: STOP and send me live CRCs.
+
+STEP 2 BACKUP to PES21FX\backup_20261114_viento509\ (relative paths): dll, map, 2 menus, 498b30, PES21FX.ini, cloth_sim.hlsl,
+cloth.ini, PES21FX_redes.lua.
+
+STEP 3 INI MERGE: python tools\ini_merge.py <build PES21FX\PES21FX.ini (9F98A75A)> <live PES21FX.ini> --menus --simular
+Expected exactly (simulated on the 279069a package ini):
+  ~ kv:desc reemplazada  (the [MenuRedes] desc text line)
+  + seccion [MenuVientoAltura] nueva (8 lineas)
+  + seccion [MenuVientoPrueba] nueva (8 lineas)
+  + x508 (3 lineas) / + y508 / + z508 / + w508 / + y510 / + z510 / + w510 (1 linea each)
+Any value line (x501, y501, z503 ... ) replaced/removed, or anything else: STOP and send me the output. His x501 = 1, y501 = 1 stay.
+Else run without --simular; every existing key = value line identical before/after; report new CRC.
+
+STEP 4 COPY dll, map, 2 menus, 498b30, PES21FX_redes.lua (into <Sider>\modules\). Verify new CRCs.
+
+STEP 5 CLOTH_SIM IN PLACE: python patch_cloth_sim_viento509.py "<game>\cloth-mod\shaders\cloth_sim.hlsl"
+5 anchored blocks (279069a -> 86917a3), keeps his PES21FX_LIVE_* lines, makes cloth_sim.hlsl.antes_viento509_20261114, refuses and
+changes nothing if a block is not found exactly once or 509 is already there. Tested: 646B73B7 -> D9538BBD (package), and on a CRLF copy
+with a changed LIVE value. Report its output line.
+
+STEP 6 cloth.ini [lod]: change ONLY sim_distance -> 250 and max_simulated -> 30 (same line endings, nothing else). Diff = 2 lines.
+Report old values and new CRC.
+
+STEP 7 REPORT CRCs to me. Tell Agustin only: installed, he can open the game. No feature explanations or test lists.
+After a match, read the newest PES21FX.log and send me: "redes:" lines, "viento unico: base" lines (look for "afuera"), any line with
+"repeticion", "pagina Sider", "cursor", ERROR; and sider.log lines with PES21FX_redes.
+Rollback (game closed): restore everything from backup_20261114_viento509.
