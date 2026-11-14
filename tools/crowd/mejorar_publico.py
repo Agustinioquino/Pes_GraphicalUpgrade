@@ -3,6 +3,7 @@
 uso: mejorar_publico.py <carpeta dt00 extraida (con Asset/...)> <salida> 
 - au_h_face_bsm / _alp: atlas de caras 1024x2048 -> 2048x4096 (Lanczos + nitidez suave), DXT1 / DXT5 con mips
 - au_h_nrm 1024 -> 2048, au_h_srm 512 -> 1024
+- (14/11) au_h_parts_bsm 128x256 -> 512x1024, au_l_nrm / au_l_srm 64x128 -> 256x512
 - au_h_col_bsm / au_l_col_bsm (paleta de ropa 128x32): mas saturacion y mas colores vivos (filas 0..25; las 6 ultimas, colores fijos, no se tocan)
 No toca la boca (son texturas del publico)."""
 import sys, os, io, colorsys, random
@@ -72,7 +73,10 @@ def main(root, out):
     rng = random.Random(2021)
     jobs = {'au_h_face_bsm': lambda im: up(im, 2), 'au_h_face_bsm_alp': lambda im: up(im, 2),
             'au_h_nrm': lambda im: up(im, 2, False), 'au_h_srm': lambda im: up(im, 2, False),
-            'au_h_col_bsm_rgba32': lambda im: paleta(im, rng), 'au_l_col_bsm_rgba32': lambda im: paleta(im, rng)}
+            'au_h_col_bsm_rgba32': lambda im: paleta(im, rng), 'au_l_col_bsm_rgba32': lambda im: paleta(im, rng),
+            # (14/11 0kygek, Agustin: "mejorar su calidad tambien") bufandas / banderas (128x256 -> 512x1024) y la LOD de media
+            # distancia (relieve y brillo 64x128 -> 256x512). Las mascaras de region (*_mask_*_nomip) NO: son codigos por canal
+            'au_h_parts_bsm': lambda im: up(im, 4), 'au_l_nrm': lambda im: up(im, 4, False), 'au_l_srm': lambda im: up(im, 4, False)}
     for n, fn in jobs.items():
         src = Ftex(open(os.path.join(src_dir, n + '.ftex'), 'rb').read())
         im = fn(load(src)); data = build(src, im, src.fmt)
