@@ -578,7 +578,9 @@ void MatchWind(const MatchInfo& m, unsigned long long seed) {
 // para que (1) nunca se guarden ni arranquen prendidas, (2) "Apagar todo el debug" las apague de una y (3) la prueba automatica
 // fotografie cada vista. minOn = desde que valor (absoluto) es depuracion; safe = valor al apagarla (z314: 2 = depuracion, 1 = normal prendido)
 static const float kV12[] = { 2, 3, 4, 5, 6, 7, -3 }, kV380[] = { 1, 2, 3, 4, 5 }, kV107[] = { 1, 2, 3, 4, 5 }, kV75[] = { 1, 2 }, kV27[] = { 1, 2 }, kV1[] = { 1 }, kV2[] = { 2 }, kV429[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+static const float kV510[] = { 1, 2, 3, 4, 5, 6 };   // (14/11 sk9ema) "Probar el viento"
 static const DebugParam kDebugParams[] = {
+    { 510, 0, 0.5f, 0.0f, "Viento: prueba (leve de costado, desde abajo, tormenta maxima, racha cada 3 s, calma, a mano)", "Viento", kV510, 6 },   // (14/11 sk9ema) wind.cpp
     { 12, 3, 0.5f, 0.0f, "Vista de diagnostico (rebote, sol y piel, contacto, nubes, cascadas, sombra, resolucion)", "Diagnostico", kV12, 7 },
     { 380, 3, 0.5f, 0.0f, "Vista de prueba de la luz del editor", "Editor", kV380, 5 },
     { 393, 0, 0.5f, 0.0f, "Pasto del mod bajo el jugador (editor, experimento)", "Editor", kV1, 1 },

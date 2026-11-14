@@ -63,7 +63,7 @@ bool Readable(const void* p, size_t n) {
 }
 bool SigAt(uintptr_t a, const unsigned char* s, size_t n) { return Readable((const void*)a, n) && memcmp((const void*)a, s, n) == 0; }
 // viento de este cuadro (lo arma RedesPresent, lo leen los ganchos en el hilo del juego)
-struct NetWind { float ax, az, ay, dx, dz, D, turb, on; };
+struct NetWind { float ax, az, ay, dx, dz, D, turb, on, up; WindHeight hp; };   // (14/11) up = empuje desde abajo, hp = perfil por altura
 NetWind s_w{};
 
 void __fastcall hk_Point(void* pt, void* acc, float dt, uintptr_t a4) {
@@ -77,8 +77,10 @@ void __fastcall hk_Point(void* pt, void* acc, float dt, uintptr_t a4) {
     const float s = pos[0] * w.dx + pos[2] * w.dz - w.D;
     const float g = 1.0f + (0.25f + 0.35f * w.turb) * sinf(0.9f * s) + 0.12f * sinf(2.3f * s + pos[0] * 1.7f + pos[2] * 1.3f);
     const float d2 = dt * dt;
-    pos[0] += w.ax * g * d2; pos[2] += w.az * g * d2;
-    pos[1] += w.ay * sinf(1.7f * s + pos[1] * 3.0f) * d2;
+    // (14/11) perfil por altura (fila 508): abajo de la red sopla menos que arriba; la fuerza va con el cuadrado de la velocidad
+    const float hk = WindHeightK(w.hp, pos[1] > 0.03f ? pos[1] : 0.03f), hk2 = hk * hk;
+    pos[0] += w.ax * g * hk2 * d2; pos[2] += w.az * g * hk2 * d2;
+    pos[1] += (w.ay * sinf(1.7f * s + pos[1] * 3.0f) * hk2 + w.up) * d2;
     if (pos[1] < 0.03f) pos[1] = 0.03f;   // el mismo piso del juego
     s_pushed.fetch_add(1, std::memory_order_relaxed);
 }
@@ -134,6 +136,10 @@ void RedesPresent() {
         const float a = 0.015f * k * v * v * std::clamp(gNow, 0.1f, 10.0f);
         w.ax = a * p[494][0]; w.az = a * p[494][1]; w.ay = 0.15f * a; w.dx = p[494][0]; w.dz = p[494][1]; w.D = p[494][3];
         w.turb = std::clamp(p[495][1], 0.0f, 1.0f); w.on = v * sqrtf(k) > 0.3f ? 1.0f : 0.0f;
+        // (14/11) viento desde abajo (x511, solo "Probar el viento" por ahora): mismo arrastre, hacia arriba
+        const float u = p[511][0]; w.up = 0.015f * k * u * fabsf(u) * std::clamp(gNow, 0.1f, 10.0f);
+        if (fabsf(u) * sqrtf(k) > 0.3f) w.on = 1.0f;
+        w.hp = g_windHeight;
     }
     s_w = w;
     // 2) (13/11 16:45) la fisica de la red (peso, rebote, pasadas...) la cambia el modulo de Sider PES21FX_redes.lua (presets,

@@ -979,6 +979,13 @@ static void DrawWindNowPanel() {
         return;
     }
     ImGui::Text(TRS("Ahora: %.1f m/s (%.0f km/h), %s"), w.speed, w.speed * 3.6f, BeaufortName(w.speed));
+    if (w.test > 0) {   // (14/11) "Probar el viento" pisa todo: que se vea
+        static const char* kT[] = { "", "leve de costado", "desde abajo", "tormenta maxima", "racha cada 3 s", "calma total", "a mano" };
+        ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.35f, 1), TRS("PRUEBA: %s (no se guarda). Desde abajo %.1f m/s"), TRS(kT[std::clamp(w.test, 0, 6)]), w.up);
+    }
+    { const WindHeight hp = g_windHeight;   // (14/11) viento a cada altura (fila 508)
+      ImGui::TextDisabled(TRS("Al ras del pasto %.1f m/s, ropa %.1f, cabeza %.1f, arriba de la tribuna (20 m) %.1f"),
+          w.speed * w.grassK, w.speed * w.clothK, w.speed, w.speed * WindHeightK(hp, 20.0f)); }
     if (Anim()) {   // (14/11) la cancha con el viento que vuela; arrastrar fija el rumbo
         ImGui::TextDisabled(TRS("En 2 s: %.1f m/s. Promedio del partido: %.1f m/s"), w.soonSpeed, w.base);
         MvWindIn wi; wi.live = true; wi.speed = w.speed; wi.dirDeg = w.dirDeg; wi.soonSpeed = w.soonSpeed; wi.soonDirDeg = w.soonDirDeg; wi.gust = w.gust; wi.turb = w.turb;
