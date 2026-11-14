@@ -7,6 +7,15 @@
 namespace fx {
 
 static const char* const kEn[][2] = {
+    // (14/11 sk9ema) prueba y altura del viento
+    { "PRUEBA: %s (no se guarda). Desde abajo %.1f m/s", "TEST: %s (not saved). From below %.1f m/s" },
+    { "leve de costado", "light from the side" },
+    { "desde abajo", "from below" },
+    { "tormenta maxima", "maximum storm" },
+    { "racha cada 3 s", "gust every 3 s" },
+    { "calma total", "dead calm" },
+    { "a mano", "by hand" },
+    { "Al ras del pasto %.1f m/s, ropa %.1f, cabeza %.1f, arriba de la tribuna (20 m) %.1f", "At grass level %.1f m/s, cloth %.1f, head %.1f, above the stands (20 m) %.1f" },
     // (13/11 sk9ema) panel "Viento ahora"
     { "Calma", "Calm" },
     { "Ventolina", "Light air" },
@@ -757,6 +766,15 @@ static const char* const kEn[][2] = {
 
 // (27/10) portugues: mismo orden que kEn
 static const char* const kPt[][2] = {
+    // (14/11 sk9ema) prueba y altura del viento
+    { "PRUEBA: %s (no se guarda). Desde abajo %.1f m/s", "TESTE: %s (n\303\243o \303\251 salvo). De baixo %.1f m/s" },
+    { "leve de costado", "leve de lado" },
+    { "desde abajo", "de baixo" },
+    { "tormenta maxima", "tempestade m\303\241xima" },
+    { "racha cada 3 s", "rajada a cada 3 s" },
+    { "calma total", "calmaria total" },
+    { "a mano", "manual" },
+    { "Al ras del pasto %.1f m/s, ropa %.1f, cabeza %.1f, arriba de la tribuna (20 m) %.1f", "Rente \303\240 grama %.1f m/s, roupa %.1f, cabe\303\247a %.1f, acima da arquibancada (20 m) %.1f" },
     // (13/11 sk9ema) panel "Viento ahora"
     { "Calma", "Calmaria" },
     { "Ventolina", "Aragem" },

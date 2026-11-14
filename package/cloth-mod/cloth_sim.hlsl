@@ -258,6 +258,8 @@ static float3 s_grav;   // PES21 FX: gravedad en el espacio de la prenda (para e
 static float3 s_omega;  // PES21 FX: velocidad angular de la prenda (rad/s, espacio de la prenda)
 static float3 s_center; // PES21 FX: origen de la prenda
 static float  s_windLen; // PES21 FX (13/11): largo del viento de cloth.ini (fijo en el partido): marca la velocidad de la onda de turbulencia
+static bool   s_pesWindOn;   // PES21 FX (14/11): esta prenda usa el viento unico de la DLL (fila 494)
+static float  s_windHem;     // PES21 FX (14/11): z509 (w508) = cuanto viento le llega por debajo al borde libre (faldon de la remera)
 static bool   s_menu;   // PES21 FX (25/10): escena de menu (editor, presentacion): sin empujes por movimiento del cuerpo
 static float3 s_ref;    // PES21 FX (25/10): punto cerca de la prenda; las sumas en enteros van relativas a el
 COH RWByteAddressBuffer             g_outPos    : register(u0);
@@ -653,7 +655,7 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
     v = vBody + vRel;
     float3 n = rnrm1;
     float3 wind = 0;
-    float k = g_airDrag;
+    float k = g_airDrag, kW = 0.0, pesWs = 0.0;
     if (any(windBase != 0)) {
         float  ws = length(windBase);
         float3 wd = windBase / ws;
@@ -672,7 +674,7 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
         float  T = g_windTurbulence;
         float3 slow = windBase * max(0.0, gust);
         wind = slow + ws * T * (wd * 0.5 * e1 + side * 0.6 * e2 + up * 0.35 * e3);
-        k += g_windResponse;
+        if (s_pesWindOn) { kW = g_windResponse; pesWs = ws; } else k += g_windResponse;
     }
     // PES21 FX: resistencia del aire con la velocidad del cuerpo (correr pega la tela; frenar la deja flamear)
     float pesSpeed = length(vBody);
@@ -685,7 +687,28 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
             v += (side / sl) * sin(ph) * PES_SHORTS_FLUTTER * saturate(pesSpeed * 0.3) * saturate(1.0 - pin * 2.0);
         }
     }
-    v -= n * dot(v - wind, n) * min(k * h, 1.0);
+    if (!s_pesWindOn) v -= n * dot(v - wind, n) * min(k * h, 1.0);
+    else {
+        // PES21 FX (14/11, Agustin: "que el viento no le quite los valores de inercia y demas") con el viento unico la resistencia
+        // del aire es la de siempre (g_airDrag + la de correr) pero contra el aire que se mueve, y la respuesta al viento
+        // (wind_response) es de UN solo lado: acelera la tela hasta la velocidad del aire y nunca la frena. Antes wind_response
+        // se sumaba al freno y apagaba la inercia, el giro y el rebote de la tela en cuanto soplaba algo.
+        const float wn = dot(wind, n);
+        v -= n * (dot(v, n) - wn) * min(k * h, 1.0);
+        float dn = wn - dot(v, n);
+        if (dn * wn > 0.0) v += n * dn * min(kW * h, 1.0);
+        // (14/11, Agustin: "que el viento tambien afecte a la remera en la parte de abajo") el borde libre (faldon, punos) no
+        // solo recibe el viento de frente: el aire que pasa lo arrastra de costado, se mete por debajo y lo hace aletear.
+        // Solo donde la tela esta suelta (pin bajo) y con la fuerza del viento; tampoco frena lo que ya va mas rapido que el aire.
+        const float fr = saturate(1.0 - pin * 2.0) * s_windHem;
+        if (fr > 0.0 && pesWs > 0.05) {
+            const float3 wt = wind - n * wn, vt = v - n * dot(v, n), dt3 = wt - vt;
+            if (dot(dt3, wt) > 0.0) v += dt3 * min(0.35 * kW * h, 1.0) * fr;
+            const float ph = g_time * 13.0 + dot(g_rest[p].posPin.xyz, float3(19.0, 23.0, 31.0)) + float(s) * h * 13.0;
+            v += n * (sin(ph) * 0.7 + sin(ph * 1.71 + 1.3) * 0.3) * (3.0 * pesWs) * fr * h;   // aleteo: ~1 cm a 5 m/s
+            v.y += 0.15 * pesWs * fr * h;                                                     // el aire que entra por debajo lo levanta un poco
+        }
+    }
     vel = v;
     gx[p] += v * h;
 }
@@ -1461,9 +1484,18 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             // velocidad de este cuadro, con sus rachas) en vez del fijo de cloth.ini; la componente vertical sigue siendo la de cloth.ini.
             // Sin DLL (fila en cero) o con el viento del mod apagado (menus), todo queda como antes.
             float4 pesWU = IniParams.Load(int2(494, 0));
-            bool pesWOn = PES_CLOTH_FX && pesWU.z > 0.0 && IniParams.Load(int2(353, 0)).z > 0.5 && any(g_wind.xyz != 0);
-            // (13/11 etapa 2b) w503 = cuanto viento le llega a la ropa (menu Viento; 1 = real, 0 = sin viento de costado)
-            if (pesWOn) { pesWU.z *= IniParams.Load(int2(503, 0)).w; windBase = mul(transpose(W), float3(pesWU.x * pesWU.z, g_wind.y, pesWU.y * pesWU.z)); }
+            // (14/11, Agustin: "en las cinematicas mantenga este valor") ya no hace falta que cloth.ini tenga viento en este cuadro
+            // (el mod de ropa lo apaga fuera del partido y en las cinematicas): alcanza con que no sea un menu (s_menu, w255 de la
+            // DLL); en el vestuario y el tunel el viento ya lo baja la DLL (bajo techo, y500)
+            bool pesWOn = PES_CLOTH_FX && pesWU.z > 0.0 && IniParams.Load(int2(353, 0)).z > 0.5 && !s_menu;
+            // (13/11 etapa 2b / 14/11) fila 509 (la escribe la DLL, w = 1): y = cuanto viento le llega a la ropa ya con la altura
+            // (w503 x perfil por altura de la fila 508), z = viento por debajo del borde (w508). Sin DLL nueva: w503 y 1 como antes
+            float4 pesEff = IniParams.Load(int2(509, 0));
+            const bool pesEffOk = pesEff.w > 0.5;
+            // x511 (la escribe la DLL) = viento vertical en m/s (+ = desde abajo); hoy solo lo usa "Probar el viento" del menu
+            if (pesWOn) { const float kC = pesEffOk ? pesEff.y : IniParams.Load(int2(503, 0)).w; pesWU.z *= kC;
+                          windBase = mul(transpose(W), float3(pesWU.x * pesWU.z, g_wind.y + IniParams.Load(int2(511, 0)).x * kC, pesWU.y * pesWU.z)); }
+            s_pesWindOn = pesWOn; s_windHem = pesEffOk ? pesEff.z : 1.0;
             // PES21 FX (25/10): el cuerpo real de este personaje (cuerpo.cpp): de las tablas que la DLL armo en el ultimo Present (una
             // por personaje, con la piel del cuadro anterior), la que tiene su origen en el mundo mas cerca del de la prenda
             s_bodyTab = 0xffffffffu; s_bodyTc = 0.0;

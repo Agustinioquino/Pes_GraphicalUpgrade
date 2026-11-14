@@ -25,6 +25,14 @@
 
 namespace fx {
 WindNow g_windNow;
+WindHeight g_windHeight;
+// cuanto viento hay a la altura h (m) respecto del de 1.8 m: perfil logaritmico ln(h / z0) / ln(1.8 / z0), z0 = 3 cm (pasto),
+// mezclado con parejo segun hp.prof, con piso hp.ground abajo y tope hp.top arriba
+float WindHeightK(const WindHeight& hp, float h) {
+    const float z0 = 0.03f, lg = logf((std::max)(h, z0 * 1.05f) / z0) / logf(1.8f / z0);
+    float f = 1.0f + (lg - 1.0f) * hp.prof;
+    return h < 1.8f ? (std::max)(f, hp.ground) : (std::min)(f, hp.top);
+}
 namespace {
 double Hash1(long long i, unsigned seed) {
     unsigned long long h = (unsigned long long)i * 0x9E3779B97F4A7C15ull ^ ((unsigned long long)seed << 32 | seed);
@@ -72,7 +80,7 @@ void WindFrame(float (*p)[4], double tReal) {
     if (lastGame >= 0.0) { dG = g - lastGame; if (dG < -50000.0) dG += 100000.0; dG = std::clamp(dG, 0.0, 0.5); }
     lastGame = g; tG += dG;
     // z353 viento unico; w353 = el grupo "viento distinto en cada partido" prendido
-    if (c.live[353][2] < 0.5f || c.live[353][3] < 0.5f) { for (int k = 0; k < 4; k++) p[494][k] = p[495][k] = p[504][k] = 0.0f; g_windNow.on = false; return; }
+    if (c.live[353][2] < 0.5f || c.live[353][3] < 0.5f) { for (int k = 0; k < 4; k++) p[494][k] = p[495][k] = p[504][k] = p[511][k] = 0.0f; g_windNow.on = false; return; }
     // viento base de este partido
     // (13/11 arreglo, primer partido de Agustin con la tanda 2: "base 0.00 m/s" todo el partido) si cloth.ini no trae viento de
     // costado (claves ausentes o wind_x / wind_z en 0: su viento base es 0 y MatchWind lo multiplica), la base es 2 m/s con la fuerza
@@ -98,7 +106,17 @@ void WindFrame(float (*p)[4], double tReal) {
     auto P = [&](int r, int k, float def) { return (!c.info[r][k].defined && c.live[r][k] == 0.0f) ? def : c.live[r][k]; };
     // cuanto le llega a cada cosa (z503 pasto, w503 ropa; el pelo tiene x24 y la red x499): los shaders leen la fila que sube la DLL,
     // asi que aca se deja el valor seguro si el ini no los trae
-    p[503][2] = std::clamp(P(503, 2, 1.0f), 0.0f, 3.0f); p[503][3] = std::clamp(P(503, 3, 1.0f), 0.0f, 3.0f);
+    // (14/11, Agustin: "agregar opciones de altura para el viento") perfil por altura: arriba sopla mas que abajo (perfil
+    // logaritmico con rugosidad de pasto z0 = 3 cm). La fila 494 es el viento a 1.8 m (la cabeza, lo que muestra el panel); cada
+    // cosa recibe K(altura): pasto 8 cm, ropa 1.2 m, red (cada punto, redes.cpp), banderas arriba. x508 = cuanto perfil (0 parejo,
+    // 1 real), y508 = minimo al ras del suelo, z508 = tope arriba. La fila 509 (la escribe la DLL, nunca se guarda: c.live es lo
+    // que se guarda, por eso no se toca la 503) lleva x pasto = z503 x K(0.08), y ropa = w503 x K(1.2), z borde = w508, w = 1
+    const WindHeight hp{ std::clamp(P(508, 0, 0.5f), 0.0f, 1.0f), std::clamp(P(508, 1, 0.3f), 0.0f, 1.0f), std::clamp(P(508, 2, 2.0f), 1.0f, 3.0f) };
+    g_windHeight = hp;
+    p[509][0] = std::clamp(P(503, 2, 1.0f), 0.0f, 3.0f) * WindHeightK(hp, 0.08f);
+    p[509][1] = std::clamp(P(503, 3, 1.0f), 0.0f, 3.0f) * WindHeightK(hp, 1.2f);
+    p[509][2] = std::clamp(P(508, 3, 1.0f), 0.0f, 2.0f);
+    p[509][3] = 1.0f;
     if (!s_stadLoaded) LoadStadiums();
     StadiumWind sw; { auto it = c.match.known ? s_stadiums.find(c.match.stadium) : s_stadiums.end(); if (it != s_stadiums.end()) sw = it->second; }
     const bool shManual = c.live[503][0] > 0.5f;
@@ -161,19 +179,43 @@ void WindFrame(float (*p)[4], double tReal) {
     // (vestuario, tunel, menus, estudio), el viento baja en ~1.5 s a lo que diga y500 (0.05 = casi nada) y vuelve en ~1 s al salir.
     // x500 = 1: siempre afuera (como antes).
     static float expo = 1.0f; static bool wasOut = true;
-    { const bool out = c.live[500][0] > 0.5f || p[159][3] > 0.5f || PresentNo() - g_grassSeenFrame.load(std::memory_order_relaxed) < 30;
+    // (14/11, su partido en el estadio 9: "afuera 0.00" TODO el partido: ni el domo del cielo w159 ni el PS de las hojas 18afff se
+    // vieron) tambien cuenta como afuera la cancha del juego dibujada hace menos de 15 s (w93, la misma marca "en partido" que usan
+    // la ropa y el sudor: los primeros planos sin cancha siguen contando); el vestuario y el tunel la pierden a los 15 s
+    { const bool out = c.live[500][0] > 0.5f || p[159][3] > 0.5f || PresentNo() - g_grassSeenFrame.load(std::memory_order_relaxed) < 90 || p[93][3] > 0.5f;   // (14/11) 90 cuadros: un primer plano de cinematica no cuenta como bajo techo
       const float k = (float)(std::min)(1.0, dR / (out ? 1.0 : 1.5)); expo += ((out ? 1.0f : 0.0f) - expo) * k;
-      if (out != wasOut) { wasOut = out; Log("viento unico: %s (cielo %s, pasto hace %d cuadros)", out ? "afuera" : "bajo techo: el viento se calma",
-          p[159][3] > 0.5f ? "si" : "no", PresentNo() - g_grassSeenFrame.load()); } }
+      if (out != wasOut) { wasOut = out; Log("viento unico: %s (cielo %s, hojas hace %d cuadros, cancha %s)", out ? "afuera" : "bajo techo: el viento se calma",
+          p[159][3] > 0.5f ? "si" : "no", PresentNo() - g_grassSeenFrame.load(), p[93][3] > 0.5f ? "si" : "no"); } }
     const float roofK = std::clamp(c.live[500][1], 0.0f, 1.0f) + (1.0f - std::clamp(c.live[500][1], 0.0f, 1.0f)) * expo;
     U *= roofK;
+    // (14/11, Agustin: "opciones para experimentar o de diagnostico, viento leve por un lado, por abajo o tormenta maxima")
+    // x510 (nunca se guarda) pisa el viento de ahora: 1 leve de costado (1.5 m/s cruzando la cancha), 2 desde abajo (1 m/s de
+    // costado + 1.5 m/s hacia arriba), 3 tormenta maxima (18 m/s, rachas y turbulencia al tope), 4 una racha fuerte cada 3 s,
+    // 5 calma total, 6 a mano (y510 m/s, z510 rumbo, w510 m/s desde abajo). La fila 511 (DLL) = viento vertical (+ = hacia arriba)
+    float upW = 0.0f, dxx = dx, dzz = dz; double ee = e; float turbOut = std::clamp(turbI * (0.5f + 0.5f * (float)e) * 2.0f, 0.0f, 1.0f);
+    const int test = std::clamp((int)lroundf(c.live[510][0]), 0, 6);
+    if (test > 0) {
+        auto dirDeg = [&](float d) { const float a = d * 0.0174533f; dxx = cosf(a); dzz = sinf(a); };
+        switch (test) {
+        case 1: U = 1.5f; dirDeg(90.0f); ee = 0.2; turbOut = 0.1f; break;
+        case 2: U = 1.0f; dirDeg(90.0f); upW = 1.5f; ee = 0.2; turbOut = 0.15f; break;
+        case 3: U = 18.0f * (float)(0.85 + 0.15 * Noise1(tG / 1.3, seed + 41u)); ee = 1.0; turbOut = 1.0f; break;
+        case 4: { const double ph = fmod(tG, 3.0); const double pulse = ph < 0.4 ? ph / 0.4 : exp(-(ph - 0.4) * 2.5);
+                  U = (float)(1.0 + 9.0 * pulse); ee = pulse; turbOut = 0.4f; } break;
+        case 5: U = 0.0f; ee = 0.0; turbOut = 0.0f; break;
+        default: U = std::clamp(c.live[510][1], 0.0f, 30.0f); dirDeg(c.live[510][2]); upW = std::clamp(c.live[510][3], -10.0f, 10.0f); turbOut = 0.3f; break;
+        }
+        static int lastTest = 0; if (test != lastTest) { lastTest = test; Log("viento unico: PRUEBA %d (%.1f m/s, rumbo %.0f, desde abajo %.1f m/s)", test, U, atan2f(dzz, dxx) * 57.2958f, upW); }
+    }
+    p[511][0] = upW; p[511][1] = p[511][2] = p[511][3] = 0.0f;
     dist += (double)U * dG; if (dist >= 8192.0) dist -= 8192.0;
-    p[494][0] = dx; p[494][1] = dz; p[494][2] = u0 > 1e-4f ? (std::max)(U, 0.01f) : 0.0f; p[494][3] = (float)dist;
+    p[494][0] = dxx; p[494][1] = dzz; p[494][2] = (u0 > 1e-4f || test > 0) ? (std::max)(U, 0.01f) : 0.0f; p[494][3] = (float)dist;
     // (etapa 2b) fila 504 (la escribe la DLL): el viento de dentro de 2 s, para lo que es lento (banderas grandes, nubes) y tiene
     // que empezar a moverse antes: x, y rumbo, z velocidad m/s, w racha 0..1
     p[504][0] = soon.dx; p[504][1] = soon.dz; p[504][2] = u0 > 1e-4f ? (std::max)(soon.U * roofK, 0.01f) : 0.0f; p[504][3] = (float)soon.e;
-    p[495][0] = (float)e; p[495][1] = std::clamp(turbI * (0.5f + 0.5f * (float)e) * 2.0f, 0.0f, 1.0f); p[495][2] = (float)fmod(tG, 8192.0); p[495][3] = p[157][3];
-    { WindNow& n = g_windNow; n.on = true; n.speed = p[494][2]; n.dirDeg = atan2f(dz, dx) * 57.2958f; n.gust = (float)e; n.turb = p[495][1];
+    if (test > 0) { p[504][0] = p[494][0]; p[504][1] = p[494][1]; p[504][2] = p[494][2]; p[504][3] = (float)ee; }   // prueba: sin pronostico
+    p[495][0] = (float)ee; p[495][1] = turbOut; p[495][2] = (float)fmod(tG, 8192.0); p[495][3] = p[157][3];
+    { WindNow& n = g_windNow; n.on = true; n.speed = p[494][2]; n.dirDeg = atan2f(dzz, dxx) * 57.2958f; n.gust = (float)ee; n.test = test; n.up = upW; n.grassK = p[509][0]; n.clothK = p[509][1]; n.turb = p[495][1];
       n.outside = roofK; n.base = u0; n.preset = preset; n.fixedDir = fixedDir; n.shelter = sw.shelter; n.shelterManual = shManual;
       n.soonSpeed = p[504][2]; n.soonDirDeg = atan2f(soon.dz, soon.dx) * 57.2958f; n.stadium = c.match.known ? c.match.stadium : -1;
       n.hour = g_solClock.valid ? g_solClock.hour : -1.0f; n.rain = rain; n.season = season; n.fromCloth = src == 0; n.src = src; }

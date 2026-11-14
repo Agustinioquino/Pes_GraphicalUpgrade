@@ -63,7 +63,8 @@ bool Readable(const void* p, size_t n) {
 }
 bool SigAt(uintptr_t a, const unsigned char* s, size_t n) { return Readable((const void*)a, n) && memcmp((const void*)a, s, n) == 0; }
 // viento de este cuadro (lo arma RedesPresent, lo leen los ganchos en el hilo del juego)
-struct NetWind { float ax, az, ay, dx, dz, D, turb, on; };
+constexpr float kNetRef = 6.0f;   // (14/11) referencia del arrastre del aire (el peso de la red del juego)
+struct NetWind { float ax, az, ay, dx, dz, D, turb, on, up; WindHeight hp; };   // (14/11) up = empuje desde abajo, hp = perfil por altura
 NetWind s_w{};
 
 void __fastcall hk_Point(void* pt, void* acc, float dt, uintptr_t a4) {
@@ -77,23 +78,25 @@ void __fastcall hk_Point(void* pt, void* acc, float dt, uintptr_t a4) {
     const float s = pos[0] * w.dx + pos[2] * w.dz - w.D;
     const float g = 1.0f + (0.25f + 0.35f * w.turb) * sinf(0.9f * s) + 0.12f * sinf(2.3f * s + pos[0] * 1.7f + pos[2] * 1.3f);
     const float d2 = dt * dt;
-    pos[0] += w.ax * g * d2; pos[2] += w.az * g * d2;
-    pos[1] += w.ay * sinf(1.7f * s + pos[1] * 3.0f) * d2;
+    // (14/11) perfil por altura (fila 508): abajo de la red sopla menos que arriba; la fuerza va con el cuadrado de la velocidad
+    const float hk = WindHeightK(w.hp, pos[1] > 0.03f ? pos[1] : 0.03f), hk2 = hk * hk;
+    pos[0] += w.ax * g * hk2 * d2; pos[2] += w.az * g * hk2 * d2;
+    pos[1] += (w.ay * sinf(1.7f * s + pos[1] * 3.0f) * hk2 + w.up) * d2;
     if (pos[1] < 0.03f) pos[1] = 0.03f;   // el mismo piso del juego
     s_pushed.fetch_add(1, std::memory_order_relaxed);
 }
 
 void __fastcall hk_Node(void* nodeP) {
     const uintptr_t node = (uintptr_t)nodeP;
-    if (s_w.on > 0.5f && *(const int*)(node + 0x80) == 7) {
+    if (*(const int*)(node + 0x80) == 7) {
         const uintptr_t S = *(const uintptr_t*)(node + 0x190);
         if (S && *(const uintptr_t*)(node + 0x198)) {
+            s_nodes.fetch_add(1, std::memory_order_relaxed);   // (14/11) se cuenta siempre: el log dice si el gancho corre aunque no haya viento
             const uintptr_t L = *(const uintptr_t*)(S + 0x28);
             // dormida (simulador inactivo o puntos quietos): el mismo despertar que usa el juego cuando se mueve el arco
-            if (L && (*(const char*)(S + 0x31) == 0 || *(const char*)(L + 0x31) != 0)) {
+            if (s_w.on > 0.5f && L && (*(const char*)(S + 0x31) == 0 || *(const char*)(L + 0x31) != 0)) {
                 *(char*)(S + 0xf0) = 1; *(char*)(S + 0x31) = 1; s_wakes.fetch_add(1, std::memory_order_relaxed);
             }
-            s_nodes.fetch_add(1, std::memory_order_relaxed);
         }
     }
     o_node(nodeP);
@@ -131,9 +134,17 @@ void RedesPresent() {
         // empuje en proporcion al peso BASE de la red (el del juego 6.0 o el de su mod 0.25): asi el viento la mueve igual de
         // "en serio" con o sin reactive_nets. Red real: arrastre / peso ~ 0.015 v2 -> 5 m/s = 0.37 del peso, 10 m/s = 1.5
         const float gNow = s_constOk ? *(const volatile float*)kGravity : bG;   // el peso que haya ahora (preset del Lua)
-        const float a = 0.015f * k * v * v * std::clamp(gNow, 0.1f, 10.0f);
+        // (14/11, Agustin: "para las redes no veo que le afecte") antes el empuje iba en proporcion al peso de la red: con el preset
+        // reactiva (peso 0.25) a 2 m/s quedaba en 0.015 m/s2 y no se veia nada. El arrastre del aire no depende del peso que elija
+        // el preset: ahora va contra una referencia fija (6 = el peso del juego): 2 m/s = 0.36 m/s2, 5 m/s = 2.3, 10 m/s = 9
+        (void)gNow;
+        const float a = 0.015f * k * v * v * kNetRef;
         w.ax = a * p[494][0]; w.az = a * p[494][1]; w.ay = 0.15f * a; w.dx = p[494][0]; w.dz = p[494][1]; w.D = p[494][3];
         w.turb = std::clamp(p[495][1], 0.0f, 1.0f); w.on = v * sqrtf(k) > 0.3f ? 1.0f : 0.0f;
+        // (14/11) viento desde abajo (x511, solo "Probar el viento" por ahora): mismo arrastre, hacia arriba
+        const float u = p[511][0]; w.up = 0.015f * k * u * fabsf(u) * kNetRef;
+        if (fabsf(u) * sqrtf(k) > 0.3f) w.on = 1.0f;
+        w.hp = g_windHeight;
     }
     s_w = w;
     // 2) (13/11 16:45) la fisica de la red (peso, rebote, pasadas...) la cambia el modulo de Sider PES21FX_redes.lua (presets,

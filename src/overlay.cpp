@@ -982,6 +982,13 @@ static void DrawWindNowPanel() {
         return;
     }
     ImGui::Text(TRS("Ahora: %.1f m/s (%.0f km/h), %s"), w.speed, w.speed * 3.6f, BeaufortName(w.speed));
+    if (w.test > 0) {   // (14/11) "Probar el viento" pisa todo: que se vea
+        static const char* kT[] = { "", "leve de costado", "desde abajo", "tormenta maxima", "racha cada 3 s", "calma total", "a mano" };
+        ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.35f, 1), TRS("PRUEBA: %s (no se guarda). Desde abajo %.1f m/s"), TRS(kT[std::clamp(w.test, 0, 6)]), w.up);
+    }
+    { const WindHeight hp = g_windHeight;   // (14/11) viento a cada altura (fila 508)
+      ImGui::TextDisabled(TRS("Al ras del pasto %.1f m/s, ropa %.1f, cabeza %.1f, arriba de la tribuna (20 m) %.1f"),
+          w.speed * w.grassK, w.speed * w.clothK, w.speed, w.speed * WindHeightK(hp, 20.0f)); }
     if (Anim()) {   // (14/11) la cancha con el viento que vuela; arrastrar fija el rumbo
         ImGui::TextDisabled(TRS("En 2 s: %.1f m/s. Promedio del partido: %.1f m/s"), w.soonSpeed, w.base);
         MvWindIn wi; wi.live = true; wi.speed = w.speed; wi.dirDeg = w.dirDeg; wi.soonSpeed = w.soonSpeed; wi.soonDirDeg = w.soonDirDeg; wi.gust = w.gust; wi.turb = w.turb;
@@ -2745,12 +2752,13 @@ void OverlayPresent(IDXGISwapChain* sc) {
     float mmx = 0, mmy = 0; const bool mmCur = !g_menuOpen && MenuMouseCursor(&mmx, &mmy);   // (11/11) flecha del mouse sobre los menus del juego
     const bool keyHud = KeyHudPoll();   // (11/11) cuadrito con la ultima tecla apretada
     const bool gizmo = MotorGizmoPoll();   // (11/11) gizmo de camara del Motor (motorgizmo.cpp)
+    const bool repe = RepeticionPresent(sc);   // (14/11 9vcq5h) barra de la repeticion con el mouse / desenfoque en los cortes
     {   // (14/11 d) ayuda de los botones del mouse: aparece al usar el mouse en los menus del juego y se va sola (con el cursor apagado, no)
         static float s_mh = 0.0f; static double s_mhT = 0.0; const double tn = Now(); const float dt = (float)std::clamp(tn - s_mhT, 0.0, 0.1); s_mhT = tn;
         const bool want = mmCur && g_cfg.mouseHint && g_cfg.menuCursor != 0;
         s_mh = std::clamp(s_mh + (want ? dt / 0.20f : -dt / 0.40f), 0.0f, 1.0f); mouseHintA = s_mh * s_mh * (3.0f - 2.0f * s_mh);
     }
-    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo && !curToast && mouseHintA <= 0.0f) {
+    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo && !curToast && mouseHintA <= 0.0f && !repe) {
         g_blockGamePad = false;   // (14/11) sin menu ni camara libre no se dibuja nada (ni se lee el mando): el juego vuelve a ver el mando
         return;
     }
@@ -2910,6 +2918,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         dl->AddText(ImVec2(a0.x + pad.x, a0.y + pad.y), IM_COL32(235, 240, 245, (int)(255 * a)), msg.c_str());
     }
     if (gizmo) MotorGizmoDraw();
+    if (repe) RepeticionDraw();
     if (keyHud) KeyHudDraw();
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)

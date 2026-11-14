@@ -121,6 +121,7 @@ void PhotoReplayCtl(void* line) {
     } __except (EXCEPTION_EXECUTE_HANDLER) { s_pfLine = nullptr; }
 }
 uint64_t hk_rpl(void* obj, unsigned pad, unsigned char p3) {
+    RepeticionRplHook(obj);   // (14/11 9vcq5h) salto con el mouse y cortes (repeticion.cpp), antes del control del visor
     g_replayCalls.fetch_add(1, std::memory_order_relaxed); g_replayCallsV2.fetch_add(1, std::memory_order_relaxed);
     const bool v2 = GrassLive(448, 1) > 0.5f;
     __try { if (obj && *(const int*)obj == 5) {
@@ -516,14 +517,14 @@ void RastroReplayHookEnsure() {
 // el rastro este apagado. Solo lectura de MatchInfo. Se llama en cada Present despues de RastroPresent.
 void RastroEventosPresent() {
     static bool tried = false;
-    if (tried || (g_cfg.live[394][0] <= 0.0f && g_cfg.live[431][0] <= 0.5f)) return;   // (12/11) tambien para el desgaste real (reloj del partido)
+    if (tried || (g_cfg.live[394][0] <= 0.0f && g_cfg.live[431][0] <= 0.5f && !RepeticionWantsHook())) return;   // (12/11) tambien para el desgaste real (reloj del partido)
     tried = true;
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
     if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("publico: exe distinto (sello %08X): sin eventos del partido", (unsigned)nt->FileHeader.TimeDateStamp); return; }
     if (!s_relHooked.load() && SigAt(kRegRelease, kRelSig, sizeof kRelSig) && MH_CreateHook((void*)kRegRelease, (void*)&hk_rel, (void**)&o_rel) == MH_OK && MH_EnableHook((void*)kRegRelease) == MH_OK) s_relHooked = true;
     s_ev = s_relHooked.load();
-    if (g_cfg.live[431][0] > 0.5f && !g_replayHook.load()) {   // (12/11 16:45) visor de repeticiones para el desgaste real
+    if ((g_cfg.live[431][0] > 0.5f || RepeticionWantsHook()) && !g_replayHook.load()) {   // (14/11 9vcq5h) tambien para la barra de la repeticion   // (12/11 16:45) visor de repeticiones para el desgaste real
         const bool sig = SigAt(kReplayCtl, kReplaySig, sizeof kReplaySig);
         if (sig && MH_CreateHook((void*)kReplayCtl, (void*)&hk_rpl, (void**)&o_rpl) == MH_OK && MH_EnableHook((void*)kReplayCtl) == MH_OK) g_replayHook = 1;
         Log("desgaste real: visor de repeticiones %s", g_replayHook.load() ? "enganchado (0x14217c0b0)" : sig ? "NO (MinHook)" : "NO (firma distinta)");

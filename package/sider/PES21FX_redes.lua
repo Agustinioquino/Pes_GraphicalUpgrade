@@ -15,7 +15,7 @@
 -- 9 releer PES21FX_redes.ini. En el ini: preset general, preset por estadio ([estadios] id = preset), presets propios
 -- ([preset nombre] con base = otro y los valores a cambiar), [personal] y red mojada con lluvia (lluvia = 1).
 
-local m = { version = "1.0" }
+local m = { version = "1.1" }
 
 -- nombre, desplazamiento desde el comienzo del bloque, valor del juego, "vivo" / "carga", tipo
 local P = {
@@ -186,8 +186,9 @@ local function find_block()
     if not a then log("PES21FX_redes: no se encontro el bloque de la fisica de la red (otro mod lo cambio?): no se toca nada"); return end
     st.addr = a
     -- pasadas y estiramiento: solo si el bloque esta donde lo pone el exe 1.07.02 y esos dos valores son los del juego
-    local base = tonumber(a) or a
-    if base == BLOCK then
+    -- (14/11) la direccion que da memory.search_process no es un numero de Lua: se compara por su texto (antes nunca coincidia
+    -- y "viva" / "tv" no cambiaban pasadas ni estiramiento)
+    if string.lower(memory.hex(a)) == string.format("0x%x", BLOCK) then
         local s = memory.read(a - 0x850, 8)
         local e, n = memory.unpack("f", s:sub(1, 4)), memory.unpack("u32", s:sub(5, 8))
         st.outOk = (math.abs(e - 1.2) < 1e-6) and n == 2

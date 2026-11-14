@@ -144,6 +144,9 @@ static bool LoadConfigLocked() {
             else if (kl == "camara_mando") c.camPad = std::clamp(atoi(v.c_str()), 0, 1);           // (14/11) el mando mueve la camara libre (modo foto)
             else if (kl == "menu_cursor") { const int cv = std::clamp(atoi(v.c_str()), 0, 3); c.menuCursor = cv == 3 ? 1 : cv; }   // 0 no, 1 dardo + mano, 2 Windows           // (14/11) cursor del menu
             else if (kl == "menu_mando_abrir") c.menuPadOpen = atoi(v.c_str()) != 0;             // (14/11) L3 + R3 abre / cierra el menu
+            else if (kl == "repeticion_barra") c.replayBar = atoi(v.c_str()) != 0 ? 1 : 0;      // (14/11 9vcq5h) barra propia de la repeticion
+            else if (kl == "repeticion_corte") c.replayCut = atoi(v.c_str()) != 0 ? 1 : 0;      // (14/11 9vcq5h) desenfoque en los cortes
+            else if (kl == "repeticion_corte_ms") c.replayCutMs = std::clamp(atoi(v.c_str()), 100, 1000);
             else if (kl == "mouse_menus") c.menuMouse = atoi(v.c_str()) != 0 ? 1 : 0;   // (11/11) mouse en los menus nativos del juego
             else if (kl == "mouse_menus_retraso") c.menuMouseDelay = std::clamp(atoi(v.c_str()), 0, 4);
             else if (kl == "mouse_menus_cerca") c.menuMouseNear = atoi(v.c_str()) != 0 ? 1 : 0;
@@ -582,7 +585,9 @@ void MatchWind(const MatchInfo& m, unsigned long long seed) {
 // para que (1) nunca se guarden ni arranquen prendidas, (2) "Apagar todo el debug" las apague de una y (3) la prueba automatica
 // fotografie cada vista. minOn = desde que valor (absoluto) es depuracion; safe = valor al apagarla (z314: 2 = depuracion, 1 = normal prendido)
 static const float kV12[] = { 2, 3, 4, 5, 6, 7, -3 }, kV380[] = { 1, 2, 3, 4, 5 }, kV107[] = { 1, 2, 3, 4, 5 }, kV75[] = { 1, 2 }, kV27[] = { 1, 2 }, kV1[] = { 1 }, kV2[] = { 2 }, kV429[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+static const float kV510[] = { 1, 2, 3, 4, 5, 6 };   // (14/11 sk9ema) "Probar el viento"
 static const DebugParam kDebugParams[] = {
+    { 510, 0, 0.5f, 0.0f, "Viento: prueba (leve de costado, desde abajo, tormenta maxima, racha cada 3 s, calma, a mano)", "Viento", kV510, 6 },   // (14/11 sk9ema) wind.cpp
     { 12, 3, 0.5f, 0.0f, "Vista de diagnostico (rebote, sol y piel, contacto, nubes, cascadas, sombra, resolucion)", "Diagnostico", kV12, 7 },
     { 380, 3, 0.5f, 0.0f, "Vista de prueba de la luz del editor", "Editor", kV380, 5 },
     { 393, 0, 0.5f, 0.0f, "Pasto del mod bajo el jugador (editor, experimento)", "Editor", kV1, 1 },
