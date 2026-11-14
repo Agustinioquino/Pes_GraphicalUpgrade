@@ -120,7 +120,7 @@ static ImVec4 KelvinCol(float K) {   // aproximacion del color de un cuerpo negr
     return ImVec4(r, g, b, 1);
 }
 // iconos chicos para los botones (todo con lineas)
-enum { kSiShadow, kSiTemp, kSiPower, kSiSpin, kSiDay, kSiCloud, kSiHeightCol, kSiCopy };
+enum { kSiShadow, kSiTemp, kSiPower, kSiSpin, kSiDay, kSiCloud, kSiHeightCol, kSiCopy, kSiCompass, kSiWave, kSiGust, kSiSwirl, kSiStadium, kSiGrass, kSiShirt, kSiLen };
 static void SmallIcon(ImDrawList* dl, ImVec2 c, float s, int ic, ImU32 col, float t) {
     const float th = std::max(1.2f, s * 0.11f);
     switch (ic) {
@@ -147,6 +147,39 @@ static void SmallIcon(ImDrawList* dl, ImVec2 c, float s, int ic, ImU32 col, floa
         const float dx = sinf(t * 0.8f) * s * 0.05f;
         dl->AddCircleFilled(ImVec2(c.x - s * 0.18f + dx, c.y + s * 0.05f), s * 0.18f, col, 14); dl->AddCircleFilled(ImVec2(c.x + s * 0.05f + dx, c.y - s * 0.06f), s * 0.24f, col, 14);
         dl->AddCircleFilled(ImVec2(c.x + s * 0.27f + dx, c.y + s * 0.07f), s * 0.16f, col, 14); dl->AddRectFilled(ImVec2(c.x - s * 0.18f + dx, c.y + s * 0.05f), ImVec2(c.x + s * 0.27f + dx, c.y + s * 0.23f), col); } break;
+    case kSiCompass: {   // brujula con la aguja
+        dl->AddCircle(c, s * 0.40f, col, 20, th);
+        const float a = -kPI * 0.25f + sinf(t * 1.5f) * 0.15f; const ImVec2 d(cosf(a), sinf(a)), n(-d.y, d.x);
+        dl->AddTriangleFilled(ImVec2(c.x + d.x * s * 0.32f, c.y + d.y * s * 0.32f), ImVec2(c.x + n.x * s * 0.09f, c.y + n.y * s * 0.09f), ImVec2(c.x - n.x * s * 0.09f, c.y - n.y * s * 0.09f), col);
+        dl->AddTriangleFilled(ImVec2(c.x - d.x * s * 0.32f, c.y - d.y * s * 0.32f), ImVec2(c.x + n.x * s * 0.09f, c.y + n.y * s * 0.09f), ImVec2(c.x - n.x * s * 0.09f, c.y - n.y * s * 0.09f), col & 0x66FFFFFF); } break;
+    case kSiWave: {      // linea que sube y baja (el promedio que cambia durante el partido)
+        for (int i = 0; i < 10; i++) { const float x0 = -0.42f + i * 0.084f, x1 = x0 + 0.084f;
+            dl->AddLine(ImVec2(c.x + x0 * s, c.y + sinf(x0 * 7.0f + t) * s * 0.2f), ImVec2(c.x + x1 * s, c.y + sinf(x1 * 7.0f + t) * s * 0.2f), col, th); } } break;
+    case kSiGust: {      // tres rayas de viento, la del medio larga
+        const float o = sinf(t * 3.0f) * s * 0.06f;
+        dl->AddLine(ImVec2(c.x - s * 0.40f, c.y - s * 0.22f), ImVec2(c.x + s * 0.10f + o, c.y - s * 0.22f), col, th);
+        dl->AddLine(ImVec2(c.x - s * 0.40f, c.y), ImVec2(c.x + s * 0.42f + o, c.y), col, th * 1.4f);
+        dl->AddLine(ImVec2(c.x - s * 0.40f, c.y + s * 0.22f), ImVec2(c.x + s * 0.02f + o, c.y + s * 0.22f), col, th); } break;
+    case kSiSwirl: {     // remolino
+        dl->PathClear(); for (int i = 0; i <= 24; i++) { const float u = i / 24.0f, a = u * kPI * 3.2f + t * 2.0f, r = s * (0.06f + 0.36f * u); dl->PathLineTo(ImVec2(c.x + cosf(a) * r, c.y + sinf(a) * r)); }
+        dl->PathStroke(col, 0, th); } break;
+    case kSiStadium:     // tribunas a los costados de la cancha
+        dl->AddRectFilled(ImVec2(c.x - s * 0.45f, c.y - s * 0.30f), ImVec2(c.x - s * 0.28f, c.y + s * 0.30f), col, 1.0f);
+        dl->AddRectFilled(ImVec2(c.x + s * 0.28f, c.y - s * 0.30f), ImVec2(c.x + s * 0.45f, c.y + s * 0.30f), col, 1.0f);
+        dl->AddLine(ImVec2(c.x - s * 0.20f, c.y + s * 0.30f), ImVec2(c.x + s * 0.20f, c.y + s * 0.30f), col, th);
+        dl->AddLine(ImVec2(c.x - s * 0.22f, c.y - s * 0.05f), ImVec2(c.x + s * 0.18f, c.y - s * 0.05f), col & 0x88FFFFFF, th); break;
+    case kSiGrass:       // hojas de pasto dobladas
+        for (int i = 0; i < 4; i++) { const float x = c.x - s * 0.33f + i * s * 0.22f, b = s * (0.10f + 0.06f * sinf(t * 2.0f + i));
+            dl->AddBezierQuadratic(ImVec2(x, c.y + s * 0.38f), ImVec2(x, c.y), ImVec2(x + b, c.y - s * (0.28f + 0.06f * (i & 1))), col, th); } break;
+    case kSiShirt: {     // camiseta
+        const ImVec2 q[8] = { ImVec2(c.x - s * 0.15f, c.y - s * 0.38f), ImVec2(c.x - s * 0.45f, c.y - s * 0.20f), ImVec2(c.x - s * 0.34f, c.y - s * 0.02f), ImVec2(c.x - s * 0.24f, c.y - s * 0.08f),
+                              ImVec2(c.x - s * 0.24f, c.y + s * 0.40f), ImVec2(c.x + s * 0.24f, c.y + s * 0.40f), ImVec2(c.x + s * 0.24f, c.y - s * 0.08f), ImVec2(c.x + s * 0.34f, c.y - s * 0.02f) };
+        dl->AddPolyline(q, 8, col, 0, th); dl->AddLine(q[7], ImVec2(c.x + s * 0.45f, c.y - s * 0.20f), col, th); dl->AddLine(ImVec2(c.x + s * 0.45f, c.y - s * 0.20f), ImVec2(c.x + s * 0.15f, c.y - s * 0.38f), col, th);
+        dl->AddBezierQuadratic(ImVec2(c.x - s * 0.15f, c.y - s * 0.38f), ImVec2(c.x, c.y - s * 0.22f), ImVec2(c.x + s * 0.15f, c.y - s * 0.38f), col, th); } break;
+    case kSiLen:         // dos rachas, una corta y una larga
+        dl->AddLine(ImVec2(c.x - s * 0.42f, c.y - s * 0.12f), ImVec2(c.x - s * 0.10f, c.y - s * 0.12f), col, th * 1.4f);
+        dl->AddLine(ImVec2(c.x - s * 0.42f, c.y + s * 0.14f), ImVec2(c.x + s * 0.42f, c.y + s * 0.14f), col, th * 1.4f);
+        dl->AddLine(ImVec2(c.x + s * 0.42f, c.y + s * 0.02f), ImVec2(c.x + s * 0.42f, c.y + s * 0.26f), col, th); break;
     case kSiHeightCol:   // sol bajo naranja sobre la linea
         dl->AddLine(ImVec2(c.x - s * 0.45f, c.y + s * 0.15f), ImVec2(c.x + s * 0.45f, c.y + s * 0.15f), col, th);
         dl->PathArcTo(ImVec2(c.x, c.y + s * 0.15f), s * 0.22f, kPI, kPI * 2.0f, 12); dl->PathFillConvex(IM_COL32(255, 150, 70, (col >> 24) & 255)); break;
@@ -378,77 +411,220 @@ bool MvSunWidget(MvSunIn& in) {
 // ------------------------------------------------------------------------------------------------------------------------------
 // viento
 struct WindDot { float x, y, life, seed; };
-bool MvWindWidget(MvWindIn& in) {
-    const float k = in.k; bool changed = false;
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float W = std::min(ImGui::GetContentRegionAvail().x, 340.0f * k), H = W * 68.0f / 105.0f, gd = W * 2.0f / 105.0f;
-    const ImVec2 o = ImGui::GetCursorScreenPos(), a(o.x + gd, o.y), b(a.x + W, a.y + H), c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
-    const ImGuiID wid = ImGui::GetID("##vientocancha");
-    ImGui::InvisibleButton("##vientocancha", ImVec2(W + 2 * gd, H));
-    const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
-    const bool fixed = in.fixed && *in.fixed > 0.5f;
-    float dir = in.live ? in.dirDeg : (in.fixedDeg ? *in.fixedDeg : 0.0f);
-    if (act && in.fixed && in.fixedDeg) {   // arrastrar: el rumbo fijo apunta hacia el mouse
-        const ImVec2 m = ImGui::GetIO().MousePos; const float dx = m.x - c.x, dy = m.y - c.y;
-        if (dx * dx + dy * dy > 16.0f * k * k) {
-            float d = atan2f(dy, dx) / kDeg; if (d < 0) d += 360.0f;
-            *in.fixed = 1.0f; *in.fixedDeg = roundf(d); dir = *in.fixedDeg; changed = true;
-        }
-    }
-    if (hov && in.strength && ImGui::GetIO().MouseWheel != 0.0f) {   // rueda: la fuerza general
-        ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
-        *in.strength = std::clamp(*in.strength + ImGui::GetIO().MouseWheel * 0.05f, 0.0f, 3.0f); changed = true;
-    }
-    if (ImGui::IsItemClicked(ImGuiMouseButton_Right) && in.fixed) { *in.fixed = 0.0f; changed = true; }   // clic derecho: rumbo del partido
-    if (fixed && in.fixedDeg && !in.live) dir = *in.fixedDeg;
-    const float shDir = Follow(wid + 1, dir, 10.0f, in.anim && !act, true);
-    const float speed = in.live ? in.speed : (in.strength ? 2.0f * *in.strength : 2.0f);
-    const float shSpd = Follow(wid + 2, speed, 4.0f, in.anim);
-    DrawPitchTop(dl, a, b, 1.0f);
-    const ImU32 ln = Col(0.92f, 0.96f, 0.92f, 0.65f);
-    const float ga = H * 7.32f / 68.0f * 0.5f;
-    dl->AddRect(ImVec2(a.x - gd, c.y - ga), ImVec2(a.x, c.y + ga), ln); dl->AddRect(ImVec2(b.x, c.y - ga), ImVec2(b.x + gd, c.y + ga), ln);
-    // particulas que vuelan con el viento (largo y velocidad segun los m/s, mas visibles en la racha)
-    const float dx = cosf(shDir * kDeg), dy = sinf(shDir * kDeg);
+// particulas que vuelan con el viento dentro del rectangulo a..b (la cancha); largo y velocidad segun los m/s, mas en la racha
+static void WindParticles(ImDrawList* dl, ImVec2 a, ImVec2 b, float dirDeg, float spd, float gust, float turb, double now, bool anim, float k) {
+    const float W = b.x - a.x, H = b.y - a.y, dx = cosf(dirDeg * kDeg), dy = sinf(dirDeg * kDeg);
     static WindDot s_dots[90]; static bool s_init = false;
     if (!s_init) { unsigned s = 12345u; for (auto& d : s_dots) { s = s * 1664525u + 1013904223u; d.x = (s >> 8) / 16777216.0f; s = s * 1664525u + 1013904223u; d.y = (s >> 8) / 16777216.0f; s = s * 1664525u + 1013904223u; d.life = (s >> 8) / 16777216.0f; d.seed = d.x * 7.0f + d.y * 3.0f; } s_init = true; }
-    const int nDots = std::clamp((int)(20 + shSpd * 7.0f), 20, 90);
-    const float dt = in.anim ? std::min(ImGui::GetIO().DeltaTime, 0.05f) : 0.0f;
-    const float v = (0.04f + shSpd * 0.03f) * (1.0f + 0.6f * in.gust);
+    const int nDots = std::clamp((int)(20 + spd * 7.0f), 20, 90);
+    const float dt = anim ? std::min(ImGui::GetIO().DeltaTime, 0.05f) : 0.0f;
+    const float v = (0.04f + spd * 0.03f) * (1.0f + 0.6f * gust);
     dl->PushClipRect(a, b, true);
     for (int i = 0; i < nDots; i++) {
         WindDot& d = s_dots[i];
-        const float wob = sinf((float)in.now * (2.0f + in.turb * 4.0f) + d.seed) * 0.15f * (0.3f + in.turb);
-        d.x += (dx - dy * wob) * v * dt * 105.0f / 105.0f; d.y += (dy + dx * wob) * v * dt * 105.0f / 68.0f;
+        const float wob = sinf((float)now * (2.0f + turb * 4.0f) + d.seed) * 0.15f * (0.3f + turb);
+        d.x += (dx - dy * wob) * v * dt; d.y += (dy + dx * wob) * v * dt * W / std::max(H, 1.0f);
         d.life += dt * 0.5f;
         if (d.x < -0.05f || d.x > 1.05f || d.y < -0.05f || d.y > 1.05f || d.life > 1.0f) {   // vuelve a nacer del lado de donde viene
-            unsigned s = (unsigned)(d.seed * 1000.0f + in.now * 977.0f); s = s * 1664525u + 1013904223u;
+            unsigned s = (unsigned)(d.seed * 1000.0f + now * 977.0f); s = s * 1664525u + 1013904223u;
             const float r1 = (s >> 8) / 16777216.0f; s = s * 1664525u + 1013904223u; const float r2 = (s >> 8) / 16777216.0f;
             d.x = r1; d.y = r2; d.life = 0.0f;
             if (fabsf(dx) > fabsf(dy)) d.x = dx > 0 ? -0.02f + r2 * 0.3f : 1.02f - r2 * 0.3f; else d.y = dy > 0 ? -0.02f + r1 * 0.3f : 1.02f - r1 * 0.3f;
         }
         const ImVec2 p(a.x + d.x * W, a.y + d.y * H);
-        const float tail = (6.0f + shSpd * 2.2f) * k * (0.7f + 0.6f * in.gust);
-        const float al = 0.55f * sinf(Sat(d.life) * kPI) * Sat(0.25f + shSpd / 6.0f);
+        const float tail = (6.0f + spd * 2.2f) * k * (0.7f + 0.6f * gust);
+        const float al = 0.55f * sinf(Sat(d.life) * kPI) * Sat(0.25f + spd / 6.0f);
         dl->AddLine(p, ImVec2(p.x - dx * tail, p.y - dy * tail), Col(1, 1, 1, al), 1.4f * k);
     }
     dl->PopClipRect();
-    // flechas: la de dentro de 2 s (clara) y la de ahora (amarilla); con el mouse encima, la que se arrastra
-    auto arrow = [&](float deg, float len, ImU32 col, float th) {
-        const float r = deg * kDeg, ax = cosf(r), ay = sinf(r);
-        const ImVec2 p0(c.x - ax * len * 0.5f, c.y - ay * len * 0.5f), p1(c.x + ax * len * 0.5f, c.y + ay * len * 0.5f);
-        dl->AddLine(p0, p1, col, th);
-        const float hs = 9.0f * k; const ImVec2 l(p1.x - ax * hs - ay * hs * 0.6f, p1.y - ay * hs + ax * hs * 0.6f), rr(p1.x - ax * hs + ay * hs * 0.6f, p1.y - ay * hs - ax * hs * 0.6f);
-        dl->AddTriangleFilled(p1, l, rr, col);
-        return p1;
+}
+// (14/11 e) Agustin: "me gusta mas la vista del sol, el viento podes rehacerlo tambien": misma idea que la tarjeta del sol. Arriba los
+// preajustes de un clic; abajo el dial (la cancha desde arriba con las particulas; se arrastra la flecha por el anillo = rumbo fijo),
+// la vista de costado (banderin y pasto que se doblan; se arrastra la barra = fuerza general) y los botones con dibujo.
+bool MvWindWidget(MvWindIn& in) {
+    const float k = in.k; bool changed = false;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const double t = in.now;
+    static const float kPreMs[5] = { 2.0f, 0.8f, 3.0f, 6.5f, 11.0f };
+    const int preset = in.preset ? std::clamp((int)lroundf(*in.preset), 0, 4) : 0;
+    const float strength = in.strength ? *in.strength : 1.0f;
+    // --- preajustes de un clic ---
+    if (in.preset) {
+        static const char* kN[5] = { "Del partido", "Calmo", "Brisa", "Ventoso", "Tormenta" };
+        static const ImVec4 kTop[5] = { ImVec4(0.20f, 0.42f, 0.30f, 1), ImVec4(0.32f, 0.58f, 0.72f, 1), ImVec4(0.28f, 0.52f, 0.78f, 1), ImVec4(0.30f, 0.38f, 0.58f, 1), ImVec4(0.26f, 0.24f, 0.36f, 1) };
+        static const ImVec4 kBot[5] = { ImVec4(0.12f, 0.28f, 0.18f, 1), ImVec4(0.55f, 0.74f, 0.82f, 1), ImVec4(0.45f, 0.66f, 0.84f, 1), ImVec4(0.42f, 0.48f, 0.62f, 1), ImVec4(0.14f, 0.13f, 0.20f, 1) };
+        const float bw = (avail - 4 * 6.0f * k) / 5.0f, h = 30.0f * k;
+        for (int i = 0; i < 5; i++) {
+            if (i) ImGui::SameLine(0, 6.0f * k);
+            ImGui::PushID(i);
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            if (ImGui::InvisibleButton("##wpre", ImVec2(bw, h))) { *in.preset = (float)i; changed = true; }
+            const bool hv = ImGui::IsItemHovered(), cur = preset == i;
+            dl->AddRectFilledMultiColor(p, ImVec2(p.x + bw, p.y + h), ImGui::GetColorU32(kTop[i]), ImGui::GetColorU32(kTop[i]), ImGui::GetColorU32(kBot[i]), ImGui::GetColorU32(kBot[i]));
+            // rayitas de viento: mas y mas largas con mas viento (se mueven con la animacion)
+            dl->PushClipRect(p, ImVec2(p.x + bw, p.y + h), true);
+            for (int j = 0; j < i + (i == 0 ? 2 : 1); j++) {
+                const float y = p.y + h * (0.25f + 0.5f * ((j * 37) % 10) / 10.0f), L = bw * (0.10f + 0.05f * i);
+                const float x = p.x + fmodf((float)(in.anim ? t : 0.0) * bw * (0.15f + 0.12f * i) + j * bw * 0.37f, bw + L) - L * 0.5f;
+                dl->AddLine(ImVec2(x, y), ImVec2(x + L, y), Col(1, 1, 1, 0.22f), 1.4f * k);
+            }
+            dl->PopClipRect();
+            dl->AddRect(p, ImVec2(p.x + bw, p.y + h), cur ? Col(0.45f, 0.95f, 0.66f, 1) : Col(1, 1, 1, hv ? 0.5f : 0.18f), 7.0f * k, 0, cur ? 2.0f * k : 1.0f);
+            const char* nm = TRS(kN[i]); const ImVec2 ts = ImGui::CalcTextSize(nm);
+            dl->AddText(ImVec2(p.x + (bw - ts.x) * 0.5f + 1, p.y + (h - ts.y) * 0.5f + 1), Col(0, 0, 0, 0.6f), nm);
+            dl->AddText(ImVec2(p.x + (bw - ts.x) * 0.5f, p.y + (h - ts.y) * 0.5f), IM_COL32_WHITE, nm);
+            if (hv) { if (i == 0) ImGui::SetTooltip("%s", TRS("Cada partido trae su viento: hora, clima, estacion, estadio y azar."));
+                      else ImGui::SetTooltip(TRS("%s: unos %.1f m/s (%.0f km/h), por la Fuerza general."), nm, kPreMs[i], kPreMs[i] * 3.6f); }
+            ImGui::PopID();
+        }
+        ImGui::Dummy(ImVec2(0, 4.0f * k));
+    }
+    const bool wide = avail >= 600.0f * k;
+    const float D = std::clamp(avail * (wide ? 0.30f : 0.48f), 150.0f * k, 210.0f * k);
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    // --- 1) hacia donde sopla: la cancha desde arriba con el anillo ---
+    const bool fixed = in.fixed && *in.fixed > 0.5f;
+    float dir = in.live ? in.dirDeg : (in.fixedDeg ? *in.fixedDeg : 0.0f);
+    const ImGuiID wid = ImGui::GetID("##vientodial");
+    const ImVec2 c(p0.x + D * 0.5f, p0.y + D * 0.5f); const float R = D * 0.5f - 12.0f * k;
+    ImGui::InvisibleButton("##vientodial", ImVec2(D, D));
+    const bool hovD = ImGui::IsItemHovered(), actD = ImGui::IsItemActive();
+    if (actD && in.fixed && in.fixedDeg) {
+        const ImVec2 m = ImGui::GetIO().MousePos; const float mx = m.x - c.x, my = m.y - c.y;
+        if (mx * mx + my * my > 16.0f * k * k) { float d = atan2f(my, mx) / kDeg; if (d < 0) d += 360.0f; *in.fixed = 1.0f; *in.fixedDeg = roundf(d); dir = *in.fixedDeg; changed = true; }
+    }
+    if (hovD && in.strength && ImGui::GetIO().MouseWheel != 0.0f) { ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY); *in.strength = std::clamp(*in.strength + ImGui::GetIO().MouseWheel * 0.05f, 0.0f, 3.0f); changed = true; }
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right) && in.fixed) { *in.fixed = 0.0f; changed = true; }
+    if (fixed && in.fixedDeg && !in.live) dir = *in.fixedDeg;
+    const float shDir = Follow(wid + 1, dir, 10.0f, in.anim && !actD, true);
+    const float speed = in.live ? in.speed : kPreMs[preset] * strength;
+    const float shSpd = Follow(wid + 2, speed, 4.0f, in.anim);
+    {
+        dl->AddCircleFilled(c, R + 10.0f * k, Col(0, 0, 0, 0.25f), 64);
+        dl->AddCircle(c, R, Col(1, 1, 1, hovD || actD ? 0.45f : 0.22f), 64, 10.0f * k);
+        for (int i = 0; i < 24; i++) { const float a = i * kPI / 12; const float l = i % 6 == 0 ? 6.0f : 3.0f; dl->AddLine(ImVec2(c.x + cosf(a) * (R - l * k), c.y + sinf(a) * (R - l * k)), ImVec2(c.x + cosf(a) * (R + l * k), c.y + sinf(a) * (R + l * k)), Col(1, 1, 1, 0.35f), 1.0f); }
+        const float pw = R * 1.05f, ph = pw * 68.0f / 105.0f;
+        const ImVec2 pa(c.x - pw * 0.5f, c.y - ph * 0.5f), pb(c.x + pw * 0.5f, c.y + ph * 0.5f);
+        DrawPitchTop(dl, pa, pb, 1.0f);
+        WindParticles(dl, pa, pb, shDir, shSpd, in.gust, in.turb, t, in.anim, k);
+        // flecha por la cancha (la de 2 s clarita) y la perilla en el anillo, del lado hacia donde sopla
+        auto arrow = [&](float deg, float len, ImU32 col, float th) {
+            const float r = deg * kDeg, ax = cosf(r), ay = sinf(r);
+            const ImVec2 q0(c.x - ax * len * 0.5f, c.y - ay * len * 0.5f), q1(c.x + ax * len * 0.5f, c.y + ay * len * 0.5f);
+            dl->AddLine(q0, q1, col, th);
+            const float hs = 8.0f * k; dl->AddTriangleFilled(q1, ImVec2(q1.x - ax * hs - ay * hs * 0.6f, q1.y - ay * hs + ax * hs * 0.6f), ImVec2(q1.x - ax * hs + ay * hs * 0.6f, q1.y - ay * hs - ax * hs * 0.6f), col);
+        };
+        const float L0 = ph * 0.35f, L1 = pw * 0.85f;
+        if (in.live) arrow(in.soonDirDeg, L0 + (L1 - L0) * Sat(in.soonSpeed / 12.0f), Col(1, 1, 1, 0.28f), 2.0f * k);
+        const float pulse = in.anim ? 0.85f + 0.15f * sinf((float)t * 3.0f) : 1.0f;
+        arrow(shDir, L0 + (L1 - L0) * Sat(shSpd / 12.0f), Col(1.0f, 0.92f, 0.47f, 0.92f * pulse), 3.0f * k);
+        const ImVec2 kp(c.x + cosf(shDir * kDeg) * R, c.y + sinf(shDir * kDeg) * R);
+        dl->AddCircleFilled(kp, (8.0f + (hovD || actD ? 1.5f : 0.0f)) * k, fixed ? Col(1.0f, 0.92f, 0.47f, 1) : Col(0.75f, 0.85f, 0.95f, 0.9f), 20);
+        WindGlyph(dl, kp, 11.0f * k, Col(0.10f, 0.12f, 0.16f, 1), in.anim ? (float)fmod(t, 3600.0) : 0.0f);
+        const char* lab = TRS(fixed ? "Rumbo fijo" : "Rumbo del partido"); const ImVec2 ts = ImGui::CalcTextSize(lab);
+        dl->AddText(ImVec2(c.x - ts.x * 0.5f, c.y + ph * 0.5f + 4.0f * k), Col(1, 1, 1, 0.6f), lab);
+        if (hovD && !actD) ImGui::SetTooltip("%s", TRS("Hacia donde sopla: arrastra por el anillo (pasa el Rumbo a Fijo). Clic derecho: el rumbo del partido. Rueda del mouse: Fuerza general. La flecha clarita es el viento de dentro de 2 s."));
+    }
+    // --- 2) la fuerza: vista de costado con el banderin y el pasto; la barra de la derecha se arrastra ---
+    const float AW = std::clamp(D * 0.72f, 110.0f * k, 150.0f * k);
+    ImGui::SetCursorScreenPos(ImVec2(p0.x + D + 8.0f * k, p0.y));
+    const ImVec2 a0 = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##vientofuerza", ImVec2(AW, D));
+    const bool hovA = ImGui::IsItemHovered(), actA = ImGui::IsItemActive();
+    const float gx = a0.x + AW - 14.0f * k, gy0 = a0.y + 12.0f * k, gy1 = a0.y + D - 34.0f * k;   // barra de la fuerza
+    if (actA && in.strength) { const float u = Sat((gy1 - ImGui::GetIO().MousePos.y) / (gy1 - gy0)); *in.strength = roundf(u * 3.0f * 20.0f) / 20.0f; changed = true; }
+    if (hovA && in.strength && ImGui::GetIO().MouseWheel != 0.0f) { ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY); *in.strength = std::clamp(*in.strength + ImGui::GetIO().MouseWheel * 0.05f, 0.0f, 3.0f); changed = true; }
+    {
+        const float ground = a0.y + D - 26.0f * k;
+        const ImVec4 sk0 = Lerp4(ImVec4(0.30f, 0.52f, 0.80f, 1), ImVec4(0.25f, 0.27f, 0.36f, 1), Sat(shSpd / 12.0f)), sk1 = Lerp4(ImVec4(0.62f, 0.78f, 0.92f, 1), ImVec4(0.40f, 0.42f, 0.50f, 1), Sat(shSpd / 12.0f));
+        dl->AddRectFilledMultiColor(a0, ImVec2(a0.x + AW, ground), ImGui::GetColorU32(sk0), ImGui::GetColorU32(sk0), ImGui::GetColorU32(sk1), ImGui::GetColorU32(sk1));
+        dl->AddRectFilled(ImVec2(a0.x, ground), ImVec2(a0.x + AW, a0.y + D), Col(0.15f, 0.38f, 0.19f, 1));
+        dl->PushClipRect(a0, ImVec2(a0.x + AW, a0.y + D), true);
+        // de costado se ve la parte del viento que va de izquierda a derecha (cos del rumbo); el signo dice para donde se dobla
+        const float side = cosf(shDir * kDeg) >= 0.0f ? 1.0f : -1.0f, bend = Sat(shSpd / 12.0f);
+        const float tt = in.anim ? (float)fmod(t, 3600.0) : 0.0f;
+        // nubes que pasan mas rapido con mas viento
+        for (int i = 0; i < 2; i++) { const float x = a0.x + fmodf(tt * (6.0f + shSpd * 5.0f) * k * side + i * AW * 0.55f + AW * 4.0f, AW + 40.0f * k) - 20.0f * k, y = a0.y + (14.0f + i * 22.0f) * k;
+            dl->AddCircleFilled(ImVec2(x, y), 7.0f * k, Col(1, 1, 1, 0.35f), 12); dl->AddCircleFilled(ImVec2(x + 8.0f * k, y - 3.0f * k), 9.0f * k, Col(1, 1, 1, 0.35f), 12); dl->AddCircleFilled(ImVec2(x + 17.0f * k, y), 6.0f * k, Col(1, 1, 1, 0.35f), 12); }
+        // pasto que se dobla
+        for (int i = 0; i < 14; i++) { const float x = a0.x + (6.0f + i * 7.5f) * k, w = sinf(tt * (2.0f + shSpd * 0.5f) + i * 0.7f) * 0.25f + 0.75f;
+            dl->AddBezierQuadratic(ImVec2(x, ground + 2.0f * k), ImVec2(x, ground - 6.0f * k), ImVec2(x + side * bend * w * 9.0f * k, ground - (12.0f - 5.0f * bend * w) * k), Col(0.35f, 0.70f, 0.35f, 1), 1.6f * k); }
+        // banderin del corner: palo y la tela que flamea
+        const ImVec2 pole(a0.x + AW * 0.38f, ground), top(pole.x, ground - D * 0.55f);
+        dl->AddLine(pole, top, Col(0.95f, 0.95f, 0.98f, 1), 2.5f * k);
+        const float FL = 30.0f * k, FH = 20.0f * k, droop = (1.0f - Sat(shSpd / 5.0f)) * 0.9f;   // sin viento cuelga
+        ImVec2 up[9], lo[9];
+        for (int i = 0; i <= 8; i++) {
+            const float u = i / 8.0f, wave = sinf(u * 5.0f - tt * (3.0f + shSpd * 1.2f)) * u * FH * 0.12f * (0.4f + bend);
+            const float ang = droop * 1.35f;   // 0 = horizontal, ~1.35 = colgando
+            const float x = side * cosf(ang) * u * FL, y = sinf(ang) * u * FL + wave;
+            up[i] = ImVec2(top.x + x, top.y + 2.0f * k + y); lo[i] = ImVec2(top.x + x - side * sinf(ang) * FH * 0.0f, top.y + 2.0f * k + y + FH * (1.0f - 0.15f * u) * (1.0f - droop * 0.55f));
+        }
+        for (int i = 0; i < 8; i++) dl->AddQuadFilled(up[i], up[i + 1], lo[i + 1], lo[i], (i & 1) ? Col(1.0f, 0.86f, 0.25f, 0.95f) : Col(0.95f, 0.75f, 0.15f, 0.95f));
+        dl->PopClipRect();
+        // barra de la fuerza
+        const float u = in.strength ? Sat(*in.strength / 3.0f) : 0.33f, gy = gy1 - (gy1 - gy0) * u;
+        dl->AddRectFilled(ImVec2(gx - 3.0f * k, gy0), ImVec2(gx + 3.0f * k, gy1), Col(0, 0, 0, 0.35f), 3.0f * k);
+        dl->AddRectFilled(ImVec2(gx - 3.0f * k, gy), ImVec2(gx + 3.0f * k, gy1), Col(0.75f, 0.90f, 1.0f, 0.95f), 3.0f * k);
+        dl->AddLine(ImVec2(gx - 6.0f * k, gy1 - (gy1 - gy0) / 3.0f), ImVec2(gx + 6.0f * k, gy1 - (gy1 - gy0) / 3.0f), Col(1, 1, 1, 0.6f), 1.0f);   // 1 = normal
+        dl->AddCircleFilled(ImVec2(gx, gy), (6.0f + (hovA || actA ? 1.5f : 0.0f)) * k, Col(0.95f, 0.96f, 0.98f, 1), 16);
+        dl->AddRect(a0, ImVec2(a0.x + AW, a0.y + D), Col(1, 1, 1, hovA || actA ? 0.45f : 0.18f), 9.0f * k, 0, 1.0f);
+        char b[48]; snprintf(b, sizeof b, "%.1f m/s  x%.2f", shSpd, in.strength ? *in.strength : 1.0f);
+        dl->AddText(ImVec2(a0.x + 7.0f * k, a0.y + D - ImGui::GetFontSize() - 5.0f * k), IM_COL32_WHITE, b);
+        if (hovA && !actA) ImGui::SetTooltip("%s", TRS("Fuerza general: arrastra la barra de la derecha (o la rueda del mouse). La raya = 1, normal. El banderin y el pasto muestran cuanto sopla ahora."));
+    }
+    // --- 3) las demas opciones con botones de icono ---
+    const float bwAll = wide ? avail - (D + AW + 18.0f * k) : avail;
+    if (wide) ImGui::SetCursorScreenPos(ImVec2(p0.x + D + AW + 18.0f * k, p0.y)); else ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + D + 8.0f * k));
+    ImGui::BeginGroup();
+    const float cw = (bwAll - 6.0f * k) * 0.5f;
+    int col = 0;
+    auto next = [&]() { if (++col % 2) ImGui::SameLine(0, 6.0f * k); };
+    // chip de 3 valores: clic pasa al siguiente
+    auto chip3 = [&](const char* id, int ic, const char* label, float* v, const float* vals, const char* const* names, const char* tip) {
+        if (!v) return;
+        int cur = 0; for (int i = 1; i < 3; i++) if (fabsf(vals[i] - *v) < fabsf(vals[cur] - *v)) cur = i;
+        if (Chip(id, ic, TRS(label), TRS(names[cur]), cur > 0, cw, k, t, in.anim)) { *v = vals[(cur + 1) % 3]; changed = true; }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(tip));
+        next();
     };
-    const float L0 = H * 0.35f, L1 = H * 0.9f;
-    if (in.live) arrow(in.soonDirDeg, L0 + (L1 - L0) * Sat(in.soonSpeed / 12.0f), Col(1, 1, 1, 0.28f), 2.0f * k);
-    const float pulse = in.anim ? 0.85f + 0.15f * sinf((float)in.now * 3.0f) : 1.0f;
-    const ImVec2 tip = arrow(shDir, (L0 + (L1 - L0) * Sat(shSpd / 12.0f)) * (act ? 1.05f : 1.0f), Col(1.0f, 0.92f, 0.47f, 0.92f * pulse), 3.0f * k);
-    if (hov || act) dl->AddCircle(tip, 7.0f * k, Col(1.0f, 0.92f, 0.47f, 0.8f), 16, 1.5f * k);
-    if (fixed) dl->AddText(ImVec2(a.x + 5 * k, a.y + 3 * k), Col(1, 1, 1, 0.8f), TRS("Rumbo fijo"));
-    if (hov && !act) ImGui::SetTooltip("%s", TRS("Arrastra para fijar hacia donde sopla (pasa el Rumbo a Fijo). Clic derecho: volver al rumbo del partido. Rueda del mouse: Fuerza general."));
+    if (in.fixed) {
+        if (Chip("##w_rb", kSiCompass, TRS("Rumbo"), TRS(fixed ? "Fijo (el del dial)" : "Del partido"), fixed, cw, k, t, in.anim)) { *in.fixed = fixed ? 0.0f : 1.0f; changed = true; }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Del partido = cada partido trae el suyo. Fijo = siempre el del dial (para grabar videos iguales)."));
+        next();
+    }
+    { static const float v[3] = { 0.0f, 0.5f, 1.0f }; static const char* n[3] = { "Parejo", "Natural", "Mucho" };
+      chip3("##w_ch", kSiWave, "Cambio en el partido", in.change, v, n, "El viento medio sube y baja de a poco durante el partido. Clic: parejo / natural / mucho."); }
+    { static const float v[3] = { 0.0f, 1.0f, 2.0f }; static const char* n[3] = { "Viento parejo", "Natural", "Muy racheado" };
+      chip3("##w_ra", kSiGust, "Rachas", in.gusts, v, n, "Cuanto mas fuerte que el promedio llegan las rachas. Clic: parejo / natural / muy racheado."); }
+    { static const float v[3] = { 0.5f, 1.0f, 2.0f }; static const char* n[3] = { "Cortas y seguidas", "Natural", "Largas" };
+      chip3("##w_lr", kSiLen, "Largo de las rachas", in.gustLen, v, n, "Rafagas cortas y seguidas, o rachas largas y sostenidas. Clic para cambiar."); }
+    { static const float v[3] = { 0.0f, 1.0f, 2.0f }; static const char* n[3] = { "Aire liso", "Natural", "Revuelto" };
+      chip3("##w_tu", kSiSwirl, "Turbulencia", in.turbP, v, n, "Los remolinos chicos y rapidos encima de la racha. Clic: liso / natural / revuelto."); }
+    { static const float v[3] = { 0.0f, 1.0f, 2.0f }; static const char* n[3] = { "Clavado", "Natural", "Mucho" };
+      chip3("##w_gi", kSiSpin, "Giro del rumbo", in.veer, v, n, "Cuanto se corre solo el rumbo. Clic: clavado / natural / mucho."); }
+    if (in.shelterMode && in.shelter) {
+        const int cur = *in.shelterMode < 0.5f ? 0 : (*in.shelter < 0.25f ? 1 : (*in.shelter > 0.75f ? 3 : 2));
+        static const char* n[4] = { "Segun el estadio", "Cancha abierta", "Medio", "Estadio cerrado" };
+        if (Chip("##w_re", kSiStadium, TRS("Reparo del estadio"), TRS(n[cur]), cur != 0, cw, k, t, in.anim)) {
+            const int nx = (cur + 1) % 4; *in.shelterMode = nx == 0 ? 0.0f : 1.0f; if (nx) *in.shelter = nx == 1 ? 0.0f : nx == 2 ? 0.5f : 1.0f; changed = true; }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Cuanto tapan las tribunas. Segun el estadio = la tabla viento_estadios.txt. Abierta = mas viento y mas liso; cerrado = menos y mas revuelto."));
+        next();
+    }
+    if (col % 2) ImGui::NewLine();
+    auto strip = [&](const char* id, int ic, const char* label, float* v, ImVec4 fill) {
+        if (!v) return;
+        const ImVec2 lp = ImGui::GetCursorScreenPos(); char sub[64]; snprintf(sub, sizeof sub, "%s  %.2f", TRS(label), *v);
+        SmallIcon(dl, ImVec2(lp.x + 9.0f * k, lp.y + ImGui::GetFontSize() * 0.5f), 18.0f * k, ic, Col(0.85f, 0.87f, 0.9f, 1), in.anim ? (float)fmod(t, 3600.0) : 0.0f);
+        dl->AddText(ImVec2(lp.x + 22.0f * k, lp.y), Col(0.85f, 0.87f, 0.9f, 1), sub); ImGui::Dummy(ImVec2(1, ImGui::GetFontSize() + 2.0f * k));
+        if (Strip(id, v, 0.0f, 3.0f, bwAll, k, nullptr, 0, fill, in.anim)) changed = true;
+    };
+    strip("##w_pa", kSiGrass, "Viento en el pasto", in.grass, ImVec4(0.40f, 0.80f, 0.42f, 1));
+    strip("##w_ro", kSiShirt, "Viento en la ropa", in.cloth, ImVec4(0.55f, 0.75f, 1.0f, 1));
+    ImGui::EndGroup();
+    const float yEnd = std::max(ImGui::GetItemRectMax().y, p0.y + D);
+    ImGui::SetCursorScreenPos(ImVec2(p0.x, yEnd + 4.0f * k)); ImGui::Dummy(ImVec2(avail, 1.0f));
     return changed;
 }
 
@@ -611,32 +787,31 @@ void MvPadGlyph(ImDrawList* dl, ImVec2 c, float r, int btn, float alpha, float l
     dl->AddRect(a, b, Col(1, 1, 1, 0.25f * alpha), r * 0.78f);
     dl->AddText(f, fs, ImVec2(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f), Col(0.93f, 0.94f, 0.96f, alpha), n);
 }
-// --- dibujo del mando (14/11 d, segun las fotos de Agustin): dibujo plano de un solo color con sombra suave de arriba hacia abajo,
-// detalles en el mismo tono un poco mas oscuro y bordes finos. PS5 blanco con el frente gris; PS4 y Xbox del color del cuerpo.
-// Todo con curvas de ImGui; no es una imagen.
-ImVec2 MvPadSize(float k) { return ImVec2(240.0f * k, 178.0f * k); }
-// curva suave por los puntos (Catmull-Rom), cerrada
-static void SmoothClosed(const ImVec2* in, int n, ImVector<ImVec2>& out, int sub) {
-    out.resize(0);
-    for (int i = 0; i < n; i++) {
-        const ImVec2 p0 = in[(i - 1 + n) % n], p1 = in[i], p2 = in[(i + 1) % n], p3 = in[(i + 2) % n];
-        for (int j = 0; j < sub; j++) {
-            const float t = (float)j / sub, t2 = t * t, t3 = t2 * t;
-            out.push_back(ImVec2(0.5f * ((2 * p1.x) + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
-                                 0.5f * ((2 * p1.y) + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3)));
-        }
-    }
-}
-// medio contorno (lado derecho, de arriba al centro de abajo) en unidades: x 0..1 = medio ancho, y 0..1 = alto; se espeja
+// --- dibujo del mando (14/11 e). Agustin: "respetar la forma del mando correcta". Los contornos (cuerpo, gatillos, frente gris del
+// PS5, panel tactil y puntas de los agarres del PS4) estan CALCADOS de las 3 fotos que mando Agustin (blanco PS5, rojo PS4, rojo
+// Xbox): mitad izquierda del contorno espejada, en unidades u = -1..1 (medio ancho) y v = 0..1 (alto con los gatillos). Los botones
+// van en el lugar medido sobre las mismas fotos. Dibujo plano con sombra suave, como las fotos; no es una imagen.
+static const float kB_ps5[][2] = { { 0.000f, 0.131f }, { 0.266f, 0.134f }, { 0.438f, 0.151f }, { 0.484f, 0.151f }, { 0.499f, 0.124f }, { 0.635f, 0.124f }, { 0.752f, 0.158f }, { 0.757f, 0.178f }, { 0.797f, 0.191f }, { 0.899f, 0.349f }, { 0.944f, 0.450f }, { 0.975f, 0.544f }, { 1.000f, 0.671f }, { 1.000f, 0.815f }, { 0.980f, 0.893f }, { 0.959f, 0.930f }, { 0.899f, 0.977f }, { 0.863f, 0.987f }, { 0.808f, 0.987f }, { 0.742f, 0.993f }, { 0.737f, 1.000f }, { 0.722f, 1.000f }, { 0.691f, 0.973f }, { 0.554f, 0.752f }, { 0.524f, 0.725f }, { 0.478f, 0.698f }, { 0.443f, 0.688f }, { 0.387f, 0.688f }, { 0.352f, 0.695f }, { 0.000f, 0.695f } };
+static const float kT_ps5[][2] = { { 0.757f, 0.111f }, { 0.757f, 0.121f }, { 0.651f, 0.121f }, { 0.620f, 0.114f }, { 0.499f, 0.117f }, { 0.499f, 0.091f }, { 0.539f, 0.044f }, { 0.590f, 0.007f }, { 0.610f, 0.000f }, { 0.651f, 0.000f }, { 0.701f, 0.030f }, { 0.737f, 0.074f } };
+static const float kB_ps4[][2] = { { 0.000f, 0.179f }, { 0.335f, 0.179f }, { 0.461f, 0.170f }, { 0.755f, 0.175f }, { 0.818f, 0.245f }, { 0.856f, 0.301f }, { 0.956f, 0.550f }, { 0.987f, 0.668f }, { 1.000f, 0.773f }, { 1.000f, 0.834f }, { 0.987f, 0.886f }, { 0.969f, 0.926f }, { 0.944f, 0.952f }, { 0.893f, 0.983f }, { 0.818f, 1.000f }, { 0.743f, 0.996f }, { 0.674f, 0.974f }, { 0.611f, 0.926f }, { 0.567f, 0.869f }, { 0.486f, 0.707f }, { 0.461f, 0.690f }, { 0.392f, 0.721f }, { 0.273f, 0.725f }, { 0.210f, 0.707f }, { 0.172f, 0.686f }, { 0.000f, 0.686f } };
+static const float kT_ps4[][2] = { { 0.712f, 0.118f }, { 0.687f, 0.122f }, { 0.561f, 0.118f }, { 0.505f, 0.109f }, { 0.498f, 0.100f }, { 0.561f, 0.013f }, { 0.599f, 0.000f }, { 0.624f, 0.000f }, { 0.674f, 0.026f } };
+static const float kB_xb[][2] = { { 0.000f, 0.134f }, { 0.273f, 0.134f }, { 0.289f, 0.127f }, { 0.521f, 0.127f }, { 0.625f, 0.155f }, { 0.675f, 0.182f }, { 0.686f, 0.203f }, { 0.752f, 0.244f }, { 0.791f, 0.296f }, { 0.884f, 0.447f }, { 0.950f, 0.577f }, { 1.000f, 0.739f }, { 1.000f, 0.835f }, { 0.989f, 0.873f }, { 0.956f, 0.924f }, { 0.906f, 0.962f }, { 0.829f, 0.990f }, { 0.791f, 0.990f }, { 0.758f, 0.979f }, { 0.697f, 0.945f }, { 0.631f, 0.893f }, { 0.515f, 0.780f }, { 0.438f, 0.735f }, { 0.377f, 0.722f }, { 0.000f, 0.722f } };
+static const float kT_xb[][2] = { { 0.377f, 0.007f }, { 0.394f, 0.003f }, { 0.438f, 0.007f }, { 0.532f, 0.065f }, { 0.543f, 0.076f }, { 0.565f, 0.124f }, { 0.543f, 0.124f }, { 0.444f, 0.103f }, { 0.377f, 0.103f } };
+static const float kF_ps5[][2] = { { 0.000f, 0.409f }, { 0.261f, 0.409f }, { 0.306f, 0.396f }, { 0.332f, 0.376f }, { 0.342f, 0.352f }, { 0.362f, 0.352f }, { 0.362f, 0.389f }, { 0.372f, 0.409f }, { 0.423f, 0.456f }, { 0.484f, 0.500f }, { 0.549f, 0.564f }, { 0.651f, 0.695f }, { 0.742f, 0.846f }, { 0.787f, 0.943f }, { 0.808f, 0.970f }, { 0.808f, 0.983f }, { 0.767f, 0.990f }, { 0.722f, 0.990f }, { 0.711f, 0.973f }, { 0.696f, 0.970f }, { 0.691f, 0.936f }, { 0.681f, 0.926f }, { 0.666f, 0.926f }, { 0.666f, 0.906f }, { 0.651f, 0.903f }, { 0.651f, 0.889f }, { 0.641f, 0.886f }, { 0.641f, 0.872f }, { 0.630f, 0.869f }, { 0.630f, 0.856f }, { 0.620f, 0.852f }, { 0.620f, 0.829f }, { 0.605f, 0.826f }, { 0.605f, 0.802f }, { 0.590f, 0.799f }, { 0.590f, 0.785f }, { 0.580f, 0.782f }, { 0.570f, 0.755f }, { 0.544f, 0.732f }, { 0.484f, 0.695f }, { 0.448f, 0.685f }, { 0.382f, 0.685f }, { 0.347f, 0.691f }, { 0.000f, 0.691f } };
+static const float kTP_ps4[][2] = { { 0.000f, 0.183f }, { 0.323f, 0.183f }, { 0.323f, 0.419f }, { 0.292f, 0.437f }, { 0.000f, 0.437f } };
+static const float kG_ps4[][2] = { { 0.987f, 0.843f }, { 0.962f, 0.921f }, { 0.906f, 0.969f }, { 0.850f, 0.991f }, { 0.781f, 0.996f }, { 0.712f, 0.983f }, { 0.680f, 0.969f }, { 0.618f, 0.921f }, { 0.618f, 0.904f }, { 0.781f, 0.908f }, { 0.837f, 0.900f }, { 0.918f, 0.873f }, { 0.962f, 0.843f } };
+
+static const float kAspect[3] = { 1.326f, 1.393f, 1.247f };   // ancho / alto de cada foto
+ImVec2 MvPadSize(float k) { const float w = 240.0f * k; return ImVec2(w, w / kAspect[s_style]); }
+// medio contorno (de arriba al centro de abajo, u >= 0) espejado: contorno cerrado
 static void MirrorShape(const float (*half)[2], int n, ImVec2 o, float hw, float H, ImVector<ImVec2>& pts) {
     pts.resize(0);
     for (int i = 0; i < n; i++) pts.push_back(ImVec2(o.x + half[i][0] * hw, o.y + half[i][1] * H));
     for (int i = n - 1; i >= 0; i--) if (half[i][0] > 1e-4f) pts.push_back(ImVec2(o.x - half[i][0] * hw, o.y + half[i][1] * H));
 }
-// forma de un lado (sin espejar): puntos (u, v) con u ya con signo
+// forma de un lado (puntos con u del lado derecho), espejada al lado 'sg'
 static void SideShape(const float (*pts)[2], int n, float sg, ImVec2 o, float hw, float H, ImVector<ImVec2>& out) {
     out.resize(0); for (int i = 0; i < n; i++) out.push_back(ImVec2(o.x + sg * pts[i][0] * hw, o.y + pts[i][1] * H));
-    if (sg < 0) std::reverse(out.begin(), out.end());
 }
 // relleno con degrade vertical (luz arriba, sombra abajo) + borde fino
 static void FillShade(ImDrawList* dl, const ImVector<ImVec2>& pts, ImVec4 top, ImVec4 bot, float y0, float y1, float a, ImU32 edge, float edgeW) {
@@ -665,184 +840,166 @@ void MvPadDraw(ImDrawList* dl, ImVec2 o, float k, const MvPad& p, float alpha, b
     auto mix = [](ImVec4 a, ImVec4 b, float t) { return Lerp4(a, b, t); };
     const ImVec4 W1(1, 1, 1, 1), K1(0, 0, 0, 1);
     // colores: cuerpo + tonos del mismo color (como las fotos)
-    ImVec4 body = s_body.x >= 0 ? s_body : ps5 ? ImVec4(0.95f, 0.95f, 0.97f, 1) : xb ? ImVec4(0.80f, 0.13f, 0.13f, 1) : ImVec4(0.88f, 0.20f, 0.20f, 1);
-    const float lum = body.x * 0.3f + body.y * 0.59f + body.z * 0.11f;
-    const bool light = lum > 0.6f;
-    const ImVec4 hi = mix(body, W1, 0.18f), lo = mix(body, K1, light ? 0.10f : 0.22f), dk = mix(body, K1, light ? 0.30f : 0.40f), deep = mix(body, K1, light ? 0.45f : 0.62f);
-    const ImU32 edge = ColA(mix(body, K1, light ? 0.28f : 0.45f), 0.75f * A);
+    const ImVec4 body = s_body.x >= 0 ? s_body : ps5 ? ImVec4(0.96f, 0.96f, 0.97f, 1) : xb ? ImVec4(0.80f, 0.12f, 0.12f, 1) : ImVec4(0.88f, 0.17f, 0.17f, 1);
+    const bool light = body.x * 0.3f + body.y * 0.59f + body.z * 0.11f > 0.6f;
+    const ImVec4 hi = mix(body, W1, 0.12f), lo = mix(body, K1, light ? 0.06f : 0.16f), dk = mix(body, K1, light ? 0.30f : 0.32f), deep = mix(body, K1, light ? 0.45f : 0.55f);
+    const ImU32 edge = ColA(mix(body, K1, light ? 0.25f : 0.40f), 0.7f * A);
     const ImVec4 accent = xb ? ImVec4(0.45f, 0.90f, 0.40f, 1) : ImVec4(0.30f, 0.58f, 1.0f, 1);
-    ImVector<ImVec2> raw, sm;
-    // --- gatillos L2 / R2 (cuernos de atras) y L1 / R1
+    const ImVec4 grey(0.80f, 0.81f, 0.83f, 1);   // gris del PS5 (frente, analogicos, gatillos)
+    ImVector<ImVec2> pts;
+    // --- gatillos (L2 / R2) con el L1 / R1 en la base
     for (int s = 0; s < 2; s++) {
-        const float sg = s ? 1.0f : -1.0f, fill = s ? p.r2 : p.l2;
-        static const float kTrPS5[][2] = { { 0.50f, 0.17f }, { 0.52f, 0.07f }, { 0.58f, 0.005f }, { 0.65f, 0.015f }, { 0.71f, 0.09f }, { 0.74f, 0.18f } };
-        static const float kTrPS4[][2] = { { 0.50f, 0.17f }, { 0.52f, 0.08f }, { 0.57f, 0.025f }, { 0.63f, 0.035f }, { 0.67f, 0.10f }, { 0.69f, 0.18f } };
-        static const float kTrXb[][2] = { { 0.47f, 0.19f }, { 0.50f, 0.07f }, { 0.55f, 0.0f }, { 0.60f, 0.02f }, { 0.64f, 0.10f }, { 0.67f, 0.20f } };
-        const float (*tr)[2] = xb ? kTrXb : ps5 ? kTrPS5 : kTrPS4;
-        const float ty = std::max(0.0f, fill) * 0.025f;   // el gatillo apretado baja un poco
-        raw.resize(0); for (int i = 0; i < 6; i++) raw.push_back(P(sg * tr[i][0], tr[i][1] + ty));
-        SmoothClosed(raw.Data, raw.Size, sm, 5);
-        FillShade(dl, sm, mix(mix(hi, W1, ps5 ? 0.0f : 0.1f), accent, 0.75f * fill), mix(lo, accent, 0.6f * fill), P(0, 0).y, P(0, 0.18f).y, 0.95f * A, edge, 1.0f);
-        // L1 / R1 (banda debajo del gatillo)
-        const float lb = lit(s ? kPadR1 : kPadL1);
-        const float x0 = (xb ? 0.46f : 0.50f), x1 = (xb ? 0.70f : ps5 ? 0.75f : 0.70f), y0 = xb ? 0.175f : 0.155f;
-        raw.resize(0);
-        raw.push_back(P(sg * x0, y0 + 0.03f)); raw.push_back(P(sg * (x0 + 0.02f), y0)); raw.push_back(P(sg * (x1 - 0.03f), y0 - 0.005f)); raw.push_back(P(sg * (x1 + 0.03f), y0 + 0.035f));
-        dl->AddConvexPolyFilled(raw.Data, raw.Size, ColA(mix(ps5 ? ImVec4(0.30f, 0.31f, 0.34f, 1) : dk, accent, 0.8f * lb), 0.95f * A));
+        const float sg = s ? 1.0f : -1.0f, fill = s ? p.r2 : p.l2, lb = lit(s ? kPadR1 : kPadL1);
+        const float ty = std::max(0.0f, fill) * 0.02f;   // el gatillo apretado baja un poco
+        if (xb) SideShape(kT_xb, IM_ARRAYSIZE(kT_xb), sg, ImVec2(c0.x, c0.y + ty * H), hw, H, pts);
+        else if (ps5) SideShape(kT_ps5, IM_ARRAYSIZE(kT_ps5), sg, ImVec2(c0.x, c0.y + ty * H), hw, H, pts);
+        else SideShape(kT_ps4, IM_ARRAYSIZE(kT_ps4), sg, ImVec2(c0.x, c0.y + ty * H), hw, H, pts);
+        const ImVec4 tc = ps5 ? grey : mix(body, K1, 0.12f);
+        FillShade(dl, pts, mix(mix(tc, W1, 0.12f), accent, 0.75f * fill), mix(mix(tc, K1, 0.10f), accent, 0.6f * fill), P(0, 0).y, P(0, 0.13f).y, 0.96f * A, edge, 1.0f);
+        // L1 / R1: la banda oscura de la base (en las fotos se ve como una linea)
+        const float x0 = xb ? 0.29f : 0.50f, x1 = xb ? 0.66f : ps5 ? 0.755f : 0.71f, y = xb ? 0.128f : ps5 ? 0.118f : 0.119f;
+        dl->AddBezierQuadratic(P(sg * x0, y + 0.004f), P(sg * (x0 + x1) * 0.5f, y - 0.010f), P(sg * x1, y + (xb ? 0.03f : 0.008f)), ColA(mix(ps5 ? ImVec4(0.12f, 0.12f, 0.14f, 1) : deep, accent, 0.85f * lb), 0.95f * A), (2.4f + 1.0f * lb) * k);
     }
     // --- cuerpo
-    static const float kBodyPS5[][2] = {
-        { 0.00f, 0.17f }, { 0.30f, 0.165f }, { 0.56f, 0.17f }, { 0.71f, 0.19f }, { 0.83f, 0.25f }, { 0.91f, 0.35f }, { 0.95f, 0.49f }, { 0.98f, 0.66f },
-        { 0.99f, 0.81f }, { 0.96f, 0.93f }, { 0.88f, 1.00f }, { 0.80f, 0.98f }, { 0.73f, 0.89f }, { 0.65f, 0.77f }, { 0.55f, 0.69f }, { 0.40f, 0.655f }, { 0.00f, 0.645f } };
-    static const float kBodyPS4[][2] = {
-        { 0.00f, 0.17f }, { 0.40f, 0.165f }, { 0.62f, 0.17f }, { 0.75f, 0.19f }, { 0.84f, 0.27f }, { 0.88f, 0.40f }, { 0.90f, 0.56f }, { 0.93f, 0.73f },
-        { 0.94f, 0.87f }, { 0.90f, 0.97f }, { 0.81f, 1.00f }, { 0.72f, 0.95f }, { 0.65f, 0.84f }, { 0.57f, 0.73f }, { 0.45f, 0.685f }, { 0.28f, 0.675f }, { 0.00f, 0.675f } };
-    static const float kBodyXb[][2] = {
-        { 0.00f, 0.165f }, { 0.12f, 0.175f }, { 0.28f, 0.20f }, { 0.48f, 0.19f }, { 0.64f, 0.20f }, { 0.78f, 0.23f }, { 0.88f, 0.30f }, { 0.94f, 0.43f },
-        { 0.97f, 0.60f }, { 0.99f, 0.78f }, { 0.97f, 0.91f }, { 0.91f, 0.99f }, { 0.83f, 0.97f }, { 0.75f, 0.87f }, { 0.65f, 0.75f }, { 0.53f, 0.69f }, { 0.30f, 0.665f }, { 0.00f, 0.66f } };
-    if (xb) MirrorShape(kBodyXb, IM_ARRAYSIZE(kBodyXb), c0, hw, H, raw); else if (ps5) MirrorShape(kBodyPS5, IM_ARRAYSIZE(kBodyPS5), c0, hw, H, raw); else MirrorShape(kBodyPS4, IM_ARRAYSIZE(kBodyPS4), c0, hw, H, raw);
-    SmoothClosed(raw.Data, raw.Size, sm, 6);
-    // sombra en el piso (da volumen sobre el fondo oscuro)
-    dl->AddEllipseFilled(P(0, 0.99f), ImVec2(hw * 0.95f, H * 0.05f), Col(0, 0, 0, 0.22f * A), 0.0f, 32);
-    FillShade(dl, sm, hi, lo, P(0, 0.15f).y, P(0, 1.0f).y, (ps5 ? 0.94f : 0.92f) * A, edge, 1.2f);
-    // brillo suave arriba a la izquierda (como la luz de las fotos)
+    if (xb) MirrorShape(kB_xb, IM_ARRAYSIZE(kB_xb), c0, hw, H, pts); else if (ps5) MirrorShape(kB_ps5, IM_ARRAYSIZE(kB_ps5), c0, hw, H, pts); else MirrorShape(kB_ps4, IM_ARRAYSIZE(kB_ps4), c0, hw, H, pts);
+    dl->AddEllipseFilled(P(0, 0.995f), ImVec2(hw * 0.95f, H * 0.035f), Col(0, 0, 0, 0.20f * A), 0.0f, 32);   // sombra en el piso
+    FillShade(dl, pts, hi, lo, P(0, 0.12f).y, P(0, 1.0f).y, 0.95f * A, edge, 1.1f);
     if (ps5) {
-        // frente gris (entre los agarres) y el filo gris de adentro de cada agarre
-        static const float kFront[][2] = { { 0.00f, 0.45f }, { 0.27f, 0.445f }, { 0.41f, 0.50f }, { 0.50f, 0.59f }, { 0.545f, 0.68f }, { 0.40f, 0.655f }, { 0.00f, 0.645f } };
-        MirrorShape(kFront, IM_ARRAYSIZE(kFront), c0, hw, H, raw);
-        SmoothClosed(raw.Data, raw.Size, sm, 5);
-        FillShade(dl, sm, ImVec4(0.80f, 0.81f, 0.84f, 1), ImVec4(0.72f, 0.73f, 0.77f, 1), P(0, 0.45f).y, P(0, 0.68f).y, 0.96f * A, Col(0.60f, 0.61f, 0.66f, 0.6f * A), 1.0f);
-        for (int s2 = 0; s2 < 2; s2++) { const float sg = s2 ? 1.0f : -1.0f;
-            dl->AddBezierCubic(P(sg * 0.50f, 0.66f), P(sg * 0.60f, 0.72f), P(sg * 0.68f, 0.84f), P(sg * 0.775f, 0.965f), Col(0.76f, 0.77f, 0.81f, 0.95f * A), 5.0f * k); }
-    } else {
-        // puntas de los agarres un tono mas oscuras
-        static const float kGripPS4[][2] = { { 0.64f, 0.81f }, { 0.80f, 0.79f }, { 0.935f, 0.79f }, { 0.94f, 0.87f }, { 0.90f, 0.97f }, { 0.81f, 1.00f }, { 0.72f, 0.95f } };
-        static const float kGripXb[][2] = { { 0.70f, 0.82f }, { 0.84f, 0.80f }, { 0.985f, 0.80f }, { 0.97f, 0.91f }, { 0.91f, 0.99f }, { 0.83f, 0.97f }, { 0.75f, 0.87f } };
-        for (int s = 0; s < 2; s++) {
-            SideShape(xb ? kGripXb : kGripPS4, 7, s ? 1.0f : -1.0f, c0, hw, H, raw);
-            SmoothClosed(raw.Data, raw.Size, sm, 4);
-            FillShade(dl, sm, mix(hi, lo, 0.8f), dk, P(0, 0.79f).y, P(0, 1.0f).y, 0.75f * A, 0, 0);
-        }
-        // borde de adentro de los agarres con un filo claro (Xbox)
-    }
-    // --- panel tactil (PS5 / PS4)
-    if (!xb) {
+        // frente gris (calcado): baja por el borde de adentro de los agarres
+        MirrorShape(kF_ps5, IM_ARRAYSIZE(kF_ps5), c0, hw, H, pts);
+        FillShade(dl, pts, mix(grey, W1, 0.05f), mix(grey, K1, 0.06f), P(0, 0.40f).y, P(0, 1.0f).y, 0.97f * A, 0, 0);
+        // panel tactil: el blanco de arriba con el borde gris, y la barra de luz a los costados (late suave)
         const float lt = std::max(lit(kPadTouch), lit(kPadPS) * 0.4f);
-        if (ps5) {
-            static const float kPad[][2] = { { 0.00f, 0.18f }, { 0.30f, 0.18f }, { 0.29f, 0.30f }, { 0.255f, 0.42f }, { 0.20f, 0.445f }, { 0.00f, 0.45f } };
-            MirrorShape(kPad, IM_ARRAYSIZE(kPad), c0, hw, H, raw);
-            FillShade(dl, raw, mix(ImVec4(0.98f, 0.98f, 1, 1), accent, 0.25f * lt), ImVec4(0.90f, 0.91f, 0.94f, 1), P(0, 0.18f).y, P(0, 0.45f).y, 0.97f * A, Col(0.66f, 0.68f, 0.73f, 0.75f * A), 1.2f);
-            // barra de luz a los costados (late suave)
-            const float glow = (anim ? 0.55f + 0.45f * sinf((float)now * 1.6f) : 0.8f) * (0.6f + 0.4f * lt);
-            for (int s = 0; s < 2; s++) {
-                const float sg = s ? 1.0f : -1.0f; const ImVec2 a = P(sg * 0.325f, 0.20f), b = P(sg * 0.28f, 0.43f);
-                for (int i = 3; i >= 1; i--) dl->AddLine(a, b, ColA(accent, 0.14f * glow * A), (1.5f + 2.0f * i) * k);
-                dl->AddLine(a, b, ColA(mix(accent, W1, 0.4f), 0.85f * glow * A), 1.4f * k);
-            }
-        } else {
-            raw.resize(0); raw.push_back(P(-0.28f, 0.175f)); raw.push_back(P(0.28f, 0.175f)); raw.push_back(P(0.28f, 0.42f)); raw.push_back(P(0.25f, 0.445f)); raw.push_back(P(-0.25f, 0.445f)); raw.push_back(P(-0.28f, 0.42f));
-            FillShade(dl, raw, mix(dk, accent, 0.25f * lt), mix(dk, K1, 0.1f), P(0, 0.17f).y, P(0, 0.45f).y, 0.95f * A, ColA(deep, 0.5f * A), 1.0f);
-            // parlante (puntitos)
-            for (int r = 0; r < 2; r++) for (int i = -3; i <= 3; i++) dl->AddCircleFilled(P(i * 0.016f + (r ? 0.008f : 0.0f), 0.475f + r * 0.018f), 0.9f * k, ColA(deep, 0.8f * A), 6);
+        pts.resize(0);
+        pts.push_back(P(-0.425f, 0.150f)); pts.push_back(P(0.425f, 0.150f)); pts.push_back(P(0.405f, 0.300f)); pts.push_back(P(0.375f, 0.395f)); pts.push_back(P(0.345f, 0.410f));
+        pts.push_back(P(-0.345f, 0.410f)); pts.push_back(P(-0.375f, 0.395f)); pts.push_back(P(-0.405f, 0.300f));
+        dl->AddConvexPolyFilled(pts.Data, pts.Size, ColA(mix(ImVec4(0.985f, 0.985f, 0.99f, 1), accent, 0.22f * lt), 0.97f * A));
+        dl->AddPolyline(pts.Data + 1, 6, Col(0.72f, 0.73f, 0.76f, 0.95f * A), 0, 2.2f * k);
+        const float glow = (anim ? 0.55f + 0.45f * sinf((float)now * 1.6f) : 0.8f) * (0.5f + 0.5f * lt);
+        for (int s = 0; s < 2; s++) {
+            const float sg = s ? 1.0f : -1.0f; const ImVec2 a = P(sg * 0.425f, 0.17f), b = P(sg * 0.385f, 0.39f);
+            for (int i = 3; i >= 1; i--) dl->AddLine(a, b, ColA(accent, 0.10f * glow * A), (1.5f + 2.0f * i) * k);
+            dl->AddLine(a, b, ColA(mix(accent, W1, 0.4f), 0.55f * glow * A), 1.2f * k);
+        }
+    } else if (!xb) {
+        // PS4: panel tactil y puntas de los agarres un tono mas oscuros (calcados)
+        const float lt = std::max(lit(kPadTouch), lit(kPadPS) * 0.4f);
+        MirrorShape(kTP_ps4, IM_ARRAYSIZE(kTP_ps4), c0, hw, H, pts);
+        FillShade(dl, pts, mix(mix(body, K1, 0.30f), accent, 0.25f * lt), mix(body, K1, 0.36f), P(0, 0.18f).y, P(0, 0.44f).y, 0.95f * A, ColA(deep, 0.35f * A), 1.0f);
+        for (int s = 0; s < 2; s++) {
+            SideShape(kG_ps4, IM_ARRAYSIZE(kG_ps4), s ? 1.0f : -1.0f, c0, hw, H, pts);
+            FillShade(dl, pts, mix(body, K1, 0.22f), mix(body, K1, 0.32f), P(0, 0.83f).y, P(0, 1.0f).y, 0.9f * A, 0, 0);
+        }
+        for (int r = 0; r < 3; r++) for (int i = -3 + (r & 1); i <= 3 - (r & 1); i++) dl->AddCircleFilled(P(i * 0.024f + (r & 1 ? 0.012f : 0.0f) - (r & 1 ? 0.012f : 0.0f), 0.495f + r * 0.022f), 0.9f * k, ColA(deep, 0.75f * A), 6);
+    } else {
+        // Xbox: el filo claro del borde de adentro de los agarres (sigue el contorno calcado)
+        for (int s = 0; s < 2; s++) {
+            const float sg = s ? 1.0f : -1.0f; pts.resize(0);
+            for (int i = 18; i <= 23; i++) pts.push_back(P(sg * kB_xb[i][0], kB_xb[i][1] - 0.012f));
+            dl->AddPolyline(pts.Data, pts.Size, ColA(mix(body, W1, 0.28f), 0.75f * A), 0, 3.0f * k);
         }
     }
     // --- botones del medio: create / share / options (PS) o view / menu (Xbox)
     {
         const float ls = lit(kPadShare), lo2 = lit(kPadOptions);
         if (xb) {
-            for (int s = 0; s < 2; s++) { const ImVec2 c = P(s ? 0.17f : -0.17f, 0.34f); const float l = s ? lo2 : ls;
-                dl->AddCircleFilled(c, 5.5f * k, ColA(mix(dk, accent, 0.8f * l), 0.95f * A), 16); dl->AddCircle(c, 5.5f * k, ColA(deep, 0.7f * A), 16, 1.0f); }
+            for (int s = 0; s < 2; s++) { const ImVec2 c = P(s ? 0.17f : -0.17f, 0.31f); const float l = s ? lo2 : ls, r = 0.040f * hw;
+                dl->AddCircleFilled(c, r, ColA(mix(dk, accent, 0.8f * l), 0.95f * A), 16); dl->AddCircle(c, r, ColA(deep, 0.8f * A), 16, 1.4f * k); }
         } else {
-            const float x = ps5 ? 0.37f : 0.355f;
+            const float x = ps5 ? 0.475f : 0.405f, y0 = ps5 ? 0.185f : 0.195f, y1 = ps5 ? 0.235f : 0.255f, w = ps5 ? 0.022f : 0.030f;
             for (int s = 0; s < 2; s++) { const float sg = s ? 1.0f : -1.0f; const float l = s ? lo2 : ls;
-                dl->AddRectFilled(P(sg * x - 0.017f, 0.215f), P(sg * x + 0.017f, 0.29f), ColA(mix(ps5 ? ImVec4(0.72f, 0.73f, 0.77f, 1) : dk, accent, l), 0.95f * A), 3.0f * k); }
+                dl->AddRectFilled(P(sg * x - w, y0), P(sg * x + w, y1), ColA(mix(ps5 ? grey : dk, accent, l), 0.95f * A), w * hw); }
         }
     }
     // --- cruceta
     {
-        const ImVec2 c = xb ? P(-0.25f, 0.585f) : P(-0.60f, 0.385f);
-        const float r = (xb ? 0.11f : 0.135f) * hw;
+        struct { int b; float dx, dy; } d[4] = { { kPadUp, 0, -1 }, { kPadDown, 0, 1 }, { kPadLeft, -1, 0 }, { kPadRight, 1, 0 } };
         if (xb) {
-            dl->AddCircleFilled(c, r * 1.25f, ColA(lo, 0.9f * A), 28); dl->AddCircle(c, r * 1.25f, ColA(deep, 0.35f * A), 28, 1.0f);
-            const float w = r * 0.36f; const ImVec4 dc = dk;
-            dl->AddRectFilled(ImVec2(c.x - w, c.y - r), ImVec2(c.x + w, c.y + r), ColA(dc, 0.95f * A), 2.0f * k);
-            dl->AddRectFilled(ImVec2(c.x - r, c.y - w), ImVec2(c.x + r, c.y + w), ColA(dc, 0.95f * A), 2.0f * k);
-            struct { int b; float dx, dy; } d[4] = { { kPadUp, 0, -1 }, { kPadDown, 0, 1 }, { kPadLeft, -1, 0 }, { kPadRight, 1, 0 } };
-            for (auto& q : d) { const float lv = lit(q.b); if (lv < 0.01f) continue; const ImVec2 m(c.x + q.dx * r * 0.62f, c.y + q.dy * r * 0.62f);
-                dl->AddRectFilled(ImVec2(m.x - (q.dx ? r * 0.38f : w), m.y - (q.dy ? r * 0.38f : w)), ImVec2(m.x + (q.dx ? r * 0.38f : w), m.y + (q.dy ? r * 0.38f : w)), ColA(accent, 0.9f * lv * A), 2.0f * k); }
+            const ImVec2 c = P(-0.27f, 0.52f); const float L = 0.145f * hw, w = 0.032f * hw;
+            dl->AddCircleFilled(c, L * 1.15f, ColA(mix(body, K1, 0.04f), 0.5f * A), 28);
+            dl->AddRectFilled(ImVec2(c.x - w, c.y - L), ImVec2(c.x + w, c.y + L), ColA(lo, 0.95f * A), 2.0f * k);
+            dl->AddRectFilled(ImVec2(c.x - L, c.y - w), ImVec2(c.x + L, c.y + w), ColA(lo, 0.95f * A), 2.0f * k);
+            dl->AddRect(ImVec2(c.x - w, c.y - L), ImVec2(c.x + w, c.y + L), ColA(deep, 0.6f * A), 2.0f * k, 0, 1.2f * k);
+            dl->AddRect(ImVec2(c.x - L, c.y - w), ImVec2(c.x + L, c.y + w), ColA(deep, 0.6f * A), 2.0f * k, 0, 1.2f * k);
+            for (auto& q : d) { const float lv = lit(q.b); if (lv < 0.01f) continue; const ImVec2 m(c.x + q.dx * L * 0.6f, c.y + q.dy * L * 0.6f);
+                const float ex = q.dx ? L * 0.4f : w, ey = q.dy ? L * 0.4f : w;
+                dl->AddRectFilled(ImVec2(m.x - ex, m.y - ey), ImVec2(m.x + ex, m.y + ey), ColA(accent, 0.9f * lv * A), 2.0f * k); }
         } else {
-            if (!ps5) { dl->AddCircleFilled(c, r * 1.18f, ColA(mix(body, K1, 0.06f), 0.6f * A), 28); dl->AddCircle(c, r * 1.18f, ColA(deep, 0.25f * A), 28, 1.0f); }
-            const float w = 0.045f * hw;
-            struct { int b; float dx, dy; } d[4] = { { kPadUp, 0, -1 }, { kPadDown, 0, 1 }, { kPadLeft, -1, 0 }, { kPadRight, 1, 0 } };
+            // cuatro teclas separadas con la punta hacia el centro (PS5: 'ps5'; PS4 un poco mas grandes)
+            const ImVec2 c = ps5 ? P(-0.65f, 0.36f) : P(-0.64f, 0.375f);
+            const float off = (ps5 ? 0.108f : 0.110f) * hw, hl = (ps5 ? 0.052f : 0.050f) * hw, hwid = (ps5 ? 0.046f : 0.042f) * hw;
             for (auto& q : d) {
                 const float lv = lit(q.b);
-                const ImVec2 tip(c.x + q.dx * r * (ps5 ? 0.28f : 0.36f), c.y + q.dy * r * (ps5 ? 0.28f : 0.36f)), end(c.x + q.dx * r, c.y + q.dy * r);
-                const ImVec2 pr(-q.dy, q.dx);
-                const ImVec2 pts[5] = { tip, ImVec2(tip.x + q.dx * w + pr.x * w * 1.25f, tip.y + q.dy * w + pr.y * w * 1.25f), ImVec2(end.x + pr.x * w * 1.25f, end.y + pr.y * w * 1.25f),
-                                        ImVec2(end.x - pr.x * w * 1.25f, end.y - pr.y * w * 1.25f), ImVec2(tip.x + q.dx * w - pr.x * w * 1.25f, tip.y + q.dy * w - pr.y * w * 1.25f) };
-                const ImVec4 bc = ps5 ? ImVec4(0.93f, 0.94f, 0.96f, 1) : hi;
-                dl->AddConvexPolyFilled(pts, 5, ColA(mix(bc, accent, 0.8f * lv), 0.96f * A));
-                dl->AddPolyline(pts, 5, ps5 ? Col(0.62f, 0.64f, 0.69f, 0.85f * A) : ColA(deep, 0.6f * A), ImDrawFlags_Closed, 1.0f);
-                if (ps5) dl->AddCircleFilled(ImVec2((tip.x + end.x) * 0.5f + q.dx * w * 0.6f, (tip.y + end.y) * 0.5f + q.dy * w * 0.6f), 0.9f * k, Col(0.60f, 0.62f, 0.67f, 0.8f * A), 6);
+                const ImVec2 m(c.x + q.dx * off, c.y + q.dy * off), pr(-q.dy, q.dx);
+                // tecla: rectangulo redondeado hacia afuera y punta hacia el centro
+                const ImVec2 tip(m.x - q.dx * hl * 1.25f, m.y - q.dy * hl * 1.25f);
+                ImVec2 k5[5] = { tip, ImVec2(m.x - q.dx * hl * 0.45f + pr.x * hwid, m.y - q.dy * hl * 0.45f + pr.y * hwid), ImVec2(m.x + q.dx * hl + pr.x * hwid, m.y + q.dy * hl + pr.y * hwid),
+                                 ImVec2(m.x + q.dx * hl - pr.x * hwid, m.y + q.dy * hl - pr.y * hwid), ImVec2(m.x - q.dx * hl * 0.45f - pr.x * hwid, m.y - q.dy * hl * 0.45f - pr.y * hwid) };
+                const ImVec4 kc = ps5 ? ImVec4(0.93f, 0.93f, 0.95f, 1) : mix(body, W1, 0.08f);
+                dl->AddConvexPolyFilled(k5, 5, ColA(mix(kc, accent, 0.8f * lv), 0.97f * A));
+                dl->AddPolyline(k5, 5, ps5 ? Col(0.66f, 0.67f, 0.71f, 0.95f * A) : ColA(deep, 0.55f * A), ImDrawFlags_Closed, 1.6f * k);
+                dl->AddTriangleFilled(ImVec2(m.x + q.dx * hl * 0.15f, m.y + q.dy * hl * 0.15f), ImVec2(m.x - q.dx * hl * 0.25f + pr.x * hwid * 0.3f, m.y - q.dy * hl * 0.25f + pr.y * hwid * 0.3f),
+                                      ImVec2(m.x - q.dx * hl * 0.25f - pr.x * hwid * 0.3f, m.y - q.dy * hl * 0.25f - pr.y * hwid * 0.3f), ps5 ? Col(0.62f, 0.63f, 0.67f, 0.9f * A) : ColA(deep, 0.5f * A));
             }
         }
     }
-    // --- botones de accion
+    // --- botones de accion (en el lugar medido de las fotos)
     {
-        const ImVec2 c = xb ? P(0.55f, 0.37f) : P(0.60f, 0.385f);
-        const float d = (xb ? 0.105f : 0.115f) * hw, r = (xb ? 0.052f : 0.056f) * hw;
+        const ImVec2 c = xb ? P(0.52f, 0.34f) : ps5 ? P(0.65f, 0.36f) : P(0.62f, 0.38f);
+        const float d = (xb ? 0.130f : ps5 ? 0.134f : 0.147f) * hw, r = (xb ? 0.069f : ps5 ? 0.064f : 0.062f) * hw;
         struct { int b; float dx, dy; } q[4] = { { kPadTriangle, 0, -1 }, { kPadCircle, 1, 0 }, { kPadCross, 0, 1 }, { kPadSquare, -1, 0 } };
-        if (!ps5 && !xb) { dl->AddCircleFilled(c, d + r * 1.3f, ColA(mix(body, K1, 0.06f), 0.6f * A), 32); dl->AddCircle(c, d + r * 1.3f, ColA(deep, 0.25f * A), 32, 1.0f); }
         for (auto& e : q) {
             const float lv = lit(e.b); const ImVec2 bc(c.x + e.dx * d, c.y + e.dy * d); const ImVec4 cc = FaceCol(e.b);
             if (lv > 0.01f) for (int i = 3; i >= 1; i--) dl->AddCircleFilled(bc, r * (1.0f + 0.3f * i * lv), ColA(cc, 0.13f * lv * A), 20);
-            dl->AddCircleFilled(ImVec2(bc.x, bc.y + 1.0f * k), r, ColA(K1, 0.25f * A), 20);
-            const ImVec4 face = ps5 ? ImVec4(0.95f, 0.95f, 0.97f, 1) : mix(body, W1, 0.06f);
-            dl->AddCircleFilled(bc, r, ColA(mix(face, cc, 0.40f * lv), 0.97f * A), 20);
-            dl->AddCircle(bc, r, ps5 ? Col(0.60f, 0.62f, 0.67f, 0.85f * A) : ColA(deep, 0.55f * A), 20, 1.0f);
-            const ImVec4 gc = ps5 ? ImVec4(0.55f, 0.57f, 0.62f, 1) : deep;
-            if (xb) XboxLetter(dl, bc, r * 0.55f, e.b, ColA(mix(gc, mix(cc, K1, 0.2f), 0.3f + 0.7f * lv), A));
-            else GlyphShape(dl, bc, r * 0.46f, e.b, ColA(mix(gc, mix(cc, K1, 0.3f), lv), A), std::max(1.1f, r * 0.16f));
+            const ImVec4 face = ps5 ? ImVec4(0.94f, 0.94f, 0.96f, 1) : mix(body, W1, 0.05f);
+            dl->AddCircleFilled(bc, r, ColA(mix(face, cc, 0.45f * lv), 0.97f * A), 24);
+            dl->AddCircle(bc, r, ps5 ? Col(0.70f, 0.71f, 0.75f, 0.95f * A) : ColA(deep, 0.55f * A), 24, 1.6f * k);
+            const ImVec4 gc = ps5 ? ImVec4(0.66f, 0.67f, 0.71f, 1) : deep;
+            if (xb) XboxLetter(dl, bc, r * 0.55f, e.b, ColA(mix(gc, mix(cc, K1, 0.2f), 0.2f + 0.8f * lv), A));
+            else GlyphShape(dl, bc, r * 0.46f, e.b, ColA(mix(gc, mix(cc, K1, 0.3f), lv), A), std::max(1.1f, r * 0.15f));
         }
     }
-    // --- analogicos: hueco oscuro, perilla corrida segun el stick, arco del color de acento hacia donde se empuja
+    // --- analogicos: hueco, perilla corrida segun el stick, arco del color de acento hacia donde se empuja
     for (int s = 0; s < 2; s++) {
-        const ImVec2 c = xb ? (s ? P(0.25f, 0.585f) : P(-0.53f, 0.37f)) : P(s ? (ps5 ? 0.22f : 0.27f) : (ps5 ? -0.22f : -0.27f), ps5 ? 0.545f : 0.565f);
-        const float R = (xb ? 0.10f : 0.10f) * hw, sx = s ? p.rx : p.lx, sy = s ? p.ry : p.ly;
+        const ImVec2 c = xb ? (s ? P(0.26f, 0.52f) : P(-0.53f, 0.32f)) : ps5 ? P(s ? 0.30f : -0.30f, 0.555f) : P(s ? 0.31f : -0.31f, 0.585f);
+        const float R = (xb ? 0.124f : ps5 ? 0.12f : 0.125f) * hw, sx = s ? p.rx : p.lx, sy = s ? p.ry : p.ly;
         float* fx_ = st->GetFloatRef(base + 40 + s * 2, 0.0f); float* fy_ = st->GetFloatRef(base + 41 + s * 2, 0.0f);
         if (anim) { const float a = 1.0f - expf(-dt * 22.0f); *fx_ += (sx - *fx_) * a; *fy_ += (sy - *fy_) * a; } else { *fx_ = sx; *fy_ = sy; }
         const float lv = lit(s ? kPadR3 : kPadL3), mag = sqrtf(*fx_ * *fx_ + *fy_ * *fy_);
-        const ImVec4 well = ps5 ? ImVec4(0.62f, 0.63f, 0.67f, 1) : deep, cap = ps5 ? ImVec4(0.55f, 0.56f, 0.60f, 1) : dk;
-        if (xb) dl->AddCircleFilled(c, R * 1.18f, ColA(lo, 0.9f * A), 28);
-        dl->AddCircleFilled(c, R, ColA(well, 0.95f * A), 28);
+        const ImVec4 well = ps5 ? ImVec4(0.74f, 0.75f, 0.78f, 1) : mix(body, K1, 0.30f), cap = ps5 ? ImVec4(0.58f, 0.59f, 0.63f, 1) : mix(body, K1, 0.42f);
+        dl->AddCircleFilled(c, R, ColA(well, 0.95f * A), 32);
+        if (xb) dl->AddCircle(c, R, ColA(mix(body, W1, 0.25f), 0.6f * A), 32, 1.6f * k);
         if (mag > 0.05f) { const float ang = atan2f(*fy_, *fx_); dl->PathArcTo(c, R * 0.97f, ang - 0.7f, ang + 0.7f, 12); dl->PathStroke(ColA(accent, 0.9f * Sat(mag) * A), 0, 2.2f * k); }
-        const ImVec2 kc(c.x + *fx_ * R * 0.42f, c.y + *fy_ * R * 0.42f); const float kr = R * 0.78f * (1.0f - 0.07f * lv);
-        dl->AddCircleFilled(ImVec2(kc.x, kc.y + 1.5f * k), kr, ColA(K1, 0.30f * A), 24);
+        const ImVec2 kc(c.x + *fx_ * R * 0.30f, c.y + *fy_ * R * 0.30f); const float kr = R * 0.70f * (1.0f - 0.07f * lv);
+        dl->AddCircleFilled(ImVec2(kc.x, kc.y + 1.5f * k), kr, ColA(K1, 0.25f * A), 24);
         const int v0 = dl->VtxBuffer.Size;
         dl->AddCircleFilled(kc, kr, ColA(mix(cap, accent, 0.35f * lv), 0.98f * A), 24);
-        ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, ImVec2(kc.x, kc.y - kr), ImVec2(kc.x, kc.y + kr), ColA(mix(mix(cap, W1, 0.15f), accent, 0.35f * lv), 1) | IM_COL32_A_MASK, ColA(mix(mix(cap, K1, 0.12f), accent, 0.35f * lv), 1) | IM_COL32_A_MASK);
-        dl->AddCircle(kc, kr * 0.62f, ColA(mix(cap, K1, 0.2f), 0.7f * A), 20, 1.2f);
+        ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, ImVec2(kc.x, kc.y - kr), ImVec2(kc.x, kc.y + kr), ColA(mix(mix(cap, W1, 0.12f), accent, 0.35f * lv), 1) | IM_COL32_A_MASK, ColA(mix(mix(cap, K1, 0.10f), accent, 0.35f * lv), 1) | IM_COL32_A_MASK);
+        dl->AddCircle(kc, kr * 0.62f, ColA(mix(cap, K1, 0.15f), 0.6f * A), 20, 1.2f * k);
     }
     // --- boton central: PS (PS5 en el frente gris, PS4 negro redondo) o el boton Xbox que brilla
     {
         const float lp = lit(kPadPS);
         if (xb) {
-            const ImVec2 c = P(0.0f, 0.245f); const float r = 0.060f * hw;
+            const ImVec2 c = P(0.0f, 0.21f); const float r = 0.070f * hw;
             const float gl = (anim ? 0.75f + 0.25f * sinf((float)now * 1.4f) : 0.9f) * (0.7f + 0.3f * lp);
             for (int i = 3; i >= 1; i--) dl->AddCircleFilled(c, r * (1.0f + 0.25f * i), Col(1, 1, 1, 0.07f * gl * A), 24);
-            dl->AddCircleFilled(c, r, ColA(mix(ImVec4(0.92f, 0.93f, 0.95f, 1), accent, 0.5f * lp), 0.95f * gl * A), 24);
-            const float x = r * 0.42f; const ImU32 lc = ColA(mix(body, K1, 0.2f), 0.9f * A);
-            dl->AddBezierQuadratic(ImVec2(c.x - x, c.y - x), c, ImVec2(c.x + x, c.y + x), lc, 1.8f * k);
-            dl->AddBezierQuadratic(ImVec2(c.x + x, c.y - x), c, ImVec2(c.x - x, c.y + x), lc, 1.8f * k);
+            dl->AddCircleFilled(c, r, ColA(mix(ImVec4(0.94f, 0.94f, 0.96f, 1), accent, 0.5f * lp), 0.95f * gl * A), 24);
+            const float x = r * 0.45f; const ImU32 lc = Col(0.55f, 0.56f, 0.60f, 0.95f * A);
+            dl->AddBezierQuadratic(ImVec2(c.x - x, c.y - x), c, ImVec2(c.x + x, c.y + x), lc, 2.0f * k);
+            dl->AddBezierQuadratic(ImVec2(c.x + x, c.y - x), c, ImVec2(c.x - x, c.y + x), lc, 2.0f * k);
         } else if (ps5) {
-            const ImVec2 pc = P(0.0f, 0.57f);
+            const ImVec2 pc = P(0.0f, 0.60f);
             if (lp > 0.01f) dl->AddCircleFilled(pc, 9.0f * k, ColA(accent, 0.30f * lp * A), 16);
-            dl->AddText(ImGui::GetFont(), 10.0f * k, ImVec2(pc.x - 6.0f * k, pc.y - 6.0f * k), ColA(mix(ImVec4(0.52f, 0.54f, 0.58f, 1), accent, lp), A), "PS");
-            for (int i = -2; i <= 2; i++) dl->AddCircleFilled(P(i * 0.016f, 0.50f), 0.9f * k, Col(0.55f, 0.57f, 0.61f, 0.8f * A), 6);
+            const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(10.0f * k, FLT_MAX, 0, "PS");
+            dl->AddText(ImGui::GetFont(), 10.0f * k, ImVec2(pc.x - ts.x * 0.5f, pc.y - ts.y * 0.5f), ColA(mix(ImVec4(0.66f, 0.67f, 0.71f, 1), accent, lp), A), "PS");
+            for (int r = 0; r < 2; r++) for (int i = -4; i <= 4; i++) dl->AddCircleFilled(P(i * 0.020f, 0.475f + r * 0.022f), 0.9f * k, Col(0.66f, 0.67f, 0.71f, 0.9f * A), 6);
         } else {
-            const ImVec2 pc = P(0.0f, 0.60f); const float r = 0.035f * hw;
-            dl->AddCircleFilled(pc, r, ColA(mix(ImVec4(0.08f, 0.08f, 0.10f, 1), accent, 0.6f * lp), 0.95f * A), 16);
-            dl->AddText(ImGui::GetFont(), 7.0f * k, ImVec2(pc.x - 4.0f * k, pc.y - 4.5f * k), Col(0.9f, 0.9f, 0.92f, 0.9f * A), "PS");
+            const ImVec2 pc = P(0.0f, 0.59f); const float r = 0.045f * hw;
+            dl->AddCircleFilled(pc, r, ColA(mix(ImVec4(0.06f, 0.06f, 0.08f, 1), accent, 0.6f * lp), 0.97f * A), 20);
+            dl->AddCircle(pc, r, Col(0.7f, 0.7f, 0.72f, 0.6f * A), 20, 1.0f);
+            const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(7.5f * k, FLT_MAX, 0, "PS");
+            dl->AddText(ImGui::GetFont(), 7.5f * k, ImVec2(pc.x - ts.x * 0.5f, pc.y - ts.y * 0.5f), Col(0.92f, 0.92f, 0.94f, 0.95f * A), "PS");
         }
     }
 }

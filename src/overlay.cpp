@@ -968,7 +968,7 @@ static void DrawWindNowPanel() {
     if (!w.on) {
         ImGui::TextDisabled("%s", TRS("Viento unico apagado: prende 'Viento distinto en cada partido' y 'Viento unico (rachas reales)'."));
         if (Anim()) {   // (14/11) igual se puede elegir el rumbo fijo en la cancha
-            MvWindIn wi; wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now();
+            MvWindIn wi; wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now(); { auto& L = g_cfg.live; wi.preset = &L[501][0]; wi.change = &L[501][3]; wi.gusts = &L[502][0]; wi.gustLen = &L[502][1]; wi.turbP = &L[502][2]; wi.veer = &L[502][3]; wi.shelterMode = &L[503][0]; wi.shelter = &L[503][1]; wi.grass = &L[503][2]; wi.cloth = &L[503][3]; }
             MvWindWidget(wi);
         }
         return;
@@ -977,9 +977,8 @@ static void DrawWindNowPanel() {
     if (Anim()) {   // (14/11) la cancha con el viento que vuela; arrastrar fija el rumbo
         ImGui::TextDisabled(TRS("En 2 s: %.1f m/s. Promedio del partido: %.1f m/s"), w.soonSpeed, w.base);
         MvWindIn wi; wi.live = true; wi.speed = w.speed; wi.dirDeg = w.dirDeg; wi.soonSpeed = w.soonSpeed; wi.soonDirDeg = w.soonDirDeg; wi.gust = w.gust; wi.turb = w.turb;
-        wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now();
+        wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now(); { auto& L = g_cfg.live; wi.preset = &L[501][0]; wi.change = &L[501][3]; wi.gusts = &L[502][0]; wi.gustLen = &L[502][1]; wi.turbP = &L[502][2]; wi.veer = &L[502][3]; wi.shelterMode = &L[503][0]; wi.shelter = &L[503][1]; wi.grass = &L[503][2]; wi.cloth = &L[503][3]; }
         MvWindWidget(wi);
-        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled)); ImGui::TextWrapped("%s", TRS("Arrastra la flecha para fijar el rumbo (clic derecho: el del partido); la rueda del mouse cambia la fuerza.")); ImGui::PopStyleColor();
     } else {
     ImGui::TextDisabled(TRS("En 2 s: %.1f m/s. Promedio del partido: %.1f m/s"), w.soonSpeed, w.base);
     // cancha desde arriba: X del mundo = el largo (105 m), Z = el ancho (68 m); la flecha va hacia donde sopla

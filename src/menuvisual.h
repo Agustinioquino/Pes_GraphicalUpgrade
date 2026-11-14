@@ -39,13 +39,24 @@ struct MvSunIn {
 };
 bool MvSunWidget(MvSunIn& in);    // true = cambio algo
 
-// --- tarjeta del viento: la cancha desde arriba con particulas que vuelan con el viento; arrastrar fija el rumbo ---
+// --- tarjeta del viento (14/11 e, como la del sol): preajustes de un clic, dial con la cancha (arrastrar = rumbo fijo), vista de
+// costado con el banderin (arrastrar la barra = fuerza general) y botones con dibujo para lo demas ---
 struct MvWindIn {
     bool live = false;            // hay viento unico corriendo (g_windNow.on)
     float speed = 0, dirDeg = 0, soonSpeed = 0, soonDirDeg = 0, gust = 0, turb = 0;
     float* fixed = nullptr;       // y501 (0 del partido, 1 fijo)
     float* fixedDeg = nullptr;    // z501
-    float* strength = nullptr;    // x353 (fuerza general; rueda del mouse sobre la cancha)
+    float* strength = nullptr;    // x353 (fuerza general)
+    float* preset = nullptr;      // x501 (0 partido, 1 calmo, 2 brisa, 3 ventoso, 4 tormenta)
+    float* change = nullptr;      // w501 cambio durante el partido
+    float* gusts = nullptr;       // x502 rachas
+    float* gustLen = nullptr;     // y502 largo de las rachas
+    float* turbP = nullptr;       // z502 turbulencia
+    float* veer = nullptr;        // w502 giro del rumbo
+    float* shelterMode = nullptr; // x503 (0 segun el estadio, 1 a mano)
+    float* shelter = nullptr;     // y503 reparo a mano
+    float* grass = nullptr;       // z503 viento en el pasto
+    float* cloth = nullptr;       // w503 viento en la ropa
     bool anim = true; float k = 1.0f; double now = 0.0;
 };
 bool MvWindWidget(MvWindIn& in);
