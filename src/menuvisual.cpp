@@ -145,6 +145,34 @@ static void SideStadium(ImDrawList* dl, ImVec2 a, ImVec2 b, float ground, ImVec4
         dl->AddLine(ImVec2(x, yy), ImVec2(x + lean2 * len, yy - len), ImGui::GetColorU32(ImVec4(cc.x, cc.y, cc.z, 0.55f + 0.3f * d)), (0.7f + 0.7f * d) * k);
     }
 }
+// (14/11 i) "a las nubes dale un diseno mejor": cumulo con base plana y copetes redondos de distinto tamano, borde suave (capas
+// con poca opacidad), luz arriba y gris azulado abajo; 'w' = ancho, 'seed' cambia la forma
+static void Cloud(ImDrawList* dl, ImVec2 p, float w, unsigned seed, float alpha, ImVec4 lit, ImVec4 shade) {
+    unsigned sd = seed; auto rnd = [&]() { sd = sd * 1664525u + 1013904223u; return (sd >> 8) / 16777216.0f; };
+    struct B { float x, y, r; } bl[9]; int n = 0;
+    for (int i = 0; i < 7; i++) {   // copetes: grandes al medio, chicos a los costados
+        const float u = (i + 0.5f) / 7.0f, mid = 1.0f - fabsf(u - 0.5f) * 1.6f;
+        const float r = w * (0.10f + 0.12f * mid) * (0.8f + 0.4f * rnd());
+        bl[n++] = { p.x + (u - 0.5f) * w * 0.82f, p.y - r * (0.55f + 0.35f * mid), r };
+    }
+    bl[n++] = { p.x - w * 0.12f, p.y - w * 0.28f * (0.8f + 0.3f * rnd()), w * 0.16f };   // copete alto
+    bl[n++] = { p.x + w * 0.10f, p.y - w * 0.22f * (0.8f + 0.3f * rnd()), w * 0.13f };
+    const float base = p.y, top = p.y - w * 0.45f;
+    // borde suave: tres pasadas que crecen con menos opacidad
+    for (int g = 2; g >= 0; g--) {
+        const float grow = 1.0f + 0.07f * g, a = alpha * (g == 0 ? 1.0f : 0.18f);
+        for (int i = 0; i < n; i++) {
+            const int v0 = dl->VtxBuffer.Size;
+            dl->AddCircleFilled(ImVec2(bl[i].x, std::min(bl[i].y, base - bl[i].r * 0.2f)), bl[i].r * grow, ImGui::GetColorU32(ImVec4(lit.x, lit.y, lit.z, a)), 20);
+            ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, ImVec2(0, top), ImVec2(0, base), ImGui::GetColorU32(ImVec4(lit.x, lit.y, lit.z, 1)), ImGui::GetColorU32(ImVec4(shade.x, shade.y, shade.z, 1)));
+        }
+    }
+    // base plana (los cumulos tienen el fondo derecho) con la sombra de abajo
+    dl->AddRectFilledMultiColor(ImVec2(p.x - w * 0.40f, base - w * 0.10f), ImVec2(p.x + w * 0.40f, base), ImGui::GetColorU32(ImVec4(Lerp4(lit, shade, 0.7f).x, Lerp4(lit, shade, 0.7f).y, Lerp4(lit, shade, 0.7f).z, alpha)),
+        ImGui::GetColorU32(ImVec4(Lerp4(lit, shade, 0.7f).x, Lerp4(lit, shade, 0.7f).y, Lerp4(lit, shade, 0.7f).z, alpha)), ImGui::GetColorU32(ImVec4(shade.x, shade.y, shade.z, alpha)), ImGui::GetColorU32(ImVec4(shade.x, shade.y, shade.z, alpha)));
+    // brillo arriba a la izquierda de los copetes grandes
+    for (int i = 2; i < 5; i++) dl->AddCircleFilled(ImVec2(bl[i].x - bl[i].r * 0.25f, bl[i].y - bl[i].r * 0.30f), bl[i].r * 0.45f, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.22f * alpha)), 14);
+}
 // (14/11 h) "el cesped mejor": hojas de adelante finitas, que se afinan en la punta, de alturas y tonos distintos (algunas puntas
 // secas), dobladas por el viento ('lean' -1..1) y moviendose un poco; la punta toma la luz del sol
 static void GrassBlades(ImDrawList* dl, float x0, float x1, float yBase, float hMax, int n, float lean, float sway, float tt, float light, ImVec4 sunCol, unsigned seed, float k) {
@@ -406,6 +434,12 @@ bool MvSunWidget(MvSunIn& in) {
         // resplandor del sol en el cielo (mas grande y naranja cuando esta bajo)
         const ImVec2 sp0(base.x + cosf(shEl * kDeg) * AR, base.y - sinf(shEl * kDeg) * AR);
         if (on && shEl > -3.0f) for (int i = 4; i >= 1; i--) dl->AddCircleFilled(sp0, (10.0f + i * (7.0f + 6.0f * (1.0f - light))) * k, ColA(sc, 0.045f * (on ? 1.0f : 0.4f)), 24);
+        {   // un par de nubes que toman el color del cielo (naranjas al atardecer, oscuras de noche)
+            const ImVec4 cl = Lerp4(Lerp4(hor, ImVec4(1, 1, 1, 1), 0.55f * light + 0.15f), sc, 0.15f * (1.0f - light)), cs = Lerp4(top, hor, 0.5f);
+            const float dx = in.anim ? fmodf((float)fmod(t, 3600.0) * 2.0f * k, AW + 60.0f * k) : 0.0f;
+            Cloud(dl, ImVec2(a0.x + fmodf(AW * 0.25f + dx, AW + 60.0f * k) - 30.0f * k, a0.y + D * 0.20f), 36.0f * k, 501u, 0.85f, cl, cs);
+            Cloud(dl, ImVec2(a0.x + fmodf(AW * 0.80f + dx * 0.7f, AW + 60.0f * k) - 30.0f * k, a0.y + D * 0.33f), 26.0f * k, 733u, 0.70f, cl, cs);
+        }
         GrassBlades(dl, a0.x - 4.0f * k, a0.x + AW + 4.0f * k, a0.y + D + 1.0f * k, 12.0f * k, 70, 0.0f, in.anim ? 0.6f : 0.0f, (float)fmod(t, 3600.0), light, sc, 991u, k);
         dl->PathArcTo(base, AR, -kPI * 0.5f, 0.0f, 24); dl->PathStroke(Col(1, 1, 1, 0.30f), 0, 2.0f * k);
         for (int e = 0; e <= 90; e += 15) { const float a = -e * kDeg, l = e % 45 == 0 ? 6.0f : 3.5f;
@@ -624,14 +658,12 @@ bool MvWindWidget(MvWindIn& in) {
         // de costado se ve la parte del viento que va de izquierda a derecha (cos del rumbo); el signo dice para donde se dobla
         const float side = cosf(shDir * kDeg) >= 0.0f ? 1.0f : -1.0f;
         const float tt = in.anim ? (float)fmod(t, 3600.0) : 0.0f;
-        // nubes (con sombra abajo) que pasan mas rapido con mas viento
-        for (int i = 0; i < 3; i++) {
-            const float sp = (5.0f + shSpd * 5.0f) * k * (0.7f + 0.2f * i);
-            const float x = a0.x + fmodf(tt * sp * side + i * AW * 0.41f + AW * 8.0f, AW + 50.0f * k) - 25.0f * k, y = a0.y + (12.0f + i * 15.0f) * k, sc2 = 1.0f - 0.2f * i;
-            const ImU32 cl = Col(1, 1, 1, 0.55f - 0.12f * i), cs = Col(0.70f, 0.74f, 0.82f, 0.45f - 0.10f * i);
-            dl->AddEllipseFilled(ImVec2(x + 9.0f * k * sc2, y + 4.0f * k * sc2), ImVec2(15.0f * k * sc2, 3.5f * k * sc2), cs, 0.0f, 16);
-            dl->AddCircleFilled(ImVec2(x, y), 6.0f * k * sc2, cl, 12); dl->AddCircleFilled(ImVec2(x + 8.0f * k * sc2, y - 3.5f * k * sc2), 8.5f * k * sc2, cl, 14);
-            dl->AddCircleFilled(ImVec2(x + 17.0f * k * sc2, y), 6.5f * k * sc2, cl, 12); dl->AddRectFilled(ImVec2(x, y), ImVec2(x + 17.0f * k * sc2, y + 4.0f * k * sc2), cl);
+        // nubes que pasan mas rapido con mas viento (las de atras mas chicas, lentas y transparentes); con tormenta, mas grises
+        for (int i = 2; i >= 0; i--) {
+            const float sz = (44.0f - 9.0f * i) * k, sp = (4.0f + shSpd * 4.5f) * k * (1.0f - 0.25f * i);
+            const float x = a0.x + fmodf(tt * sp * side + i * AW * 0.43f + AW * 8.0f, AW + sz * 1.2f) - sz * 0.6f, y = a0.y + (24.0f + i * 13.0f) * k;
+            const ImVec4 lit = Lerp4(ImVec4(1.0f, 1.0f, 1.0f, 1), ImVec4(0.72f, 0.74f, 0.80f, 1), bend), shd = Lerp4(ImVec4(0.72f, 0.78f, 0.88f, 1), ImVec4(0.38f, 0.40f, 0.48f, 1), bend);
+            Cloud(dl, ImVec2(x, y), sz, 77u + i * 31u, 0.92f - 0.2f * i, lit, shd);
         }
         // arco del corner en la cal (en perspectiva) y la linea de fondo
         const ImVec2 cp(a0.x + AW * 0.40f, ground + 18.0f * k);
