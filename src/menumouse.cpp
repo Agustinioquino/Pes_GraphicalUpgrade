@@ -74,13 +74,10 @@ static std::atomic<int> s_wheel{0};
 static bool s_overB = false; static std::atomic<bool> s_over{false};   // (14/11 d) el mouse esta justo sobre una fila (se puede hacer clic): mano
 static std::atomic<int> s_curX{0}, s_curY{0}; static std::atomic<double> s_moveT{0}, s_liveT{0};
 static std::atomic<int> s_nSel{0}, s_nClick{0}, s_nBack{0}, s_nWheel{0}, s_nStep{0}, s_nNear{0}, s_nOpt{0}, s_nExtra{0};
-// (14/11 ythnmm) mas opciones con el mouse: boton del medio = triangulo, lateral atras = volver, lateral adelante = cuadrado,
-// Ctrl + rueda (o rueda de costado) = L1 / R1, Shift + rueda = L2 / R2. Indices de accion del juego (tabla 0x1427bcdf0, codigo del
-// boton = 19 + boton de DirectInput: 19 cuadrado, 22 triangulo, 23 / 24 L1 / R1, 25 / 26 L2 / R2, 27 SHARE, 28 OPTIONS, 29 / 30 L3 / R3)
-enum { kActSquare = 2, kActTriangle = 3, kActL2 = 6, kActR2 = 7, kActL1 = 8, kActR1 = 9 };
-static int s_extraAct = -1; static double s_extraT = 0;                   // accion pedida por un boton extra / la rueda con Ctrl o Shift
-static bool s_mWas = false, s_x1Was = false, s_x2Was = false;
-static std::atomic<int> s_hwheel{0};
+// (14/11 ythnmm) acciones del juego por indice (tabla 0x1427bcdf0, codigo del boton = 19 + boton de DirectInput): 0 aceptar, 1 volver,
+// 2 cuadrado, 3 triangulo, 4 OPTIONS, 5 SHARE, 6 / 7 L2 / R2, 8 / 9 L1 / R1, 10 / 11 L3 / R3. Agustin 14/11 09:34: con el mouse solo
+// rueda, clic izquierdo y clic derecho (nada de botones extra ni teclas). s_extraAct queda para pedir una accion desde un clic.
+static int s_extraAct = -1; static double s_extraT = 0;
 static void* s_wheelOptWin = nullptr; static float s_wheelOptMx = 0;       // (14/11 ythnmm) el mouse esta sobre la fila elegida y es un selector: la rueda cambia la opcion
 
 static bool Readable(const void* p, size_t n) {
@@ -207,16 +204,6 @@ static void Sample(double now, bool fresh) {
     const bool lNow = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, rNow = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
     const bool lEdge = lNow && !s_lWas && !fresh, rEdge = rNow && !s_rWas && !fresh;
     s_lWas = lNow; s_rWas = rNow;
-    {   // (14/11 ythnmm) botones extra: se piden como accion del juego (la toma la ventana que la tenga)
-        const bool mNow = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0, x1 = (GetAsyncKeyState(VK_XBUTTON1) & 0x8000) != 0, x2 = (GetAsyncKeyState(VK_XBUTTON2) & 0x8000) != 0;
-        HWND hf = OverlayHwnd(); const bool fg = hf && GetForegroundWindow() == hf;
-        if (g_cfg.menuMouseExtra != 0 && fg && !fresh) {
-            if (mNow && !s_mWas) { s_extraAct = kActTriangle; s_extraT = now; }
-            else if (x2 && !s_x2Was) { s_extraAct = kActSquare; s_extraT = now; }
-            else if (x1 && !s_x1Was) { s_extraAct = 1; s_extraT = now; }
-        }
-        s_mWas = mNow; s_x1Was = x1; s_x2Was = x2;
-    }
     HWND h = OverlayHwnd(); POINT p{}; RECT rc{};
     if (!h || GetForegroundWindow() != h || !GetCursorPos(&p) || !ScreenToClient(h, &p) || !GetClientRect(h, &rc)) { s_last.x = s_last.y = -32000; return; }
     s_m.cw = (float)(rc.right - rc.left); s_m.ch = (float)(rc.bottom - rc.top);
@@ -234,7 +221,7 @@ static void Step(void* win) {
     const bool fresh = now - s_stepT > 0.25;      // primer paso de un menu despues de un rato sin menus
     const bool batch = fresh || now - s_m.t > 0.004;
     s_stepT = now; s_pendWin = nullptr; s_pendAction = -1; s_pendDxWin = nullptr;
-    if (fresh) { s_wheelAcc = 0; s_wheel.store(0); s_hwheel.store(0); s_latchWin = nullptr; s_extraAct = -1; s_wheelOptWin = nullptr; }
+    if (fresh) { s_wheelAcc = 0; s_wheel.store(0); s_latchWin = nullptr; s_extraAct = -1; s_wheelOptWin = nullptr; }
     if (batch) Sample(now, fresh);                 // siempre, para no inventar un clic al volver del menu de PES21FX
     // (12/11) en el Motor el juego no ve el teclado (freecam.cpp FreeCamBlocksKeys): Esc = "volver" lo pone la DLL, este o no el
     // mouse en menus prendido, para que siempre se pueda salir sin mando
@@ -262,7 +249,7 @@ static void Step(void* win) {
     const float cw = s_m.cw, ch = s_m.ch; float sw = cw, sh = ch, ox = 0, oy = 0;
     if (cw * 9.0f > ch * 16.0f) { sw = ch * 16.0f / 9.0f; ox = (cw - sw) * 0.5f; } else if (cw * 9.0f < ch * 16.0f) { sh = cw * 9.0f / 16.0f; oy = (ch - sh) * 0.5f; }
     const float mx = ((float)s_m.p.x - ox) * 1920.0f / sw, my = ((float)s_m.p.y - oy) * 1080.0f / sh;
-    if (s_extraAct >= 0) {   // (14/11 ythnmm) boton extra / rueda con Ctrl o Shift: la ventana bajo el mouse que tenga esa accion; si ninguna, la primera que la tenga
+    if (s_extraAct >= 0) {   // (14/11 ythnmm) accion pedida: la ventana bajo el mouse que tenga esa accion; si ninguna, la primera que la tenga
         if (now - s_extraT > 0.5) s_extraAct = -1;
         else {
             const uint32_t mode = U32(I + 0x120 + (size_t)s_extraAct * 4);
@@ -270,7 +257,7 @@ static void Step(void* win) {
             if (mode >= 1 && mode <= 3 && (over || now - s_extraT > 0.05)) {
                 s_pendWin = win; s_pendAction = s_extraAct; s_extraAct = -1; s_moveT.store(now);
                 const int k = s_nExtra.fetch_add(1, std::memory_order_relaxed);
-                if (k < 12) Log("mouse en menus: boton extra -> accion %d de la pagina (vtable %p)", s_pendAction, *(void**)win);
+                if (k < 12) Log("mouse en menus: accion pedida -> %d de la pagina (vtable %p)", s_pendAction, *(void**)win);
                 return;
             }
         }
@@ -334,20 +321,10 @@ static void hk_Dirs(void* win, int* dx, int* dy, unsigned char* trig) {
         if (k < 8) Log("mouse en menus: clic sobre un selector -> opcion %s", s_pendDx > 0 ? "siguiente" : "anterior");
         return;
     }
-    {   // (14/11 ythnmm) rueda de costado = L1 / R1
-        const int hw = s_hwheel.exchange(0);
-        if (g_cfg.menuMouseExtra != 0 && std::abs(hw) >= 60) { s_extraAct = hw > 0 ? kActR1 : kActL1; s_extraT = Now(); }
-    }
     s_wheelAcc = std::clamp(s_wheelAcc + w, -600, 600);
     if (std::abs(s_wheelAcc) < 120 || *dx != 0 || *dy != 0) return;       // el mando / teclado mandan
     HWND h = OverlayHwnd(); if (!h || GetForegroundWindow() != h) { s_wheelAcc = 0; return; }
     const int sgn = s_wheelAcc > 0 ? 1 : -1; s_wheelAcc -= sgn * 120;
-    if (g_cfg.menuMouseExtra != 0 && ((GetAsyncKeyState(VK_CONTROL) & 0x8000) || (GetAsyncKeyState(VK_SHIFT) & 0x8000))) {
-        // Ctrl + rueda = L1 / R1 (pestanas, ligas), Shift + rueda = L2 / R2; hacia adelante = izquierda
-        const bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-        s_extraAct = ctrl ? (sgn > 0 ? kActL1 : kActR1) : (sgn > 0 ? kActL2 : kActR2); s_extraT = Now();
-        s_nWheel.fetch_add(1, std::memory_order_relaxed); return;
-    }
     if (s_wheelOptWin == win) {                                          // sobre un selector: la rueda cambia la opcion (adelante = siguiente)
         *dx = sgn > 0 ? 1 : -1; if (trig) *trig = 1;
         s_pendWin = nullptr; s_pendAction = -1;
@@ -399,7 +376,6 @@ static void Install() {
 }
 
 void MenuMouseWheel(int delta) { if (s_ok && g_cfg.menuMouse != 0) s_wheel.fetch_add(delta, std::memory_order_relaxed); }
-void MenuMouseHWheel(int delta) { if (s_ok && g_cfg.menuMouse != 0) s_hwheel.fetch_add(delta, std::memory_order_relaxed); }   // (14/11 ythnmm) rueda de costado
 
 bool MenuMouseOverRow() { return s_over.load(); }   // (14/11 d) para la mano del cursor sobre los menus del juego
 

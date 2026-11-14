@@ -172,14 +172,10 @@ static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (!g_menuOpen) {
         int wd = 0;
         if (m == WM_MOUSEWHEEL) wd = (int)GET_WHEEL_DELTA_WPARAM(w);
-        else if (m == WM_MOUSEHWHEEL) { if (!FreeCamActive()) MenuMouseHWheel((int)GET_WHEEL_DELTA_WPARAM(w)); }   // (14/11 ythnmm) rueda de costado = L1 / R1
         else if (m == WM_INPUT) {
             RAWINPUT ri{}; UINT sz = sizeof(ri);
             if (GetRawInputData((HRAWINPUT)l, RID_INPUT, &ri, &sz, sizeof(RAWINPUTHEADER)) != (UINT)-1 && ri.header.dwType == RIM_TYPEMOUSE) {
                 if (ri.data.mouse.usButtonFlags & RI_MOUSE_WHEEL) wd = (int)(short)ri.data.mouse.usButtonData;
-#ifdef RI_MOUSE_HWHEEL
-                else if ((ri.data.mouse.usButtonFlags & RI_MOUSE_HWHEEL) && !FreeCamActive()) MenuMouseHWheel((int)(short)ri.data.mouse.usButtonData);
-#endif
             }
         }
         if (wd != 0) { if (FreeCamActive()) FreeCamWheel(wd); else MenuMouseWheel(wd); }
@@ -1960,10 +1956,6 @@ static void DrawSettingsPage() {
             if (ImGui::SliderInt("##mousemenusret", &rt, 0, 4)) g_cfg.menuMouseDelay = rt;
             if (ImGui::IsItemDeactivatedAfterEdit()) SaveOption("mouse_menus_retraso", std::to_string(g_cfg.menuMouseDelay));
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("El juego tarda 2 cuadros en marcar la fila elegida. Con 2 la flecha y la fila marcada van juntas; con 0 la flecha va mas pegada a la mano pero la fila la sigue de atras."));
-            bool ex = g_cfg.menuMouseExtra != 0;   // (14/11 ythnmm) mas opciones con el mouse
-            row(TRS("Botones extra del mouse"));
-            if (ImGui::Checkbox("##mousemenusextra", &ex)) { g_cfg.menuMouseExtra = ex ? 1 : 0; SaveOption("mouse_botones_extra", ex ? "1" : "0"); }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Boton del medio = triangulo, boton lateral de atras = volver, lateral de adelante = cuadrado, Ctrl + rueda (o la rueda de costado) = L1 / R1, Shift + rueda = L2 / R2. Solo hacen algo en las pantallas que tienen ese boton."));
             bool wo = g_cfg.menuMouseWheelOpt != 0;
             row(TRS("Rueda sobre una opcion: cambiarla"));
             if (ImGui::Checkbox("##mousemenusrueda", &wo)) { g_cfg.menuMouseWheelOpt = wo ? 1 : 0; SaveOption("mouse_rueda_opciones", wo ? "1" : "0"); }
