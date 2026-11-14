@@ -129,7 +129,29 @@ uint64_t hk_rpl(void* obj, unsigned pad, unsigned char p3) {
         const bool mv = RplCursorMoved(obj, cur) || (stp & 0x7fffffffu) != 0u;
         g_replayPlayV2.fetch_add(1, std::memory_order_relaxed); if (mv) { g_replayMoveV2.fetch_add(1, std::memory_order_relaxed); g_replayMoveMs.store(GetTickCount64(), std::memory_order_relaxed); }
         if (v2 && mv) { g_replayMs.store(GetTickCount64(), std::memory_order_relaxed); g_replayPlay.fetch_add(1, std::memory_order_relaxed); } } } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    // (14/11 g, Agustin: "que el slow mo del lua tambien permita que la reproduccion normal ... vaya en camara lenta") REPETICION NORMAL
+    // EN CAMARA LENTA ([PES21FX] repeticion_lenta): mientras la linea avanza a velocidad normal (sin flechas ni pausa del visor), su
+    // velocidad (+0x1C) se multiplica por la de la flecha derecha (0.5 del exe o la de SlowMoServer) solo durante la llamada. Si el paso
+    // del cuadro no es el normal (flechas, stick, pausa, salto) no se toca: se vuelve a escalar en cuanto la reproduccion vuelve a la normal.
+    static const void* s_nlLine = nullptr; static bool s_nlScale = false;
+    float spd0 = 0.0f, pos0 = 0.0f, mul = 1.0f; bool scaled = false, st5 = false;
+    const bool nlOn = g_cfg.replaySlow != 0 && obj && s_pfLine == nullptr;
+    if (nlOn) { __try {
+        st5 = *(const int*)obj == 5;
+        if (st5) {
+            if (s_nlLine != obj) { s_nlLine = obj; s_nlScale = false; }
+            pos0 = *(const float*)((const char*)obj + 0x14); spd0 = *(const float*)((const char*)obj + 0x1c);
+            mul = RplSpeedConst(0x14217C133ull, 0.5f);
+            if (s_nlScale && spd0 > 0.0f && spd0 < 10.0f && mul > 0.0f && mul < 1.0f) { *(float*)((char*)obj + 0x1c) = spd0 * mul; scaled = true; }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { st5 = false; } }
     const uint64_t r = o_rpl(obj, pad, p3);
+    if (nlOn && st5) { __try {
+        if (scaled && *(const float*)((const char*)obj + 0x1c) == spd0 * mul) *(float*)((char*)obj + 0x1c) = spd0;
+        const float d = *(const float*)((const char*)obj + 0x14) - pos0, expect = scaled ? spd0 * mul : spd0;
+        s_nlScale = spd0 > 0.0f && fabsf(d - expect) < 0.02f + 0.05f * expect;   // reproduccion normal: en la siguiente llamada, lenta
+    } __except (EXCEPTION_EXECUTE_HANDLER) { s_nlScale = false; } }
+    else s_nlScale = false;
     PhotoReplayCtl(obj);   // (14/11 g) pausa / avance / pasos del modo foto sobre la linea del visor
     return r;
 }

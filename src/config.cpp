@@ -148,6 +148,7 @@ static bool LoadConfigLocked() {
             else if (kl == "mouse_menus_retraso") c.menuMouseDelay = std::clamp(atoi(v.c_str()), 0, 4);
             else if (kl == "mouse_menus_cerca") c.menuMouseNear = atoi(v.c_str()) != 0 ? 1 : 0;
             else if (kl == "ayuda_mouse") c.mouseHint = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 d) botones del mouse abajo a la derecha
+            else if (kl == "repeticion_lenta") c.replaySlow = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 g)
             else if (kl == "tecla_cursor") c.cursorKey = (v == "0" || v.empty()) ? 0 : VkFromName(v);   // (14/11 c) F1 de fabrica
             else if (kl == "tecla_mouse_menus") c.menuMouseKey = (v == "0" || v.empty()) ? 0 : VkFromName(v);
             else if (kl == "ultima_tecla") c.keyHud = std::clamp(atoi(v.c_str()), 0, 4);   // (11/11) cuadrito con la ultima tecla apretada

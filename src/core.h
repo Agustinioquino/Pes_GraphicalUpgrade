@@ -176,6 +176,7 @@ struct Config {
     int menuMouseDelay = 2;                    // (11/11 v2) cuadros de retraso de la flecha, para que vaya junto con la fila marcada ([PES21FX] mouse_menus_retraso, 0..4)
     int menuMouseNear = 1;                     // (11/11 v2) en los huecos entre filas de un grupo vale la mas cercana ([PES21FX] mouse_menus_cerca)
     int mouseHint = 1;                         // (14/11 d) [PES21FX] ayuda_mouse: clic izq. / der. abajo a la derecha al usar el mouse en los menus del juego
+    int replaySlow = 1;                        // (14/11 g) [PES21FX] repeticion_lenta: la repeticion normal va a la velocidad lenta del visor (SlowMoServer)
     int cursorKey = VK_F1;                     // (14/11 c) tecla que prende / apaga el cursor ([PES21FX] tecla_cursor = F1, 0 = ninguna)
     int menuMouseKey = 0;                      // (11/11 v2) tecla que saca / pone el mouse en los menus (0 = ninguna, de fabrica: Agustin 22:23 no la necesita) ([PES21FX] tecla_mouse_menus = F8...)
     int keyHud = 4;                            // (11/11) cuadrito con la ultima tecla apretada: 0 apagado, 1..4 esquina ([PES21FX] ultima_tecla)
