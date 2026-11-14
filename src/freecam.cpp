@@ -109,6 +109,11 @@ float FreeCamPhotoScale() {
     return sp;
 }
 // (14/11 g) cruceta izquierda / derecha mantenida mientras la camara vuela con el mando (sin L1): el visor de la repeticion la usa
+// (14/11 i) desenfoque de profundidad con la camara libre: R3 / B lo prenden o apagan (camara_sin_dof, hooks.cpp UploadParams)
+void FreeCamDofToggle(const char* how) {
+    g_cfg.camNoDof = g_cfg.camNoDof ? 0 : 1; SaveOption("camara_sin_dof", g_cfg.camNoDof ? "1" : "0");
+    Log("camara libre: desenfoque de profundidad %s (%s)", g_cfg.camNoDof ? "APAGADO" : "como el juego", how);
+}
 int FreeCamReplayDpad() { if (!s_padFly.load()) return 0; MvPad p; if (!PadGet(p) || p.b[kPadL1]) return 0; return p.b[kPadRight] ? 1 : p.b[kPadLeft] ? -1 : 0; }
 FreeCamPadInfo FreeCamPadState() {
     FreeCamPadInfo i; i.wanted = FreeCamPadWanted(); i.flying = s_padFly.load(); i.step = s_phStep.load(); i.paused = s_phPause.load();
@@ -245,6 +250,12 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
             Log("modo foto: reloj x%.2f", kPhotoSteps[st]);
         }
         if (ed[kPadCircle]) { PhotoReset(); Log("modo foto: velocidad del menu"); }
+        {   // (14/11 i, Agustin: "que cambiar el desenfoque de profundidad sea una opcion en el menu con mando") R3 (soltar sin L3) =
+            // desenfoque si / no; L3 + R3 sigue siendo el menu
+            static bool s_r3 = false, s_r3Combo = false;
+            if (pad.b[kPadR3]) { if (!s_r3) s_r3Combo = false; if (pad.b[kPadL3]) s_r3Combo = true; s_r3 = true; }
+            else if (s_r3) { s_r3 = false; if (!s_r3Combo) FreeCamDofToggle("R3"); }
+        }
         if (ed[kPadOptions]) { s_padGive = true; Log("camara libre: OPTIONS, el mando vuelve al juego hasta que se apague la camara libre"); }
         s_phAdv = s_phPause.load() && pad.b[kPadSquare];
     } else { memset(s_padWas, 0, sizeof s_padWas); s_phAdv = false; }
@@ -258,6 +269,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
         if (ke[0]) { if (s_phStep.load() < 0) s_phStep = NearestStep(cur()); s_phPause = !s_phPause.load(); Log("modo foto: %s (P)", s_phPause.load() ? "pausa" : "sigue"); }
         if (ke[2] || ke[3]) { int st = s_phStep.load(); if (st < 0) st = NearestStep(cur()); st = std::clamp(st + (ke[3] ? 1 : -1), 0, kPhotoN - 1); s_phStep = st; Log("modo foto: reloj x%.2f (teclado)", kPhotoSteps[st]); }
         if (ke[4]) { PhotoReset(); Log("modo foto: velocidad del menu (N)"); }
+        { static bool s_bWas = false; const bool bk = Key('B'); if (bk && !s_bWas && FreeCamActive()) FreeCamDofToggle("B"); s_bWas = bk; }   // (14/11 i) B = desenfoque si / no
         if (!padOk) s_phAdv = s_phPause.load() && kd[1];
         else if (kd[1] && s_phPause.load()) s_phAdv = true;
     }

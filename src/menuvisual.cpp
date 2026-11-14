@@ -2085,11 +2085,15 @@ void MvPhotoHud(ImDrawList* dl, ImVec2 m0, ImVec2 m1, const MvHudIn& in) {
     const float h = 34.0f * k, maxW = std::min((m1.x - m0.x) - 40.0f * k, 920.0f * k);   // (14/11 "mas minimalista")
     // contenido: [estado | velocidad zoom] [reloj + riel] [ayudas...]; las ayudas que no entran se sacan desde el final
     struct Hint { int g; const char* key; const char* t; };
-    static const Hint kPadH[] = { { kLgStickL, nullptr, "Mover" }, { kLgStickR, nullptr, "Mirar" }, { kLgL2R2, nullptr, "Bajar / subir" }, { kPadCross, nullptr, "Pausa" },
-                                  { kPadSquare, nullptr, "Avanzar" }, { kLgL1DpadLR, nullptr, "Reloj" }, { kLgDpadLR, nullptr, "Velocidad" }, { kLgDpadUD, nullptr, "Zoom" }, { kPadTriangle, nullptr, "Volver" },
-                                  { kPadShare, nullptr, "HUD" }, { kPadOptions, nullptr, "Soltar" } };
-    static const Hint kKbH[] = { { -1, "W A S D", "Mover" }, { -1, "Q E", "Bajar / subir" }, { -1, "Clic der.", "Mirar" }, { -1, "P", "Pausa" },
-                                 { -1, "O", "Avanzar" }, { -1, ", .", "Reloj" }, { -1, "[ ]", "Velocidad" }, { -1, "Inicio", "Volver" }, { -1, "H", "HUD" } };
+    // (14/11 i, Agustin: "que las opciones funcionen en realidad") cada ayuda dice lo que hace el boton AHORA: en la repeticion la
+    // cruceta izq / der es atras / adelante del visor (no la velocidad); R3 / B desenfoque si / no; circulo / N reloj normal
+    const char* dofT = in.dofOff ? "Desenfoque: no" : "Desenfoque: si";
+    const char* lrT = in.replay ? "Atras / adelante" : "Velocidad";
+    const Hint kPadH[] = { { kLgStickL, nullptr, "Mover" }, { kLgStickR, nullptr, "Mirar" }, { kLgL2R2, nullptr, "Bajar / subir" }, { kPadCross, nullptr, "Pausa" },
+                           { kPadSquare, nullptr, "Avanzar" }, { kLgDpadLR, nullptr, lrT }, { kPadR3, nullptr, dofT }, { kLgL1DpadLR, nullptr, "Reloj" }, { kLgDpadUD, nullptr, "Zoom" },
+                           { kPadCircle, nullptr, "Reloj normal" }, { kPadTriangle, nullptr, "Volver" }, { kPadShare, nullptr, "HUD" }, { kPadOptions, nullptr, "Soltar" } };
+    const Hint kKbH[] = { { -1, "W A S D", "Mover" }, { -1, "Q E", "Bajar / subir" }, { -1, "Clic der.", "Mirar" }, { -1, "P", "Pausa" },
+                          { -1, "O", "Avanzar" }, { -1, "B", dofT }, { -1, ", .", "Reloj" }, { -1, "N", "Reloj normal" }, { -1, "[ ]", "Velocidad" }, { -1, "Inicio", "Volver" }, { -1, "H", "HUD" } };
     const Hint* H = in.padMode ? kPadH : kKbH; const int nH = in.padMode ? (int)(sizeof kPadH / sizeof kPadH[0]) : (int)(sizeof kKbH / sizeof kKbH[0]);
     auto hintW = [&](const Hint& hh) {
         const float tw = f->CalcTextSizeA(fsS, FLT_MAX, 0, TRS(hh.t)).x;

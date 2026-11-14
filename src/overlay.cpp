@@ -2888,7 +2888,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
             MvHudIn h; h.pad = s_pad; h.padMode = PadUi(); h.freeCam = camFree;
             h.status = TRS(ReplayNow() ? "REPETICION" : "EN VIVO"); h.speed = g_cfg.live[344][1]; h.zoom = g_cfg.live[344][2]; h.follow = g_cfg.live[346][2] > 0.5f;
             h.photo = pi.scale > 0.0f; h.clock = pi.scale > 0.0f ? pi.scale : camSlow; h.paused = pi.paused; h.adv = pi.advancing; h.step = pi.step; h.steps = FreeCamPhotoSteps(&h.nSteps);
-            h.compact = s_hudC; h.k = UIK(); h.alpha = s_hudA; h.anim = Anim(); h.now = tn;
+            h.replay = ReplayNow(); h.dofOff = g_cfg.camNoDof != 0; h.compact = s_hudC; h.k = UIK(); h.alpha = s_hudA; h.anim = Anim(); h.now = tn;
             const ImGuiViewport* vp = ImGui::GetMainViewport();
             MvPhotoHud(ImGui::GetForegroundDrawList(), vp->Pos, ImVec2(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y), h);
         }

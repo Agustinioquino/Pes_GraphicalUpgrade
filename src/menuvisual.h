@@ -125,6 +125,7 @@ struct MvHudIn {
     bool freeCam = false; const char* status = "";   // "EN VIVO" / "REPETICION"
     float speed = 1.0f, zoom = 1.0f; bool follow = false;
     float clock = 1.0f; bool photo = false, paused = false, adv = false; int step = -1; const float* steps = nullptr; int nSteps = 0;
+    bool replay = false, dofOff = false;       // (14/11 i) ayudas segun lo que hace cada boton de verdad
     float compact = 0.0f;                       // 0 barra completa, 1 pastilla
     float k = 1.0f, alpha = 1.0f; bool anim = true; double now = 0.0;
 };
