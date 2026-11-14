@@ -181,10 +181,29 @@ static bool DrawnRect(uint8_t* node, float& x, float& y, float& w, float& h) {
     x = x0; y = y0; w = x1 - x0; h = y1 - y0; return true;
 }
 
+// (14/11 f) el nodo dice "visible" pero el AFP no lo muestra: el objeto o un padre con la bandera de invisible (0x20000 en +0x20, la de
+// la propiedad 0x1007) o con el alfa de su color en 0 (+0xdc, si tiene transformacion de color: 0x8000000 en +0x24). En el menu
+// principal del Dream Patch la lista del medio (grupo 1) no se dibuja pero sus filas siguen "visibles" para el juego: el mouse las
+// elegia y despues el mando quedaba moviendose en una lista que no se ve (Agustin 14/11 13:42).
+static bool AfpShown(uint8_t* node, uint32_t* why = nullptr) {
+    if (!s_afpOk || g_cfg.menuMouseDrawn == 0) return true;
+    uint8_t* hd = P8(node + 0x40); if (!Ptr(hd)) return true;
+    const uint32_t id = U32(hd + 0xc); if (((id >> 27) & 0xf) != 4) return true;
+    uint8_t* o = ((PFN_AfpObj)kAfpObj)(id);
+    for (int i = 0; i < 32 && Ptr(o); i++) {
+        if (U32(o + 0x20) & 0x20000u) { if (why) *why = 0x100u + (uint32_t)i; return false; }
+        if (U32(o + 0x24) & 0x8000000u) { float a; memcpy(&a, o + 0xdc, 4); if (std::isfinite(a) && a < 0.02f) { if (why) *why = 0x200u + (uint32_t)i; return false; } }
+        int16_t depth; memcpy(&depth, o + 0x78, 2); if (depth < 1) break;
+        o = P8(o + 0x40);
+    }
+    return true;
+}
+
 struct Hit { int group = -1, row = -1; float x = 0, y = 0, w = 0, h = 0, dist = 0; };   // dist > 0: no esta justo encima, es la fila mas cercana de su grupo
 
 // replica de la recorrida de 0x140e400d0 con (mx, my) en vez del puntero del juego
-static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
+static bool HitTest(uint8_t* I, float mx, float my, Hit& out, bool useShown = true) {
+    int nSeen = 0, nHidden = 0;                    // si el AFP da por escondidas TODAS las filas, la lectura esta mal: se repite sin esa prueba
     uint8_t* root = P8(I + 0x98); if (!Ptr(root)) return false;
     const uint32_t ng = U32(I + 0xa4); if (ng == 0 || ng > 64) return false;
     // (v2) huecos entre filas de un mismo grupo (pestanas separadas, listas con margen): con el mouse dentro del rectangulo que
@@ -214,6 +233,48 @@ static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
           if (lb != le && Ptr(lb) && le > lb && (size_t)(le - lb) <= 4 * 256) for (uint8_t* e = lb; e + 4 <= le; e += 4) if (U32(e) == g) { inList = true; break; } }
         const uint32_t n = ChildCount(grp); if (n > 512) continue;
         Hit cand; float nearD = 1e9f; int rows = 0; float bx0 = 1e9f, by0 = 1e9f, bx1 = -1e9f, by1 = -1e9f;
+        // (14/11 f) GRILLA CON FILAS CHICAS: en un menu redibujado por un parche la fila del juego puede ser solo la esquina de la tarjeta
+        // (126 x 126 con tarjetas cada 420 px). Si las filas del grupo son mucho mas chicas que la distancia entre ellas, cada fila
+        // ocupa su celda: hasta la columna siguiente y hasta la fila siguiente de su columna (o el borde de la grilla).
+        struct Cell { uint32_t r; float x, y, w, h; }; static Cell s_cell[96]; int nc = 0; bool cells = false;
+        if (g_cfg.menuMouseDrawn != 0 && n <= 96) {
+            for (uint32_t r = 0; r < n; r++) {
+                uint8_t* node = Child(grp, r);
+                if (!Ptr(node) || !NodeFlag(node, 0x0c) || (!NodeFlag(node, 0x10) && !inList)) continue;
+                void** vt = *(void***)node; if (!Ptr(vt) || !RowClass(vt)) continue;
+                float pos[2] = { 0, 0 }, size[2] = { 0, 0 };
+                if (((PFN_NodeVec2)vt[0xa0 / 8])(node, pos) < 0) continue;
+                ((PFN_NodeVec2)vt[0xc0 / 8])(node, size);
+                if (!(size[0] > 0.0f) || !(size[1] > 0.0f) || !(size[0] < 4000.0f) || !(size[1] < 4000.0f) || !(std::fabs(pos[0]) < 8000.0f) || !(std::fabs(pos[1]) < 8000.0f)) continue;
+                if (useShown && !AfpShown(node)) continue;
+                s_cell[nc++] = { r, pos[0], pos[1], size[0], size[1] };
+            }
+            float xs[96], ys[96]; int nx = 0, ny = 0; float maxW = 0, maxH = 0;
+            for (int i = 0; i < nc; i++) {
+                bool fx = false, fy = false;
+                for (int k = 0; k < nx; k++) if (std::fabs(xs[k] - s_cell[i].x) < 6.0f) fx = true;
+                for (int k = 0; k < ny; k++) if (std::fabs(ys[k] - s_cell[i].y) < 6.0f) fy = true;
+                if (!fx) xs[nx++] = s_cell[i].x; if (!fy) ys[ny++] = s_cell[i].y;
+                maxW = std::max(maxW, s_cell[i].w); maxH = std::max(maxH, s_cell[i].h);
+            }
+            std::sort(xs, xs + nx); std::sort(ys, ys + ny);
+            float pitchX = 1e9f, pitchY = 1e9f;
+            for (int k = 1; k < nx; k++) pitchX = std::min(pitchX, xs[k] - xs[k - 1]);
+            for (int k = 1; k < ny; k++) pitchY = std::min(pitchY, ys[k] - ys[k - 1]);
+            cells = nc >= 2 && ((nx >= 2 && maxW < 0.6f * pitchX) || (nx < 2 && ny >= 2 && maxH < 0.6f * pitchY));
+            if (cells) {
+                const float right = nx >= 2 ? xs[nx - 1] + (xs[nx - 1] - xs[nx - 2]) : xs[0] + maxW;
+                const float bottom = ny >= 2 ? ys[ny - 1] + (ys[ny - 1] - ys[ny - 2]) : ys[0] + maxH;
+                for (int i = 0; i < nc; i++) {
+                    Cell& c = s_cell[i]; float nxX = right, nxY = bottom;
+                    for (int k = 0; k < nx; k++) if (xs[k] > c.x + 6.0f) { nxX = xs[k]; break; }
+                    for (int j = 0; j < nc; j++) if (std::fabs(s_cell[j].x - c.x) < 6.0f && s_cell[j].y > c.y + 6.0f) nxY = std::min(nxY, s_cell[j].y);
+                    const float gapX = nx >= 2 ? 0.03f * (nxX - c.x) : 0.0f;
+                    if (nx >= 2) c.w = std::max(8.0f, nxX - c.x - gapX);
+                    c.h = std::max(8.0f, nxY - c.y - 2.0f);
+                }
+            }
+        }
         for (uint32_t r = 0; r < n; r++) {
             uint8_t* node = Child(grp, r);
             if (!Ptr(node) || !NodeFlag(node, 0x0c) || (!NodeFlag(node, 0x10) && !inList)) continue;
@@ -222,7 +283,10 @@ static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
             if (((PFN_NodeVec2)vt[0xa0 / 8])(node, pos) < 0) continue;      // sin clip: el juego usaria valores viejos, aca se saltea
             ((PFN_NodeVec2)vt[0xc0 / 8])(node, size);
             if (!(size[0] > 0.0f) || !(size[1] > 0.0f)) continue;
-            {
+            nSeen++;
+            if (useShown && !AfpShown(node)) { nHidden++; continue; }       // (14/11 f) el juego la da por visible pero no se dibuja
+            if (cells) for (int i = 0; i < nc; i++) if (s_cell[i].r == r) { size[0] = s_cell[i].w; size[1] = s_cell[i].h; break; }
+            if (!cells) {
                 float dx0, dy0, dw, dh;
                 if (DrawnRect(node, dx0, dy0, dw, dh)) {
                     const float ix = std::min(pos[0] + size[0], dx0 + dw) - std::max(pos[0], dx0), iy = std::min(pos[1] + size[1], dy0 + dh) - std::max(pos[1], dy0);
@@ -257,6 +321,7 @@ static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
         }
         if (rows >= 2 && cand.group >= 0 && nearD < bestD && mx > bx0 && mx < bx1 && my > by0 && my < by1) { bestD = nearD; best = cand; }
     }
+    if (useShown && nSeen > 0 && nHidden == nSeen) return HitTest(I, mx, my, out, false);
     const bool drawnBad = nBogus * 10 > nRows * 6;
     if (drawnBad && directAll.group >= 0 && (direct.group < 0 || directAllD < directD)) { out = directAll; return true; }
     if (direct.group >= 0) { out = direct; return true; }
@@ -486,8 +551,13 @@ static void Step(void* win) {
                     float pos[2] = { 0, 0 }, size[2] = { 0, 0 }, d[4] = { 0, 0, 0, 0 };
                     const int pr = ((PFN_NodeVec2)v[0xa0 / 8])(nd, pos); ((PFN_NodeVec2)v[0xc0 / 8])(nd, size);
                     const bool dk = DrawnRect(nd, d[0], d[1], d[2], d[3]); shown++;
-                    Log("mouse en menus:   fila %u / %u: juego %.0f %.0f %.0f x %.0f (%d), dibujo %s %.0f %.0f %.0f x %.0f, visible %d activa %d",
-                        g, r, pos[0], pos[1], size[0], size[1], pr, dk ? "si" : "no", d[0], d[1], d[2], d[3], (int)NodeFlag(nd, 0x0c), (int)NodeFlag(nd, 0x10)); } }
+                    uint32_t why = 0; const bool sh = AfpShown(nd, &why);
+                    char chain[160]; int co = 0; chain[0] = 0;      // cadena de padres del AFP: banderas +0x20 y alfa
+                    { uint8_t* hd = P8(nd + 0x40); const uint32_t id = Ptr(hd) ? U32(hd + 0xc) : 0; uint8_t* o = (s_afpOk && ((id >> 27) & 0xf) == 4) ? ((PFN_AfpObj)kAfpObj)(id) : nullptr;
+                      for (int i = 0; i < 6 && Ptr(o) && co < 130; i++) { float a; memcpy(&a, o + 0xdc, 4); int16_t dp; memcpy(&dp, o + 0x78, 2);
+                          co += snprintf(chain + co, sizeof chain - (size_t)co, " %x/%x/%.2f", U32(o + 0x20) & 0xfffffu, U32(o + 0x24) >> 24, a); if (dp < 1) break; o = P8(o + 0x40); } }
+                    Log("mouse en menus:   fila %u / %u: juego %.0f %.0f %.0f x %.0f (%d), dibujo %s %.0f %.0f %.0f x %.0f, visible %d activa %d, mostrada %d (%x), afp%s",
+                        g, r, pos[0], pos[1], size[0], size[1], pr, dk ? "si" : "no", d[0], d[1], d[2], d[3], (int)NodeFlag(nd, 0x0c), (int)NodeFlag(nd, 0x10), (int)sh, why, chain); } }
         }
     }
     if (I[0x44]) return;                              // pagina con puntero propio del juego: no se toca (por ahora)
