@@ -471,8 +471,8 @@ enum : unsigned {
     kIcoFace = 0xf118, kIcoHand = 0xf256, kIcoHair = 0xf0c4, kIcoDrop = 0xf043, kIcoBody = 0xf183, kIcoShirt = 0xf553, kIcoWind = 0xf72e,
     kIcoCamera = 0xf030, kIcoPad = 0xf11b, kIcoDiag = 0xf0f1, kIcoLayers = 0xf5fd, kIcoStar = 0xf005, kIcoPen = 0xf304, kIcoHistory = 0xf1da,
     kIcoSliders = 0xf1de, kIcoTools = 0xf7d9, kIcoGear = 0xf013, kIcoWarn = 0xf071, kIcoSave = 0xf0c7, kIcoUndo = 0xf2ea, kIcoRedo = 0xf2f9,
-    kIcoRevert = 0xf0e2, kIcoEye = 0xf06e, kIcoEyeSlash = 0xf070, kIcoReload = 0xf021, kIcoSearch = 0xf002, kIcoX = 0xf00d, kIcoCompress = 0xf066, kIcoExpand = 0xf065,
-    kIcoFilter = 0xf0b0, kIcoDot = 0xf111, kIcoHelp = 0xf059, kIcoDown = 0xf078, kIcoRight = 0xf054, kIcoKeys = 0xf11c, kIcoMuscle = 0xf44b, kIcoSeedling = 0xf4d8, kIcoPointer = 0xf245, kIcoPlug = 0xf1e6,
+    kIcoRevert = 0xf0e2, kIcoEye = 0xf06e, kIcoEyeSlash = 0xf06e,   /* (14/11 f) 0xf070 no esta en pes_icons.ttf (salia "?") */ kIcoReload = 0xf021, kIcoSearch = 0xf002, kIcoX = 0xf00d, kIcoCompress = 0xf066, kIcoExpand = 0xf065,
+    kIcoFilter = 0xf0b0, kIcoDot = 0xf111, kIcoHelp = 0xf059, kIcoDown = 0xf078, kIcoRight = 0xf054, kIcoKeys = 0xf11c, kIcoMuscle = 0xf44b, kIcoSeedling = 0xf4d8, kIcoPointer = 0xf256, kIcoPlug = 0xf1de,   /* (14/11 f) 0xf245 y 0xf1e6 no estan en pes_icons.ttf (salian "?"): mano y tiras */
 };
 // categoria (0 escena, 1 jugadores, 2 otros), orden dentro de ella e icono de cada seccion (la clave es la seccion en espanol)
 static void SecInfo(const std::string& s, int& cat, int& ord, unsigned& ico) {
@@ -2151,19 +2151,22 @@ static void DrawMenu() {
         if (fail) { ImGui::SameLine(); ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1), TRS("   %d con error (ver Errores)"), fail); if (ImGui::IsItemClicked()) SelectPage("errors"); }
     }
     ImGui::EndGroup();
+    const float headH = std::max(ImGui::GetItemRectSize().y, ImGui::GetTextLineHeightWithSpacing() * 2.0f);   // (14/11 f) alto de la cabecera (logo + 2 lineas)
     {   // (08/11) tamano de la ventana + cerrar, arriba a la derecha
-        const float bw = 36 * UIK(), sp = ImGui::GetStyle().ItemSpacing.x;
+        // (14/11 f, Agustin: "no se mantiene el align de las teclas de cerrar y cambiar el formato") centrados en el alto de la cabecera,
+        // con el borde derecho alineado con la barra de abajo, en cualquier tamano del menu
+        const float bw = std::round(ImGui::GetFrameHeight() * 1.15f), sp = ImGui::GetStyle().ItemSpacing.x;
         ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - bw * 2 - sp);
-        ImGui::SetCursorPosY(headY);
+        ImGui::SetCursorPosY(headY + std::max(0.0f, std::round((headH - ImGui::GetFrameHeight()) * 0.5f)));
         static const unsigned kSzIco[3] = { kIcoCompress, kIcoExpand, kIcoLayers };   // icono del tamano al que pasa el boton
         const int cur = std::clamp(g_cfg.menuSize, 0, 2);
-        if (ImGui::Button(s_iconsOk ? (Ico(kSzIco[(cur + 1) % 3]) + "##tam").c_str() : "[ ]", ImVec2(bw, 0))) {
+        if (ImGui::Button(s_iconsOk ? (Ico(kSzIco[(cur + 1) % 3]) + "##tam").c_str() : "[ ]", ImVec2(bw, ImGui::GetFrameHeight()))) {
             g_cfg.menuSize = (cur + 1) % 3; s_winReq = g_cfg.menuSize; SaveOption("menu_tamano", std::to_string(g_cfg.menuSize));
         }
         static const char* const kSzTip[3] = { "Pantalla grande", "Panel a la derecha (deja la cara a la vista)", "Ventana" };
         if (ImGui::IsItemHovered()) ImGui::SetTooltip(TRS("Tamano del menu: %s"), TRS(kSzTip[cur]));
         ImGui::SameLine(0, sp);
-        if (ImGui::Button(s_iconsOk ? Ico(kIcoX).c_str() : "X", ImVec2(bw, 0))) g_menuOpen = false;
+        if (ImGui::Button(s_iconsOk ? Ico(kIcoX).c_str() : "X", ImVec2(bw, ImGui::GetFrameHeight()))) g_menuOpen = false;
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Cerrar (Insert)"));
     }
     ImGui::Spacing();

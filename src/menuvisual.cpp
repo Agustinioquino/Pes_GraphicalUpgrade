@@ -1606,7 +1606,7 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
         const ImVec2 t0(m.x - 1.0f * sc, m.y + 14.2f * sc), t1(m.x - 4.6f * sc, m.y + 9.6f * sc);
         const ImU32 green = ColA(Lerp4(acc, ImVec4(1, 1, 1, 1), 0.10f + 0.25f * s_flash), alpha);
         for (int pass = 0; pass < 2; pass++) {
-            const float e = pass == 0 ? 2.1f * k : 1.25f * k; const ImU32 c = pass == 0 ? Col(0.02f, 0.05f, 0.04f, 0.75f * alpha) : green;
+            const float e = pass == 0 ? 1.55f * k : 0.85f * k;   /* (14/11 f) borde verde mas fino */ const ImU32 c = pass == 0 ? Col(0.02f, 0.05f, 0.04f, 0.75f * alpha) : green;
             for (const Part& q : parts) { auto r = R(q.x0, q.y0, q.x1, q.y1); dl->AddRectFilled(ImVec2(r.first.x - e, r.first.y - e), ImVec2(r.second.x + e, r.second.y + e), c, q.r * sc + e); }
             dl->AddLine(t0, t1, c, 3.4f * sc + 2 * e); dl->AddCircleFilled(t1, 1.7f * sc + e, c, 16);
         }
@@ -1653,8 +1653,7 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
     dl->AddConcavePolyFilled(pts, 5, Col(1, 1, 1, alpha));
     ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, m, ImVec2(m.x + 6.0f * sd, m.y + 20.0f * sd), white, Col(0.80f, 0.83f, 0.88f, alpha));
     dl->AddPolyline(pts, 5, edge, ImDrawFlags_Closed, 1.3f * k);
-    dl->AddLine(ImVec2(pts[0].x + 1.5f * k, pts[0].y + 3.2f * k), ImVec2(pts[1].x + 1.6f * k, pts[1].y - 4.5f * k), Col(1, 1, 1, 0.9f * alpha), 1.0f * k);
-    dl->AddLine(ImVec2(pts[0].x + 2.6f * k, pts[0].y + 2.6f * k), ImVec2(pts[4].x - 4.0f * k, pts[4].y - 1.6f * k), Col(1, 1, 1, 0.5f * alpha), 1.0f * k);
+    // (14/11 f, Agustin: "esa linea esta rara en el dardo") sin las lineas de brillo adentro: cuerpo limpio con degradado y borde
 }
 
 // (14/11 d, Agustin: "al usar el mouse que se muestre un pequeno texto ... abajo a la derecha en pequeno los botones del mouse: clic
