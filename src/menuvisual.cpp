@@ -91,11 +91,6 @@ static ImVec4 SunColor(const MvSunIn& in, float el) {
     const float m = std::max(c.x, std::max(c.y, c.z)); if (m > 1e-3f) { c.x /= m; c.y /= m; c.z /= m; }
     return c;
 }
-// cielo desde arriba: centro = cenit, borde = horizonte. X del mundo a la derecha, Z hacia abajo (como el panel del viento)
-static ImVec2 DomePos(ImVec2 c, float R, float azDeg, float elDeg) {
-    const float r = R * (1.0f - std::clamp(elDeg, -8.0f, 90.0f) / 90.0f);
-    return ImVec2(c.x + sinf(azDeg * kDeg) * r, c.y + cosf(azDeg * kDeg) * r);
-}
 static void DrawPitchTop(ImDrawList* dl, ImVec2 a, ImVec2 b, float alpha) {
     const ImVec2 c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f); const float W = b.x - a.x, H = b.y - a.y;
     // franjas del corte del pasto
@@ -110,177 +105,208 @@ static void DrawPitchTop(ImDrawList* dl, ImVec2 a, ImVec2 b, float alpha) {
     const float aH = H * 40.3f / 68.0f * 0.5f, aW = W * 16.5f / 105.0f;
     dl->AddRect(ImVec2(a.x, c.y - aH), ImVec2(a.x + aW, c.y + aH), ln); dl->AddRect(ImVec2(b.x - aW, c.y - aH), ImVec2(b.x, c.y + aH), ln);
 }
+// (14/11 b) Agustin: "no me gusta como se plasma lo del sol" -> panorama del cielo visto desde la cancha: una franja con la silueta
+// de las tribunas, los arcos y las torres de luz; izquierda / derecha = hacia donde esta el sol (azimut, la vuelta entera), arriba /
+// abajo = la altura. Al lado, un jugador parado en el pasto con la luz de ese sol y su sombra.
+static float WrapDeg(float a) { a = fmodf(a, 360.0f); return a < 0 ? a + 360.0f : a; }
+// alto de la tribuna (en grados de altura) segun el rumbo: las de los costados mas altas, detras de los arcos mas bajas
+static float StandDeg(float az) { const float c = fabsf(cosf(az * kDeg)); return 6.0f + 9.0f * Smooth(0.25f, 0.85f, c); }
+static void DrawPlayer(ImDrawList* dl, ImVec2 feet, float h, const float L[3], ImVec4 sun, ImVec4 sky, float day, float sunI, float A) {
+    // sombra en el pasto: del pie hacia el lado contrario al sol, larga con el sol bajo (vista desde la camara: X a la derecha,
+    // Z hacia el fondo = hacia arriba en la pantalla, achicado por la perspectiva)
+    if (L[1] > 0.02f && day > 0.01f) {
+        const float len = std::min(3.0f, 1.0f / tanf(std::max(asinf(Sat(L[1])), 5.0f * kDeg))) * h;
+        const float hx = sqrtf(L[0] * L[0] + L[2] * L[2]) + 1e-4f, dx = -L[0] / hx, dz = -L[2] / hx;
+        const ImVec2 e(feet.x + dx * len, feet.y - dz * len * 0.30f);
+        const float w = h * 0.13f, nx = -(e.y - feet.y), ny = e.x - feet.x, nl = sqrtf(nx * nx + ny * ny) + 1e-4f;
+        const ImVec2 q[4] = { ImVec2(feet.x + nx / nl * w, feet.y + ny / nl * w), ImVec2(e.x + nx / nl * w * 0.7f, e.y + ny / nl * w * 0.7f),
+                              ImVec2(e.x - nx / nl * w * 0.7f, e.y - ny / nl * w * 0.7f), ImVec2(feet.x - nx / nl * w, feet.y - ny / nl * w) };
+        dl->AddConvexPolyFilled(q, 4, Col(0.02f, 0.06f, 0.02f, 0.55f * day * sunI * A));
+        dl->AddEllipseFilled(feet, ImVec2(w * 1.6f, w * 0.45f), Col(0, 0, 0, 0.45f * A), 0, 16);
+    }
+    // jugador: piernas, short, camiseta, brazos, cabeza; cada parte con luz del sol (lado que mira al sol) y del cielo
+    auto shade = [&](float nx, float ny, ImVec4 base) {
+        const float lam = std::max(0.0f, nx * L[0] + ny * L[1] - 0.35f * L[2]) * day * sunI;
+        const float amb = 0.30f + 0.15f * ny;
+        return ImVec4(Sat(base.x * (lam * sun.x * 0.95f + amb * sky.x)), Sat(base.y * (lam * sun.y * 0.95f + amb * sky.y)), Sat(base.z * (lam * sun.z * 0.95f + amb * sky.z)), A);
+    };
+    const ImVec4 kit(0.85f, 0.18f, 0.20f, 1), shorts(0.95f, 0.95f, 0.97f, 1), skin(0.86f, 0.64f, 0.50f, 1), sock(0.85f, 0.18f, 0.20f, 1);
+    const float u = h / 10.0f;
+    auto part = [&](ImVec2 a, ImVec2 b, ImVec4 base, float r) {   // mitad izquierda y derecha con distinta luz (volumen)
+        const float mx = (a.x + b.x) * 0.5f;
+        dl->AddRectFilled(a, ImVec2(mx, b.y), ImGui::GetColorU32(shade(-0.8f, 0.3f, base)), r, ImDrawFlags_RoundCornersLeft);
+        dl->AddRectFilled(ImVec2(mx, a.y), b, ImGui::GetColorU32(shade(0.8f, 0.3f, base)), r, ImDrawFlags_RoundCornersRight);
+    };
+    part(ImVec2(feet.x - 1.3f * u, feet.y - 4.6f * u), ImVec2(feet.x - 0.2f * u, feet.y - 0.3f * u), sock, 0.4f * u);   // piernas
+    part(ImVec2(feet.x + 0.2f * u, feet.y - 4.6f * u), ImVec2(feet.x + 1.3f * u, feet.y - 0.3f * u), sock, 0.4f * u);
+    part(ImVec2(feet.x - 1.5f * u, feet.y - 5.6f * u), ImVec2(feet.x + 1.5f * u, feet.y - 4.2f * u), shorts, 0.5f * u);   // short
+    part(ImVec2(feet.x - 1.7f * u, feet.y - 8.4f * u), ImVec2(feet.x + 1.7f * u, feet.y - 5.4f * u), kit, 0.8f * u);   // camiseta
+    part(ImVec2(feet.x - 2.4f * u, feet.y - 8.1f * u), ImVec2(feet.x - 1.6f * u, feet.y - 5.4f * u), skin, 0.4f * u);   // brazos
+    part(ImVec2(feet.x + 1.6f * u, feet.y - 8.1f * u), ImVec2(feet.x + 2.4f * u, feet.y - 5.4f * u), skin, 0.4f * u);
+    const ImVec2 hc(feet.x, feet.y - 9.3f * u);
+    dl->AddCircleFilled(hc, 1.0f * u, ImGui::GetColorU32(shade(0.0f, 0.5f, skin)), 20);
+    if (L[0] < -0.05f || L[0] > 0.05f) {   // el lado de la cabeza que mira al sol, mas claro
+        const float sg = L[0] > 0 ? 1.0f : -1.0f;
+        dl->PathArcTo(hc, 0.75f * u, sg > 0 ? -1.2f : kPI - 1.2f, sg > 0 ? 1.2f : kPI + 1.2f, 10);
+        dl->PathStroke(ImGui::GetColorU32(shade(sg, 0.2f, skin)), 0, 0.5f * u);
+    }
+    if (L[2] > 0.25f && day > 0.01f) {   // sol detras (contraluz): borde encendido
+        const float rim = Sat((L[2] - 0.25f) * 1.6f) * day * sunI;
+        dl->AddCircle(hc, 1.02f * u, Col(sun.x, sun.y * 0.9f, sun.z * 0.7f, 0.8f * rim * A), 20, 1.4f);
+        dl->AddRect(ImVec2(feet.x - 1.75f * u, feet.y - 8.45f * u), ImVec2(feet.x + 1.75f * u, feet.y - 5.35f * u), Col(sun.x, sun.y * 0.9f, sun.z * 0.7f, 0.6f * rim * A), 0.8f * u, 0, 1.3f);
+    }
+    dl->AddRectFilled(ImVec2(feet.x - 1.5f * u, feet.y - 0.4f * u), ImVec2(feet.x - 0.1f * u, feet.y + 0.2f * u), Col(0.08f, 0.08f, 0.09f, A), 0.3f * u);   // botines
+    dl->AddRectFilled(ImVec2(feet.x + 0.1f * u, feet.y - 0.4f * u), ImVec2(feet.x + 1.5f * u, feet.y + 0.2f * u), Col(0.08f, 0.08f, 0.09f, A), 0.3f * u);
+}
 bool MvSunWidget(MvSunIn& in) {
     if (!in.az || !in.el || !in.on) return false;
     const float k = in.k; bool changed = false;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float avail = ImGui::GetContentRegionAvail().x;
-    const bool side = avail >= 470.0f * k;
-    const float D = side ? std::min(avail * 0.46f, 250.0f * k) : std::min(avail, 250.0f * k);
-    const float pvW = side ? std::min(avail - D - 14.0f * k, 330.0f * k) : std::min(avail, 330.0f * k), pvH = D;
-    const ImVec2 p0 = ImGui::GetCursorScreenPos();
-    const ImVec2 c(p0.x + D * 0.5f, p0.y + D * 0.5f); const float R = D * 0.5f - 14.0f * k;
+    const bool side = avail >= 520.0f * k;
+    const float pvW = side ? std::min(150.0f * k, avail * 0.26f) : 0.0f;
+    const float W = side ? avail - pvW - 10.0f * k : avail, Hs = std::clamp(W * 0.36f, 130.0f * k, 190.0f * k);
+    const ImVec2 p0 = ImGui::GetCursorScreenPos(), p1(p0.x + W, p0.y + Hs);
     const bool on = *in.on > 0.5f;
-    // donde se dibuja el sol: el que manda el sol libre este cuadro (con giro / recorrido); apagado, el sol del partido
     float wantAz = in.relative && in.realOk ? *in.az + in.realAz : *in.az, wantEl = *in.el;
     if (on && in.finalOk) { wantAz = in.finalAz; wantEl = in.finalEl; }
     else if (!on && in.realOk) { wantAz = in.realAz; wantEl = in.realEl; }
-    wantAz = fmodf(wantAz + 720.0f, 360.0f);
-    const ImGuiID wid = ImGui::GetID("##soldome");
-    ImGui::InvisibleButton("##soldome", ImVec2(D, D));
+    wantAz = WrapDeg(wantAz);
+    // franja: x = azimut 0..360 (el centro = 180), y = altura: arriba 90, el horizonte a 3/4 del alto, abajo -15 (pasto)
+    const float horY = p0.y + Hs * 0.80f;
+    auto X = [&](float az) { return p0.x + WrapDeg(az) / 360.0f * W; };
+    auto Y = [&](float el) { return el >= 0 ? horY - (horY - p0.y - 6.0f * k) * (el / 90.0f) : horY - el / 15.0f * (p1.y - horY); };
+    const ImGuiID wid = ImGui::GetID("##solpano");
+    ImGui::InvisibleButton("##solpano", ImVec2(W, Hs));
     const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
-    if (act) {   // arrastrar el sol: azimut por el angulo, altura por la distancia al centro; Ctrl = solo el azimut
-        const ImVec2 m = ImGui::GetIO().MousePos; const float dx = m.x - c.x, dy = m.y - c.y;
-        float az = atan2f(dx, dy) / kDeg; if (az < 0) az += 360.0f;
-        const float el = std::clamp(90.0f * (1.0f - sqrtf(dx * dx + dy * dy) / R), -5.0f, 90.0f);
+    if (act) {
+        const ImVec2 m = ImGui::GetIO().MousePos;
+        const float az = WrapDeg((m.x - p0.x) / W * 360.0f);
+        float el = m.y <= horY ? (horY - m.y) / (horY - p0.y - 6.0f * k) * 90.0f : -(m.y - horY) / (p1.y - horY) * 15.0f;
+        el = std::clamp(el, -5.0f, 90.0f);
         if (!on) *in.on = 1.0f;
-        *in.az = in.relative && in.realOk ? fmodf(az - in.realAz + 720.0f, 360.0f) : az;
+        *in.az = roundf(in.relative && in.realOk ? WrapDeg(az - in.realAz) : az);
         if (!ImGui::GetIO().KeyCtrl) *in.el = roundf(el);
-        *in.az = roundf(*in.az);
-        wantAz = az; wantEl = ImGui::GetIO().KeyCtrl ? wantEl : *in.el; changed = true;
+        wantAz = az; wantEl = *in.el; changed = true;
     }
-    if (hov && !act && ImGui::GetIO().MouseWheel != 0.0f) {   // rueda: subir / bajar el sol
+    if (hov && !act && ImGui::GetIO().MouseWheel != 0.0f) {
         ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
         *in.el = std::clamp(*in.el + ImGui::GetIO().MouseWheel * (ImGui::GetIO().KeyShift ? 0.5f : 2.0f), -5.0f, 90.0f); changed = true;
         if (!on) *in.on = 1.0f;
     }
+    // el sol dibujado sigue al valor suave (el azimut por el camino corto, cruzando el borde de la franja)
     const float shAz = Follow(wid + 1, wantAz, 14.0f, in.anim && !act, true), shEl = Follow(wid + 2, wantEl, 14.0f, in.anim && !act);
     const float t = (float)fmod(in.now, 3600.0);
-    const float hv = ImGui::GetStateStorage()->GetFloat(wid + 3, 0.0f);
     { float* h = ImGui::GetStateStorage()->GetFloatRef(wid + 3, 0.0f); *h = std::clamp(*h + ((hov || act) ? 1.0f : -1.0f) * ImGui::GetIO().DeltaTime * 6.0f, 0.0f, 1.0f); }
-    // --- el cielo ---
+    const float hv = ImGui::GetStateStorage()->GetFloat(wid + 3, 0.0f);
     ImVec4 top, hor; SkyColors(shEl, top, hor);
-    for (int i = 12; i >= 1; i--) {   // degrade del borde (horizonte) al centro (cenit)
-        const float f = i / 12.0f;
-        dl->AddCircleFilled(c, R * f, ImGui::GetColorU32(Lerp4(top, hor, f * f)), 48);
-    }
-    dl->AddCircle(c, R, Col(1, 1, 1, 0.35f + 0.25f * hv), 64, 1.4f * k);
-    for (int ring = 1; ring <= 2; ring++) dl->AddCircle(c, R * (1.0f - ring * 30.0f / 90.0f), Col(1, 1, 1, 0.13f), 48, 1.0f);
-    char lb[16];
-    for (int ring = 0; ring <= 2; ring++) {   // alturas 0 / 30 / 60 grados, en diagonal arriba a la derecha
-        snprintf(lb, sizeof lb, "%d", ring * 30); const float rr = R * (1.0f - ring * 30.0f / 90.0f);
-        dl->AddText(ImVec2(c.x + rr * 0.707f + 2.0f * k, c.y - rr * 0.707f - ImGui::GetFontSize() * 0.9f), Col(1, 1, 1, 0.45f), lb);
-    }
-    // la cancha en el medio y un jugador con su sombra (la vista previa de hacia donde van las sombras)
-    const float pw = R * 0.78f, ph = pw * 68.0f / 105.0f;
-    DrawPitchTop(dl, ImVec2(c.x - pw * 0.5f, c.y - ph * 0.5f), ImVec2(c.x + pw * 0.5f, c.y + ph * 0.5f), 1.0f);
-    if (shEl > 0.5f) {
-        const float len = std::min(R * 0.62f, (R * 0.11f) / tanf(std::max(shEl, 4.0f) * kDeg));
-        const float sx = -sinf(shAz * kDeg), sy = -cosf(shAz * kDeg);
-        const ImVec2 e(c.x + sx * len, c.y + sy * len);
-        const float wd = 3.2f * k;
-        dl->AddQuadFilled(ImVec2(c.x - sy * wd, c.y + sx * wd), ImVec2(c.x + sy * wd, c.y - sx * wd), ImVec2(e.x + sy * wd * 0.6f, e.y - sx * wd * 0.6f), ImVec2(e.x - sy * wd * 0.6f, e.y + sx * wd * 0.6f), Col(0, 0, 0, 0.45f * Smooth(0.5f, 6.0f, shEl)));
-    }
-    dl->AddCircleFilled(c, 3.6f * k, Col(0.95f, 0.95f, 1.0f, 0.95f), 12);
-    // el sol del partido (fantasma) cuando el sol libre esta prendido
-    if (on && in.realOk) {
-        const ImVec2 rp = DomePos(c, R, in.realAz, in.realEl);
-        dl->AddCircle(rp, 7.0f * k, Col(1, 1, 1, 0.60f), 20, 1.3f * k);
-        dl->AddCircleFilled(rp, 2.0f * k, Col(1, 1, 1, 0.60f), 8);
-    }
-    // el sol
-    const ImVec2 sp = DomePos(c, R, shAz, shEl);
     const ImVec4 sc = SunColor(in, shEl);
+    const float rr = 10.0f * k;
+    dl->PushClipRect(p0, p1, true);
+    // cielo: degrade, mas un resplandor alrededor del sol (mas grande y calido con el sol bajo)
+    dl->AddRectFilledMultiColor(p0, ImVec2(p1.x, horY), ImGui::GetColorU32(top), ImGui::GetColorU32(top), ImGui::GetColorU32(hor), ImGui::GetColorU32(hor));
+    const ImVec2 sp(X(shAz), Y(shEl));
+    {
+        const float low = 1.0f - Smooth(0.0f, 30.0f, shEl), gr = (40.0f + 50.0f * low) * k;
+        for (int c = -1; c <= 1; c++) for (int i = 7; i >= 1; i--) dl->AddCircleFilled(ImVec2(sp.x + c * W, sp.y), gr * i / 7.0f, ColA(sc, (0.035f + 0.03f * low) * (on ? 1.0f : 0.6f)), 32);
+    }
+    // estrellas de noche
+    if (shEl < 2.0f) { const float n = 1.0f - Smooth(-6.0f, 2.0f, shEl); unsigned r = 777u; for (int i = 0; i < 40; i++) { r = r * 1664525u + 1013904223u; const float x = p0.x + (r >> 8) % 10000 / 10000.0f * W; r = r * 1664525u + 1013904223u; const float y = p0.y + (r >> 8) % 10000 / 10000.0f * (horY - p0.y) * 0.7f; dl->AddCircleFilled(ImVec2(x, y), 0.9f * k, Col(1, 1, 1, 0.7f * n * (in.anim ? 0.6f + 0.4f * sinf(t * 2.0f + i) : 1.0f)), 6); } }
+    // lineas de altura 30 / 60
+    for (int e = 30; e <= 60; e += 30) { dl->AddLine(ImVec2(p0.x, Y((float)e)), ImVec2(p1.x, Y((float)e)), Col(1, 1, 1, 0.10f), 1.0f); char b[8]; snprintf(b, sizeof b, "%d", e); dl->AddText(ImVec2(p0.x + 4.0f * k, Y((float)e) - ImGui::GetFontSize() - 1.0f), Col(1, 1, 1, 0.40f), b); }
+    // el sol (detras de las tribunas si esta bajo)
     const float pulse = in.anim ? 0.5f + 0.5f * sinf(t * 2.2f) : 0.5f;
-    const float sr = (8.0f + 2.0f * hv + (act ? 1.5f : 0.0f)) * k;
-    SunGlyph(dl, sp, sr, on ? sc : ImVec4(sc.x, sc.y, sc.z, 0.55f), in.anim ? t * 0.5f : 0.0f, on ? (0.6f + 0.4f * pulse) * Sat(in.intensity) + 0.3f * hv : 0.25f);
-    if (shEl < 0.0f) dl->AddText(ImVec2(sp.x - 18.0f * k, sp.y + 13.0f * k), Col(1, 1, 1, 0.7f), TRS("de noche"));
-    if (hov && !act) ImGui::SetTooltip("%s", TRS("Arrastra el sol: el angulo es el Azimut y la distancia al centro la Elevacion (centro = arriba de todo, borde = horizonte). Rueda del mouse = subir o bajar. Ctrl = mover solo el Azimut. Prende el sol libre solo."));
+    const float sr = (9.0f + 2.0f * hv + (act ? 1.5f : 0.0f)) * k;
+    for (int c = -1; c <= 1; c++) SunGlyph(dl, ImVec2(sp.x + c * W, sp.y), sr, on ? sc : ImVec4(sc.x, sc.y, sc.z, 0.6f), in.anim ? t * 0.5f : 0.0f, on ? (0.6f + 0.4f * pulse) * Sat(in.intensity) + 0.3f * hv : 0.3f);
+    // tribunas: silueta con el techo, mas alta a los costados; los arcos en el medio de las cabeceras; torres de luz en las esquinas
+    {
+        const ImVec4 stand(top.x * 0.25f + 0.04f, top.y * 0.25f + 0.05f, top.z * 0.25f + 0.08f, 1);
+        const int N = 72; ImVec2 prev;
+        for (int i = 0; i <= N; i++) {
+            const float az = 360.0f * i / N, x = p0.x + W * i / N, y = Y(StandDeg(az));
+            if (i) { dl->AddQuadFilled(prev, ImVec2(x, y), ImVec2(x, horY), ImVec2(prev.x, horY), ImGui::GetColorU32(stand)); dl->AddLine(prev, ImVec2(x, y), Col(1, 1, 1, 0.10f), 1.0f); }
+            prev = ImVec2(x, y);
+        }
+        // filas de publico (puntitos claros)
+        unsigned r = 99u;
+        for (int i = 0; i < 260; i++) { r = r * 1664525u + 1013904223u; const float az = (r >> 8) % 36000 / 100.0f; r = r * 1664525u + 1013904223u; const float f = (r >> 8) % 1000 / 1000.0f;
+            const float y = horY - (horY - Y(StandDeg(az))) * (0.15f + 0.7f * f); dl->AddCircleFilled(ImVec2(X(az), y), 0.8f * k, Col(0.9f, 0.9f, 0.95f, 0.18f + 0.12f * f), 4); }
+        for (int c = 0; c < 4; c++) {   // torres de luz en las esquinas (45, 135, 225, 315)
+            const float az = 45.0f + 90.0f * c, x = X(az), yt = Y(StandDeg(az) + 9.0f);
+            dl->AddLine(ImVec2(x, horY), ImVec2(x, yt), Col(0.6f, 0.62f, 0.68f, 0.7f), 1.4f * k);
+            dl->AddRectFilled(ImVec2(x - 5.0f * k, yt - 3.0f * k), ImVec2(x + 5.0f * k, yt + 2.0f * k), shEl < 4.0f ? Col(1.0f, 0.97f, 0.85f, 0.95f) : Col(0.7f, 0.72f, 0.78f, 0.8f), 1.0f);
+        }
+        static const struct { float az; const char* t; } kMark[4] = { { 0, "Tribuna" }, { 90, "Arco" }, { 180, "Tribuna" }, { 270, "Arco" } };
+        for (auto& m : kMark) {
+            const float x = X(m.az + 0.001f);
+            if (!strcmp(m.t, "Arco")) {   // el arco: dos palos y el travesano sobre el horizonte
+                const float gw = 14.0f * k, gh = 7.0f * k;
+                dl->AddLine(ImVec2(x - gw, horY), ImVec2(x - gw, horY - gh), IM_COL32_WHITE, 1.5f * k); dl->AddLine(ImVec2(x + gw, horY), ImVec2(x + gw, horY - gh), IM_COL32_WHITE, 1.5f * k);
+                dl->AddLine(ImVec2(x - gw, horY - gh), ImVec2(x + gw, horY - gh), IM_COL32_WHITE, 1.5f * k);
+            }
+            const char* tt = TRS(m.t); const float tw = ImGui::CalcTextSize(tt).x;
+            dl->AddText(ImVec2(std::clamp(x - tw * 0.5f, p0.x + 2.0f, p1.x - tw - 2.0f), horY + 3.0f * k), Col(1, 1, 1, 0.65f), tt);
+        }
+    }
+    // pasto (con franjas) debajo del horizonte
+    {
+        const ImVec4 g0(0.13f, 0.34f, 0.17f, 1), g1(0.15f, 0.39f, 0.19f, 1);
+        const float day = Smooth(-4.0f, 8.0f, shEl), gl = 0.45f + 0.55f * day;
+        for (int i = 0; i < 12; i++) dl->AddRectFilled(ImVec2(p0.x + W * i / 12.0f, horY), ImVec2(p0.x + W * (i + 1) / 12.0f, p1.y), ImGui::GetColorU32(ImVec4((i % 2 ? g0 : g1).x * gl, (i % 2 ? g0 : g1).y * gl, (i % 2 ? g0 : g1).z * gl, 1)));
+        dl->AddLine(ImVec2(p0.x, horY), ImVec2(p1.x, horY), Col(1, 1, 1, 0.25f), 1.0f);
+    }
+    // el sol del partido (marca) cuando el sol libre esta prendido
+    if (on && in.realOk) {
+        const ImVec2 rp(X(in.realAz), Y(in.realEl));
+        dl->AddCircle(rp, 7.0f * k, Col(1, 1, 1, 0.75f), 20, 1.3f * k);
+        dl->AddLine(ImVec2(rp.x, rp.y + 8.0f * k), ImVec2(rp.x, rp.y + 13.0f * k), Col(1, 1, 1, 0.6f), 1.0f);
+        dl->AddText(ImVec2(rp.x - ImGui::CalcTextSize(TRS("partido")).x * 0.5f, rp.y + 13.0f * k), Col(1, 1, 1, 0.75f), TRS("partido"));
+    }
+    if (in.anim && hv > 0.01f && !act) {   // guia: la cruz del mouse sobre la franja
+        const ImVec2 m = ImGui::GetIO().MousePos;
+        dl->AddLine(ImVec2(m.x, p0.y), ImVec2(m.x, p1.y), Col(1, 1, 1, 0.12f * hv), 1.0f);
+        dl->AddLine(ImVec2(p0.x, m.y), ImVec2(p1.x, m.y), Col(1, 1, 1, 0.12f * hv), 1.0f);
+    }
+    dl->PopClipRect();
+    // marco de vidrio
+    dl->AddRect(ImVec2(p0.x - 1, p0.y - 1), ImVec2(p1.x + 1, p1.y + 1), ImGui::GetColorU32(ImGuiCol_FrameBg), rr + 1, 0, 2.5f * k);
+    dl->AddRect(p0, p1, Col(1, 1, 1, 0.20f + 0.25f * hv), rr, 0, 1.0f);
+    dl->AddRectFilledMultiColor(ImVec2(p0.x + 2, p0.y + 2), ImVec2(p1.x - 2, p0.y + Hs * 0.18f), IM_COL32(255, 255, 255, 16), IM_COL32(255, 255, 255, 16), IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0));
+    {
+        char b[96];
+        if (on) snprintf(b, sizeof b, TRS("Rumbo %.0f   Altura %.0f"), wantAz, wantEl);
+        else snprintf(b, sizeof b, "%s", in.realOk ? TRS("Sol del partido: arrastralo para moverlo") : TRS("Arrastra el sol para moverlo"));
+        const ImVec2 ts = ImGui::CalcTextSize(b);
+        dl->AddRectFilled(ImVec2(p1.x - ts.x - 16.0f * k, p0.y + 6.0f * k), ImVec2(p1.x - 6.0f * k, p0.y + 10.0f * k + ts.y), Col(0, 0, 0, 0.35f), 6.0f * k);
+        dl->AddText(ImVec2(p1.x - ts.x - 11.0f * k, p0.y + 8.0f * k), Col(1, 1, 1, 0.92f), b);
+    }
+    if (hov && !act) ImGui::SetTooltip("%s", TRS("El cielo visto desde la cancha, la vuelta entera. Arrastra el sol: a los costados = hacia donde esta; arriba / abajo = la altura. Rueda del mouse = subir o bajar. Ctrl = mover solo a los costados. Prende el sol libre solo."));
     if (act) {
-        char b[64]; snprintf(b, sizeof b, TRS("Azimut %.0f  Elevacion %.0f"), wantAz, *in.el);
+        char b[64]; snprintf(b, sizeof b, TRS("Rumbo %.0f  Altura %.0f"), wantAz, *in.el);
         ImDrawList* fg = ImGui::GetForegroundDrawList(); const ImVec2 ts = ImGui::CalcTextSize(b);
-        const ImVec2 bp(sp.x - ts.x * 0.5f - 7 * k, sp.y - sr * 2.2f - ts.y - 8 * k);
+        const ImVec2 bp(sp.x - ts.x * 0.5f - 7 * k, sp.y - sr * 2.4f - ts.y - 8 * k);
         fg->AddRectFilled(bp, ImVec2(bp.x + ts.x + 14 * k, bp.y + ts.y + 6 * k), Col(0.10f, 0.12f, 0.16f, 0.92f), 8.0f * k);
         fg->AddText(ImVec2(bp.x + 7 * k, bp.y + 3 * k), IM_COL32_WHITE, b);
     }
-    // --- vista previa: como queda la luz (vista de TV: la camara mira la cancha de costado) ---
-    ImVec2 q0;
-    if (side) q0 = ImVec2(p0.x + D + 14.0f * k, p0.y);
-    else { ImGui::Dummy(ImVec2(0, 6.0f * k)); q0 = ImGui::GetCursorScreenPos(); }
-    const ImVec2 q1(q0.x + pvW, q0.y + pvH);
-    const float rr = 10.0f * k;
-    const float hY = q0.y + pvH * 0.52f;   // horizonte
-    dl->AddRectFilledMultiColor(q0, ImVec2(q1.x, hY), ImGui::GetColorU32(top), ImGui::GetColorU32(top), ImGui::GetColorU32(hor), ImGui::GetColorU32(hor));
-    // tribuna lejana
-    dl->AddRectFilled(ImVec2(q0.x, hY - pvH * 0.07f), ImVec2(q1.x, hY), Col(top.x * 0.4f + 0.05f, top.y * 0.4f + 0.05f, top.z * 0.4f + 0.07f, 1));
-    // cancha en perspectiva: franjas cada vez mas anchas hacia la camara
-    const float L[3] = { cosf(shEl * kDeg) * sinf(shAz * kDeg), sinf(shEl * kDeg), cosf(shEl * kDeg) * cosf(shAz * kDeg) };
-    const float day = Smooth(-4.0f, 6.0f, shEl), sunI = on ? Sat(in.intensity / 1.5f) * 0.6f + 0.4f : 1.0f;
-    const float gl = (0.25f + 0.75f * day * Sat(L[1] * 1.6f + 0.15f)) * sunI;
-    for (int i = 0; i < 8; i++) {
-        const float f0 = i / 8.0f, f1 = (i + 1) / 8.0f;
-        const float y0 = hY + (q1.y - hY) * f0 * f0, y1 = hY + (q1.y - hY) * f1 * f1;
-        const float g = i % 2 ? 0.92f : 1.0f;
-        dl->AddRectFilled(ImVec2(q0.x, y0), ImVec2(q1.x, y1), Col((0.12f + 0.25f * gl * sc.x) * g, (0.25f + 0.40f * gl * sc.y) * g, (0.10f + 0.12f * gl * sc.z) * g, 1));
-    }
-    // pelota (o cabeza): sombreado por puntos con la luz del sol, luz del cielo y el borde encendido a contraluz
-    const float br = pvH * 0.17f; const ImVec2 bc(q0.x + pvW * 0.5f, hY + (q1.y - hY) * 0.50f - br);
-    if (shEl > 0.0f) {   // sombra en el piso (hacia el lado contrario al sol; larga con el sol bajo)
-        const float tl = std::min(3.2f, 1.0f / tanf(std::max(shEl, 5.0f) * kDeg));
-        const float ox = -L[0] / std::max(0.08f, sqrtf(L[0] * L[0] + L[2] * L[2])) * tl * br * 0.9f, oz = -L[2] / std::max(0.08f, sqrtf(L[0] * L[0] + L[2] * L[2])) * tl * br * 0.25f;
-        const ImVec2 sc0(bc.x + ox * 0.5f, bc.y + br + oz * 0.5f - br * 0.05f);
-        const float a = 0.50f * Smooth(0.0f, 8.0f, shEl) * sunI;
-        for (int i = 3; i >= 1; i--) {
-            const float s = 1.0f + 0.18f * i;
-            dl->AddEllipseFilled(sc0, ImVec2((br + fabsf(ox) * 0.5f) * s, (br * 0.22f + fabsf(oz) * 0.5f) * s), Col(0, 0, 0, a / (i + 0.5f)), 0.0f, 28);
+    // vista previa: un jugador con esta luz y su sombra
+    if (side) {
+        const ImVec2 q0(p1.x + 10.0f * k, p0.y), q1(q0.x + pvW, p1.y);
+        const float qh = (q1.y - q0.y) * 0.42f;
+        dl->AddRectFilledMultiColor(q0, ImVec2(q1.x, q0.y + qh), ImGui::GetColorU32(top), ImGui::GetColorU32(top), ImGui::GetColorU32(hor), ImGui::GetColorU32(hor));
+        const float day = Smooth(-4.0f, 6.0f, shEl), sunI = on ? Sat(in.intensity / 1.5f) * 0.6f + 0.4f : 1.0f;
+        for (int i = 0; i < 6; i++) {
+            const float f0 = i / 6.0f, f1 = (i + 1) / 6.0f, y0 = q0.y + qh + (q1.y - q0.y - qh) * f0 * f0, y1 = q0.y + qh + (q1.y - q0.y - qh) * f1 * f1;
+            const float gl = (0.4f + 0.6f * day) * (i % 2 ? 0.92f : 1.0f);
+            dl->AddRectFilled(ImVec2(q0.x, y0), ImVec2(q1.x, y1), Col(0.14f * gl + 0.06f * sc.x * day, 0.38f * gl, 0.17f * gl, 1));
         }
-    }
-    {
-        const int N = std::clamp((int)(br * 2.0f / (1.5f * k)), 16, 56);
-        const float cell = br * 2.0f / N;
-        const ImVec4 sky = Lerp4(top, hor, 0.5f);
-        for (int iy = 0; iy < N; iy++) for (int ix = 0; ix < N; ix++) {
-            const float u = (ix + 0.5f) / N * 2.0f - 1.0f, v = (iy + 0.5f) / N * 2.0f - 1.0f, rr2 = u * u + v * v;
-            if (rr2 > 1.0f) continue;
-            const float nz = -sqrtf(1.0f - rr2), n[3] = { u, -v, nz };   // normal (la camara mira hacia +Z)
-            const float lam = std::max(0.0f, n[0] * L[0] + n[1] * L[1] + n[2] * L[2]) * day * sunI;
-            const float amb = 0.18f + 0.22f * Sat(n[1] * 0.5f + 0.5f);
-            const float rim = powf(1.0f - fabsf(nz), 3.0f) * Sat(L[2]) * day * 1.1f;   // sol detras: el borde se enciende (transmision)
-            float r = 0.92f * (lam * sc.x + amb * sky.x) + rim * sc.x, g = 0.90f * (lam * sc.y + amb * sky.y) + rim * sc.y * 0.85f, b = 0.86f * (lam * sc.z + amb * sky.z) + rim * sc.z * 0.6f;
-            {   // brillo del sol sobre la pelota (Blinn, la camara mira hacia +Z)
-                const float hx = L[0], hy = L[1], hz = L[2] - 1.0f, hn = sqrtf(hx * hx + hy * hy + hz * hz) + 1e-4f;
-                const float sp = powf(std::max(0.0f, (n[0] * hx + n[1] * hy + n[2] * hz) / hn), 40.0f) * day * sunI * 0.7f;
-                r += sp * sc.x; g += sp * sc.y; b += sp * sc.z;
-            }
-            const float x = bc.x - br + ix * cell, y = bc.y - br + iy * cell;
-            dl->AddRectFilled(ImVec2(x, y), ImVec2(x + cell + 0.6f, y + cell + 0.6f), Col(Sat(r), Sat(g), Sat(b), 1));
-        }
-        dl->AddCircle(bc, br - 0.3f, Col(0, 0, 0, 0.35f), 40, 1.6f);
-    }
-    // el sol en la vista previa (si esta del lado de la camara se ve arriba del horizonte)
-    if (shEl > -2.0f && L[2] > -0.15f) {
-        const float sx = q0.x + pvW * (0.5f + 0.5f * L[0] / std::max(0.35f, L[2] + 0.35f) * 0.6f), sy = hY - (pvH * 0.52f - 10.0f * k) * Sat(shEl / 70.0f);
-        if (sx > q0.x && sx < q1.x) SunGlyph(dl, ImVec2(sx, sy), 6.0f * k, sc, in.anim ? -t * 0.4f : 0.0f, 0.8f);
-    }
-    if (on && in.anim) {   // nubes que pasan (z455) o simplemente un brillo que cruza el vidrio
-        const float sweep = fmodf(t * 0.18f, 1.6f) - 0.3f;
-        const float sx = q0.x + pvW * sweep;
-        dl->PushClipRect(q0, q1, true);
-        dl->AddRectFilledMultiColor(ImVec2(sx - 30 * k, q0.y), ImVec2(sx, q1.y), IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 14), IM_COL32(255, 255, 255, 14), IM_COL32(255, 255, 255, 0));
-        dl->AddRectFilledMultiColor(ImVec2(sx, q0.y), ImVec2(sx + 30 * k, q1.y), IM_COL32(255, 255, 255, 14), IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 14));
-        dl->PopClipRect();
-    }
-    // marco de vidrio de la vista previa
-    {   // las esquinas redondeadas: se tapan con el color de la tarjeta usando un borde grueso
+        const float L[3] = { cosf(shEl * kDeg) * sinf(shAz * kDeg), sinf(shEl * kDeg), cosf(shEl * kDeg) * cosf(shAz * kDeg) };
+        DrawPlayer(dl, ImVec2((q0.x + q1.x) * 0.5f, q1.y - (q1.y - q0.y) * 0.16f), (q1.y - q0.y) * 0.62f, L, sc, Lerp4(top, hor, 0.5f), day, sunI, 1.0f);
         dl->AddRect(ImVec2(q0.x - 1, q0.y - 1), ImVec2(q1.x + 1, q1.y + 1), ImGui::GetColorU32(ImGuiCol_FrameBg), rr + 1, 0, 2.5f * k);
-        dl->AddRect(q0, q1, Col(1, 1, 1, 0.22f), rr, 0, 1.0f);
-        dl->AddRectFilledMultiColor(ImVec2(q0.x + 2, q0.y + 2), ImVec2(q1.x - 2, q0.y + pvH * 0.22f), IM_COL32(255, 255, 255, 18), IM_COL32(255, 255, 255, 18), IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0));
+        dl->AddRect(q0, q1, Col(1, 1, 1, 0.20f), rr, 0, 1.0f);
+        dl->AddText(ImVec2(q0.x + 7.0f * k, q0.y + 5.0f * k), Col(1, 1, 1, 0.75f), TRS("Vista previa"));
+        if (ImGui::IsMouseHoveringRect(q0, q1) && !act) ImGui::SetTooltip("%s", TRS("Un jugador con la luz de este sol y su sombra en el pasto, visto desde la camara de TV. Con el sol de frente a la camara se enciende el borde (contraluz)."));
     }
-    {
-        char b[96];
-        if (on) snprintf(b, sizeof b, TRS("Sol libre: %.0f / %.0f grados"), wantAz, wantEl);
-        else snprintf(b, sizeof b, "%s", in.realOk ? TRS("Sol del partido (arrastralo para moverlo)") : TRS("Arrastra el sol para moverlo"));
-        dl->AddText(ImVec2(q0.x + 8 * k, q1.y - ImGui::GetFontSize() - 6 * k), Col(1, 1, 1, 0.85f), b);
-        dl->AddText(ImVec2(q0.x + 8 * k, q0.y + 6 * k), Col(1, 1, 1, 0.65f), TRS("Vista previa"));
-    }
-    if (on && in.realOk) {   // leyenda del circulito
-        const ImVec2 lp(p0.x + 4.0f * k, p0.y + D - ImGui::GetFontSize() - 2.0f * k);
-        dl->AddCircle(ImVec2(lp.x + 6.0f * k, lp.y + ImGui::GetFontSize() * 0.5f), 5.0f * k, Col(1, 1, 1, 0.6f), 16, 1.2f * k);
-        dl->AddText(ImVec2(lp.x + 15.0f * k, lp.y), Col(1, 1, 1, 0.6f), TRS("sol del partido"));
-    }
-    if (side) { ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + D)); ImGui::Dummy(ImVec2(D + 14.0f * k + pvW, 2.0f * k)); }
-    else { ImGui::Dummy(ImVec2(pvW, pvH)); }
-    if (ImGui::IsMouseHoveringRect(q0, q1) && !act) ImGui::SetTooltip("%s", TRS("Como pega este sol en una pelota y en el pasto, visto desde la camara de TV. Con el sol detras se enciende el borde (la luz que atraviesa orejas y nariz)."));
+    ImGui::SetCursorScreenPos(ImVec2(p0.x, p1.y)); ImGui::Dummy(ImVec2(W + pvW, 4.0f * k));
     return changed;
 }
 
@@ -446,38 +472,61 @@ void MvPadFeedImGui(const MvPad& p) {
     io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickLeft, p.rx < -0.1f, Sat(-p.rx)); io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickRight, p.rx > 0.1f, Sat(p.rx));
     io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickUp, p.ry < -0.1f, Sat(-p.ry)); io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickDown, p.ry > 0.1f, Sat(p.ry));
 }
-// simbolos: cruz azul, circulo rojo, cuadrado rosa, triangulo verde (dibujados, no son imagenes de nadie)
+// simbolos de los botones como en el mando de PS5: trazos finos y claros sobre un circulo oscuro (sin colores de relleno); al
+// apretar se enciende un halo del color de cada simbolo. 'mono' = el gris del mando (sobre el plastico blanco)
+static void GlyphShape(ImDrawList* dl, ImVec2 c, float s, int btn, ImU32 sc, float th) {
+    if (btn == kPadCross) { dl->AddLine(ImVec2(c.x - s, c.y - s), ImVec2(c.x + s, c.y + s), sc, th); dl->AddLine(ImVec2(c.x - s, c.y + s), ImVec2(c.x + s, c.y - s), sc, th); }
+    else if (btn == kPadCircle) dl->AddCircle(c, s * 1.08f, sc, 24, th);
+    else if (btn == kPadSquare) dl->AddRect(ImVec2(c.x - s * 0.92f, c.y - s * 0.92f), ImVec2(c.x + s * 0.92f, c.y + s * 0.92f), sc, 0, 0, th);
+    else dl->AddTriangle(ImVec2(c.x, c.y - s * 1.10f), ImVec2(c.x + s * 1.05f, c.y + s * 0.72f), ImVec2(c.x - s * 1.05f, c.y + s * 0.72f), sc, th);
+}
+static const ImVec4 kGlyphCol[4] = { ImVec4(0.55f, 0.72f, 1.0f, 1), ImVec4(1.0f, 0.45f, 0.48f, 1), ImVec4(1.0f, 0.60f, 0.88f, 1), ImVec4(0.40f, 0.92f, 0.78f, 1) };
 void MvPadGlyph(ImDrawList* dl, ImVec2 c, float r, int btn, float alpha, float lit) {
-    static const ImVec4 kCol[4] = { ImVec4(0.49f, 0.70f, 1.0f, 1), ImVec4(1.0f, 0.42f, 0.45f, 1), ImVec4(0.98f, 0.55f, 0.85f, 1), ImVec4(0.33f, 0.88f, 0.70f, 1) };
-    const float th = std::max(1.2f, r * 0.22f);
+    const float th = std::max(1.3f, r * 0.17f);
     if (btn >= kPadCross && btn <= kPadTriangle) {
-        const ImVec4 cc = kCol[btn];
-        dl->AddCircleFilled(c, r, Col(0.10f + 0.25f * lit * cc.x, 0.11f + 0.25f * lit * cc.y, 0.14f + 0.25f * lit * cc.z, (0.85f) * alpha), 24);
-        if (lit > 0.01f) dl->AddCircle(c, r * (1.0f + 0.25f * lit), ColA(cc, 0.6f * lit * alpha), 24, 2.0f);
-        const ImU32 sc = ColA(Lerp4(cc, ImVec4(1, 1, 1, 1), 0.35f * lit), alpha);
-        const float s = r * 0.48f;
-        if (btn == kPadCross) { dl->AddLine(ImVec2(c.x - s, c.y - s), ImVec2(c.x + s, c.y + s), sc, th); dl->AddLine(ImVec2(c.x - s, c.y + s), ImVec2(c.x + s, c.y - s), sc, th); }
-        else if (btn == kPadCircle) dl->AddCircle(c, s * 1.05f, sc, 20, th);
-        else if (btn == kPadSquare) dl->AddRect(ImVec2(c.x - s * 0.9f, c.y - s * 0.9f), ImVec2(c.x + s * 0.9f, c.y + s * 0.9f), sc, 0, 0, th);
-        else dl->AddTriangle(ImVec2(c.x, c.y - s * 1.05f), ImVec2(c.x + s * 1.0f, c.y + s * 0.70f), ImVec2(c.x - s * 1.0f, c.y + s * 0.70f), sc, th);
+        const ImVec4 cc = kGlyphCol[btn];
+        if (lit > 0.01f) for (int i = 3; i >= 1; i--) dl->AddCircleFilled(c, r * (1.0f + 0.22f * i * lit), ColA(cc, 0.10f * lit * alpha), 24);
+        dl->AddCircleFilled(c, r, Col(0.06f, 0.07f, 0.09f, 0.88f * alpha), 28);
+        dl->AddCircle(c, r - 0.5f, Col(1, 1, 1, 0.22f * alpha), 28, 1.0f);
+        GlyphShape(dl, c, r * 0.46f, btn, ColA(Lerp4(ImVec4(0.93f, 0.94f, 0.96f, 1), cc, 0.25f + 0.6f * lit), alpha), th);
         return;
     }
-    // el resto: una pastilla con el nombre
-    static const char* kName[kPadCount] = { "", "", "", "", "L1", "R1", "L2", "R2", "SHARE", "OPT", "L3", "R3", "PS", "PAD", "", "", "", "" };
     if (btn >= kPadUp) {   // cruceta
-        const float a = r * 0.36f;
-        dl->AddRectFilled(ImVec2(c.x - a, c.y - r), ImVec2(c.x + a, c.y + r), Col(0.75f, 0.78f, 0.84f, 0.85f * alpha), 2.0f);
-        dl->AddRectFilled(ImVec2(c.x - r, c.y - a), ImVec2(c.x + r, c.y + a), Col(0.75f, 0.78f, 0.84f, 0.85f * alpha), 2.0f);
+        const float a = r * 0.34f; const ImU32 cl = Col(0.90f, 0.91f, 0.94f, 0.9f * alpha);
+        dl->AddRectFilled(ImVec2(c.x - a, c.y - r), ImVec2(c.x + a, c.y + r), cl, a * 0.6f);
+        dl->AddRectFilled(ImVec2(c.x - r, c.y - a), ImVec2(c.x + r, c.y + a), cl, a * 0.6f);
+        dl->AddCircleFilled(c, a * 0.55f, Col(0.06f, 0.07f, 0.09f, 0.6f * alpha), 12);
         return;
     }
+    static const char* kName[kPadCount] = { "", "", "", "", "L1", "R1", "L2", "R2", "CREATE", "OPTIONS", "L3", "R3", "PS", "PAD", "", "", "", "" };
     const char* n = kName[btn]; ImFont* f = ImGui::GetFont(); const float fs = r * 1.15f;
     const ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0, n);
-    const ImVec2 a(c.x - ts.x * 0.5f - r * 0.45f, c.y - r * 0.75f), b(c.x + ts.x * 0.5f + r * 0.45f, c.y + r * 0.75f);
-    dl->AddRectFilled(a, b, Col(0.12f + 0.4f * lit, 0.14f + 0.4f * lit, 0.18f + 0.4f * lit, 0.88f * alpha), r * 0.5f);
-    dl->AddRect(a, b, Col(1, 1, 1, 0.35f * alpha), r * 0.5f);
-    dl->AddText(f, fs, ImVec2(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f), Col(1, 1, 1, alpha), n);
+    const ImVec2 a(c.x - ts.x * 0.5f - r * 0.5f, c.y - r * 0.78f), b(c.x + ts.x * 0.5f + r * 0.5f, c.y + r * 0.78f);
+    dl->AddRectFilled(a, b, Col(0.06f + 0.3f * lit, 0.07f + 0.3f * lit, 0.09f + 0.35f * lit, 0.88f * alpha), r * 0.78f);
+    dl->AddRect(a, b, Col(1, 1, 1, 0.25f * alpha), r * 0.78f);
+    dl->AddText(f, fs, ImVec2(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f), Col(0.93f, 0.94f, 0.96f, alpha), n);
 }
-ImVec2 MvPadSize(float k) { return ImVec2(232.0f * k, 150.0f * k); }
+// --- dibujo del mando: la forma del mando de PS5 (plastico blanco en las alas y agarres, frente negro con los analogicos, panel
+// tactil blanco con la barra de luz a los costados). Todo dibujado con curvas; no es una imagen.
+ImVec2 MvPadSize(float k) { return ImVec2(250.0f * k, 158.0f * k); }
+// curva suave por los puntos (Catmull-Rom), cerrada
+static void SmoothClosed(const ImVec2* in, int n, ImVector<ImVec2>& out, int sub) {
+    out.resize(0);
+    for (int i = 0; i < n; i++) {
+        const ImVec2 p0 = in[(i - 1 + n) % n], p1 = in[i], p2 = in[(i + 1) % n], p3 = in[(i + 2) % n];
+        for (int j = 0; j < sub; j++) {
+            const float t = (float)j / sub, t2 = t * t, t3 = t2 * t;
+            out.push_back(ImVec2(0.5f * ((2 * p1.x) + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+                                 0.5f * ((2 * p1.y) + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3)));
+        }
+    }
+}
+// medio contorno (lado derecho, de arriba al centro de abajo) en unidades: x 0..1 = medio ancho, y 0..1 = alto; se espeja
+static void MirrorShape(const float (*half)[2], int n, ImVec2 o, float hw, float H, ImVector<ImVec2>& pts) {
+    pts.resize(0);
+    for (int i = 0; i < n; i++) pts.push_back(ImVec2(o.x + half[i][0] * hw, o.y + half[i][1] * H));
+    for (int i = n - 1; i >= 0; i--) if (half[i][0] > 1e-4f) pts.push_back(ImVec2(o.x - half[i][0] * hw, o.y + half[i][1] * H));
+}
 void MvPadDraw(ImDrawList* dl, ImVec2 o, float k, const MvPad& p, float alpha, bool anim, double now) {
     if (alpha <= 0.01f) return;
     ImGuiStorage* st = ImGui::GetStateStorage();
@@ -489,90 +538,108 @@ void MvPadDraw(ImDrawList* dl, ImVec2 o, float k, const MvPad& p, float alpha, b
         *v = p.b[i] ? std::min(1.0f, *v + dt * 18.0f) : std::max(0.0f, *v - dt * 4.0f);
         return *v;
     };
-    const ImVec2 S = MvPadSize(k);
-    const float A = alpha;
-    const ImU32 body = Col(0.12f, 0.13f, 0.16f, 0.82f * A), bodyHi = Col(0.30f, 0.32f, 0.38f, 0.55f * A), edge = Col(1, 1, 1, 0.28f * A);
-    // gatillos y botones de arriba (L2 / R2 se llenan segun cuanto se aprietan)
-    const float tW = 46.0f * k, tH = 14.0f * k;
-    const float l2 = p.l2, r2 = p.r2;
+    const ImVec2 S = MvPadSize(k); const float A = alpha;
+    const ImVec2 c0(o.x + S.x * 0.5f, o.y);   // centro de arriba
+    const float hw = S.x * 0.5f, H = S.y;
+    auto P = [&](float u, float v) { return ImVec2(c0.x + u * hw, c0.y + v * H); };
+    const ImVec4 white(0.93f, 0.94f, 0.96f, 1), black(0.07f, 0.08f, 0.10f, 1), blue(0.30f, 0.55f, 1.0f, 1);
+    ImVector<ImVec2> raw, sm;
+    // gatillos L2 / R2 (detras) y L1 / R1
     for (int s = 0; s < 2; s++) {
-        const float x = s ? o.x + S.x - 30.0f * k - tW : o.x + 30.0f * k;
-        const float fill = s ? r2 : l2;
-        const ImVec2 a(x, o.y + 2.0f * k), b(x + tW, o.y + 2.0f * k + tH);
-        dl->AddRectFilled(a, b, Col(0.10f, 0.11f, 0.14f, 0.75f * A), 6.0f * k, ImDrawFlags_RoundCornersTop);
-        if (fill > 0.01f) dl->AddRectFilled(ImVec2(a.x, b.y - tH * fill), b, Col(0.45f, 0.85f, 0.65f, 0.75f * A), 6.0f * k, ImDrawFlags_RoundCornersTop);
-        dl->AddText(ImVec2(a.x + tW * 0.5f - 7.0f * k, a.y), Col(1, 1, 1, 0.75f * A), s ? "R2" : "L2");
+        const float sg = s ? 1.0f : -1.0f, fill = s ? p.r2 : p.l2;
+        const float tr[][2] = { { 0.50f, 0.05f }, { 0.78f, 0.02f }, { 0.86f, 0.10f }, { 0.80f, 0.16f }, { 0.52f, 0.16f } };
+        raw.resize(0); for (auto& q : tr) raw.push_back(P(sg * q[0], q[1]));
+        SmoothClosed(raw.Data, raw.Size, sm, 5);
+        dl->AddConcavePolyFilled(sm.Data, sm.Size, ColA(Lerp4(ImVec4(0.12f, 0.13f, 0.16f, 0.92f), blue, 0.75f * fill), A));
+        dl->AddText(ImVec2(P(sg * 0.67f, 0.0f).x - 8.0f * k, P(0, 0.025f).y), Col(1, 1, 1, (0.45f + 0.5f * fill) * A), s ? "R2" : "L2");
         const float lb = lit(s ? kPadR1 : kPadL1);
-        const ImVec2 a1(x - 2.0f * k, b.y + 1.0f * k), b1(x + tW + 2.0f * k, b.y + 8.0f * k);
-        dl->AddRectFilled(a1, b1, Col(0.18f + 0.35f * lb, 0.19f + 0.55f * lb, 0.23f + 0.40f * lb, 0.85f * A), 3.0f * k);
+        dl->AddRectFilled(P(sg > 0 ? 0.52f : -0.84f, 0.150f), P(sg > 0 ? 0.84f : -0.52f, 0.195f), ColA(Lerp4(white, blue, 0.7f * lb), 0.95f * A), 3.0f * k);
     }
-    // cuerpo: una sola silueta (cuerpo + dos agarres) como poligono, asi con poca opacidad no se ven costuras
-    const float top = o.y + 26.0f * k;
+    // cuerpo blanco (alas y agarres)
+    static const float kBody[][2] = {
+        { 0.00f, 0.20f }, { 0.30f, 0.19f }, { 0.55f, 0.18f }, { 0.74f, 0.19f }, { 0.88f, 0.25f }, { 0.96f, 0.37f }, { 1.00f, 0.52f },
+        { 1.00f, 0.68f }, { 0.97f, 0.83f }, { 0.91f, 0.95f }, { 0.83f, 1.00f }, { 0.74f, 0.98f }, { 0.67f, 0.89f }, { 0.60f, 0.76f },
+        { 0.50f, 0.67f }, { 0.34f, 0.63f }, { 0.00f, 0.62f } };
+    MirrorShape(kBody, IM_ARRAYSIZE(kBody), c0, hw, H, raw);
+    SmoothClosed(raw.Data, raw.Size, sm, 6);
+    dl->AddConcavePolyFilled(sm.Data, sm.Size, ColA(white, 0.90f * A));
+    // sombra suave abajo de las alas (volumen)
+    for (int s = 0; s < 2; s++) { const float sg = s ? 1.0f : -1.0f; dl->AddEllipseFilled(P(sg * 0.80f, 0.80f), ImVec2(hw * 0.14f, H * 0.16f), Col(0.55f, 0.58f, 0.64f, 0.20f * A), sg * 0.4f, 24); }
+    // frente negro (entre los agarres, con los analogicos)
+    static const float kFront[][2] = { { 0.00f, 0.40f }, { 0.30f, 0.40f }, { 0.42f, 0.46f }, { 0.50f, 0.58f }, { 0.48f, 0.66f }, { 0.34f, 0.64f }, { 0.00f, 0.63f } };
+    MirrorShape(kFront, IM_ARRAYSIZE(kFront), c0, hw, H, raw);
+    SmoothClosed(raw.Data, raw.Size, sm, 6);
+    dl->AddConcavePolyFilled(sm.Data, sm.Size, ColA(black, 0.92f * A));
+    // panel tactil blanco con la barra de luz a los costados (late suave)
     {
-        ImVector<ImVec2> pts;
-        auto arc = [&](ImVec2 c, float rx, float ry, float a0, float a1, int n) { for (int i = 0; i <= n; i++) { const float a = a0 + (a1 - a0) * i / n; pts.push_back(ImVec2(c.x + cosf(a) * rx, c.y + sinf(a) * ry)); } };
-        const float x0 = o.x + 12.0f * k, x1 = o.x + S.x - 12.0f * k, r = 24.0f * k, yb = o.y + S.y - 6.0f * k, ym = o.y + S.y - 58.0f * k;
-        arc(ImVec2(x0 + r, top + r), r, r, kPI, kPI * 1.5f, 8);                       // arriba a la izquierda
-        arc(ImVec2(x1 - r, top + r), r, r, kPI * 1.5f, kPI * 2.0f, 8);                // arriba a la derecha
-        arc(ImVec2(x1 - 30.0f * k, yb - 30.0f * k), 30.0f * k, 30.0f * k, 0.0f, kPI * 0.95f, 14);   // agarre derecho
-        pts.push_back(ImVec2(o.x + S.x * 0.5f + 46.0f * k, ym + 30.0f * k));
-        arc(ImVec2(o.x + S.x * 0.5f, ym + 30.0f * k), 46.0f * k, 9.0f * k, 0.0f, -kPI, 10); // borde de abajo del centro (entre los agarres)
-        arc(ImVec2(x0 + 30.0f * k, yb - 30.0f * k), 30.0f * k, 30.0f * k, kPI * 0.05f, kPI, 14);    // agarre izquierdo
-        // el arco del borde de abajo va al reves (de derecha a izquierda por arriba): ya queda en orden
-        dl->AddConcavePolyFilled(pts.Data, pts.Size, body);
-        dl->AddPolyline(pts.Data, pts.Size, edge, ImDrawFlags_Closed, 1.0f);
-    }
-    // reflejo de vidrio arriba
-    dl->AddRectFilledMultiColor(ImVec2(o.x + 30.0f * k, top + 2.0f * k), ImVec2(o.x + S.x - 30.0f * k, top + 20.0f * k), Col(1, 1, 1, 0.10f * A), Col(1, 1, 1, 0.10f * A), Col(1, 1, 1, 0), Col(1, 1, 1, 0));
-    // panel tactil (centro)
-    {
-        const float lt = std::max(lit(kPadTouch), lit(kPadPS) * 0.4f);
-        const ImVec2 a(o.x + S.x * 0.5f - 34.0f * k, top + 4.0f * k), b(o.x + S.x * 0.5f + 34.0f * k, top + 34.0f * k);
-        dl->AddRectFilled(a, b, Col(0.16f + 0.3f * lt, 0.17f + 0.35f * lt, 0.21f + 0.4f * lt, 0.85f * A), 6.0f * k);
-        dl->AddRect(a, b, bodyHi, 6.0f * k);
-        // share / options a los costados
+        const float lt = std::max(lit(kPadTouch), lit(kPadPS) * 0.5f);
+        static const float kPad[][2] = { { 0.00f, 0.20f }, { 0.31f, 0.20f }, { 0.29f, 0.30f }, { 0.25f, 0.41f }, { 0.00f, 0.42f } };
+        MirrorShape(kPad, IM_ARRAYSIZE(kPad), c0, hw, H, raw);
+        dl->AddConvexPolyFilled(raw.Data, raw.Size, ColA(Lerp4(ImVec4(0.97f, 0.97f, 0.99f, 1), blue, 0.25f * lt), 0.96f * A));
+        dl->AddPolyline(raw.Data, raw.Size, Col(0.70f, 0.72f, 0.78f, 0.6f * A), ImDrawFlags_Closed, 1.0f);
+        const float glow = (anim ? 0.55f + 0.45f * sinf((float)now * 1.6f) : 0.8f) * (0.6f + 0.4f * lt);
+        for (int s = 0; s < 2; s++) {
+            const float sg = s ? 1.0f : -1.0f;
+            const ImVec2 a = P(sg * 0.33f, 0.21f), b = P(sg * 0.27f, 0.42f);
+            for (int i = 3; i >= 1; i--) dl->AddLine(a, b, ColA(blue, 0.18f * glow * A), (1.5f + 2.2f * i) * k);
+            dl->AddLine(a, b, ColA(Lerp4(blue, ImVec4(0.8f, 0.9f, 1, 1), 0.4f), 0.95f * glow * A), 1.6f * k);
+        }
+        // create / options
         const float ls = lit(kPadShare), lo = lit(kPadOptions);
-        dl->AddRectFilled(ImVec2(a.x - 12.0f * k, a.y + 2.0f * k), ImVec2(a.x - 6.0f * k, a.y + 12.0f * k), Col(0.5f + 0.5f * ls, 0.52f + 0.48f * ls, 0.58f + 0.42f * ls, 0.8f * A), 2.0f * k);
-        dl->AddRectFilled(ImVec2(b.x + 6.0f * k, a.y + 2.0f * k), ImVec2(b.x + 12.0f * k, a.y + 12.0f * k), Col(0.5f + 0.5f * lo, 0.52f + 0.48f * lo, 0.58f + 0.42f * lo, 0.8f * A), 2.0f * k);
-        // boton central
-        const float lp = lit(kPadPS);
-        dl->AddCircleFilled(ImVec2(o.x + S.x * 0.5f, b.y + 26.0f * k), 5.0f * k, Col(0.35f + 0.6f * lp, 0.38f + 0.6f * lp, 0.45f + 0.5f * lp, 0.85f * A), 16);
+        dl->AddRectFilled(P(-0.40f, 0.22f), P(-0.36f, 0.29f), ColA(Lerp4(ImVec4(0.55f, 0.57f, 0.62f, 1), blue, ls), 0.9f * A), 2.0f * k);
+        dl->AddRectFilled(P(0.36f, 0.22f), P(0.40f, 0.29f), ColA(Lerp4(ImVec4(0.55f, 0.57f, 0.62f, 1), blue, lo), 0.9f * A), 2.0f * k);
     }
-    // cruceta
+    // cruceta (cuatro flechas separadas, como en el de PS5)
     {
-        const ImVec2 c(o.x + 50.0f * k, top + 30.0f * k); const float r = 16.0f * k, w = 5.6f * k;
+        const ImVec2 c = P(-0.62f, 0.40f); const float r = 0.13f * hw, w = 0.045f * hw;
         struct { int b; float dx, dy; } d[4] = { { kPadUp, 0, -1 }, { kPadDown, 0, 1 }, { kPadLeft, -1, 0 }, { kPadRight, 1, 0 } };
         for (auto& q : d) {
             const float lv = lit(q.b);
-            const ImVec2 m(c.x + q.dx * r * 0.55f, c.y + q.dy * r * 0.55f);
-            const ImVec2 a(m.x - (q.dx ? r * 0.45f : w), m.y - (q.dy ? r * 0.45f : w)), b(m.x + (q.dx ? r * 0.45f : w), m.y + (q.dy ? r * 0.45f : w));
-            dl->AddRectFilled(a, b, Col(0.42f + 0.5f * lv, 0.45f + 0.5f * lv, 0.52f + 0.45f * lv, 0.85f * A), 2.0f * k);
+            const ImVec2 tip(c.x + q.dx * r * 0.30f, c.y + q.dy * r * 0.30f), end(c.x + q.dx * r, c.y + q.dy * r);
+            const ImVec2 pr(-q.dy, q.dx);
+            const ImVec2 pts[5] = { tip, ImVec2(tip.x + q.dx * w + pr.x * w * 1.2f, tip.y + q.dy * w + pr.y * w * 1.2f), ImVec2(end.x + pr.x * w * 1.2f, end.y + pr.y * w * 1.2f),
+                                    ImVec2(end.x - pr.x * w * 1.2f, end.y - pr.y * w * 1.2f), ImVec2(tip.x + q.dx * w - pr.x * w * 1.2f, tip.y + q.dy * w - pr.y * w * 1.2f) };
+            dl->AddConvexPolyFilled(pts, 5, ColA(Lerp4(ImVec4(0.80f, 0.82f, 0.86f, 1), blue, 0.8f * lv), 0.95f * A));
+            dl->AddPolyline(pts, 5, Col(0.45f, 0.47f, 0.52f, 0.7f * A), ImDrawFlags_Closed, 1.0f);
         }
     }
-    // botones de la derecha (triangulo arriba, circulo derecha, cruz abajo, cuadrado izquierda)
+    // botones de accion: grises claros con el simbolo gris (como el de PS5); el apretado se enciende con su color
     {
-        const ImVec2 c(o.x + S.x - 50.0f * k, top + 30.0f * k); const float d = 14.0f * k, r = 7.6f * k;
+        const ImVec2 c = P(0.62f, 0.40f); const float d = 0.11f * hw, r = 0.058f * hw;
         struct { int b; float dx, dy; } q[4] = { { kPadTriangle, 0, -1 }, { kPadCircle, 1, 0 }, { kPadCross, 0, 1 }, { kPadSquare, -1, 0 } };
-        for (auto& e : q) { const float lv = lit(e.b); MvPadGlyph(dl, ImVec2(c.x + e.dx * d, c.y + e.dy * d), r * (1.0f + 0.12f * lv), e.b, A, lv); }
+        for (auto& e : q) {
+            const float lv = lit(e.b); const ImVec2 bc(c.x + e.dx * d, c.y + e.dy * d); const ImVec4 cc = kGlyphCol[e.b];
+            if (lv > 0.01f) for (int i = 3; i >= 1; i--) dl->AddCircleFilled(bc, r * (1.0f + 0.3f * i * lv), ColA(cc, 0.12f * lv * A), 20);
+            dl->AddCircleFilled(ImVec2(bc.x, bc.y + 1.0f * k), r, Col(0.45f, 0.47f, 0.52f, 0.45f * A), 20);
+            dl->AddCircleFilled(bc, r, ColA(Lerp4(ImVec4(0.84f, 0.85f, 0.88f, 1), cc, 0.35f * lv), 0.97f * A), 20);
+            GlyphShape(dl, bc, r * 0.48f, e.b, ColA(Lerp4(ImVec4(0.40f, 0.42f, 0.47f, 1), ImVec4(cc.x * 0.6f, cc.y * 0.6f, cc.z * 0.6f, 1), lv), A), std::max(1.1f, r * 0.17f));
+        }
     }
-    // analogicos: base, perilla corrida segun el stick y una estela corta
+    // analogicos: base negra, perilla con el borde texturado, corrida segun el stick; arco verde-azul hacia donde se empuja
     for (int s = 0; s < 2; s++) {
-        const ImVec2 c(o.x + S.x * 0.5f + (s ? 30.0f : -30.0f) * k, o.y + S.y - 50.0f * k);
-        const float R = 15.0f * k, sx = s ? p.rx : p.lx, sy = s ? p.ry : p.ly;
+        const ImVec2 c = P(s ? 0.22f : -0.22f, 0.53f);
+        const float R = 0.105f * hw, sx = s ? p.rx : p.lx, sy = s ? p.ry : p.ly;
         float* fx_ = st->GetFloatRef(base + 40 + s * 2, 0.0f); float* fy_ = st->GetFloatRef(base + 41 + s * 2, 0.0f);
         if (anim) { const float a = 1.0f - expf(-dt * 22.0f); *fx_ += (sx - *fx_) * a; *fy_ += (sy - *fy_) * a; } else { *fx_ = sx; *fy_ = sy; }
-        const float lv = lit(s ? kPadR3 : kPadL3);
-        dl->AddCircleFilled(c, R, Col(0.07f, 0.08f, 0.10f, 0.9f * A), 28);
-        dl->AddCircle(c, R, edge, 28, 1.0f);
-        const float mag = sqrtf(*fx_ * *fx_ + *fy_ * *fy_);
-        if (mag > 0.05f) {   // estela: marca hacia donde se empuja
-            dl->AddLine(c, ImVec2(c.x + *fx_ * R * 0.62f, c.y + *fy_ * R * 0.62f), Col(0.45f, 0.85f, 0.65f, 0.55f * A * Sat(mag)), 3.0f * k);
-            dl->AddCircle(c, R * 0.98f, Col(0.45f, 0.85f, 0.65f, 0.45f * A * Sat(mag)), 28, 1.5f * k);
+        const float lv = lit(s ? kPadR3 : kPadL3), mag = sqrtf(*fx_ * *fx_ + *fy_ * *fy_);
+        dl->AddCircleFilled(c, R, Col(0.02f, 0.02f, 0.03f, 0.95f * A), 28);
+        if (mag > 0.05f) {
+            const float ang = atan2f(*fy_, *fx_);
+            dl->PathArcTo(c, R * 0.96f, ang - 0.7f, ang + 0.7f, 12); dl->PathStroke(ColA(blue, 0.85f * Sat(mag) * A), 0, 2.2f * k);
         }
-        const ImVec2 kc(c.x + *fx_ * R * 0.55f, c.y + *fy_ * R * 0.55f);
-        dl->AddCircleFilled(ImVec2(kc.x, kc.y + 1.5f * k), R * 0.62f, Col(0, 0, 0, 0.35f * A), 24);
-        dl->AddCircleFilled(kc, R * 0.60f * (1.0f - 0.08f * lv), Col(0.30f + 0.3f * lv, 0.32f + 0.5f * lv, 0.38f + 0.35f * lv, 0.95f * A), 24);
-        dl->AddCircle(kc, R * 0.42f, Col(1, 1, 1, 0.18f * A), 20, 1.0f);
+        const ImVec2 kc(c.x + *fx_ * R * 0.45f, c.y + *fy_ * R * 0.45f); const float kr = R * 0.74f * (1.0f - 0.06f * lv);
+        dl->AddCircleFilled(ImVec2(kc.x, kc.y + 1.5f * k), kr, Col(0, 0, 0, 0.45f * A), 24);
+        dl->AddCircleFilled(kc, kr, ColA(Lerp4(ImVec4(0.14f, 0.15f, 0.18f, 1), blue, 0.35f * lv), 0.98f * A), 24);
+        for (int i = 0; i < 16; i++) { const float a = i * (2.0f * kPI / 16); dl->AddCircleFilled(ImVec2(kc.x + cosf(a) * kr * 0.82f, kc.y + sinf(a) * kr * 0.82f), 0.9f * k, Col(0.32f, 0.34f, 0.38f, 0.8f * A), 6); }
+        dl->AddCircle(kc, kr * 0.55f, Col(0.28f, 0.30f, 0.34f, 0.8f * A), 20, 1.0f);
+    }
+    // boton PS y microfono
+    {
+        const float lp = lit(kPadPS);
+        const ImVec2 pc = P(0.0f, 0.535f);
+        if (lp > 0.01f) dl->AddCircleFilled(pc, 9.0f * k, ColA(blue, 0.25f * lp * A), 16);
+        dl->AddText(ImGui::GetFont(), 10.0f * k, ImVec2(pc.x - 6.0f * k, pc.y - 6.0f * k), ColA(Lerp4(ImVec4(0.75f, 0.77f, 0.82f, 1), blue, lp), A), "PS");
+        dl->AddRectFilled(P(-0.035f, 0.590f), P(0.035f, 0.605f), Col(0.25f, 0.27f, 0.31f, 0.9f * A), 2.0f * k);
     }
 }
 void MvPadHints(float k, float alpha) {

@@ -2708,7 +2708,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         const float k = UIK(); const ImVec2 ds2 = ImGui::GetIO().DisplaySize, sz = MvPadSize(k);
         const float anyIn = [&] { float a = 0; for (int i = 0; i < kPadCount; i++) a = std::max(a, s_pad.b[i] ? 1.0f : 0.0f); return std::max(a, std::max(fabsf(s_pad.lx) + fabsf(s_pad.ly), fabsf(s_pad.rx) + fabsf(s_pad.ry)) > 0.2f ? 1.0f : a); }();
         static float s_padA = 0.0f; const float dtp = ImGui::GetIO().DeltaTime;
-        s_padA = g_cfg.menuVisual ? s_padA + ((anyIn > 0.0f ? 0.85f : 0.42f) - s_padA) * std::min(1.0f, dtp * (anyIn > 0.0f ? 12.0f : 2.0f)) : 0.55f;   // con poca opacidad; se ilumina al usarlo
+        s_padA = g_cfg.menuVisual ? s_padA + ((anyIn > 0.0f ? 0.90f : 0.55f) - s_padA) * std::min(1.0f, dtp * (anyIn > 0.0f ? 12.0f : 2.0f)) : 0.55f;   // con poca opacidad; se ilumina al usarlo
         const float e = Ease(s_menuVis);
         const float x = g_cfg.menuSize == 2 ? 24.0f * k : ds2.x - sz.x - 24.0f * k, y = ds2.y - sz.y - 22.0f * k + (1.0f - e) * 30.0f * k;   // entra subiendo
         MvPadDraw(ImGui::GetForegroundDrawList(), ImVec2(x, y), k, s_pad, s_padA * e, g_cfg.menuVisual, Now());
