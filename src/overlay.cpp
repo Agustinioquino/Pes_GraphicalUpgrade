@@ -174,8 +174,9 @@ static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (m == WM_MOUSEWHEEL) wd = (int)GET_WHEEL_DELTA_WPARAM(w);
         else if (m == WM_INPUT) {
             RAWINPUT ri{}; UINT sz = sizeof(ri);
-            if (GetRawInputData((HRAWINPUT)l, RID_INPUT, &ri, &sz, sizeof(RAWINPUTHEADER)) != (UINT)-1 && ri.header.dwType == RIM_TYPEMOUSE &&
-                (ri.data.mouse.usButtonFlags & RI_MOUSE_WHEEL)) wd = (int)(short)ri.data.mouse.usButtonData;
+            if (GetRawInputData((HRAWINPUT)l, RID_INPUT, &ri, &sz, sizeof(RAWINPUTHEADER)) != (UINT)-1 && ri.header.dwType == RIM_TYPEMOUSE) {
+                if (ri.data.mouse.usButtonFlags & RI_MOUSE_WHEEL) wd = (int)(short)ri.data.mouse.usButtonData;
+            }
         }
         if (wd != 0) { if (FreeCamActive()) FreeCamWheel(wd); else MenuMouseWheel(wd); }
     }
@@ -1955,6 +1956,10 @@ static void DrawSettingsPage() {
             if (ImGui::SliderInt("##mousemenusret", &rt, 0, 4)) g_cfg.menuMouseDelay = rt;
             if (ImGui::IsItemDeactivatedAfterEdit()) SaveOption("mouse_menus_retraso", std::to_string(g_cfg.menuMouseDelay));
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("El juego tarda 2 cuadros en marcar la fila elegida. Con 2 la flecha y la fila marcada van juntas; con 0 la flecha va mas pegada a la mano pero la fila la sigue de atras."));
+            bool wo = g_cfg.menuMouseWheelOpt != 0;
+            row(TRS("Rueda sobre una opcion: cambiarla"));
+            if (ImGui::Checkbox("##mousemenusrueda", &wo)) { g_cfg.menuMouseWheelOpt = wo ? 1 : 0; SaveOption("mouse_rueda_opciones", wo ? "1" : "0"); }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con el mouse quieto sobre una fila con opciones (izquierda / derecha), la rueda cambia la opcion en vez de subir o bajar."));
         }
     }
     {   // (11/11) cuadrito con la ultima tecla apretada: [PES21FX] ultima_tecla

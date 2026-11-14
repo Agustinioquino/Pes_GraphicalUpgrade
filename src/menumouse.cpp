@@ -59,6 +59,20 @@ static const uintptr_t kChildByType = 0x140e4f5d0ull;
 static PFN_Hover o_hover = nullptr; static PFN_Dirs o_dirs = nullptr; static PFN_Action o_action = nullptr;
 
 static bool s_tried = false, s_ok = false;
+// (14/11 ythnmm, Agustin: "continuar al igual que en el primer menu de apretar cualquier tecla") pantalla del titulo menu::TitleStart
+// (vtable 0x142671970): su vf40 0x140a9ae40 -> 0x140a9ac10 lee el mando 0 boton por boton (vf+0x40) y si hay alguno llama a
+// 0x141b58200(1) (mando activo) y 0x140a99250(pagina) ("titleOut", +0x9c = 1). Con el mouse: el clic izquierdo hace lo mismo, cuando
+// el "pressStart_on" ya se mostro (+0xd8) y no salio todavia (+0x9c != 1).
+static const uintptr_t kTitleVt = 0x142671970ull, kPadActive = 0x141b58200ull, kTitleGo = 0x140a99250ull;
+static const unsigned char kPadActiveSig[14] = { 0x8b,0xd1,0x48,0x8b,0x0d,0x8f,0x6c,0xca,0x01,0x48,0x85,0xc9,0x74,0x07 };
+static const unsigned char kTitleGoSig[14] = { 0x40,0x53,0x48,0x83,0xec,0x20,0xba,0x13,0x00,0x00,0x00,0x48,0x8b,0xd9 };
+static bool s_titleOk = false;
+// (14/11 ythnmm, Agustin: "el video de introduccion no es salteable") video de la intro menu::Movie (vtable 0x142671230): su vf40
+// 0x140a98b80, en el estado 2 (+0xa4, video andando), con el boton aceptar (codigo 0x24) o 0x1b corta el video: si +0xa5 == 0 lo pone
+// en 1 y llama a 0x140e72ee0([pagina+0x90]) (para el video), despues +0xa4 = 3 y +0xa6 = 1. El clic izquierdo hace exactamente eso.
+static const uintptr_t kMovieVt = 0x142671230ull, kMovieStop = 0x140e72ee0ull;
+static const unsigned char kMovieStopSig[14] = { 0x48,0x89,0x5c,0x24,0x08,0x57,0x48,0x83,0xec,0x20,0x48,0x8b,0xd9,0xe8 };
+static bool s_movieOk = false;
 // estado del hilo del menu (los tres ganchos corren ahi)
 static void* s_pendWin = nullptr; static int s_pendAction = -1;
 static void* s_pendDxWin = nullptr; static int s_pendDx = 0;              // (v3) clic sobre una fila con selector: "derecha" / "izquierda" para el juego
@@ -73,7 +87,12 @@ static void* s_latchWin = nullptr; static int s_latchG = -1, s_latchR = -1, s_la
 static std::atomic<int> s_wheel{0};
 static bool s_overB = false; static std::atomic<bool> s_over{false};   // (14/11 d) el mouse esta justo sobre una fila (se puede hacer clic): mano
 static std::atomic<int> s_curX{0}, s_curY{0}; static std::atomic<double> s_moveT{0}, s_liveT{0};
-static std::atomic<int> s_nSel{0}, s_nClick{0}, s_nBack{0}, s_nWheel{0}, s_nStep{0}, s_nNear{0}, s_nOpt{0};
+static std::atomic<int> s_nSel{0}, s_nClick{0}, s_nBack{0}, s_nWheel{0}, s_nStep{0}, s_nNear{0}, s_nOpt{0}, s_nExtra{0};
+// (14/11 ythnmm) acciones del juego por indice (tabla 0x1427bcdf0, codigo del boton = 19 + boton de DirectInput): 0 aceptar, 1 volver,
+// 2 cuadrado, 3 triangulo, 4 OPTIONS, 5 SHARE, 6 / 7 L2 / R2, 8 / 9 L1 / R1, 10 / 11 L3 / R3. Agustin 14/11 09:34: con el mouse solo
+// rueda, clic izquierdo y clic derecho (nada de botones extra ni teclas). s_extraAct queda para pedir una accion desde un clic.
+static int s_extraAct = -1; static double s_extraT = 0;
+static void* s_wheelOptWin = nullptr; static float s_wheelOptMx = 0;       // (14/11 ythnmm) el mouse esta sobre la fila elegida y es un selector: la rueda cambia la opcion
 
 static bool Readable(const void* p, size_t n) {
     MEMORY_BASIC_INFORMATION mi{};
@@ -106,6 +125,11 @@ static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
     // (v2) huecos entre filas de un mismo grupo (pestanas separadas, listas con margen): con el mouse dentro del rectangulo que
     // encierra a las filas del grupo vale la fila mas cercana. Una fila justo debajo del mouse gana siempre (se devuelve al toque).
     Hit best; float bestD = 1e9f;
+    // (14/11 ythnmm, Agustin: "la precision") filas que se pisan (grillas de iconos, el rect del juego es mas grande que el dibujo): gana la
+    // que tiene el centro mas cerca del mouse, no la primera de la lista. Y la "mas cercana" en los huecos solo vale a pocos pixeles
+    // (antes llegaba a 160 y elegia iconos a 140 px). mouse_menus_cerca 2 = como antes.
+    Hit direct; float directD = 1e9f;
+    const bool wide = g_cfg.menuMouseNear >= 2;
     for (uint32_t g = 0; g < ng; g++) {
         {   // grupo anotado en el vector con +0xc en 0: no se prueba
             uint8_t* vb = P8(I + 0xa8); uint8_t* ve = P8(I + 0xb0); bool skip = false;
@@ -129,17 +153,21 @@ static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
             ((PFN_NodeVec2)vt[0xc0 / 8])(node, size);
             if (!(size[0] > 0.0f) || !(size[1] > 0.0f)) continue;
             if (mx > pos[0] && pos[0] + size[0] > mx && my > pos[1] && pos[1] + size[1] > my) {
-                out.group = (int)g; out.row = (int)r; out.x = pos[0]; out.y = pos[1]; out.w = size[0]; out.h = size[1]; out.dist = 0;
-                return true;
+                const float nx = (mx - (pos[0] + size[0] * 0.5f)) / size[0], ny = (my - (pos[1] + size[1] * 0.5f)) / size[1];
+                const float dd = std::max(std::fabs(nx), std::fabs(ny));
+                if (dd < directD) { directD = dd; direct.group = (int)g; direct.row = (int)r; direct.x = pos[0]; direct.y = pos[1]; direct.w = size[0]; direct.h = size[1]; direct.dist = 0; }
+                continue;
             }
             if (!(size[0] < 4000.0f) || !(size[1] < 4000.0f) || !(std::fabs(pos[0]) < 8000.0f) || !(std::fabs(pos[1]) < 8000.0f)) continue;
             rows++; bx0 = std::min(bx0, pos[0]); by0 = std::min(by0, pos[1]); bx1 = std::max(bx1, pos[0] + size[0]); by1 = std::max(by1, pos[1] + size[1]);
             const float dx = std::max(std::max(pos[0] - mx, mx - (pos[0] + size[0])), 0.0f), dy = std::max(std::max(pos[1] - my, my - (pos[1] + size[1])), 0.0f);
-            const float d = std::sqrt(dx * dx + dy * dy), cap = std::min(160.0f, 1.25f * std::max(size[0], size[1]));
+            const float d = std::sqrt(dx * dx + dy * dy);
+            const float cap = wide ? std::min(160.0f, 1.25f * std::max(size[0], size[1])) : std::min(28.0f, 0.30f * std::min(size[0], size[1]));
             if (d <= cap && d < nearD) { nearD = d; cand.group = (int)g; cand.row = (int)r; cand.x = pos[0]; cand.y = pos[1]; cand.w = size[0]; cand.h = size[1]; cand.dist = std::max(d, 0.01f); }
         }
         if (rows >= 2 && cand.group >= 0 && nearD < bestD && mx > bx0 && mx < bx1 && my > by0 && my < by1) { bestD = nearD; best = cand; }
     }
+    if (direct.group >= 0) { out = direct; return true; }
     if (g_cfg.menuMouseNear != 0 && best.group >= 0) { out = best; return true; }
     return false;
 }
@@ -207,7 +235,7 @@ static void Step(void* win) {
     const bool fresh = now - s_stepT > 0.25;      // primer paso de un menu despues de un rato sin menus
     const bool batch = fresh || now - s_m.t > 0.004;
     s_stepT = now; s_pendWin = nullptr; s_pendAction = -1; s_pendDxWin = nullptr;
-    if (fresh) { s_wheelAcc = 0; s_wheel.store(0); s_latchWin = nullptr; }
+    if (fresh) { s_wheelAcc = 0; s_wheel.store(0); s_latchWin = nullptr; s_extraAct = -1; s_wheelOptWin = nullptr; }
     if (batch) Sample(now, fresh);                 // siempre, para no inventar un clic al volver del menu de PES21FX
     // (12/11) en el Motor el juego no ve el teclado (freecam.cpp FreeCamBlocksKeys): Esc = "volver" lo pone la DLL, este o no el
     // mouse en menus prendido, para que siempre se pueda salir sin mando
@@ -222,6 +250,37 @@ static void Step(void* win) {
     uint8_t* I = P8((uint8_t*)win + 0x88); if (!Ptr(I)) return;
     s_liveT.store(now); s_nStep.fetch_add(1, std::memory_order_relaxed);
     if (!s_m.ok) return;
+    if (s_m.lEdge && s_movieOk && *(uintptr_t*)win == kMovieVt) {        // video de la intro: clic = saltearlo
+        uint8_t* w = (uint8_t*)win;
+        if (w[0xa4] == 2 && Ptr(P8(w + 0x90))) {
+            s_m.lEdge = false; s_moveT.store(now);
+            if (w[0xa5] == 0) { w[0xa5] = 1; ((void (*)(void*))kMovieStop)(P8(w + 0x90)); }
+            w[0xa4] = 3; w[0xa6] = 1;
+            Log("mouse en menus: clic en el video de la intro -> saltearlo (permitido por el juego %d / %d)", (int)w[0xb9], (int)U32(w + 0xa0));
+            return;
+        }
+    }
+    if (s_m.lEdge && s_titleOk && *(uintptr_t*)win == kTitleVt) {        // titulo: clic = "apreta cualquier boton"
+        uint8_t* w = (uint8_t*)win;
+        if (U32(w + 0x9c) != 1 && w[0xd8] != 0) {
+            s_m.lEdge = false; s_moveT.store(now);
+            ((void (*)(int))kPadActive)(1); ((void (*)(void*))kTitleGo)(win);
+            Log("mouse en menus: clic en la pantalla del titulo -> continuar");
+            return;
+        }
+    }
+    {   // (14/11 ythnmm) diagnostico: la primera vez que se usa el mouse en cada clase de pagina, cuantos grupos / filas ve la DLL
+        static uintptr_t s_seen[32] = {}; static int s_nSeen = 0; const uintptr_t vt = *(uintptr_t*)win;
+        bool seen = false; for (int i = 0; i < s_nSeen; i++) if (s_seen[i] == vt) { seen = true; break; }
+        if (!seen && s_nSeen < 32 && (s_m.moved || s_m.lEdge)) {
+            s_seen[s_nSeen++] = vt;
+            int rows = 0, rowsOk = 0; uint8_t* root = P8(I + 0x98); const uint32_t ng = Ptr(root) ? std::min<uint32_t>(U32(I + 0xa4), 64) : 0;
+            for (uint32_t g = 0; g < ng; g++) { uint8_t* grp = Child(root, g); if (!Ptr(grp)) continue; const uint32_t n = std::min<uint32_t>(ChildCount(grp), 512);
+                for (uint32_t r = 0; r < n; r++) { uint8_t* nd = Child(grp, r); if (!Ptr(nd)) continue; rows++; void** v = *(void***)nd; if (Ptr(v) && RowClass(v)) rowsOk++; } }
+            Log("mouse en menus: pagina vtable %p: puntero propio %d, grupos %u, filas %d (%d que la DLL sabe medir), grupo / fila actual %d / %d",
+                (void*)vt, (int)I[0x44], ng, rows, rowsOk, (int)U32(I + 0xa0), (int)U32(I + 0xd8));
+        }
+    }
     if (I[0x44]) return;                              // pagina con puntero propio del juego: no se toca (por ahora)
     if (s_latchWin == win) {                          // clic del paso anterior que primero tuvo que elegir la fila
         const bool same = (int)U32(I + 0xa0) == s_latchG && (int)U32(I + 0xd8) == s_latchR && now - s_latchT < 0.25;
@@ -231,11 +290,24 @@ static void Step(void* win) {
             return;
         }
     }
-    if (!s_m.moved && !s_m.lEdge && !s_m.rEdge) return;
     // escenario de 1920 x 1080 centrado en la ventana
     const float cw = s_m.cw, ch = s_m.ch; float sw = cw, sh = ch, ox = 0, oy = 0;
     if (cw * 9.0f > ch * 16.0f) { sw = ch * 16.0f / 9.0f; ox = (cw - sw) * 0.5f; } else if (cw * 9.0f < ch * 16.0f) { sh = cw * 9.0f / 16.0f; oy = (ch - sh) * 0.5f; }
     const float mx = ((float)s_m.p.x - ox) * 1920.0f / sw, my = ((float)s_m.p.y - oy) * 1080.0f / sh;
+    if (s_extraAct >= 0) {   // (14/11 ythnmm) accion pedida: la ventana bajo el mouse que tenga esa accion; si ninguna, la primera que la tenga
+        if (now - s_extraT > 0.5) s_extraAct = -1;
+        else {
+            const uint32_t mode = U32(I + 0x120 + (size_t)s_extraAct * 4);
+            Hit h2; const bool over = HitTest(I, mx, my, h2) && h2.dist <= 0.0f;
+            if (mode >= 1 && mode <= 3 && (over || now - s_extraT > 0.05)) {
+                s_pendWin = win; s_pendAction = s_extraAct; s_extraAct = -1; s_moveT.store(now);
+                const int k = s_nExtra.fetch_add(1, std::memory_order_relaxed);
+                if (k < 12) Log("mouse en menus: accion pedida -> %d de la pagina (vtable %p)", s_pendAction, *(void**)win);
+                return;
+            }
+        }
+    }
+    if (!s_m.moved && !s_m.lEdge && !s_m.rEdge) return;
     {   // (v4) panel del Motor: arrastrar desde la franja del titulo (motorpage.cpp). La primera fila dibujada del grupo 0 da el lugar
         float tx = 0, ty = 0, tw = 0;
         uint8_t* root0 = P8(I + 0x98); uint8_t* g0 = Ptr(root0) ? Child(root0, 0) : nullptr; uint8_t* r0 = Ptr(g0) ? Child(g0, 0) : nullptr;
@@ -257,6 +329,10 @@ static void Step(void* win) {
         if (k < 12 || (hit.dist > 0 && s_nNear.load(std::memory_order_relaxed) <= 8))
             Log("mouse en menus: fila %s -> grupo %d fila %d (rect %.0f %.0f %.0f x %.0f; mouse %.0f %.0f de 1920 x 1080; a %.0f; ventana %.0f x %.0f; seleccion ahora %d / %d)",
                 hit.dist > 0 ? "mas cercana" : "bajo el mouse", hit.group, hit.row, hit.x, hit.y, hit.w, hit.h, mx, my, hit.dist, cw, ch, (int)U32(I + 0xa0), (int)U32(I + 0xd8));
+    }
+    if (s_m.moved) {   // (14/11 ythnmm) rueda sobre un selector = cambiar la opcion (si la fila bajo el mouse ya es la elegida)
+        if (on && hit.dist <= 0.0f && g_cfg.menuMouseWheelOpt != 0 && (int)U32(I + 0xa0) == hit.group && (int)U32(I + 0xd8) == hitAbs && SelectorDir(I, hit, mx) != 0) { s_wheelOptWin = win; s_wheelOptMx = mx; }
+        else if (s_wheelOptWin == win) s_wheelOptWin = nullptr;
     }
     if (s_m.lEdge && on) {
         s_m.lEdge = false;                            // un clic es para una sola ventana
@@ -294,18 +370,24 @@ static void hk_Dirs(void* win, int* dx, int* dy, unsigned char* trig) {
     if (std::abs(s_wheelAcc) < 120 || *dx != 0 || *dy != 0) return;       // el mando / teclado mandan
     HWND h = OverlayHwnd(); if (!h || GetForegroundWindow() != h) { s_wheelAcc = 0; return; }
     const int sgn = s_wheelAcc > 0 ? 1 : -1; s_wheelAcc -= sgn * 120;
+    if (s_wheelOptWin == win) {                                          // sobre un selector: la rueda cambia la opcion (adelante = siguiente)
+        *dx = sgn > 0 ? 1 : -1; if (trig) *trig = 1;
+        s_pendWin = nullptr; s_pendAction = -1;
+        s_nWheel.fetch_add(1, std::memory_order_relaxed); s_nOpt.fetch_add(1, std::memory_order_relaxed); s_moveT.store(Now());
+        return;
+    }
     *dy = sgn > 0 ? -1 : 1;                                             // rueda hacia adelante = arriba
     s_pendWin = nullptr; s_pendAction = -1;
     s_nWheel.fetch_add(1, std::memory_order_relaxed); s_moveT.store(Now());
 }
 
 static char hk_Action(void* win, void* pad, int action) {
-    if (win && pad && s_pendWin == win && s_pendAction == action && action >= 0 && action < 2) {
+    if (win && pad && s_pendWin == win && s_pendAction == action && action >= 0 && action < 12) {
         uint8_t* I = P8((uint8_t*)win + 0x88);
         const uint32_t mode = Ptr(I) ? U32(I + 0x120 + (size_t)action * 4) : 0;
         if (mode >= 1 && mode <= 3) {                                    // la pagina tiene esa accion
             s_pendWin = nullptr; s_pendAction = -1;
-            (action == 0 ? s_nClick : s_nBack).fetch_add(1, std::memory_order_relaxed);
+            if (action < 2) (action == 0 ? s_nClick : s_nBack).fetch_add(1, std::memory_order_relaxed);
             return 1;
         }
     }
@@ -334,6 +416,9 @@ static void Install() {
         MH_DisableHook((void*)kHover); MH_DisableHook((void*)kDirs); MH_DisableHook((void*)kAction);
         Log("mouse en menus: MinHook no pudo prender los ganchos: se omite"); return;
     }
+    s_titleOk = SigAt(kPadActive, kPadActiveSig, sizeof kPadActiveSig) && SigAt(kTitleGo, kTitleGoSig, sizeof kTitleGoSig);
+    s_movieOk = SigAt(kMovieStop, kMovieStopSig, sizeof kMovieStopSig);
+    if (!s_titleOk) Log("mouse en menus: firma del titulo distinta (0x141b58200 / 0x140a99250): sin clic en el titulo");
     s_ok = true;
     Log("mouse en menus: listo (prueba del puntero 0x140e400d0, direcciones 0x140e3e6b0, acciones 0x140e48f80); mouse_menus = %d (0 lo apaga)", g_cfg.menuMouse);
 }
