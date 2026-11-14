@@ -37,7 +37,7 @@ using SeekFn = void(*)(void*, unsigned short);
 std::atomic<void*> s_line{nullptr};                  // linea de tiempo que el visor esta usando (hk_rpl)
 std::atomic<unsigned long long> s_lineMs{0};
 std::atomic<int> s_seekReq{-1};                      // cuadro pedido con el mouse (lo aplica el hilo del juego)
-std::atomic<int> s_cutReq{0};                        // cortes vistos por el hilo del juego (Present los consume)
+std::atomic<int> s_cutReq{0}; std::atomic<int> s_seekBlur{0};   // s_seekBlur: el salto es un clic (no el arrastre): lleva desenfoque                        // cortes vistos por el hilo del juego (Present los consume)
 std::atomic<int> s_ok{-1};                           // -1 sin mirar, 0 firma distinta, 1 bien
 // datos de la linea para el dibujo (los copia el hilo del juego en cada llamada)
 std::atomic<int> s_cur{0}, s_first{0}, s_last{0}, s_n{1};
@@ -90,7 +90,7 @@ void RepeticionRplHook(void* line) {
         const int req = s_seekReq.exchange(-1);
         if (req >= 0 && g_cfg.replayBar) {
             ((SeekFn)kSeek)(line, (unsigned short)Wrap(req, n));
-            if (g_cfg.replayCut) s_cutReq.fetch_add(1);
+            if (g_cfg.replayCut && s_seekBlur.exchange(0)) s_cutReq.fetch_add(1);
             s_prevLine = nullptr;                    // el salto propio no cuenta como corte de la jugada
         }
         const int cur = *(const unsigned short*)(L + 0x238);
@@ -223,6 +223,7 @@ bool RepeticionPresent(IDXGISwapChain* sc) {
             static int s_sent = -1; static double s_sentT = 0;
             if (want != s_sent || now - s_sentT > 0.25) {   // mientras se arrastra: un salto por cuadro del mouse
                 if (s_sent < 0 || lNow != s_lWas) Log("repeticion: salto con el mouse a %.1f %% (cuadro %d de %d)", fr * 100.0f, want, len);
+                if (lNow && !s_lWas) s_seekBlur = 1;
                 s_seekReq = want; s_sent = want; s_sentT = now;
             }
             s_moveT = now;
@@ -244,7 +245,7 @@ void RepeticionDraw() {
         const int N = 8;
         // nuevo: promedio de N copias corridas hacia la izquierda (llega desde la derecha), cada vez menos
         const float sNew = (1.0f - e) * 0.09f * ds.x;
-        ImTextureID cur = (ImTextureID)s_srv[s_prevI], old = (ImTextureID)s_srv[s_prevI ^ 1];
+        ImTextureID cur = (ImTextureID)(uintptr_t)s_srv[s_prevI], old = (ImTextureID)(uintptr_t)s_srv[s_prevI ^ 1];
         for (int i = 1; i < N; i++) {
             const float o = sNew * (float)i / (float)(N - 1);
             const int a = (int)(255.0f / (float)(i + 1) + 0.5f);
