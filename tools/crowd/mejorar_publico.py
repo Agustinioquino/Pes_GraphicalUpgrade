@@ -17,19 +17,26 @@ def load(f):
     if f.fmt == 0: return Image.frombytes('RGBA', (f.w, f.h), f.mips[0], 'raw', 'BGRA')
     return Image.open(io.BytesIO(dxt_to_dds(f, True))).convert('RGBA')
 
+def rs(im, size, filt):
+    # (14/11 0kygek) RGB y alfa por separado: Pillow premultiplica el RGBA al escalar y donde el alfa es 0 el color quedaba NEGRO
+    # (au_h_face_bsm_alp: color medio 3 contra 123 del original -> el publico de cerca salia negro)
+    if im.mode != 'RGBA': return im.resize(size, filt)
+    r, g, b, a = im.split()
+    return Image.merge('RGBA', [c.resize(size, filt) for c in (r, g, b, a)])
+
 def mips_of(im, fmt):
     out = []; cur = im
     while True:
         w, h = cur.size
         if fmt in (2, 4):
             pw, ph = max(4, (w + 3) // 4 * 4), max(4, (h + 3) // 4 * 4)
-            pad = cur if (pw, ph) == (w, h) else cur.resize((pw, ph), Image.NEAREST)
+            pad = cur if (pw, ph) == (w, h) else rs(cur, (pw, ph), Image.NEAREST)
             rgba = pad.convert('RGBA').tobytes()
         if fmt == 2: out.append(bytes(etcpak.compress_bc1(rgba, pw, ph)))
         elif fmt == 4: out.append(bytes(etcpak.compress_bc3(rgba, pw, ph)))
         else: out.append(cur.convert('RGBA').tobytes('raw', 'BGRA'))
         if (max(w, h) <= 4 if fmt in (2, 4) else min(w, h) == 1): break
-        cur = cur.resize((max(1, w // 2), max(1, h // 2)), Image.LANCZOS)
+        cur = rs(cur, (max(1, w // 2), max(1, h // 2)), Image.LANCZOS)
     return out
 
 def build(src, im, fmt):
@@ -40,8 +47,9 @@ def build(src, im, fmt):
     return f.to_bytes(chunk=65536, small_first=True)
 
 def up(im, k, sharp=True):
-    r = im.resize((im.size[0] * k, im.size[1] * k), Image.LANCZOS)
-    if sharp: r = r.filter(ImageFilter.UnsharpMask(radius=1.6, percent=60, threshold=2))
+    r = rs(im, (im.size[0] * k, im.size[1] * k), Image.LANCZOS)
+    if sharp:   # nitidez solo al color: el alfa (recorte del pelo / borde) queda como lo escalo Lanczos
+        a = r.split()[3]; r = r.convert('RGB').filter(ImageFilter.UnsharpMask(radius=1.6, percent=60, threshold=2)).convert('RGBA'); r.putalpha(a)
     return r
 
 def paleta(im, rng):
