@@ -2110,7 +2110,7 @@ bool MvSlowWidget(MvSlowIn& in) {
       for (int row = 0; row < 2; row++) {
           const int i0 = row == 0 ? 0 : 6, n = row == 0 ? 6 : 5;
           ImGui::TextDisabled("%s", TRS(row == 0 ? "Mas lenta" : "Normal y mas rapida"));
-          const float bw = (avail - (n - 1) * 5.0f * k) / n, h = 36.0f * k;   // (14/11 "mas minimalista")
+          const float bw = (avail - (n - 1) * 6.0f * k) / n, h = 46.0f * k;
           for (int j = 0; j < n; j++) {
               const int i = i0 + j;
               if (j) ImGui::SameLine(0, 6.0f * k); ImGui::PushID(i + 40);
@@ -2126,13 +2126,12 @@ bool MvSlowWidget(MvSlowIn& in) {
               dl->PushClipRect(p, ImVec2(p.x + bw, p.y + h), true);
               const float run = in.anim ? fmodf((float)t * 0.35f * std::min(kV[i], 4.0f) * 3.0f, 1.0f) : 0.5f, x = p.x + 10.0f * k + (bw - 20.0f * k) * run;
               const ImU32 ic = cur ? Col(1, 1, 1, 1) : Col(0.80f, 0.83f, 0.88f, 1);
-              const float ly = p.y + h - 8.0f * k;   // el caracol / la pelota corre por la linea de abajo
-              dl->AddLine(ImVec2(p.x + 6 * k, ly + 4.0f * k), ImVec2(p.x + bw - 6 * k, ly + 4.0f * k), Col(1, 1, 1, 0.10f), 1.0f);
-              if (i < 6) SmallIcon(dl, ImVec2(x, ly), 13.0f * k, kSiSnail, ColA(ImGui::ColorConvertU32ToFloat4(ic), 0.75f), 0.0f);
-              else { if (i > 6) for (int s2 = 1; s2 <= 3; s2++) dl->AddLine(ImVec2(x - (3.0f + 4.0f * s2) * k, ly + (s2 - 2) * 2.0f * k), ImVec2(x - (6.0f + 6.0f * s2 + 2.5f * (i - 6)) * k, ly + (s2 - 2) * 2.0f * k), ColA(tint, 0.6f - 0.15f * s2), 1.2f * k);
-                     dl->AddCircleFilled(ImVec2(x, ly), 3.2f * k, ic, 10); }
+              if (i < 6) SmallIcon(dl, ImVec2(x, p.y + h * 0.33f), 20.0f * k, kSiSnail, ic, 0.0f);
+              else { if (i > 6) for (int s2 = 1; s2 <= 3; s2++) dl->AddLine(ImVec2(x - (4.0f + 5.0f * s2) * k, p.y + h * 0.36f + (s2 - 2) * 2.5f * k), ImVec2(x - (8.0f + 8.0f * s2 + 3.0f * (i - 6)) * k, p.y + h * 0.36f + (s2 - 2) * 2.5f * k), ColA(tint, 0.6f - 0.15f * s2), 1.3f * k);
+                     dl->AddCircleFilled(ImVec2(x, p.y + h * 0.36f), 4.5f * k, ic, 12); }
+              dl->AddLine(ImVec2(p.x + 6 * k, p.y + h * 0.57f), ImVec2(p.x + bw - 6 * k, p.y + h * 0.57f), Col(1, 1, 1, 0.12f), 1.0f);
               const char* nm = (i == 0 || i == 6) ? TRS(kN[i]) : kN[i]; const ImVec2 ts = ImGui::CalcTextSize(nm);
-              dl->AddText(ImVec2(p.x + std::max(3.0f * k, (bw - ts.x) * 0.5f), p.y + 4.0f * k), cur ? Col(1, 1, 1, 1) : Col(0.82f, 0.85f, 0.90f, 1), nm);
+              dl->AddText(ImVec2(p.x + std::max(3.0f * k, (bw - ts.x) * 0.5f), p.y + h * 0.62f), cur ? Col(1, 1, 1, 1) : Col(0.82f, 0.85f, 0.90f, 1), nm);
               dl->PopClipRect();
               ImGui::PopID();
           }
@@ -2172,7 +2171,7 @@ bool MvSlowWidget(MvSlowIn& in) {
         LgHeader(TRS("Modo foto"), st, in.photoPaused || in.photoScale > 0.0f, nullptr, k, acc, in.anim);
         // riel con los pasos del modo foto (el actual encendido)
         if (in.steps && in.nSteps > 1) {
-            const ImVec2 p = ImGui::GetCursorScreenPos(); const float w2 = ImGui::GetContentRegionAvail().x, h2 = 26.0f * k;
+            const ImVec2 p = ImGui::GetCursorScreenPos(); const float w2 = ImGui::GetContentRegionAvail().x, h2 = 30.0f * k;
             const float x0 = p.x + 14.0f * k, x1 = p.x + w2 - 14.0f * k, y = p.y + 9.0f * k;
             dl->AddLine(ImVec2(x0, y), ImVec2(x1, y), Col(1, 1, 1, 0.18f), 2.0f * k);
             for (int i = 0; i < in.nSteps; i++) {
@@ -2202,7 +2201,7 @@ bool MvSlowWidget(MvSlowIn& in) {
         const LgItem* src = in.padUi ? kP : kK;
         LgItem it[4]; for (int i = 0; i < 4; i++) { it[i] = src[i]; it[i].label = TRS(src[i].label); it[i].sub = TRS(src[i].sub); }
         const float aw = ImGui::GetContentRegionAvail().x;
-        LgGrid(it, 4, in.pad, aw >= 720.0f * k ? 4 : 2, k, acc, in.anim, in.padUi && !in.padFly);
+        (void)aw; LgGrid(it, 4, in.pad, 2, k, acc, in.anim, in.padUi && !in.padFly, false);
     }
     ImGui::Dummy(ImVec2(0, 2.0f * k));
     return changed;
