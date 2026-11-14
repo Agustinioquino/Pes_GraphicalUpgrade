@@ -46,6 +46,7 @@ static float s_fovBase = 0.0f, s_fovWritten = -1.0f;   // fov del juego sin zoom
 //            con el boton derecho corren el angulo respecto de la cara (perfil, tres cuartos, desde abajo) y ese angulo se mantiene.
 //   x346 = 2 ORBITAR LA CABEZA: como v1: apunta al centro de la cara pero el angulo es del mundo (no gira con la cabeza).
 static bool s_follow = false, s_headSeen = false; static int s_followMode = 0;
+static int s_subjReq = 0;   // (14/11 g) cambiar de sujeto al seguir la cara: +1 siguiente (derecha), -1 anterior
 static float s_head[3] = {}, s_hfw[3] = { 0, 0, 1 }, s_hup[3] = { 0, 1, 0 };   // cara suavizada: centro, frente, arriba
 static float s_dist = 2.0f, s_oYaw = 0, s_oPitch = 0;                            // orbita: distancia, giro, altura
 // (02/11 e) en el modo fijo la distancia sale del campo de vision: el visor del editor usa un campo de vision MUY cerrado (0.09 rad,
@@ -107,6 +108,8 @@ float FreeCamPhotoScale() {
     if (s_phPause.load()) return s_phAdv.load() ? (sp > 0.99f ? 0.25f : std::max(sp, 0.1f)) : 0.02f;
     return sp;
 }
+// (14/11 g) cruceta izquierda / derecha mantenida mientras la camara vuela con el mando (sin L1): el visor de la repeticion la usa
+int FreeCamReplayDpad() { if (!s_padFly.load()) return 0; MvPad p; if (!PadGet(p) || p.b[kPadL1]) return 0; return p.b[kPadRight] ? 1 : p.b[kPadLeft] ? -1 : 0; }
 FreeCamPadInfo FreeCamPadState() {
     FreeCamPadInfo i; i.wanted = FreeCamPadWanted(); i.flying = s_padFly.load(); i.step = s_phStep.load(); i.paused = s_phPause.load();
     i.advancing = s_phAdv.load(); i.scale = FreeCamPhotoScale(); i.given = s_padGive.load(); return i;
@@ -211,7 +214,10 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
         const bool l1 = pad.b[kPadL1];
         if (!l1 && pad.b[kPadR1]) padMul *= 3.0f;
         if (l1 && !pad.b[kPadR1] && !pad.b[kPadLeft] && !pad.b[kPadRight]) padMul *= 0.25f;
-        { static double s_rep = 0.0; const int dir = l1 ? 0 : pad.b[kPadRight] ? 1 : pad.b[kPadLeft] ? -1 : 0;
+        if (s_follow && ed[kPadR3] && !pad.b[kPadL3]) s_subjReq = pad.b[kPadL1] ? -1 : 1;   // (14/11 g) siguiendo la cara: R3 = otro sujeto (L1 + R3, el anterior)
+        // (14/11 g) en la repeticion la cruceta izquierda / derecha es la del visor (avanzar / retroceder lento con las velocidades de
+        // SlowMoServer, rastro.cpp PhotoReplayCtl); fuera de la repeticion, la velocidad de la camara
+        if (!ReplayNow()) { static double s_rep = 0.0; const int dir = l1 ? 0 : pad.b[kPadRight] ? 1 : pad.b[kPadLeft] ? -1 : 0;
           const bool edge = !l1 && (ed[kPadLeft] || ed[kPadRight]);
           if (edge) s_rep = t + 0.35;
           if (dir != 0 && (edge || t >= s_rep)) {
@@ -239,6 +245,8 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     } else { memset(s_padWas, 0, sizeof s_padWas); s_phAdv = false; }
     // (14/11) modo foto con el teclado: P pausa / sigue, O mantenida avanza, , y . reloj mas lento / rapido, N velocidad del menu
     if (front && !typing && !g_menuOpen.load() && !MotorPageActive()) {
+        { static bool s_tabWas = false; const bool tab = Key(VK_TAB);   // (14/11 g) siguiendo la cara: Tab = otro sujeto (Shift + Tab, el anterior)
+          if (tab && !s_tabWas && s_follow) s_subjReq = Key(VK_SHIFT) ? -1 : 1; s_tabWas = tab; }
         static bool s_kw[5] = {}; const int vk[5] = { 'P', 'O', VK_OEM_COMMA, VK_OEM_PERIOD, 'N' }; bool kd[5], ke[5];
         for (int i = 0; i < 5; i++) { kd[i] = Key(vk[i]); ke[i] = kd[i] && !s_kw[i]; s_kw[i] = kd[i]; }
         auto cur = [] { return g_cfg.live[343][1] > 0.5f && TiempoMatchToo() ? TiempoFactor() : 1.0f; };
@@ -306,6 +314,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     const int mode = std::clamp((int)(g_cfg.live[346][0] + 0.5f), 0, 2);
     const bool wantFollow = mode >= 1;
     float hc[3], hf[3], hu[3]; double age = 1e9;
+    if (s_subjReq != 0) { if (wantFollow && ExprFaceCycle(s_pos, f, &s_lockNode, s_subjReq)) Log("camara libre: sigue otra cara (%s)", s_subjReq > 0 ? "siguiente" : "anterior"); s_subjReq = 0; }
     const bool haveHead = wantFollow && ExprFaceFrame(s_pos, f, &s_lockNode, hc, hf, hu, &age) && age < 0.5;
     if (haveHead) {
         const float tau = std::clamp(g_cfg.live[346][1], 0.0f, 2.0f);   // suavizado (s)

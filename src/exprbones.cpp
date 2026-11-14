@@ -1290,6 +1290,36 @@ bool ExprFaceFrame(const float* camPos, const float* camFwd, const void** lock, 
     return true;
 }
 
+// (14/11 g, Agustin: "la opcion de seguir rostro permitirme cambiar de sujeto") cambia la cara seguida por la siguiente hacia la derecha
+// (dir > 0) o la izquierda (dir < 0) en la pantalla, dando la vuelta; true si hay otra cara a la vista
+bool ExprFaceCycle(const float* camPos, const float* camFwd, const void** lock, int dir) {
+    if (!lock || dir == 0) return false;
+    std::lock_guard<std::mutex> lk(s_hpMx);
+    const double now = Now();
+    const float r[3] = { -camFwd[2], 0.0f, camFwd[0] };
+    float ang[8]; int cur = -1, n = 0;
+    for (int i = 0; i < 8; i++) {
+        ang[i] = 1e9f;
+        if (!s_hp[i].node || now - s_hp[i].t >= 0.5) continue;
+        const float d[3] = { s_hp[i].c[0] - camPos[0], s_hp[i].c[1] - camPos[1], s_hp[i].c[2] - camPos[2] };
+        ang[i] = atan2f(d[0] * r[0] + d[2] * r[2], d[0] * camFwd[0] + d[1] * camFwd[1] + d[2] * camFwd[2]); n++;
+        if (s_hp[i].node == *lock) cur = i;
+    }
+    if (n < 2 && cur >= 0) return false;
+    const float a0 = cur >= 0 ? ang[cur] : 0.0f;
+    int best = -1, wrap = -1;
+    for (int i = 0; i < 8; i++) {
+        if (ang[i] > 1e8f || i == cur) continue;
+        const float a = ang[i];
+        if (dir > 0) { if (a > a0 + 1e-4f && (best < 0 || a < ang[best])) best = i; if (wrap < 0 || a < ang[wrap]) wrap = i; }
+        else { if (a < a0 - 1e-4f && (best < 0 || a > ang[best])) best = i; if (wrap < 0 || a > ang[wrap]) wrap = i; }
+    }
+    if (best < 0) best = wrap;
+    if (best < 0) return false;
+    *lock = s_hp[best].node;
+    return true;
+}
+
 // en el Eval de la restriccion del cuello (musculo.cpp hk_Eval, clase "cuello"): una vez por personaje y cuadro
 // (04/11) que jugador es este esqueleto y que perfil de caras.ini le toca: al armar, al recargar caras.ini y cada ~2 s mientras
 // personajes.cpp todavia no sabe quien es. Una linea por jugador nuevo: "caras: jugador <id> '<nombre>' -> perfil ..."

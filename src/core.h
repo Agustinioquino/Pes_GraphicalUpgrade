@@ -483,6 +483,7 @@ float FreeCamPhotoScale();                        // reloj del juego pedido por 
 const float* FreeCamPhotoSteps(int* n);           // pasos de velocidad del modo foto (0.02 .. 4)
 struct FreeCamPadInfo { bool wanted = false, flying = false, paused = false, advancing = false, given = false; int step = -1; float scale = -1.0f; };
 FreeCamPadInfo FreeCamPadState();
+int FreeCamReplayDpad();                          // (14/11 g) cruceta izq. / der. mantenida volando con el mando: -1 / 0 / 1
 void FreeCamPadTake();                            // la tarjeta prendio el mando: si se lo habia devuelto al juego, lo vuelve a tomar
 // (31/10) camara lenta (tiempo.cpp): gancho al reloj de juego del motor (0x14035dcb0), 343 (ini: x velocidad, y prendida; DLL: z, w)
 void TiempoPresent();
@@ -598,6 +599,7 @@ void SkinMeasureReport(const uint32_t* body, const uint32_t* face, uint32_t yMin
 bool CharNodeWorldPos(void* node, float out[3]);   // (26/10) posicion en el mundo de un SceneCharacterNode (skintone.cpp)
 bool CharNodeToWorld(void* node, const float p[3], float out[3], bool point);   // (02/11) modelo -> mundo con la matriz del nodo (skintone.cpp)
 bool CharNodeMatrix(void* node, float out[12]);   // (08/11) la matriz entera modelo -> mundo del nodo, 3x4 fila mayor: mundo[r] = out[r*4+0..2] . p + out[r*4+3]
+bool ExprFaceCycle(const float* camPos, const float* camFwd, const void** lock, int dir);   // (14/11 g) cambiar de cara seguida
 bool ExprFaceAny(); bool ExprFaceFrame(const float* camPos, const float* camFwd, const void** lock, float c[3], float fw[3], float up[3], double* age);   // (02/11) cara en el mundo desde el esqueleto (exprbones.cpp)
 void SkinTonePresent();                           // guardado diferido + tabla de jugadores con tono propio (194..254)
 bool SkinToneParams(int gameIdx, const SkinToneProf& q, float k, float out[3], float outBody[3]);   // (24/10 c) (kL, m0, m1) en Oklab para pes_skintone.hlsli

@@ -22,7 +22,9 @@
 // [PES21FX] rastro = 1 lo prende (0 por defecto), rastro_max_mb = tope de los archivos (defecto 2000: ~0.2 MB por segundo de juego), rastro_fotos = fotos por segundo de juego (1..54, defecto 2). Exe 1.07.02 (62787C6A) solo.
 #include "core.h"
 #include "MinHook.h"
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -67,6 +69,57 @@ bool RplCursorMoved(const void* obj, unsigned cur) {
     for (int i = 0; i < 4; i++) if (s_rplCur[i].obj == obj) { const bool m = s_rplCur[i].cur != cur; s_rplCur[i].cur = cur; return m; }
     s_rplCur[s_rplCurNext].obj = obj; s_rplCur[s_rplCurNext].cur = cur; s_rplCurNext = (s_rplCurNext + 1) & 3; return false;   // primera vez: sin dato
 }
+// (14/11 g, Agustin: "las opciones de avanzar o pausar no funcionan ... deberia acceder a las opciones reales de pausa, avanzar")
+// MODO FOTO EN LA REPETICION: el reloj del partido no mueve el visor, asi que la pausa / avance / pasos del modo foto se aplican a la
+// LINEA DE TIEMPO del visor con el salto del propio juego FUN_14217e800(linea, cuadro) (leido por el hilo de la repeticion 9vcq5h:
+// recorta a [primero, ultimo], escribe +0x238 y +0x14 y pone el paso en 0). Despues del control del visor: una posicion propia que avanza
+// lo que diga el modo foto por llamada (0 en pausa, 1 = normal) y, si el juego la corrio, se vuelve a ella.
+bool SigAt(uintptr_t a, const unsigned char* s, size_t n);   // mas abajo (mismo espacio de nombres)
+bool Rd(const void* p, void* out, size_t n);
+const uintptr_t kRplSeek = 0x14217e800ull;
+const unsigned char kRplSeekSig[10] = { 0x0f,0xb7,0x81,0x3c,0x02,0x00,0x00,0x4c,0x8b,0xc9 };
+using RplSeekFn = void(*)(void*, unsigned short);
+int s_seekOk = -1; const void* s_pfLine = nullptr; double s_pf = 0.0; int s_pfLogs = 0;
+// constante de la velocidad lenta del visor: la que lee el mulss del exe (0.5 / -0.5 originales, o la de SlowMoServer.lua si la cambio)
+float RplSpeedConst(uintptr_t mulss, float def) {
+    static const unsigned char kMulss[4] = { 0xf3, 0x0f, 0x59, 0x35 };
+    if (!SigAt(mulss, kMulss, 4)) return def;
+    int disp = 0; if (!Rd((const void*)(mulss + 4), &disp, 4)) return def;
+    const uintptr_t a = mulss + 8 + (intptr_t)disp;
+    float v = 0.0f; if (!Rd((const void*)a, &v, 4)) return def;
+    return (v == v && fabsf(v) >= 0.005f && fabsf(v) <= 4.0f) ? v : def;
+}
+void PhotoReplayCtl(void* line) {
+    if (!line || !FreeCamActive()) { s_pfLine = nullptr; return; }
+    const float ph = FreeCamPhotoScale(); const int dpad = FreeCamReplayDpad();
+    if (ph <= 0.0f && dpad == 0) { s_pfLine = nullptr; return; }
+    if (s_seekOk < 0) { s_seekOk = SigAt(kRplSeek, kRplSeekSig, sizeof kRplSeekSig) ? 1 : 0; Log("modo foto en la repeticion: salto del visor %s", s_seekOk ? "listo (0x14217e800)" : "NO (firma distinta)"); }
+    if (!s_seekOk) return;
+    __try {
+        if (*(const int*)line != 5) { s_pfLine = nullptr; return; }
+        const float pos = *(const float*)((const char*)line + 0x14);
+        if (!(pos >= 0.0f && pos < 65536.0f)) return;
+        if (s_pfLine != line) { s_pfLine = line; s_pf = pos; }
+        float spd = *(const float*)((const char*)line + 0x1c); if (!(spd > 0.0f && spd < 10.0f)) spd = 1.0f;   // velocidad del visor (1 = normal)
+        const FreeCamPadInfo pi = FreeCamPadState();
+        // como el visor del juego: cruceta derecha / izquierda mantenida = lento adelante / atras (0x14217C133 / 0x14217C154, lo que
+        // ponga SlowMoServer); cruz = pausa; cuadrado (u O) en pausa = avanzar lento; si no, los pasos del modo foto (L1 + cruceta)
+        double rate;
+        if (dpad > 0 || (pi.paused && pi.advancing)) rate = spd * RplSpeedConst(0x14217C133ull, 0.5f);
+        else if (dpad < 0) rate = spd * RplSpeedConst(0x14217C154ull, -0.5f);
+        else if (pi.paused) rate = 0.0;
+        else rate = (double)std::clamp(ph, 0.0f, 4.0f);
+        s_pf = std::max(0.0, s_pf + rate);
+        const int want = (int)s_pf;
+        if (want != (int)pos) {
+            ((RplSeekFn)kRplSeek)(line, (unsigned short)want);
+            const float now = *(const float*)((const char*)line + 0x14);
+            if ((int)now != want) s_pf = now;   // el juego lo recorto (principio / final de lo grabado)
+            if (s_pfLogs < 6) { s_pfLogs++; Log("modo foto en la repeticion: cuadro %d (x%.2f%s)", want, rate, pi.paused ? ", pausa" : ""); }
+        }
+        g_replayMoveMs.store(GetTickCount64(), std::memory_order_relaxed);   // la camara libre sigue viendo la repeticion aunque este quieta
+    } __except (EXCEPTION_EXECUTE_HANDLER) { s_pfLine = nullptr; }
+}
 uint64_t hk_rpl(void* obj, unsigned pad, unsigned char p3) {
     g_replayCalls.fetch_add(1, std::memory_order_relaxed); g_replayCallsV2.fetch_add(1, std::memory_order_relaxed);
     const bool v2 = GrassLive(448, 1) > 0.5f;
@@ -76,7 +129,9 @@ uint64_t hk_rpl(void* obj, unsigned pad, unsigned char p3) {
         const bool mv = RplCursorMoved(obj, cur) || (stp & 0x7fffffffu) != 0u;
         g_replayPlayV2.fetch_add(1, std::memory_order_relaxed); if (mv) { g_replayMoveV2.fetch_add(1, std::memory_order_relaxed); g_replayMoveMs.store(GetTickCount64(), std::memory_order_relaxed); }
         if (v2 && mv) { g_replayMs.store(GetTickCount64(), std::memory_order_relaxed); g_replayPlay.fetch_add(1, std::memory_order_relaxed); } } } __except (EXCEPTION_EXECUTE_HANDLER) {}
-    return o_rpl(obj, pad, p3);
+    const uint64_t r = o_rpl(obj, pad, p3);
+    PhotoReplayCtl(obj);   // (14/11 g) pausa / avance / pasos del modo foto sobre la linea del visor
+    return r;
 }
 
 using LogFn = void(*)(void*, const char*, ...);
@@ -425,7 +480,7 @@ void RastroPresent() {
 // ponia con el desgaste real (x431). Se pone apenas se elige uno de esos modos (una vez, misma firma y mismo gancho).
 void RastroReplayHookEnsure() {
     static bool tried = false;
-    if (tried || g_replayHook.load() || !(g_cfg.live[344][0] > 2.5f || g_cfg.live[343][2] > 1.5f)) return;
+    if (tried || g_replayHook.load() || !(g_cfg.live[344][0] > 0.5f || g_cfg.live[343][2] > 1.5f)) return;   // cualquier camara libre: el modo foto tambien maneja el visor
     tried = true;
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);

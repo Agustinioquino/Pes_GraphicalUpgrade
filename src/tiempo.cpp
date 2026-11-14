@@ -69,7 +69,7 @@ static bool MatchToo() { const float z = g_cfg.live[343][2]; return z > 1.5f ? R
 static void hk_Step(void* holder, float delta, void* r8) {
     float* sc = (float*)((char*)holder + 0x30);
     const float g = *sc;
-    const float ph = FreeCamPhotoScale();   // (14/11) modo foto (mando en la camara libre): manda el reloj mientras vuela
+    const float ph = ReplayNow() ? -1.0f : FreeCamPhotoScale();   // (14/11) modo foto: manda el reloj mientras vuela; (14/11 g) en la repeticion lo hace la linea del visor (rastro.cpp)
     const float f = ph > 0.0f ? std::clamp(ph, 0.02f, 4.0f) : MatchToo() ? Factor() : 1.0f;
     if (f != 1.0f) *sc = g * f;
     s_gameScale = g; s_applied = *sc; s_lastDelta = delta; s_calls++;
