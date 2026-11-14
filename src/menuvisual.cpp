@@ -10,6 +10,8 @@
 #include <cstring>
 #include <algorithm>
 #include <string>
+#include <utility>
+#include <vector>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -234,7 +236,7 @@ static ImVec4 KelvinCol(float K) {   // aproximacion del color de un cuerpo negr
     return ImVec4(r, g, b, 1);
 }
 // iconos chicos para los botones (todo con lineas)
-enum { kSiShadow, kSiTemp, kSiPower, kSiSpin, kSiDay, kSiCloud, kSiHeightCol, kSiCopy, kSiCompass, kSiWave, kSiGust, kSiSwirl, kSiStadium, kSiGrass, kSiShirt, kSiLen };
+enum { kSiShadow, kSiTemp, kSiPower, kSiSpin, kSiDay, kSiCloud, kSiHeightCol, kSiCopy, kSiCompass, kSiWave, kSiGust, kSiSwirl, kSiStadium, kSiGrass, kSiShirt, kSiLen, kSiFace, kSiOrbit, kSiNo, kSiFilm, kSiSnail, kSiPitch };
 static void SmallIcon(ImDrawList* dl, ImVec2 c, float s, int ic, ImU32 col, float t) {
     const float th = std::max(1.2f, s * 0.11f);
     switch (ic) {
@@ -297,6 +299,30 @@ static void SmallIcon(ImDrawList* dl, ImVec2 c, float s, int ic, ImU32 col, floa
     case kSiHeightCol:   // sol bajo naranja sobre la linea
         dl->AddLine(ImVec2(c.x - s * 0.45f, c.y + s * 0.15f), ImVec2(c.x + s * 0.45f, c.y + s * 0.15f), col, th);
         dl->PathArcTo(ImVec2(c.x, c.y + s * 0.15f), s * 0.22f, kPI, kPI * 2.0f, 12); dl->PathFillConvex(IM_COL32(255, 150, 70, (col >> 24) & 255)); break;
+    case kSiFace: {   // cara de frente con el marco de la camara
+        dl->AddCircle(c, s * 0.30f, col, 18, th); dl->AddCircleFilled(ImVec2(c.x - s * 0.10f, c.y - s * 0.05f), s * 0.035f, col, 6); dl->AddCircleFilled(ImVec2(c.x + s * 0.10f, c.y - s * 0.05f), s * 0.035f, col, 6);
+        dl->PathArcTo(ImVec2(c.x, c.y + s * 0.02f), s * 0.14f, kPI * 0.2f, kPI * 0.8f, 8); dl->PathStroke(col, 0, th);
+        const float e = s * 0.46f, l = s * 0.14f;
+        for (int i = 0; i < 4; i++) { const float sx = (i & 1) ? 1.0f : -1.0f, sy = (i & 2) ? 1.0f : -1.0f;
+            dl->AddLine(ImVec2(c.x + sx * e, c.y + sy * e), ImVec2(c.x + sx * (e - l), c.y + sy * e), col, th); dl->AddLine(ImVec2(c.x + sx * e, c.y + sy * e), ImVec2(c.x + sx * e, c.y + sy * (e - l)), col, th); } } break;
+    case kSiOrbit: {  // punto con una orbita y la camara dando la vuelta
+        dl->AddCircleFilled(c, s * 0.10f, col, 10); dl->AddEllipse(c, ImVec2(s * 0.42f, s * 0.20f), col, -0.3f, 24, th);
+        const float a = t * 2.0f; const ImVec2 q(c.x + cosf(a) * s * 0.42f * cosf(-0.3f) - sinf(a) * s * 0.20f * sinf(-0.3f), c.y + cosf(a) * s * 0.42f * sinf(-0.3f) + sinf(a) * s * 0.20f * cosf(-0.3f));
+        dl->AddRectFilled(ImVec2(q.x - s * 0.09f, q.y - s * 0.06f), ImVec2(q.x + s * 0.09f, q.y + s * 0.06f), col, 1.0f); } break;
+    case kSiNo:       // circulo tachado
+        dl->AddCircle(c, s * 0.32f, col, 18, th); dl->AddLine(ImVec2(c.x - s * 0.22f, c.y + s * 0.22f), ImVec2(c.x + s * 0.22f, c.y - s * 0.22f), col, th); break;
+    case kSiFilm: {   // pelicula con la flecha de volver (repeticion)
+        dl->AddRect(ImVec2(c.x - s * 0.40f, c.y - s * 0.28f), ImVec2(c.x + s * 0.40f, c.y + s * 0.28f), col, 2.0f, 0, th);
+        for (int i = 0; i < 4; i++) { const float x = c.x - s * 0.30f + i * s * 0.2f; dl->AddRectFilled(ImVec2(x - s * 0.04f, c.y - s * 0.24f), ImVec2(x + s * 0.04f, c.y - s * 0.17f), col); dl->AddRectFilled(ImVec2(x - s * 0.04f, c.y + s * 0.17f), ImVec2(x + s * 0.04f, c.y + s * 0.24f), col); }
+        const float a0 = -t * 2.5f; dl->PathArcTo(c, s * 0.11f, a0, a0 + kPI * 1.5f, 10); dl->PathStroke(col, 0, th); } break;
+    case kSiSnail: {  // caracol (camara lenta)
+        dl->PathClear(); for (int i = 0; i <= 20; i++) { const float u = i / 20.0f, a = u * kPI * 2.6f, r = s * (0.05f + 0.22f * u); dl->PathLineTo(ImVec2(c.x + s * 0.05f + cosf(a) * r, c.y - s * 0.02f + sinf(a) * r)); }
+        dl->PathStroke(col, 0, th);
+        dl->AddLine(ImVec2(c.x - s * 0.45f, c.y + s * 0.26f), ImVec2(c.x + s * 0.42f, c.y + s * 0.26f), col, th * 1.3f);
+        dl->AddLine(ImVec2(c.x - s * 0.36f, c.y + s * 0.26f), ImVec2(c.x - s * 0.44f, c.y - s * 0.02f), col, th); dl->AddCircleFilled(ImVec2(c.x - s * 0.44f, c.y - s * 0.04f), s * 0.04f, col, 6); } break;
+    case kSiPitch:    // cancha chica
+        dl->AddRect(ImVec2(c.x - s * 0.42f, c.y - s * 0.28f), ImVec2(c.x + s * 0.42f, c.y + s * 0.28f), col, 1.0f, 0, th);
+        dl->AddLine(ImVec2(c.x, c.y - s * 0.28f), ImVec2(c.x, c.y + s * 0.28f), col, th); dl->AddCircle(c, s * 0.10f, col, 12, th); break;
     case kSiCopy:     // dos hojas
         dl->AddRect(ImVec2(c.x - s * 0.35f, c.y - s * 0.35f), ImVec2(c.x + s * 0.12f, c.y + s * 0.15f), col, 2.0f, 0, th);
         dl->AddRectFilled(ImVec2(c.x - s * 0.12f, c.y - s * 0.12f), ImVec2(c.x + s * 0.35f, c.y + s * 0.38f), col, 2.0f); break;
@@ -1233,37 +1259,97 @@ void MvPadHints(float k, float alpha) {
 // sin navegacion de ImGui (el mando lo maneja esta funcion): la tecla elegida tiene un marco que se desliza y cada tecla se hunde al
 // apretarla. Se escribe directo en el texto del buscador (el campo de ImGui se suelta mientras tanto).
 static bool s_vkOpen = false, s_vkJustOpened = false;
-static int s_vkRow = 1, s_vkCol = 0;
+static int s_vkRow = 2, s_vkCol = 0, s_vkSug = 0, s_vkPage = 0;   // filas: 0 sugerencias, 1..4 teclas, 5 fila de abajo
 static float s_vkSelX = -1, s_vkSelY = -1, s_vkSelW = 0, s_vkVis = 0;
-static double s_vkPressT[64] = {}, s_vkOpenT = -10.0;
+static double s_vkPressT[80] = {}, s_vkOpenT = -10.0;
 static bool s_vkPrevB[kPadCount] = {}; static double s_vkRepT[4] = {}; static bool s_vkDirWas[4] = {};
-void MvVkOpen() { if (!s_vkOpen) { s_vkOpen = true; s_vkJustOpened = true; s_vkOpenT = ImGui::GetTime(); } }
+static std::string s_vkRecent[4];   // ultimas busquedas (de esta sesion)
+void MvVkOpen() { if (!s_vkOpen) { s_vkOpen = true; s_vkJustOpened = true; s_vkOpenT = ImGui::GetTime(); s_vkRow = 2; s_vkCol = 0; } }
 void MvVkClose() { s_vkOpen = false; }
 bool MvVkIsOpen() { return s_vkOpen; }
 bool MvVkVisible() { return s_vkOpen || s_vkVis > 0.0f; }
-static const char* const kVkRows[4][10] = {
-    { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" },
+// dos paginas: letras y simbolos / acentos (R1 o la tecla ?123 cambia)
+static const char* const kVkRows[2][4][10] = {
+  { { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" },
     { "q", "w", "e", "r", "t", "y", "u", "i", "o", "p" },
     { "a", "s", "d", "f", "g", "h", "j", "k", "l", "\xc3\xb1" },
-    { "z", "x", "c", "v", "b", "n", "m", ",", ".", "-" } };
-enum { kVkSpace = 0, kVkBack, kVkClear, kVkDone };
-static int VkSpecialAt(int col) { return col < 4 ? kVkSpace : col < 6 ? kVkBack : col < 8 ? kVkClear : kVkDone; }
-static int VkSpecialCol0(int s) { static const int c0[4] = { 0, 4, 6, 8 }; return c0[s]; }
+    { "z", "x", "c", "v", "b", "n", "m", ",", ".", "-" } },
+  { { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" },
+    { "\xc3\xa1", "\xc3\xa9", "\xc3\xad", "\xc3\xb3", "\xc3\xba", "\xc3\xbc", "\xc3\xa7", "'", "\"", "?" },
+    { "@", "#", "%", "&", "*", "+", "=", "/", "_", ":" },
+    { "(", ")", "[", "]", "<", ">", "!", ";", "~", "|" } } };
+enum { kVkPage = 0, kVkSpace, kVkBack, kVkDone };   // fila de abajo: ?123 (2) | espacio (4) | borrar (2) | listo (2)
+static const int kVkSpC0[4] = { 0, 2, 6, 8 }, kVkSpN[4] = { 2, 4, 2, 2 };
+static int VkSpecialAt(int col) { return col < 2 ? kVkPage : col < 6 ? kVkSpace : col < 8 ? kVkBack : kVkDone; }
+static const int kVkClear = 4;   // id 40 + 4: borrar todo (tacho del campo / L1)
 static void VkBackspace(char* buf) { int n = (int)strlen(buf); if (!n) return; n--; while (n > 0 && ((unsigned char)buf[n] & 0xC0) == 0x80) n--; buf[n] = 0; }
 static bool VkAppend(char* buf, int cap, const char* t) { const int n = (int)strlen(buf), m = (int)strlen(t); if (n + m >= cap) return false; memcpy(buf + n, t, m + 1); return true; }
 static float VkEase(float x) { x = Sat(x); return 1.0f - (1.0f - x) * (1.0f - x) * (1.0f - x); }
+// iconos dibujados de las teclas especiales (centro c, tamano s = alto de la letra)
+static void VkIcon(ImDrawList* dl, int which, ImVec2 c, float s, ImU32 col, float th) {
+    switch (which) {
+    case kVkSpace: {   // barra de espacio: corchete acostado
+        const float w = s * 0.46f, h = s * 0.30f;
+        const ImVec2 p[4] = { ImVec2(c.x - w, c.y - h * 0.4f), ImVec2(c.x - w, c.y + h * 0.6f), ImVec2(c.x + w, c.y + h * 0.6f), ImVec2(c.x + w, c.y - h * 0.4f) };
+        dl->AddPolyline(p, 4, col, 0, th); break; }
+    case kVkBack: {    // borrar: etiqueta con punta a la izquierda y una cruz
+        const float w = s * 0.62f, h = s * 0.36f, t = s * 0.28f;
+        const ImVec2 p[5] = { ImVec2(c.x - w - t * 0.6f, c.y), ImVec2(c.x - w + t * 0.4f, c.y - h), ImVec2(c.x + w, c.y - h), ImVec2(c.x + w, c.y + h), ImVec2(c.x - w + t * 0.4f, c.y + h) };
+        dl->AddPolyline(p, 5, col, ImDrawFlags_Closed, th);
+        const float xc = c.x + w * 0.22f, xr = h * 0.42f;
+        dl->AddLine(ImVec2(xc - xr, c.y - xr), ImVec2(xc + xr, c.y + xr), col, th); dl->AddLine(ImVec2(xc - xr, c.y + xr), ImVec2(xc + xr, c.y - xr), col, th); break; }
+    case kVkDone: {    // listo: tilde
+        dl->AddLine(ImVec2(c.x - s * 0.42f, c.y + s * 0.02f), ImVec2(c.x - s * 0.12f, c.y + s * 0.30f), col, th * 1.3f);
+        dl->AddLine(ImVec2(c.x - s * 0.12f, c.y + s * 0.30f), ImVec2(c.x + s * 0.46f, c.y - s * 0.30f), col, th * 1.3f); break; }
+    case kVkClear: {   // tacho
+        const float w = s * 0.30f, h = s * 0.40f;
+        dl->AddLine(ImVec2(c.x - w * 1.35f, c.y - h * 0.62f), ImVec2(c.x + w * 1.35f, c.y - h * 0.62f), col, th);
+        dl->AddLine(ImVec2(c.x - w * 0.45f, c.y - h * 0.62f), ImVec2(c.x - w * 0.35f, c.y - h * 0.95f), col, th); dl->AddLine(ImVec2(c.x - w * 0.35f, c.y - h * 0.95f), ImVec2(c.x + w * 0.35f, c.y - h * 0.95f), col, th); dl->AddLine(ImVec2(c.x + w * 0.35f, c.y - h * 0.95f), ImVec2(c.x + w * 0.45f, c.y - h * 0.62f), col, th);
+        const ImVec2 p[4] = { ImVec2(c.x - w, c.y - h * 0.4f), ImVec2(c.x - w * 0.8f, c.y + h), ImVec2(c.x + w * 0.8f, c.y + h), ImVec2(c.x + w, c.y - h * 0.4f) };
+        dl->AddPolyline(p, 4, col, 0, th);
+        dl->AddLine(ImVec2(c.x, c.y - h * 0.2f), ImVec2(c.x, c.y + h * 0.75f), col, th * 0.8f); break; }
+    case 10: {         // reloj (busquedas recientes)
+        dl->AddCircle(c, s * 0.36f, col, 20, th); dl->AddLine(c, ImVec2(c.x, c.y - s * 0.22f), col, th); dl->AddLine(c, ImVec2(c.x + s * 0.16f, c.y + s * 0.08f), col, th); break; }
+    case 11: {         // lupa chica (palabra sugerida)
+        const ImVec2 lc(c.x - s * 0.06f, c.y - s * 0.06f); dl->AddCircle(lc, s * 0.24f, col, 16, th);
+        dl->AddLine(ImVec2(lc.x + s * 0.17f, lc.y + s * 0.17f), ImVec2(lc.x + s * 0.36f, lc.y + s * 0.36f), col, th * 1.2f); break; }
+    }
+}
 
 // (14/11 b, Agustin: "para el teclado manten el diseno glass y colores, asi como la animacion al abrir con l3+r3, una animacion y mostrar
 // los botones para abrir y cerrar") el fondo es el mismo vidrio del menu (backdrop = GlassBackdrop de overlay.cpp), las teclas son
 // paneles translucidos con el verde del menu; al abrir sube, crece desde el 96 % y las filas entran en cascada; al cerrar se desvanece.
-// Arriba a la derecha: con que boton se abre (OPTIONS) y se cierra (circulo).
+// (14/11 c, Agustin: "el teclado me parece feo, has las teclas mas pequenas, los textos mas grandes, mejora los iconos, y dales un
+// diseno mas alineado y mas opciones") v2: teclas cuadradas chicas en una grilla de 10 columnas donde TODO se alinea (cabecera, campo,
+// sugerencias, fila de abajo y ayuda usan los mismos bordes), letras grandes, iconos dibujados (espacio, borrar, listo, tacho, reloj),
+// y opciones nuevas: pagina de simbolos y acentos (?123 / R1), fila de sugerencias (busquedas recientes + palabras del menu), tacho en el
+// campo (L1), contador de letras.
 bool MvVirtualKeyboard(char* buf, int cap, const MvPad& p, float k, float alpha, bool anim, void (*backdrop)(ImVec2, ImVec2, float, float)) {
     ImGuiIO& io = ImGui::GetIO(); const float dt = io.DeltaTime; const double now = ImGui::GetTime();
     s_vkVis = anim ? (s_vkOpen ? std::min(1.0f, s_vkVis + dt / 0.22f) : std::max(0.0f, s_vkVis - dt / 0.16f)) : (s_vkOpen ? 1.0f : 0.0f);
     if (!s_vkOpen && s_vkVis <= 0.0f) { memcpy(s_vkPrevB, p.b, sizeof s_vkPrevB); s_vkSelX = -1; return false; }
-    bool changed = false; int press = -1;   // 0..39 letras, 40 + especial
+
+    // --- medidas: grilla de 10 columnas; todo lo demas se alinea a sus bordes ---
+    const ImVec2 ds = io.DisplaySize; const float fs0 = ImGui::GetFontSize();
+    const float key = std::clamp(std::min(46.0f * k, (ds.x - 32.0f - 36.0f * k) / 10.6f), 24.0f, 80.0f), gap = std::max(3.0f, key * 0.12f);
+    const float gridW = 10 * key + 9 * gap, pad = 18.0f * k, W = gridW + 2 * pad;
+    const float headH = fs0 * 1.4f, fieldH = key * 0.95f, sugH = key * 0.72f, hintH = fs0 * 1.5f;
+    const float H = pad + headH + gap * 2 + fieldH + gap * 2 + sugH + gap * 2 + 5 * key + 4 * gap + gap * 2 + 1.0f + gap * 2 + hintH + pad * 0.7f;
+    // sugerencias: recientes primero (reloj), despues palabras del menu (lupa) (sin repetir lo que ya esta escrito)
+    const char* fixedSug[] = { "pasto", "sol", "viento", "sombra", "piel", "luz", "camara", "mando", "pelo", "cara" };
+    struct Sug { std::string t; bool recent; float x0, x1; }; std::vector<Sug> sug;
+    for (auto& r : s_vkRecent) if (!r.empty() && r != buf) sug.push_back({ r, true, 0, 0 });
+    for (const char* f : fixedSug) { bool dup = false; for (auto& q : sug) dup |= q.t == f; if (!dup && strcmp(f, buf) != 0) sug.push_back({ f, false, 0, 0 }); }
+    { float x = 0; const float sfs = fs0 * 0.95f; size_t n = 0;
+      for (; n < sug.size(); n++) { const float w = ImGui::GetFont()->CalcTextSizeA(sfs, FLT_MAX, 0, sug[n].t.c_str()).x + sugH * 1.15f + 14.0f * k;
+          if (x + w > gridW + 0.5f) break; sug[n].x0 = x; sug[n].x1 = x + w; x += w + gap; }
+      sug.resize(n);
+      // se reparte el sobrante para que la fila termine justo en el borde de la grilla
+      if (n > 0) { const float extra = (gridW - (x - gap)) / n; for (size_t i = 0; i < n; i++) { sug[i].x0 += extra * i; sug[i].x1 += extra * (i + 1); } } }
+    const int nSug = (int)sug.size();
+
+    bool changed = false; int press = -1;   // 0..39 teclas, 40 + especial, 50 + sugerencia
     if (s_vkOpen) {
-        // --- mando: bordes (lo apretado este cuadro) y repeticion de la cruceta / stick (0.32 s y despues cada 0.075 s) ---
         bool edge[kPadCount] = {};
         for (int i = 0; i < kPadCount; i++) edge[i] = p.b[i] && !s_vkPrevB[i];
         if (s_vkJustOpened) { for (bool& e : edge) e = false; s_vkJustOpened = false; }   // el boton que lo abrio no escribe
@@ -1276,28 +1362,33 @@ bool MvVirtualKeyboard(char* buf, int cap, const MvPad& p, float k, float alpha,
             s_vkDirWas[d] = dirNow[d];
             if (fire) { if (d == 0) dRow--; else if (d == 1) dRow++; else if (d == 2) dCol--; else dCol++; }
         }
-        if (dRow) s_vkRow = (s_vkRow + dRow + 5) % 5;
+        auto colX = [&](int c) { return c * (key + gap) + key * 0.5f; };
+        if (dRow) {
+            const int minRow = nSug > 0 ? 0 : 1, nRows = 6 - minRow;
+            const int was = s_vkRow; s_vkRow = minRow + ((s_vkRow - minRow + dRow) % nRows + nRows) % nRows;
+            if (s_vkRow == 0 && was != 0) { float best = 1e9f; const float x = colX(s_vkCol); for (int i = 0; i < nSug; i++) { const float d = fabsf((sug[i].x0 + sug[i].x1) * 0.5f - x); if (d < best) { best = d; s_vkSug = i; } } }
+            if (was == 0 && s_vkRow != 0 && s_vkSug < nSug) s_vkCol = std::clamp((int)(((sug[s_vkSug].x0 + sug[s_vkSug].x1) * 0.5f) / (key + gap)), 0, 9);
+            if (s_vkRow == 5) s_vkCol = kVkSpC0[VkSpecialAt(s_vkCol)];
+        }
         if (dCol) {
-            if (s_vkRow == 4) { const int sp = (VkSpecialAt(s_vkCol) + (dCol > 0 ? 1 : 3)) % 4; s_vkCol = VkSpecialCol0(sp); }
+            if (s_vkRow == 0) s_vkSug = nSug ? (s_vkSug + dCol + nSug) % nSug : 0;
+            else if (s_vkRow == 5) { const int sp = (VkSpecialAt(s_vkCol) + (dCol > 0 ? 1 : 3)) % 4; s_vkCol = kVkSpC0[sp]; }
             else s_vkCol = (s_vkCol + dCol + 10) % 10;
         }
-        if (edge[kPadCross]) press = s_vkRow < 4 ? s_vkRow * 10 + s_vkCol : 40 + VkSpecialAt(s_vkCol);
+        if (s_vkRow == 0 && nSug == 0) s_vkRow = 1;
+        if (edge[kPadCross]) press = s_vkRow == 0 ? 50 + s_vkSug : s_vkRow < 5 ? (s_vkRow - 1) * 10 + s_vkCol : 40 + VkSpecialAt(s_vkCol);
         if (edge[kPadSquare]) press = 40 + kVkBack;
         if (edge[kPadTriangle]) press = 40 + kVkSpace;
         if (edge[kPadL1]) press = 40 + kVkClear;
+        if (edge[kPadR1]) press = 40 + kVkPage;
         if (edge[kPadCircle] || edge[kPadOptions]) press = 40 + kVkDone;
     }
     memcpy(s_vkPrevB, p.b, sizeof s_vkPrevB);
 
-    // --- ventana: sube 40 px, crece desde el 96 % y aparece (igual que el menu) ---
+    // --- ventana: sube, crece desde el 96 % y aparece (igual que el menu) ---
     const float ev = VkEase(s_vkVis), A = alpha * ev;
-    const ImVec2 ds = io.DisplaySize;
-    const float fs0 = ImGui::GetFontSize();
-    const float W = std::min(ds.x - 32.0f, 780.0f * k), gap = 6.0f * k, key = (W - 28.0f * k - 9 * gap) / 10.0f, keyH = key * 0.74f;
-    const float headH = fs0 * 1.5f, fieldH = fs0 * 1.9f;
-    const float H = 14.0f * k + headH + 8.0f * k + fieldH + 12.0f * k + 5 * keyH + 4 * gap + 12.0f * k + fs0 * 1.3f + 12.0f * k;
     const float zs = anim ? 0.96f + 0.04f * ev : 1.0f;
-    const ImVec2 c0(ds.x * 0.5f, ds.y - H * 0.5f - 26.0f * k + (1.0f - ev) * 40.0f * k);
+    const ImVec2 c0(ds.x * 0.5f, ds.y - H * 0.5f - 24.0f * k + (1.0f - ev) * 40.0f * k);
     const ImVec2 pos(c0.x - W * 0.5f, c0.y - H * 0.5f);
     ImGui::SetNextWindowPos(pos); ImGui::SetNextWindowSize(ImVec2(W, H)); if (s_vkOpen) ImGui::SetNextWindowFocus();
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0)); ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f); ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 16.0f * k);
@@ -1305,107 +1396,169 @@ bool MvVirtualKeyboard(char* buf, int cap, const MvPad& p, float k, float alpha,
     ImGui::Begin("##teclado_mando", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollWithMouse | (s_vkOpen ? 0 : ImGuiWindowFlags_NoInputs));
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec4 acc = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
-    const float R = 16.0f * k;
+    const float R = 16.0f * k, th = std::max(1.2f, 1.7f * k);
     { const ImVec2 ga(c0.x - W * 0.5f * zs, c0.y - H * 0.5f * zs), gb(c0.x + W * 0.5f * zs, c0.y + H * 0.5f * zs);
       if (backdrop) backdrop(ga, gb, R, A);
       else { dl->AddRectFilled(ga, gb, Col(0.07f, 0.08f, 0.11f, 0.92f * A), R); dl->AddRect(ga, gb, Col(1, 1, 1, 0.14f * A), R, 0, 1.0f); } }
-    const float x0 = pos.x + 14.0f * k, x1 = pos.x + W - 14.0f * k;
-    float y = pos.y + 14.0f * k;
-    // cabecera: titulo con el icono del teclado + con que se abre y se cierra
-    { const float gr = fs0 * 0.42f, cy = y + headH * 0.5f;
-      // iconito de teclado
-      const ImVec2 ia(x0, cy - fs0 * 0.42f), ib(x0 + fs0 * 1.35f, cy + fs0 * 0.42f);
-      dl->AddRect(ia, ib, ColA(acc, A), 3.0f * k, 0, 1.5f * k);
-      for (int r = 0; r < 2; r++) for (int c = 0; c < 4; c++) dl->AddRectFilled(ImVec2(ia.x + (3.0f + c * 5.2f) * k, ia.y + (3.0f + r * 4.6f) * k), ImVec2(ia.x + (6.2f + c * 5.2f) * k, ia.y + (5.6f + r * 4.6f) * k), ColA(acc, 0.9f * A));
-      dl->AddLine(ImVec2(ia.x + 6.0f * k, ib.y - 3.2f * k), ImVec2(ib.x - 6.0f * k, ib.y - 3.2f * k), ColA(acc, 0.9f * A), 1.6f * k);
-      dl->AddText(ImVec2(ib.x + 9.0f * k, cy - fs0 * 0.5f), Col(0.95f, 0.96f, 0.98f, A), TRS("Teclado del mando"));
-      // derecha: [OPTIONS] abrir   [O] cerrar
+    const float x0 = pos.x + pad, x1 = x0 + gridW;
+    float y = pos.y + pad;
+    const float tOpen = (float)(now - s_vkOpenT);
+    auto rowIn = [&](int r) { return anim && s_vkOpen ? VkEase((tOpen - 0.035f * r) / 0.20f) : 1.0f; };
+    const ImU32 txtHi = Col(0.97f, 0.98f, 1.0f, A), txtLo = Col(0.66f, 0.70f, 0.76f, A);
+
+    // cabecera: icono + titulo a la izquierda; a la derecha con que se abre y se cierra
+    { const float cy = y + headH * 0.5f, gr = fs0 * 0.44f;
+      const ImVec2 ia(x0, cy - fs0 * 0.45f), ib(x0 + fs0 * 1.45f, cy + fs0 * 0.45f);
+      dl->AddRectFilled(ia, ib, ColA(acc, 0.18f * A), 4.0f * k); dl->AddRect(ia, ib, ColA(acc, A), 4.0f * k, 0, 1.4f * k);
+      const float cw = (ib.x - ia.x - 6.0f * k) / 5.0f;
+      for (int r = 0; r < 2; r++) for (int c = 0; c < 5; c++) dl->AddRectFilled(ImVec2(ia.x + 3.0f * k + c * cw + 0.8f * k, ia.y + 3.0f * k + r * 4.4f * k), ImVec2(ia.x + 3.0f * k + (c + 1) * cw - 0.8f * k, ia.y + 5.8f * k + r * 4.4f * k), ColA(acc, 0.95f * A), 0.8f * k);
+      dl->AddLine(ImVec2(ia.x + cw * 1.3f, ib.y - 3.0f * k), ImVec2(ib.x - cw * 1.3f, ib.y - 3.0f * k), ColA(acc, 0.95f * A), 1.6f * k);
+      dl->AddText(ImGui::GetFont(), fs0 * 1.08f, ImVec2(ib.x + 10.0f * k, cy - fs0 * 0.54f), txtHi, TRS("Teclado del mando"));
       const char* tA = TRS("Abrir"); const char* tC = TRS("Cerrar");
-      const float wA = ImGui::CalcTextSize(tA).x, wC = ImGui::CalcTextSize(tC).x, gw = gr * 2.6f;
-      float hx = x1 - (gw + wC) - 14.0f * k - (gr * 4.2f + wA);
-      MvPadGlyph(dl, ImVec2(hx + gr * 1.6f, cy), gr, kPadOptions, A); dl->AddText(ImVec2(hx + gr * 3.6f, cy - fs0 * 0.5f), Col(0.70f, 0.74f, 0.80f, A), tA);
-      hx = x1 - (gw + wC);
-      MvPadGlyph(dl, ImVec2(hx + gr, cy), gr, kPadCircle, A, s_vkOpen && p.b[kPadCircle] ? 1.0f : 0.0f); dl->AddText(ImVec2(hx + gw, cy - fs0 * 0.5f), Col(0.70f, 0.74f, 0.80f, A), tC);
-      y += headH + 8.0f * k; }
-    // campo con el texto, la lupa y el cursor que titila
-    { const float fh = fieldH; const ImVec2 fa(x0, y), fb(x1, y + fh);
-      dl->AddRectFilled(fa, fb, Col(0, 0, 0, 0.30f * A), fh * 0.5f);
+      const float wA = ImGui::CalcTextSize(tA).x, wC = ImGui::CalcTextSize(tC).x, gw = gr * 2.7f;
+      float hx = x1 - wC - gw;
+      MvPadGlyph(dl, ImVec2(hx + gr, cy), gr, kPadCircle, A, s_vkOpen && p.b[kPadCircle] ? 1.0f : 0.0f); dl->AddText(ImVec2(hx + gw, cy - fs0 * 0.5f), txtLo, tC);
+      dl->AddLine(ImVec2(hx - 9.0f * k, cy - fs0 * 0.4f), ImVec2(hx - 9.0f * k, cy + fs0 * 0.4f), Col(1, 1, 1, 0.18f * A), 1.0f);
+      hx -= 18.0f * k + wA + gr * 4.4f;
+      MvPadGlyph(dl, ImVec2(hx + gr * 1.7f, cy), gr, kPadOptions, A); dl->AddText(ImVec2(hx + gr * 4.4f, cy - fs0 * 0.5f), txtLo, tA);
+      y += headH + gap * 2; }
+    // campo: lupa, texto grande, cursor que titila, contador y tacho (L1)
+    { const float fh = fieldH, ffs = fs0 * 1.22f; const ImVec2 fa(x0, y), fb(x1, y + fh);
+      dl->AddRectFilled(fa, fb, Col(0, 0, 0, 0.32f * A), fh * 0.5f);
       dl->AddRectFilledMultiColor(ImVec2(fa.x + fh * 0.5f, fa.y + 1), ImVec2(fb.x - fh * 0.5f, fa.y + fh * 0.45f), Col(1, 1, 1, 0.05f * A), Col(1, 1, 1, 0.05f * A), Col(1, 1, 1, 0), Col(1, 1, 1, 0));
-      dl->AddRect(fa, fb, ColA(acc, (0.40f + 0.25f * (0.5f + 0.5f * sinf((float)now * 3.0f))) * A), fh * 0.5f, 0, 1.3f * k);
-      const ImVec2 lc(fa.x + fh * 0.5f, fa.y + fh * 0.47f); const float lr = fs0 * 0.30f;
-      dl->AddCircle(lc, lr, ColA(acc, A), 16, 1.6f * k); dl->AddLine(ImVec2(lc.x + lr * 0.7f, lc.y + lr * 0.7f), ImVec2(lc.x + lr * 1.5f, lc.y + lr * 1.5f), ColA(acc, A), 2.0f * k);
-      const float tx = fa.x + fh * 0.95f, ty = fa.y + (fh - fs0) * 0.5f;
+      dl->AddRect(fa, fb, ColA(acc, (0.45f + 0.25f * (anim ? 0.5f + 0.5f * sinf((float)now * 3.0f) : 0.5f)) * A), fh * 0.5f, 0, 1.4f * k);
+      const ImVec2 lc(fa.x + fh * 0.52f, fa.y + fh * 0.47f); const float lr = ffs * 0.27f;
+      dl->AddCircle(lc, lr, ColA(acc, A), 18, th); dl->AddLine(ImVec2(lc.x + lr * 0.72f, lc.y + lr * 0.72f), ImVec2(lc.x + lr * 1.55f, lc.y + lr * 1.55f), ColA(acc, A), th * 1.2f);
+      // a la derecha: tacho (clic o L1) y contador
+      const float tb = fh * 0.8f; const ImVec2 ta2(fb.x - fh * 0.5f - tb * 0.5f - 4.0f * k, fa.y + (fh - tb) * 0.5f);
+      ImGui::SetCursorScreenPos(ta2); const bool clr = ImGui::InvisibleButton("##vk_clear", ImVec2(tb, tb)); const bool clrH = ImGui::IsItemHovered();
+      if (clr && s_vkOpen) press = 40 + kVkClear;
+      const float cd = anim ? Sat(1.0f - (float)(now - s_vkPressT[40 + kVkClear]) / 0.2f) : 0.0f;
+      if (clrH || cd > 0) dl->AddCircleFilled(ImVec2(ta2.x + tb * 0.5f, ta2.y + tb * 0.5f), tb * 0.5f, ColA(acc, (0.18f + 0.3f * cd) * A), 24);
+      VkIcon(dl, kVkClear, ImVec2(ta2.x + tb * 0.5f, ta2.y + tb * 0.5f), ffs, buf[0] ? Col(0.85f, 0.88f, 0.92f, A) : Col(0.5f, 0.53f, 0.58f, A), th);
+      MvPadGlyph(dl, ImVec2(ta2.x - fs0 * 0.75f, fa.y + fh * 0.5f), fs0 * 0.36f, kPadL1, A * 0.8f);
+      char cnt[24]; snprintf(cnt, sizeof cnt, "%d", (int)strlen(buf)); const float cntW = ImGui::CalcTextSize(cnt).x;
+      const float cntX = ta2.x - fs0 * 1.5f - cntW;
+      if (buf[0]) dl->AddText(ImVec2(cntX, fa.y + (fh - fs0) * 0.5f), Col(0.5f, 0.54f, 0.6f, A), cnt);
+      const float tx = fa.x + fh * 0.98f, ty = fa.y + (fh - ffs) * 0.5f;
       const bool empty = !buf[0];
       const char* shown = empty ? TRS("Escribi lo que buscas") : buf;
-      ImVec2 ts = ImGui::CalcTextSize(shown); const float maxW = fb.x - tx - fh * 0.6f;
-      const char* from = shown; while (!empty && ts.x > maxW && *from) { from++; while ((*from & 0xC0) == 0x80) from++; ts = ImGui::CalcTextSize(from); }
-      dl->PushClipRect(ImVec2(tx, fa.y), ImVec2(fb.x - fh * 0.4f, fb.y), true);
-      dl->AddText(ImVec2(tx, ty), empty ? Col(0.55f, 0.58f, 0.64f, A) : Col(0.96f, 0.97f, 1.0f, A), from);
+      ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(ffs, FLT_MAX, 0, shown); const float maxW = cntX - tx - 10.0f * k;
+      const char* from = shown; while (!empty && ts.x > maxW && *from) { from++; while ((*from & 0xC0) == 0x80) from++; ts = ImGui::GetFont()->CalcTextSizeA(ffs, FLT_MAX, 0, from); }
+      dl->PushClipRect(ImVec2(tx, fa.y), ImVec2(cntX - 4.0f * k, fb.y), true);
+      dl->AddText(ImGui::GetFont(), ffs, ImVec2(tx, ty), empty ? Col(0.52f, 0.56f, 0.62f, A) : txtHi, from);
       dl->PopClipRect();
-      if (s_vkOpen && fmodf((float)now, 1.0f) < 0.6f) { const float cx = tx + (empty ? 0.0f : ts.x) + 2.0f * k; dl->AddLine(ImVec2(cx, ty + 1), ImVec2(cx, ty + fs0 - 1), ColA(acc, A), 1.8f * k); }
-      y += fh + 12.0f * k; }
-    // teclas: cada fila entra un poco despues que la anterior (cascada) al abrir
-    const float tOpen = (float)(now - s_vkOpenT);
-    auto rowIn = [&](int r) { return anim && s_vkOpen ? VkEase((tOpen - 0.04f * r) / 0.20f) : 1.0f; };
-    auto keyRect = [&](int r, int c, int span, ImVec2& ka, ImVec2& kb) {
-        const float off = (1.0f - rowIn(r)) * 14.0f * k;
-        ka = ImVec2(x0 + c * (key + gap), y + r * (keyH + gap) + off); kb = ImVec2(ka.x + span * key + (span - 1) * gap, ka.y + keyH); };
-    { ImVec2 ka, kb; if (s_vkRow < 4) keyRect(s_vkRow, s_vkCol, 1, ka, kb); else { const int sp = VkSpecialAt(s_vkCol); keyRect(4, VkSpecialCol0(sp), sp == kVkSpace ? 4 : 2, ka, kb); }
+      if (s_vkOpen && fmodf((float)now, 1.0f) < 0.6f) { const float cx = tx + (empty ? 0.0f : ts.x) + 2.0f * k; dl->AddLine(ImVec2(cx, ty + 2), ImVec2(cx, ty + ffs - 2), ColA(acc, A), 2.0f * k); }
+      y += fh + gap * 2; }
+
+    // posicion de cada cosa elegible (para el marco que se desliza)
+    const float ySug = y, yKeys = y + sugH + gap * 2, yBot = yKeys + 4 * (key + gap);
+    auto keyRect = [&](int r, int c, int span, ImVec2& ka, ImVec2& kb) {   // r: 1..5
+        const float off = (1.0f - rowIn(r)) * 12.0f * k;
+        ka = ImVec2(x0 + c * (key + gap), yKeys + (r - 1) * (key + gap) + off); kb = ImVec2(ka.x + span * key + (span - 1) * gap, ka.y + key); };
+    { ImVec2 ka, kb;
+      if (s_vkRow == 0 && nSug) { ka = ImVec2(x0 + sug[s_vkSug].x0, ySug); kb = ImVec2(x0 + sug[s_vkSug].x1, ySug + sugH); }
+      else if (s_vkRow < 5) keyRect(s_vkRow, s_vkCol, 1, ka, kb); else { const int sp = VkSpecialAt(s_vkCol); keyRect(5, kVkSpC0[sp], kVkSpN[sp], ka, kb); }
       const float f = anim ? 1.0f - expf(-dt * 22.0f) : 1.0f;
       if (s_vkSelX < 0) { s_vkSelX = ka.x; s_vkSelY = ka.y; s_vkSelW = kb.x - ka.x; }
-      s_vkSelX += (ka.x - s_vkSelX) * f; s_vkSelY += (ka.y - s_vkSelY) * f; s_vkSelW += ((kb.x - ka.x) - s_vkSelW) * f; }
-    const float kr = 8.0f * k, pulse = anim ? 0.5f + 0.5f * sinf((float)now * 5.0f) : 0.5f;
-    { const ImVec2 sa(s_vkSelX, s_vkSelY), sb(s_vkSelX + s_vkSelW, s_vkSelY + keyH);   // halo de la tecla elegida (se desliza)
-      for (int i = 3; i >= 1; i--) dl->AddRectFilled(ImVec2(sa.x - i * 2.5f * k, sa.y - i * 2.5f * k), ImVec2(sb.x + i * 2.5f * k, sb.y + i * 2.5f * k), ColA(acc, (0.05f + 0.03f * pulse) * A), kr + i * 2.5f * k); }
-    auto drawKey = [&](int id, int row, ImVec2 ka, ImVec2 kb, const char* label, int glyph) {
-        const float rin = rowIn(row), KA = A * rin;
+      s_vkSelX += (ka.x - s_vkSelX) * f; s_vkSelY += (ka.y - s_vkSelY) * f; s_vkSelW += ((kb.x - ka.x) - s_vkSelW) * f;
+      const float selH = kb.y - ka.y, pulse = anim ? 0.5f + 0.5f * sinf((float)now * 5.0f) : 0.5f, rr = std::min(selH * 0.5f, 9.0f * k);
+      const ImVec2 sa(s_vkSelX, s_vkSelY), sb(s_vkSelX + s_vkSelW, s_vkSelY + selH);
+      for (int i = 3; i >= 1; i--) dl->AddRectFilled(ImVec2(sa.x - i * 2.2f * k, sa.y - i * 2.2f * k), ImVec2(sb.x + i * 2.2f * k, sb.y + i * 2.2f * k), ColA(acc, (0.05f + 0.03f * pulse) * A), rr + i * 2.2f * k); }
+
+    const float kr = std::min(8.0f * k, key * 0.2f);
+    // una tecla (o chip): vidrio translucido, la elegida con el verde del menu; se hunde y destella al apretar
+    auto drawPanel = [&](int id, ImVec2 ka, ImVec2 kb, float rin, bool sel, bool strong, float round, bool& hov) -> float {
+        const float KA = A * rin;
         ImGui::SetCursorScreenPos(ka); ImGui::PushID(id);
-        const bool clicked = ImGui::InvisibleButton("k", ImVec2(kb.x - ka.x, kb.y - ka.y)); const bool hov = ImGui::IsItemHovered();
+        const bool clicked = ImGui::InvisibleButton("k", ImVec2(kb.x - ka.x, kb.y - ka.y)); hov = ImGui::IsItemHovered();
         ImGui::PopID();
         if (clicked && s_vkOpen) press = id;
-        if (hov && s_vkOpen && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) { if (id < 40) { s_vkRow = id / 10; s_vkCol = id % 10; } else { s_vkRow = 4; s_vkCol = VkSpecialCol0(id - 40); } }
-        const float pt = (float)(now - s_vkPressT[id]); const float down = anim ? Sat(1.0f - pt / 0.18f) : 0.0f;
-        const float push = 2.0f * k * down;
-        const bool sel = s_vkRow < 4 ? id == s_vkRow * 10 + s_vkCol : id == 40 + VkSpecialAt(s_vkCol);
-        const bool special = id >= 40, done = id == 40 + kVkDone;
-        // panel de vidrio: blanco translucido (deja ver el vidrio de atras), el elegido con el verde del menu
         float* hv = ImGui::GetStateStorage()->GetFloatRef(ImGui::GetID(id + 9000), 0.0f);
         *hv += ((sel ? 1.0f : hov ? 0.5f : 0.0f) - *hv) * (anim ? 1.0f - expf(-dt * 16.0f) : 1.0f);
+        const float down = anim ? Sat(1.0f - (float)(now - s_vkPressT[id]) / 0.18f) : 0.0f, push = 1.8f * k * down;
         const ImVec2 ta(ka.x, ka.y + push), tb(kb.x, kb.y + push);
-        dl->AddRectFilled(ImVec2(ta.x, ta.y + 2.0f * k), ImVec2(tb.x, tb.y + 2.0f * k), Col(0, 0, 0, 0.28f * KA), kr);   // sombra corta (relieve)
-        const ImVec4 base = done ? Lerp4(ImVec4(1, 1, 1, special ? 0.07f : 0.09f), ImVec4(acc.x, acc.y, acc.z, 0.32f), 1.0f) : ImVec4(1, 1, 1, special ? 0.06f : 0.085f);
-        const ImVec4 fill = Lerp4(base, ImVec4(acc.x, acc.y, acc.z, 0.30f + 0.08f * pulse), *hv * (sel ? 1.0f : 0.5f));
-        dl->AddRectFilled(ta, tb, ColA(fill, KA), kr);
+        dl->AddRectFilled(ImVec2(ta.x, ta.y + 2.0f * k), ImVec2(tb.x, tb.y + 2.0f * k), Col(0, 0, 0, 0.26f * KA), round);
+        const ImVec4 base = strong ? ImVec4(acc.x, acc.y, acc.z, 0.30f) : ImVec4(1, 1, 1, id >= 40 ? 0.065f : 0.09f);
+        dl->AddRectFilled(ta, tb, ColA(Lerp4(base, ImVec4(acc.x, acc.y, acc.z, 0.34f), *hv * (sel ? 1.0f : 0.45f)), KA), round);
         dl->AddRectFilledMultiColor(ImVec2(ta.x + 2, ta.y + 2), ImVec2(tb.x - 2, ta.y + (tb.y - ta.y) * 0.45f), Col(1, 1, 1, 0.07f * KA), Col(1, 1, 1, 0.07f * KA), Col(1, 1, 1, 0), Col(1, 1, 1, 0));
-        dl->AddRect(ta, tb, ColA(Lerp4(ImVec4(1, 1, 1, 0.13f), ImVec4(acc.x, acc.y, acc.z, 0.95f), *hv), KA), kr, 0, (1.0f + 0.6f * *hv) * k);
-        dl->AddLine(ImVec2(ta.x + kr, ta.y + 0.8f), ImVec2(tb.x - kr, ta.y + 0.8f), Col(1, 1, 1, (0.22f + 0.2f * *hv) * KA), 1.0f);   // filo de luz
-        if (down > 0.0f) { dl->AddRectFilled(ta, tb, ColA(acc, 0.40f * down * KA), kr);   // destello y onda al apretar
-            const float gx = (1.0f - down) * 6.0f * k; dl->AddRect(ImVec2(ta.x - gx, ta.y - gx), ImVec2(tb.x + gx, tb.y + gx), ColA(acc, 0.6f * down * KA), kr + gx, 0, 1.5f * k); }
-        const float fs = fs0 * (special ? 0.92f : 1.12f) * (1.0f + 0.06f * *hv * (sel ? 1.0f : 0.0f));
-        const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0.0f, label);
-        float lx = (ta.x + tb.x - ts.x) * 0.5f;
-        if (glyph >= 0) { const float gr = fs * 0.42f, gw = gr * 2.6f; lx = (ta.x + tb.x - ts.x - gw) * 0.5f + gw; MvPadGlyph(dl, ImVec2(lx - gw + gr, (ta.y + tb.y) * 0.5f), gr, glyph, KA * 0.95f); }
-        dl->AddText(ImGui::GetFont(), fs, ImVec2(lx, (ta.y + tb.y - ts.y) * 0.5f), sel || done ? Col(1, 1, 1, KA) : Col(0.88f, 0.90f, 0.94f, KA), label);
+        dl->AddRect(ta, tb, ColA(Lerp4(ImVec4(1, 1, 1, 0.13f), ImVec4(acc.x, acc.y, acc.z, 0.95f), *hv), KA), round, 0, (1.0f + 0.6f * *hv) * k);
+        dl->AddLine(ImVec2(ta.x + round, ta.y + 0.8f), ImVec2(tb.x - round, ta.y + 0.8f), Col(1, 1, 1, (0.22f + 0.2f * *hv) * KA), 1.0f);
+        if (down > 0.0f) { dl->AddRectFilled(ta, tb, ColA(acc, 0.40f * down * KA), round);
+            const float gx = (1.0f - down) * 5.0f * k; dl->AddRect(ImVec2(ta.x - gx, ta.y - gx), ImVec2(tb.x + gx, tb.y + gx), ColA(acc, 0.6f * down * KA), round + gx, 0, 1.4f * k); }
+        return push;
     };
-    for (int r = 0; r < 4; r++) for (int c = 0; c < 10; c++) { ImVec2 ka, kb; keyRect(r, c, 1, ka, kb); drawKey(r * 10 + c, r, ka, kb, kVkRows[r][c], -1); }
-    { static const char* const kSp[4] = { "Espacio", "Borrar", "Borrar todo", "Listo" }; static const int kGl[4] = { kPadTriangle, kPadSquare, kPadL1, kPadOptions };
-      for (int sp = 0; sp < 4; sp++) { ImVec2 ka, kb; keyRect(4, VkSpecialCol0(sp), sp == kVkSpace ? 4 : 2, ka, kb); drawKey(40 + sp, 4, ka, kb, TRS(kSp[sp]), kGl[sp]); } }
-    // ayuda de abajo
-    { float hx = x0; const float hy = y + 5 * keyH + 4 * gap + 12.0f * k, r = fs0 * 0.42f;
-      struct { int b; const char* t; } h[] = { { kPadUp, "Moverse" }, { kPadCross, "Escribir" }, { kPadSquare, "Borrar" }, { kPadTriangle, "Espacio" }, { kPadL1, "Borrar todo" }, { kPadCircle, "Cerrar" } };
-      for (auto& e : h) { const char* t = TRS(e.t); const float w = r * 2.6f + ImGui::CalcTextSize(t).x; if (hx + w > x1) break;
-        MvPadGlyph(dl, ImVec2(hx + r * 1.1f, hy + fs0 * 0.5f), r, e.b, A * 0.85f, s_vkOpen && p.b[e.b] ? 1.0f : 0.0f);
-        dl->AddText(ImVec2(hx + r * 2.6f, hy), Col(0.66f, 0.70f, 0.76f, A), t); hx += w + 16.0f * k; } }
+    auto isSel = [&](int id) { return s_vkRow == 0 ? id == 50 + s_vkSug : s_vkRow < 5 ? id == (s_vkRow - 1) * 10 + s_vkCol : id == 40 + VkSpecialAt(s_vkCol); };
+    auto hoverSelect = [&](int id, bool hov) { if (!hov || !s_vkOpen || (io.MouseDelta.x == 0 && io.MouseDelta.y == 0)) return;
+        if (id >= 50) { s_vkRow = 0; s_vkSug = id - 50; } else if (id >= 40) { s_vkRow = 5; s_vkCol = kVkSpC0[id - 40]; } else { s_vkRow = id / 10 + 1; s_vkCol = id % 10; } };
+
+    // fila de sugerencias (recientes con reloj, palabras del menu con destello)
+    { const float rin = rowIn(0), sfs = fs0 * 0.95f;
+      for (int i = 0; i < nSug; i++) {
+          const ImVec2 ka(x0 + sug[i].x0, ySug + (1.0f - rin) * 12.0f * k), kb(x0 + sug[i].x1, ka.y + sugH); bool hov;
+          const float push = drawPanel(50 + i, ka, kb, rin, isSel(50 + i), false, sugH * 0.5f, hov); hoverSelect(50 + i, hov);
+          const float cy = (ka.y + kb.y) * 0.5f + push;
+          VkIcon(dl, sug[i].recent ? 10 : 11, ImVec2(ka.x + sugH * 0.55f, cy), sfs, sug[i].recent ? Col(0.75f, 0.79f, 0.85f, A * rin) : ColA(acc, A * rin), th * 0.85f);
+          dl->AddText(ImGui::GetFont(), sfs, ImVec2(ka.x + sugH * 1.0f, cy - sfs * 0.5f), isSel(50 + i) ? txtHi : Col(0.86f, 0.89f, 0.93f, A * rin), sug[i].t.c_str());
+      } }
+    // teclas: letras grandes (1.5x)
+    for (int r = 1; r <= 4; r++) for (int c = 0; c < 10; c++) {
+        const int id = (r - 1) * 10 + c; ImVec2 ka, kb; keyRect(r, c, 1, ka, kb); bool hov;
+        const float push = drawPanel(id, ka, kb, rowIn(r), isSel(id), false, kr, hov); hoverSelect(id, hov);
+        const char* lb = kVkRows[s_vkPage][r - 1][c];
+        const float lfs = fs0 * (isSel(id) ? 1.58f : 1.48f);
+        const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(lfs, FLT_MAX, 0.0f, lb);
+        dl->AddText(ImGui::GetFont(), lfs, ImVec2((ka.x + kb.x - ts.x) * 0.5f, (ka.y + kb.y - ts.y) * 0.5f + push), isSel(id) ? txtHi : Col(0.90f, 0.92f, 0.96f, A * rowIn(r)), lb);
+        if (r == 1 && !isSel(id)) { (void)0; }
+    }
+    // fila de abajo: ?123 | espacio | borrar | listo, alineada a las columnas; icono + texto + simbolo del boton del mando
+    { static const int kGl[4] = { kPadR1, kPadTriangle, kPadSquare, kPadOptions };
+      for (int sp = 0; sp < 4; sp++) {
+          const int id = 40 + sp; ImVec2 ka, kb; keyRect(5, kVkSpC0[sp], kVkSpN[sp], ka, kb); bool hov;
+          const float push = drawPanel(id, ka, kb, rowIn(5), isSel(id), sp == kVkDone, kr, hov); hoverSelect(id, hov);
+          const float cy = (ka.y + kb.y) * 0.5f + push, A5 = A * rowIn(5), ifs = fs0 * 1.15f;
+          const ImU32 ic = sp == kVkDone || isSel(id) ? Col(1, 1, 1, A5) : Col(0.88f, 0.91f, 0.95f, A5);
+          const char* lb = sp == kVkPage ? (s_vkPage == 0 ? "?123" : "abc") : sp == kVkSpace ? TRS("Espacio") : sp == kVkBack ? TRS("Borrar") : TRS("Listo");
+          const float lfs = sp == kVkPage ? fs0 * 1.15f : fs0 * 1.02f;
+          const float lw = ImGui::GetFont()->CalcTextSizeA(lfs, FLT_MAX, 0, lb).x, iw = sp == kVkPage ? 0.0f : ifs * (sp == kVkBack ? 1.6f : 1.3f);
+          const float gx = kb.x - fs0 * 0.62f;   // simbolo del boton del mando, chico, en la esquina derecha
+          MvPadGlyph(dl, ImVec2(gx, ka.y + fs0 * 0.62f + push), fs0 * 0.30f, kGl[sp], A5 * 0.75f);
+          float lx = (ka.x + kb.x - (iw + lw)) * 0.5f;
+          if (sp != kVkPage) VkIcon(dl, sp, ImVec2(lx + iw * 0.4f, cy), ifs, ic, th);
+          dl->AddText(ImGui::GetFont(), lfs, ImVec2(lx + iw, cy - lfs * 0.5f), ic, lb);
+      } }
+    // ayuda: una linea fina y 6 celdas iguales alineadas a la grilla
+    { const float ly = yBot + key + gap * 2; dl->AddLine(ImVec2(x0, ly), ImVec2(x1, ly), Col(1, 1, 1, 0.10f * A), 1.0f);
+      const float hy = ly + gap * 2, r = fs0 * 0.40f, hfs = fs0 * 0.92f;
+      struct { int b; const char* t; } h[] = { { kPadUp, "Moverse" }, { kPadCross, "Escribir" }, { kPadSquare, "Borrar" }, { kPadTriangle, "Espacio" }, { kPadR1, "Simbolos" }, { kPadCircle, "Cerrar" } };
+      const int nH = 6; const float cellW = gridW / nH;
+      for (int i = 0; i < nH; i++) {
+          const char* t = TRS(h[i].t); const float tw = ImGui::GetFont()->CalcTextSizeA(hfs, FLT_MAX, 0, t).x, w = r * 2.5f + tw;
+          if (w > cellW - 4.0f * k) continue;
+          const float hx = x0 + cellW * i + (cellW - w) * 0.5f, cy = hy + hintH * 0.5f;
+          MvPadGlyph(dl, ImVec2(hx + r, cy), r, h[i].b, A * 0.9f, s_vkOpen && p.b[h[i].b] ? 1.0f : 0.0f);
+          dl->AddText(ImGui::GetFont(), hfs, ImVec2(hx + r * 2.5f, cy - hfs * 0.5f), txtLo, t);
+      } }
     ImGui::End(); ImGui::PopStyleColor(); ImGui::PopStyleVar(3);
+
     // --- aplicar ---
     if (press >= 0) {
         s_vkPressT[press] = now;
-        if (press < 40) changed = VkAppend(buf, cap, kVkRows[press / 10][press % 10]);
+        if (press >= 50) { if (press - 50 < nSug) { snprintf(buf, cap, "%s", sug[press - 50].t.c_str()); changed = true; } }
+        else if (press < 40) changed = VkAppend(buf, cap, kVkRows[s_vkPage][press / 10][press % 10]);
         else switch (press - 40) {
             case kVkSpace: if (buf[0] && buf[strlen(buf) - 1] != ' ') changed = VkAppend(buf, cap, " "); break;
             case kVkBack: if (buf[0]) { VkBackspace(buf); changed = true; } break;
             case kVkClear: if (buf[0]) { buf[0] = 0; changed = true; } break;
-            case kVkDone: s_vkOpen = false; break;
+            case kVkPage: s_vkPage = 1 - s_vkPage; break;
+            case kVkDone:
+                s_vkOpen = false;
+                if (buf[0]) {   // se guarda en las recientes
+                    std::string q = buf; while (!q.empty() && q.back() == ' ') q.pop_back();
+                    if (!q.empty()) { int at = 3; for (int i = 0; i < 4; i++) if (s_vkRecent[i] == q) { at = i; break; }
+                        for (int i = at; i > 0; i--) s_vkRecent[i] = s_vkRecent[i - 1]; s_vkRecent[0] = q; }
+                }
+                break;
         }
     }
     return changed;
@@ -1413,48 +1566,273 @@ bool MvVirtualKeyboard(char* buf, int cap, const MvPad& p, float k, float alpha,
 
 // ------------------------------------------------------------------------------------------------------------------------------
 // (14/11, Agustin: "puedes mejorar el cursor que se muestra en el menu? asi como anadir un boton para activar y desactivar el cursor")
+// (14/11 b, Agustin: "el cursor no me gusta con la animacion [las ondas verdes] ... que brille al poder hacer click y cambie por una mano
+// asi como el cursor de windows, asi como en las partes donde se pueda escribir que cambie, que se muestre arriba del menu insert")
+// flecha clasica de Windows; sobre lo que se toca: MANO con el dedo arriba y un brillo suave del color del menu que respira; sobre un
+// campo de texto: barra I. Al apretar se achica apenas (sin ondas). Se dibuja en la capa de arriba de todo (foreground).
+static void CurShape(ImDrawList* dl, const ImVec2* p, int n, ImU32 fillTop, ImU32 fillBot, ImU32 edge, float edgeW, ImVec2 g0, ImVec2 g1) {
+    const int v0 = dl->VtxBuffer.Size; dl->AddConcavePolyFilled(p, n, IM_COL32_WHITE);
+    ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, g0, g1, fillTop, fillBot);
+    dl->AddPolyline(p, n, edge, ImDrawFlags_Closed, edgeW);
+}
 void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float alpha, bool anim) {
     if (alpha <= 0.0f) return;
     const ImVec4 acc = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
     const float dt = ImGui::GetIO().DeltaTime; const double now = ImGui::GetTime();
-    static float s_hov = 0.0f, s_dn = 0.0f; static double s_clickT = -10.0; static ImVec2 s_clickP; static bool s_downWas = false;
+    static float s_hov = 0.0f, s_dn = 0.0f, s_flash = 0.0f; static int s_kindWas = 0;
     const float f = anim ? 1.0f - expf(-dt * 18.0f) : 1.0f;
     s_hov += ((kind == 1 ? 1.0f : 0.0f) - s_hov) * f; s_dn += ((down ? 1.0f : 0.0f) - s_dn) * (anim ? 1.0f - expf(-dt * 30.0f) : 1.0f);
-    if (down && !s_downWas) { s_clickT = now; s_clickP = m; }
-    s_downWas = down;
-    // onda al hacer clic (sale de la punta)
-    const float ct = (float)(now - s_clickT);
-    if (anim && ct < 0.45f) { const float e = 1.0f - (1.0f - ct / 0.45f) * (1.0f - ct / 0.45f);
-        dl->AddCircle(s_clickP, (4.0f + 22.0f * e) * k, ColA(acc, 0.85f * (1.0f - e) * alpha), 32, (2.4f - 1.4f * e) * k);
-        dl->AddCircleFilled(s_clickP, (3.0f + 10.0f * e) * k, ColA(acc, 0.25f * (1.0f - e) * alpha), 24); }
+    if (kind == 1 && s_kindWas != 1) s_flash = 1.0f;   // al entrar a algo que se toca: un destello corto
+    s_flash = anim ? std::max(0.0f, s_flash - dt / 0.35f) : 0.0f; s_kindWas = kind;
+    const ImU32 edge = Col(0.04f, 0.05f, 0.07f, 0.95f * alpha), white = Col(1, 1, 1, alpha), grey = Col(0.84f, 0.87f, 0.91f, alpha);
     if (kind == 2) {   // barra I para escribir
-        const float h = 11.0f * k, w = 4.0f * k;
+        const float h = 10.0f * k, w = 3.6f * k;
         for (int pass = 0; pass < 2; pass++) {
-            const ImU32 c = pass == 0 ? Col(0, 0, 0, 0.75f * alpha) : Col(1, 1, 1, alpha); const float th = pass == 0 ? 4.0f * k : 1.8f * k;
+            const ImU32 c = pass == 0 ? Col(0, 0, 0, 0.8f * alpha) : white; const float th = pass == 0 ? 3.6f * k : 1.6f * k;
             dl->AddLine(ImVec2(m.x, m.y - h), ImVec2(m.x, m.y + h), c, th);
             dl->AddLine(ImVec2(m.x - w, m.y - h), ImVec2(m.x + w, m.y - h), c, th); dl->AddLine(ImVec2(m.x - w, m.y + h), ImVec2(m.x + w, m.y + h), c, th);
         }
-        dl->AddLine(ImVec2(m.x, m.y - h + 2.0f * k), ImVec2(m.x, m.y + h - 2.0f * k), ColA(acc, 0.9f * alpha), 1.0f * k);
         return;
     }
-    // flecha: punta en el mouse; crece un poco sobre algo que se toca y se achica al apretar
-    const float sc = k * (1.0f + 0.10f * s_hov - 0.10f * s_dn);
-    static const float P[5][2] = { { 0, 0 }, { 0.6f, 17.0f }, { 5.0f, 12.6f }, { 6.2f, 12.3f }, { 12.4f, 12.0f } };   // flecha tipo dardo (moderna, sin cola)
-    ImVec2 pts[5]; for (int i = 0; i < 5; i++) pts[i] = ImVec2(m.x + P[i][0] * sc, m.y + P[i][1] * sc);
-    // sombra suave (3 pasadas corridas hacia abajo a la derecha)
-    for (int i = 4; i >= 1; i--) { ImVec2 sp[5]; for (int j = 0; j < 5; j++) sp[j] = ImVec2(pts[j].x + (0.8f + i * 0.7f) * k, pts[j].y + (1.4f + i * 0.9f) * k);
-        dl->AddConcavePolyFilled(sp, 5, Col(0, 0, 0, 0.08f * alpha)); }
-    // halo verde sobre algo que se toca
-    if (s_hov > 0.02f) for (int i = 3; i >= 1; i--) dl->AddCircleFilled(ImVec2(m.x + 4.0f * sc, m.y + 7.0f * sc), (6.0f + i * 4.0f) * k, ColA(acc, 0.07f * s_hov * alpha), 24);
-    // cuerpo: blanco con un degradado (abajo un poco gris), se tine de verde sobre algo que se toca
-    const ImVec4 top = Lerp4(ImVec4(1, 1, 1, 1), ImVec4(0.85f, 1.0f, 0.92f, 1), s_hov), bot = Lerp4(ImVec4(0.80f, 0.83f, 0.88f, 1), acc, 0.85f * s_hov);
-    const int v0 = dl->VtxBuffer.Size;
-    dl->AddConcavePolyFilled(pts, 5, Col(1, 1, 1, alpha));
-    ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, m, ImVec2(m.x + 6.0f * sc, m.y + 20.0f * sc), ColA(top, 1) | IM_COL32_A_MASK, ColA(bot, 1) | IM_COL32_A_MASK);
-    dl->AddPolyline(pts, 5, ColA(Lerp4(ImVec4(0.05f, 0.06f, 0.08f, 0.95f), ImVec4(acc.x * 0.35f, acc.y * 0.35f, acc.z * 0.35f, 1), s_hov), alpha), ImDrawFlags_Closed, 1.3f * k);
-    // filo de luz en el borde izquierdo
-    dl->AddLine(ImVec2(pts[0].x + 1.5f * k, pts[0].y + 3.2f * k), ImVec2(pts[1].x + 1.6f * k, pts[1].y - 4.5f * k), Col(1, 1, 1, 0.9f * alpha), 1.0f * k);
-    dl->AddLine(ImVec2(pts[0].x + 2.6f * k, pts[0].y + 2.6f * k), ImVec2(pts[4].x - 4.0f * k, pts[4].y - 1.6f * k), Col(1, 1, 1, 0.5f * alpha), 1.0f * k);
+    const float sc = k * (1.0f - 0.08f * s_dn);
+    if (kind == 1) {
+        // brillo: halo del color del menu que respira, mas fuerte al entrar
+        const float breath = anim ? 0.5f + 0.5f * sinf((float)now * 3.2f) : 0.5f, gl = s_hov * (0.55f + 0.25f * breath) + 0.6f * s_flash;
+        const ImVec2 hc(m.x + 3.5f * sc, m.y + 10.0f * sc);
+        for (int i = 5; i >= 1; i--) dl->AddCircleFilled(hc, (5.0f + i * 3.4f) * k, ColA(acc, 0.055f * gl * alpha), 28);
+        // mano con el indice arriba (la punta del dedo es el punto del mouse)
+        auto R = [&](float x0, float y0, float x1, float y1) { return std::make_pair(ImVec2(m.x + x0 * sc, m.y + y0 * sc), ImVec2(m.x + x1 * sc, m.y + y1 * sc)); };
+        struct Part { float x0, y0, x1, y1, r; };
+        static const Part parts[5] = { { -1.7f, 0.0f, 1.7f, 11.5f, 1.7f }, { 1.5f, 5.2f, 4.6f, 12.0f, 1.5f }, { 4.4f, 6.0f, 7.4f, 12.4f, 1.5f }, { 7.2f, 7.4f, 9.8f, 12.8f, 1.3f }, { -1.7f, 9.0f, 9.8f, 17.6f, 3.0f } };
+        // sombra
+        for (const Part& q : parts) { auto r = R(q.x0, q.y0, q.x1, q.y1); dl->AddRectFilled(ImVec2(r.first.x + 1.6f * k, r.first.y + 2.2f * k), ImVec2(r.second.x + 1.6f * k, r.second.y + 2.2f * k), Col(0, 0, 0, 0.22f * alpha), q.r * sc); }
+        // borde (todo un poco mas grande en oscuro) + pulgar
+        const float e = 1.1f * k;
+        for (const Part& q : parts) { auto r = R(q.x0, q.y0, q.x1, q.y1); dl->AddRectFilled(ImVec2(r.first.x - e, r.first.y - e), ImVec2(r.second.x + e, r.second.y + e), edge, q.r * sc + e); }
+        const ImVec2 t0(m.x - 1.0f * sc, m.y + 14.2f * sc), t1(m.x - 4.6f * sc, m.y + 9.6f * sc);
+        dl->AddLine(t0, t1, edge, 3.4f * sc + 2 * e); dl->AddCircleFilled(t1, 1.7f * sc + e, edge, 12);
+        // relleno: blanco que se tine apenas del verde del menu
+        const ImU32 top = ColA(Lerp4(ImVec4(1, 1, 1, 1), ImVec4(0.90f, 1.0f, 0.95f, 1), 0.6f * s_hov), alpha), bot = ColA(Lerp4(ImVec4(0.86f, 0.89f, 0.93f, 1), Lerp4(acc, ImVec4(1, 1, 1, 1), 0.45f), 0.7f * s_hov), alpha);
+        dl->AddLine(t0, t1, top, 3.4f * sc); dl->AddCircleFilled(t1, 1.7f * sc, top, 12);
+        for (const Part& q : parts) { auto r = R(q.x0, q.y0, q.x1, q.y1); const int v0 = dl->VtxBuffer.Size; dl->AddRectFilled(r.first, r.second, IM_COL32_WHITE, q.r * sc);
+            ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, ImVec2(m.x, m.y), ImVec2(m.x, m.y + 18.0f * sc), top, bot); }
+        // lineas de los dedos y la una
+        dl->AddLine(ImVec2(m.x + 1.6f * sc, m.y + 9.5f * sc), ImVec2(m.x + 1.6f * sc, m.y + 12.0f * sc), Col(0.35f, 0.38f, 0.44f, 0.8f * alpha), 1.0f * k);
+        dl->AddLine(ImVec2(m.x + 4.5f * sc, m.y + 9.8f * sc), ImVec2(m.x + 4.5f * sc, m.y + 12.2f * sc), Col(0.35f, 0.38f, 0.44f, 0.8f * alpha), 1.0f * k);
+        dl->AddLine(ImVec2(m.x + 7.3f * sc, m.y + 10.2f * sc), ImVec2(m.x + 7.3f * sc, m.y + 12.6f * sc), Col(0.35f, 0.38f, 0.44f, 0.8f * alpha), 1.0f * k);
+        dl->AddLine(ImVec2(m.x - 0.6f * sc, m.y + 1.2f * sc), ImVec2(m.x - 0.6f * sc, m.y + 7.0f * sc), Col(1, 1, 1, 0.9f * alpha), 1.0f * k);   // brillo del indice
+        (void)grey; return;
+    }
+    // flecha clasica (como la de Windows): blanca con borde negro y sombra suave
+    static const float P[7][2] = { { 0, 0 }, { 0, 16.0f }, { 3.9f, 12.3f }, { 6.6f, 18.4f }, { 9.0f, 17.4f }, { 6.4f, 11.4f }, { 11.4f, 11.4f } };
+    ImVec2 pts[7], sh[7]; for (int i = 0; i < 7; i++) { pts[i] = ImVec2(m.x + P[i][0] * sc, m.y + P[i][1] * sc); sh[i] = ImVec2(pts[i].x + 1.5f * k, pts[i].y + 2.0f * k); }
+    dl->AddConcavePolyFilled(sh, 7, Col(0, 0, 0, 0.25f * alpha));
+    CurShape(dl, pts, 7, white, grey, edge, 1.3f * k, m, ImVec2(m.x, m.y + 18.0f * sc));
+    dl->AddLine(ImVec2(pts[0].x + 1.3f * k, pts[0].y + 3.0f * k), ImVec2(pts[1].x + 1.3f * k, pts[1].y - 4.0f * k), Col(1, 1, 1, 0.9f * alpha), 1.0f * k);
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------
+// (14/11, Agustin: "mas diseno para las opciones de camara libre") TARJETA DE LA CAMARA LIBRE: 4 modos con dibujo (apagada, prendida,
+// sin bloquear el teclado, solo en las repeticiones), un visor (la cancha vista por la camara, con el marco, REC cuando vuela y el
+// zoom: arrastrar de costado o la rueda), el teclado W A S D Q E y el mouse que se iluminan con lo que se aprieta, tiras de velocidad
+// y sensibilidad, y "seguir la cara" con dibujo.
+static void CamGlyph(ImDrawList* dl, ImVec2 c, float s, int mode, ImU32 col, float t) {
+    const float th = std::max(1.2f, s * 0.08f);
+    // cuerpo de la camara
+    const ImVec2 a(c.x - s * 0.42f, c.y - s * 0.20f), b(c.x + s * 0.20f, c.y + s * 0.24f);
+    dl->AddRect(a, b, col, s * 0.06f, 0, th);
+    const ImVec2 L[4] = { ImVec2(b.x, c.y - s * 0.04f), ImVec2(c.x + s * 0.44f, c.y - s * 0.18f), ImVec2(c.x + s * 0.44f, c.y + s * 0.22f), ImVec2(b.x, c.y + s * 0.10f) };
+    dl->AddPolyline(L, 4, col, ImDrawFlags_Closed, th);
+    dl->AddCircle(ImVec2(c.x - s * 0.11f, c.y + s * 0.02f), s * 0.10f, col, 12, th);
+    if (mode == 0) dl->AddLine(ImVec2(c.x - s * 0.46f, c.y + s * 0.34f), ImVec2(c.x + s * 0.46f, c.y - s * 0.34f), col, th * 1.3f);
+    if (mode == 1) dl->AddCircleFilled(ImVec2(a.x + s * 0.10f, a.y - s * 0.10f), s * 0.06f * (0.7f + 0.3f * sinf(t * 4.0f)), IM_COL32(255, 80, 80, (col >> 24) & 255), 8);
+    if (mode == 2) for (int i = 0; i < 4; i++) dl->AddRectFilled(ImVec2(c.x - s * 0.40f + i * s * 0.22f, c.y + s * 0.34f), ImVec2(c.x - s * 0.26f + i * s * 0.22f, c.y + s * 0.44f), col, 1.0f);
+    if (mode == 3) { const float a0 = -t * 2.5f; dl->PathArcTo(ImVec2(c.x + s * 0.30f, c.y - s * 0.36f), s * 0.13f, a0, a0 + kPI * 1.5f, 10); dl->PathStroke(col, 0, th); }
+}
+static void KeyCap(ImDrawList* dl, ImVec2 a, float w, float h, const char* t, bool on, float k, ImVec4 acc) {
+    const ImVec2 b(a.x + w, a.y + h); const float r = 5.0f * k, push = on ? 1.5f * k : 0.0f;
+    dl->AddRectFilled(ImVec2(a.x, a.y + 2.5f * k), ImVec2(b.x, b.y + 2.5f * k), Col(0, 0, 0, 0.45f), r);
+    dl->AddRectFilled(ImVec2(a.x, a.y + push), ImVec2(b.x, b.y + push), on ? ColA(acc, 0.75f) : Col(1, 1, 1, 0.10f), r);
+    dl->AddRectFilledMultiColor(ImVec2(a.x + 2, a.y + 2 + push), ImVec2(b.x - 2, a.y + h * 0.45f + push), Col(1, 1, 1, 0.08f), Col(1, 1, 1, 0.08f), Col(1, 1, 1, 0), Col(1, 1, 1, 0));
+    dl->AddRect(ImVec2(a.x, a.y + push), ImVec2(b.x, b.y + push), on ? ColA(Lerp4(acc, ImVec4(1, 1, 1, 1), 0.3f), 1) : Col(1, 1, 1, 0.18f), r, 0, 1.0f);
+    const ImVec2 ts = ImGui::CalcTextSize(t);
+    dl->AddText(ImVec2(a.x + (w - ts.x) * 0.5f, a.y + (h - ts.y) * 0.5f + push), on ? Col(1, 1, 1, 1) : Col(0.85f, 0.88f, 0.92f, 1), t);
+}
+bool MvCamWidget(MvCamIn& in) {
+    const float k = in.k; bool changed = false;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float avail = ImGui::GetContentRegionAvail().x; const double t = in.now;
+    const ImVec4 acc = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+    const int mode = in.mode ? std::clamp((int)lroundf(*in.mode), 0, 3) : 0;
+    // --- 1) modos ---
+    { static const char* kN[4] = { "Apagada", "Prendida", "Sin bloquear teclado", "Solo repeticiones" };
+      static const char* kTip[4] = { "La camara del juego, como siempre.", "Camara propia: W A S D, Q / E, mouse con el boton derecho. El juego no ve el teclado mientras tanto.",
+                                     "Igual que prendida, pero el juego sigue viendo el teclado.", "Se prende sola cuando empieza una repeticion y al terminar vuelve la del juego." };
+      const float bw = (avail - 3 * 6.0f * k) / 4.0f, h = 54.0f * k;
+      for (int i = 0; i < 4; i++) {
+          if (i) ImGui::SameLine(0, 6.0f * k);
+          ImGui::PushID(i); const ImVec2 p = ImGui::GetCursorScreenPos();
+          if (ImGui::InvisibleButton("##cmode", ImVec2(bw, h)) && in.mode) { *in.mode = (float)i; changed = true; }
+          const bool hv = ImGui::IsItemHovered(), cur = mode == i;
+          const float ha = Follow(ImGui::GetItemID(), hv ? 1.0f : 0.0f, 12.0f, in.anim), oa = Follow(ImGui::GetItemID() + 1, cur ? 1.0f : 0.0f, 10.0f, in.anim);
+          const ImVec4 top = Lerp4(ImVec4(1, 1, 1, 0.07f + 0.05f * ha), ImVec4(acc.x, acc.y, acc.z, 0.38f), oa), bot = Lerp4(ImVec4(1, 1, 1, 0.03f), ImVec4(acc.x * 0.6f, acc.y * 0.6f, acc.z * 0.6f, 0.30f), oa);
+          dl->AddRectFilledMultiColor(p, ImVec2(p.x + bw, p.y + h), ColA(top, 1), ColA(top, 1), ColA(bot, 1), ColA(bot, 1));
+          dl->AddRect(p, ImVec2(p.x + bw, p.y + h), ColA(Lerp4(ImVec4(1, 1, 1, 0.16f + 0.25f * ha), ImVec4(acc.x, acc.y, acc.z, 1), oa), 1), 8.0f * k, 0, (1.0f + oa) * k);
+          const ImU32 ic = ColA(Lerp4(ImVec4(0.80f, 0.83f, 0.88f, 1), ImVec4(1, 1, 1, 1), oa), 1);
+          CamGlyph(dl, ImVec2(p.x + bw * 0.5f, p.y + h * 0.36f), 26.0f * k, i, ic, in.anim && (cur || hv) ? (float)fmod(t, 3600.0) : 0.0f);
+          const char* nm = TRS(kN[i]); const float fs = ImGui::GetFontSize() * 0.86f; const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0, nm);
+          dl->PushClipRect(p, ImVec2(p.x + bw, p.y + h), true);
+          dl->AddText(ImGui::GetFont(), fs, ImVec2(p.x + std::max(4.0f * k, (bw - ts.x) * 0.5f), p.y + h * 0.68f), cur ? Col(1, 1, 1, 1) : Col(0.80f, 0.83f, 0.88f, 1), nm);
+          dl->PopClipRect();
+          if (hv) ImGui::SetTooltip("%s", TRS(kTip[i]));
+          ImGui::PopID();
+      }
+      ImGui::Dummy(ImVec2(0, 4.0f * k)); }
+    // --- 2) visor (izquierda) + teclas y tiras (derecha) ---
+    const bool wide = avail >= 560.0f * k;
+    const float VW = wide ? avail * 0.52f : avail, VH = VW * 0.56f;
+    const ImVec2 v0 = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##camvisor", ImVec2(VW, VH));
+    const bool hovV = ImGui::IsItemHovered(), actV = ImGui::IsItemActive();
+    if (in.zoom) {
+        if (actV && ImGui::GetIO().MouseDelta.x != 0.0f) { *in.zoom = std::clamp(*in.zoom * expf(-ImGui::GetIO().MouseDelta.x * 0.006f), 0.1f, 2.0f); changed = true; }
+        if (hovV && ImGui::GetIO().MouseWheel != 0.0f) { ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY); *in.zoom = std::clamp(*in.zoom * expf(-ImGui::GetIO().MouseWheel * 0.08f), 0.1f, 2.0f); changed = true; }
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) { *in.zoom = 1.0f; changed = true; }
+    }
+    if (hovV) ImGui::SetTooltip("%s", TRS("Arrastrar de costado o la rueda: zoom. Clic derecho: el del juego (1)."));
+    {
+        const ImVec2 a = v0, b(v0.x + VW, v0.y + VH); const float rr = 10.0f * k;
+        const float z = Follow(ImGui::GetID("##camzoom"), in.zoom ? *in.zoom : 1.0f, 10.0f, in.anim), sc = 1.0f / std::max(0.1f, z);
+        dl->AddRectFilledMultiColor(a, b, Col(0.10f, 0.16f, 0.24f, 1), Col(0.10f, 0.16f, 0.24f, 1), Col(0.06f, 0.08f, 0.11f, 1), Col(0.06f, 0.08f, 0.11f, 1));
+        dl->PushClipRect(a, b, true);
+        // escena: tribuna al fondo, cancha en perspectiva con franjas, jugadores; se agranda con el zoom alrededor del centro
+        const ImVec2 cc((a.x + b.x) * 0.5f, a.y + VH * 0.55f);
+        auto P = [&](float x, float y) { return ImVec2(cc.x + x * VW * 0.5f * sc, cc.y + y * VH * 0.5f * sc); };
+        dl->AddRectFilledMultiColor(P(-3, -1.6f), P(3, -0.55f), Col(0.16f, 0.18f, 0.24f, 1), Col(0.16f, 0.18f, 0.24f, 1), Col(0.22f, 0.24f, 0.30f, 1), Col(0.22f, 0.24f, 0.30f, 1));
+        for (int i = 0; i < 70; i++) { const float x = -2.8f + (i * 37 % 100) / 100.0f * 5.6f, y = -1.45f + (i * 53 % 90) / 100.0f; dl->AddCircleFilled(P(x, y), 1.4f * k * sc, (i % 3) ? Col(0.55f, 0.58f, 0.66f, 0.7f) : Col(0.85f, 0.35f, 0.32f, 0.7f), 6); }
+        for (int s2 = 0; s2 < 8; s2++) {   // franjas del pasto en perspectiva
+            const float y0 = -0.55f + s2 * 0.2f, y1 = y0 + 0.2f, w0 = 1.2f + (y0 + 0.55f) * 1.4f, w1 = 1.2f + (y1 + 0.55f) * 1.4f;
+            const ImVec2 q[4] = { P(-w0, y0), P(w0, y0), P(w1, y1), P(-w1, y1) };
+            dl->AddConvexPolyFilled(q, 4, (s2 & 1) ? Col(0.20f, 0.46f, 0.22f, 1) : Col(0.24f, 0.52f, 0.25f, 1));
+        }
+        dl->AddLine(P(-1.2f, -0.55f), P(1.2f, -0.55f), Col(1, 1, 1, 0.75f), 1.4f * k); dl->AddLine(P(0, -0.55f), P(0, 1.05f), Col(1, 1, 1, 0.6f), 1.2f * k);
+        dl->AddEllipse(P(0, 0.12f), ImVec2(0.42f * VW * 0.5f * sc, 0.16f * VH * 0.5f * sc), Col(1, 1, 1, 0.6f), 0.0f, 32, 1.2f * k);
+        const float ph = in.anim ? (float)t : 0.0f;
+        for (int i = 0; i < 9; i++) { const float x = -1.0f + i * 0.25f + 0.05f * sinf(ph * 0.9f + i), y = -0.2f + 0.45f * ((i * 7) % 5) / 5.0f + 0.04f * cosf(ph * 0.7f + i * 2);
+            const float ps = (0.8f + (y + 0.55f) * 0.6f) * k * sc;
+            dl->AddEllipseFilled(ImVec2(P(x, y).x, P(x, y).y + 1.5f * ps), ImVec2(4.0f * ps, 1.5f * ps), Col(0, 0, 0, 0.3f));
+            dl->AddRectFilled(ImVec2(P(x, y).x - 2.2f * ps, P(x, y).y - 9.0f * ps), ImVec2(P(x, y).x + 2.2f * ps, P(x, y).y), (i % 2) ? Col(0.85f, 0.20f, 0.22f, 1) : Col(0.92f, 0.92f, 0.96f, 1), 1.0f * ps);
+            dl->AddCircleFilled(ImVec2(P(x, y).x, P(x, y).y - 10.5f * ps), 1.8f * ps, Col(0.85f, 0.68f, 0.55f, 1), 8); }
+        dl->AddCircleFilled(P(0.15f + 0.08f * sinf(ph * 1.3f), 0.25f), 1.8f * k * sc, Col(1, 1, 1, 1), 8);
+        dl->PopClipRect();
+        // marco del visor: esquinas, centro, REC, zoom
+        const float e = 12.0f * k, m = 8.0f * k; const ImU32 fc = Col(1, 1, 1, 0.85f);
+        for (int i = 0; i < 4; i++) { const float sx = (i & 1) ? -1.0f : 1.0f, sy = (i & 2) ? -1.0f : 1.0f; const ImVec2 q((i & 1) ? b.x - m : a.x + m, (i & 2) ? b.y - m : a.y + m);
+            dl->AddLine(q, ImVec2(q.x + sx * e, q.y), fc, 1.6f * k); dl->AddLine(q, ImVec2(q.x, q.y + sy * e), fc, 1.6f * k); }
+        dl->AddLine(ImVec2(cc.x - 7 * k, a.y + VH * 0.5f), ImVec2(cc.x + 7 * k, a.y + VH * 0.5f), Col(1, 1, 1, 0.5f), 1.0f); dl->AddLine(ImVec2(cc.x, a.y + VH * 0.5f - 7 * k), ImVec2(cc.x, a.y + VH * 0.5f + 7 * k), Col(1, 1, 1, 0.5f), 1.0f);
+        const bool live = in.active;
+        const char* st = TRS(live ? "EN VIVO" : mode == 3 ? (in.replay ? "REPETICION" : "ESPERANDO REPETICION") : mode == 0 ? "APAGADA" : "LISTA");
+        const float blink = in.anim ? 0.5f + 0.5f * sinf((float)t * 5.0f) : 1.0f;
+        dl->AddCircleFilled(ImVec2(a.x + m + 10 * k, a.y + m + 18 * k), 4.5f * k, live ? Col(1.0f, 0.25f, 0.25f, 0.4f + 0.6f * blink) : Col(0.6f, 0.62f, 0.66f, 0.8f), 12);
+        dl->AddText(ImVec2(a.x + m + 19 * k, a.y + m + 10 * k), Col(1, 1, 1, 0.9f), st);
+        char zb[32]; snprintf(zb, sizeof zb, "x%.2f", in.zoom ? *in.zoom : 1.0f); const ImVec2 zs2 = ImGui::CalcTextSize(zb);
+        const ImVec2 zp(b.x - m - zs2.x - 10 * k, a.y + m + 8 * k);
+        dl->AddRectFilled(ImVec2(zp.x - 6 * k, zp.y - 2 * k), ImVec2(zp.x + zs2.x + 6 * k, zp.y + zs2.y + 2 * k), Col(0, 0, 0, 0.5f), 6 * k);
+        dl->AddText(zp, ColA(acc, 1), zb);
+        // barra del zoom abajo: 0.1 ... 2
+        const float zt = Sat((logf(std::max(0.1f, in.zoom ? *in.zoom : 1.0f)) - logf(0.1f)) / (logf(2.0f) - logf(0.1f)));
+        const float bx0 = a.x + VW * 0.25f, bx1 = b.x - VW * 0.25f, by = b.y - m - 6 * k;
+        dl->AddLine(ImVec2(bx0, by), ImVec2(bx1, by), Col(1, 1, 1, 0.35f), 2.0f * k);
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.8f, ImVec2(bx0 - 16 * k, by - 7 * k), Col(1, 1, 1, 0.7f), "+"); dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.8f, ImVec2(bx1 + 6 * k, by - 7 * k), Col(1, 1, 1, 0.7f), "-");
+        dl->AddCircleFilled(ImVec2(bx0 + (bx1 - bx0) * zt, by), (hovV || actV ? 6.0f : 5.0f) * k, Col(1, 1, 1, 1), 14);
+        dl->AddRect(a, b, hovV || actV ? ColA(acc, 0.9f) : Col(1, 1, 1, 0.16f), rr, 0, 1.2f * k);
+    }
+    // derecha: teclas que se iluminan + mouse, y las tiras
+    { const float rx = wide ? v0.x + VW + 14.0f * k : v0.x, ry = wide ? v0.y : v0.y + VH + 10.0f * k, rw = wide ? avail - VW - 14.0f * k : avail;
+      const float kw = std::min(30.0f * k, (rw - 60.0f * k) / 5.0f), kh = kw, g = 4.0f * k;
+      ImGui::SetCursorScreenPos(ImVec2(rx, ry)); ImGui::BeginGroup();   // (el grupo deja la columna alineada en rx)
+      ImGui::TextDisabled("%s", TRS("Moverse")); const float ky = ImGui::GetCursorScreenPos().y + 2.0f * k;
+      KeyCap(dl, ImVec2(rx, ky), kw, kh, "Q", in.keys[4], k, acc); KeyCap(dl, ImVec2(rx + (kw + g), ky), kw, kh, "W", in.keys[0], k, acc); KeyCap(dl, ImVec2(rx + 2 * (kw + g), ky), kw, kh, "E", in.keys[5], k, acc);
+      KeyCap(dl, ImVec2(rx, ky + kh + g), kw, kh, "A", in.keys[1], k, acc); KeyCap(dl, ImVec2(rx + (kw + g), ky + kh + g), kw, kh, "S", in.keys[2], k, acc); KeyCap(dl, ImVec2(rx + 2 * (kw + g), ky + kh + g), kw, kh, "D", in.keys[3], k, acc);
+      // mouse con el boton derecho
+      { const float mx = rx + 3 * (kw + g) + 14.0f * k, mw = kw * 1.1f, mh = kh * 2 + g; const ImVec2 ma(mx, ky), mb(mx + mw, ky + mh);
+        dl->AddRectFilled(ImVec2(ma.x, ma.y + 2.5f * k), ImVec2(mb.x, mb.y + 2.5f * k), Col(0, 0, 0, 0.45f), mw * 0.5f);
+        dl->AddRectFilled(ma, mb, Col(1, 1, 1, 0.10f), mw * 0.5f); dl->AddRect(ma, mb, Col(1, 1, 1, 0.22f), mw * 0.5f, 0, 1.0f);
+        dl->AddRectFilled(ImVec2(ma.x + mw * 0.5f, ma.y + 1), ImVec2(mb.x - 1, ma.y + mh * 0.42f), in.rmb ? ColA(acc, 0.85f) : Col(1, 1, 1, 0.06f), mw * 0.5f, ImDrawFlags_RoundCornersTopRight);
+        dl->AddLine(ImVec2(ma.x + mw * 0.5f, ma.y + 2), ImVec2(ma.x + mw * 0.5f, ma.y + mh * 0.42f), Col(1, 1, 1, 0.25f), 1.0f); dl->AddLine(ImVec2(ma.x + 2, ma.y + mh * 0.42f), ImVec2(mb.x - 2, ma.y + mh * 0.42f), Col(1, 1, 1, 0.25f), 1.0f);
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.8f, ImVec2(mb.x + 6.0f * k, ma.y + mh * 0.3f), Col(0.66f, 0.70f, 0.76f, 1), TRS("girar")); }
+      ImGui::SetCursorScreenPos(ImVec2(rx, ky + 2 * kh + g + 10.0f * k));
+      const float sw = rw;
+      if (in.speed) { ImGui::Text("%s  %.1f m/s%s", TRS("Velocidad"), *in.speed, in.keys[6] ? "  x4" : in.keys[7] ? "  /4" : "");
+          static const ImVec4 gS[3] = { ImVec4(0.25f, 0.55f, 0.85f, 1), ImVec4(0.30f, 0.80f, 0.55f, 1), ImVec4(1.0f, 0.70f, 0.30f, 1) };
+          if (Strip("##camspd", in.speed, 0.1f, 10.0f, sw, k, gS, 3, ImVec4(), in.anim)) changed = true; }
+      if (in.sens) { ImGui::Text("%s  %.2f", TRS("Sensibilidad del mouse"), *in.sens);
+          if (Strip("##camsens", in.sens, 0.1f, 5.0f, sw, k, nullptr, 0, acc, in.anim)) changed = true; }
+      ImGui::EndGroup();
+      ImGui::SetCursorScreenPos(ImVec2(v0.x, std::max(ImGui::GetCursorScreenPos().y, v0.y + (wide ? VH : 0.0f)) + 6.0f * k)); }
+    if (!wide) ImGui::SetCursorScreenPos(ImVec2(v0.x, ImGui::GetCursorScreenPos().y));
+    // --- 3) seguir la cara ---
+    if (in.follow) {
+        ImGui::Dummy(ImVec2(0, 2.0f * k));
+        const int f = std::clamp((int)lroundf(*in.follow), 0, 2);
+        const float cw = (avail - 2 * 6.0f * k) / 3.0f;
+        static const char* kF[3] = { "No seguir", "Fija al rostro", "Orbitar la cabeza" };
+        static const char* kFs[3] = { "camara libre", "pegada a la cara", "angulo del mundo" };
+        static const int kFi[3] = { kSiNo, kSiFace, kSiOrbit };
+        for (int i = 0; i < 3; i++) { if (i) ImGui::SameLine(0, 6.0f * k); ImGui::PushID(i + 20);
+            if (Chip("##cf", kFi[i], TRS(kF[i]), TRS(kFs[i]), f == i, cw, k, t, in.anim)) { *in.follow = (float)i; changed = true; }
+            ImGui::PopID(); }
+    }
+    ImGui::Dummy(ImVec2(0, 2.0f * k));
+    return changed;
+}
+
+// (14/11) TARJETA DE LA CAMARA LENTA: velocidades de un clic con el caracol (que camina a esa velocidad) y donde frena
+bool MvSlowWidget(MvSlowIn& in) {
+    const float k = in.k; bool changed = false;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float avail = ImGui::GetContentRegionAvail().x; const double t = in.now;
+    const ImVec4 acc = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+    const bool on = in.on && *in.on > 0.5f; const float sp = in.speed ? *in.speed : 1.0f;
+    // velocidades
+    { static const float kV[5] = { 1.0f, 0.5f, 0.25f, 0.1f, 0.02f }; static const char* kN[5] = { "Normal", "1/2", "1/4", "1/10", "Casi quieto" };
+      const float bw = (avail - 4 * 6.0f * k) / 5.0f, h = 50.0f * k;
+      for (int i = 0; i < 5; i++) {
+          if (i) ImGui::SameLine(0, 6.0f * k); ImGui::PushID(i + 40);
+          const ImVec2 p = ImGui::GetCursorScreenPos();
+          const bool cur = i == 0 ? !on || fabsf(sp - 1.0f) < 0.01f : on && fabsf(sp - kV[i]) < 0.005f;
+          if (ImGui::InvisibleButton("##slow", ImVec2(bw, h))) { if (in.on) *in.on = i == 0 ? 0.0f : 1.0f; if (in.speed && i) *in.speed = kV[i]; changed = true; }
+          const bool hv = ImGui::IsItemHovered();
+          const float oa = Follow(ImGui::GetItemID(), cur ? 1.0f : 0.0f, 10.0f, in.anim);
+          dl->AddRectFilled(p, ImVec2(p.x + bw, p.y + h), ColA(Lerp4(ImVec4(1, 1, 1, hv ? 0.10f : 0.06f), ImVec4(acc.x, acc.y, acc.z, 0.32f), oa), 1), 8.0f * k);
+          dl->AddRect(p, ImVec2(p.x + bw, p.y + h), ColA(Lerp4(ImVec4(1, 1, 1, hv ? 0.4f : 0.16f), acc, oa), 1), 8.0f * k, 0, (1.0f + oa) * k);
+          // caracol que avanza a esa velocidad (Normal = una pelota que corre)
+          dl->PushClipRect(p, ImVec2(p.x + bw, p.y + h), true);
+          const float run = in.anim ? fmodf((float)t * 0.35f * kV[i] * 3.0f, 1.0f) : 0.5f, x = p.x + 10.0f * k + (bw - 20.0f * k) * run;
+          if (i == 0) dl->AddCircleFilled(ImVec2(x, p.y + h * 0.36f), 5.0f * k, Col(1, 1, 1, 0.9f), 12);
+          else SmallIcon(dl, ImVec2(x, p.y + h * 0.34f), 22.0f * k, kSiSnail, cur ? Col(1, 1, 1, 1) : Col(0.80f, 0.83f, 0.88f, 1), 0.0f);
+          dl->AddLine(ImVec2(p.x + 6 * k, p.y + h * 0.56f), ImVec2(p.x + bw - 6 * k, p.y + h * 0.56f), Col(1, 1, 1, 0.12f), 1.0f);
+          const char* nm = TRS(kN[i]); const ImVec2 ts = ImGui::CalcTextSize(nm);
+          dl->AddText(ImVec2(p.x + (bw - ts.x) * 0.5f, p.y + h * 0.62f), cur ? Col(1, 1, 1, 1) : Col(0.82f, 0.85f, 0.90f, 1), nm);
+          dl->PopClipRect();
+          ImGui::PopID();
+      }
+      ImGui::Dummy(ImVec2(0, 4.0f * k)); }
+    // donde frena
+    if (in.where) {
+        const int w = std::clamp((int)lroundf(*in.where), 0, 2);
+        static const char* kW[3] = { "Modo editar", "Partido y repeticiones", "Solo repeticiones" };
+        static const char* kWs[3] = { "celebraciones, caras", "todo el reloj del juego", "el partido sigue normal" };
+        static const int kWi[3] = { kSiFace, kSiPitch, kSiFilm };
+        const float cw = (avail - 2 * 6.0f * k) / 3.0f;
+        for (int i = 0; i < 3; i++) { if (i) ImGui::SameLine(0, 6.0f * k); ImGui::PushID(i + 60);
+            const char* sub = TRS(kWs[i]); char buf2[64];
+            if (i == 2 && w == 2) { snprintf(buf2, sizeof buf2, "%s", TRS(in.replay ? "frenando ahora" : "esperando repeticion")); sub = buf2; }
+            if (Chip("##sw", kWi[i], TRS(kW[i]), sub, w == i, cw, k, t, in.anim)) { *in.where = (float)i; changed = true; }
+            ImGui::PopID(); }
+    }
+    ImGui::Dummy(ImVec2(0, 2.0f * k));
+    return changed;
 }
 
 } // namespace fx

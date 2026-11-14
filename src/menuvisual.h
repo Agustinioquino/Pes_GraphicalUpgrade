@@ -61,6 +61,30 @@ struct MvWindIn {
 };
 bool MvWindWidget(MvWindIn& in);
 
+// --- tarjetas de la camara (14/11, Agustin: "mas diseno para las opciones de camara libre") ---
+struct MvCamIn {
+    float* mode = nullptr;      // x344 0 apagada, 1 prendida, 2 sin bloquear el teclado, 3 solo en las repeticiones
+    float* speed = nullptr;     // y344 m/s
+    float* zoom = nullptr;      // z344 (x el campo de vision del juego)
+    float* sens = nullptr;      // w344 mouse
+    float* follow = nullptr;    // x346 0 no, 1 fija al rostro, 2 orbitar
+    float* smooth = nullptr;    // y346
+    bool active = false, replay = false;   // la camara libre esta volando ahora / hay repeticion
+    bool keys[8] = {};          // W A S D Q E Shift Ctrl apretadas (para iluminar el dibujo)
+    bool rmb = false;           // boton derecho del mouse
+    bool anim = true; float k = 1.0f; double now = 0.0;
+};
+bool MvCamWidget(MvCamIn& in);
+struct MvSlowIn {
+    float* on = nullptr;        // y343
+    float* speed = nullptr;     // x343
+    float* where = nullptr;     // z343 0 editor, 1 partido y repeticiones, 2 solo repeticiones
+    float editorSteps = 0;      // w343 (pasos frenados del visor por segundo)
+    bool replay = false;
+    bool anim = true; float k = 1.0f; double now = 0.0;
+};
+bool MvSlowWidget(MvSlowIn& in);
+
 // --- mando ---
 enum MvPadBtn {
     kPadCross = 0, kPadCircle, kPadSquare, kPadTriangle, kPadL1, kPadR1, kPadL2, kPadR2, kPadShare, kPadOptions,

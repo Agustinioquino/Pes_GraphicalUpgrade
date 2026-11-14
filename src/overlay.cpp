@@ -1115,6 +1115,24 @@ static void DrawGroup(MenuGroup& g, int gid) {
         if (MvSunWidget(si)) PushRecent(g.title);
         ImGui::EndDisabled();
     }
+    if (Anim() && g.id == "CamaraLibre") {   // (14/11, Agustin: "mas diseno para las opciones de camara libre")
+        ImGui::Spacing();
+        auto& L = g_cfg.live; MvCamIn ci;
+        ci.mode = &L[344][0]; ci.speed = &L[344][1]; ci.zoom = &L[344][2]; ci.sens = &L[344][3]; ci.follow = &L[346][0]; ci.smooth = &L[346][1];
+        ci.active = FreeCamActive(); ci.replay = ReplayNow();
+        static const int kVk[8] = { 'W', 'A', 'S', 'D', 'Q', 'E', VK_SHIFT, VK_CONTROL };
+        const bool front = GetForegroundWindow() == s_hwnd;
+        for (int i = 0; i < 8; i++) ci.keys[i] = front && (GetAsyncKeyState(kVk[i]) & 0x8000) != 0;
+        ci.rmb = front && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+        ci.anim = Anim(); ci.k = UIK(); ci.now = Now();
+        if (MvCamWidget(ci)) PushRecent(g.title);
+    }
+    if (Anim() && g.id == "CamaraLenta") {
+        ImGui::Spacing();
+        auto& L = g_cfg.live; MvSlowIn si2; si2.on = &L[343][1]; si2.speed = &L[343][0]; si2.where = &L[343][2]; si2.editorSteps = L[343][3];
+        si2.replay = ReplayNow(); si2.anim = Anim(); si2.k = UIK(); si2.now = Now();
+        if (MvSlowWidget(si2)) PushRecent(g.title);
+    }
     bool anyExt = false; for (auto& sl : g.sliders) anyExt |= !sl.ext.empty();
     if (anyExt && !g_cfg.clothFound) ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1), "%s", TRS("No se encontro cloth-mod\\cloth.ini"));
     if (!g.sliders.empty()) {
