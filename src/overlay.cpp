@@ -316,7 +316,7 @@ static std::vector<std::string> SplitWords(const std::string& f) {
 }
 static bool HasAll(const std::string& hay, const std::vector<std::string>& w) { for (auto& x : w) if (hay.find(x) == std::string::npos) return false; return true; }
 struct SearchHay { std::string grp, grpTitle; std::vector<std::string> lab, help; };
-struct SearchHit { int gid = -1, score = 0, nShow = 0; std::vector<char> show; };
+struct SearchHit { int gid = -1, score = 0, nShow = 0, rank = 0, rankS = 0, nStrict = 0; std::vector<char> show, strict; };
 static std::vector<SearchHay> s_hay; static size_t s_hayKey = 0;
 static std::string s_qDone; static size_t s_qKey = 0; static std::vector<SearchHit> s_hits; static std::map<int, size_t> s_hitOf;
 static std::set<std::string> s_searchFull;   // tarjetas que el usuario abrio enteras durante la busqueda
@@ -337,29 +337,76 @@ static void SearchPrep() {
     }
     s_qDone.clear();
 }
-// devuelve las tarjetas que coinciden, ordenadas: 3 = el nombre de una opcion, 2 = el titulo de la tarjeta, 1 = solo la ayuda
+// (14/11, Agustin: "no me salen como primer resultado al buscar palabras clave") ORDEN POR RELEVANCIA. Cada palabra vale segun como
+// aparece: palabra entera 3, comienzo de una palabra 2, dentro de otra 1 ("sol" en "solo" o "consola" vale poco), y segun donde: en el
+// nombre de la opcion x30, en el titulo de la tarjeta x12, en la ayuda x4. La frase entera en el nombre suma 60 y la clave exacta (x496)
+// 400. La tarjeta va con su mejor opcion; antes todas las tarjetas con la palabra en un nombre empataban (3) y quedaban en el orden del menu
+static int SearchWordK(const std::string& hay, const std::string& w) {
+    const std::string h = " " + hay + " ";
+    if (h.find(" " + w + " ") != std::string::npos) return 3;
+    if (h.find(" " + w) != std::string::npos) return 2;
+    return h.find(w) != std::string::npos ? 1 : 0;
+}
+// devuelve las tarjetas que coinciden; score: 3 = el nombre de una opcion, 2 = el titulo de la tarjeta, 1 = solo la ayuda. Orden por rank
 static const std::vector<SearchHit>& SearchRun(const std::string& q) {
     SearchPrep();
     if (q == s_qDone && s_qKey == s_hayKey) return s_hits;
     s_qDone = q; s_qKey = s_hayKey; s_hits.clear(); s_hitOf.clear();
-    const std::vector<std::string> w = SplitWords(FoldS(q));
+    const std::string fq = FoldS(q);
+    std::vector<std::string> w = SplitWords(fq);
+    {   // (14/11) palabras de relleno ("el pasto sigue a la pelota"): no cuentan si queda alguna otra
+        static const char* kStop[] = { "a", "al", "de", "del", "el", "la", "las", "los", "lo", "en", "y", "o", "con", "por", "para", "un", "una",
+                                       "the", "of", "and", "to", "in", "da", "do", "das", "dos", "e", "um", "uma", "na", "no" };
+        std::vector<std::string> k; for (auto& x : w) { bool st = false; for (const char* sw : kStop) if (x == sw) { st = true; break; } if (!st) k.push_back(x); }
+        if (!k.empty()) w.swap(k);
+    }
     if (w.empty()) return s_hits;
+    std::string phrase; for (auto& x : w) phrase += (phrase.empty() ? "" : " ") + x;
     for (size_t gi = 0; gi < s_hay.size(); gi++) {
         const SearchHay& h = s_hay[gi]; SearchHit hit; hit.gid = (int)gi;
-        const size_t n = h.lab.size(); std::vector<char> byLab(n, 0), byHelp(n, 0); int nLab = 0, nHelp = 0;
+        const size_t n = h.lab.size(); std::vector<char> byLab(n, 0), byHelp(n, 0); int nLab = 0, nHelp = 0, best = 0, bestS = 0;
+        hit.strict.assign(n, 0);
         for (size_t i = 0; i < n; i++) {
             const std::string lt = h.lab[i] + " " + h.grpTitle;
+            if (HasAll(h.lab[i], w)) { hit.strict[i] = 1; hit.nStrict++; }
             if (HasAll(lt, w)) { byLab[i] = 1; nLab++; }
             else if (HasAll(lt + " " + h.help[i], w)) { byHelp[i] = 1; nHelp++; }
+            else continue;
+            int sc = 0;
+            for (auto& x : w) {
+                int k = SearchWordK(h.lab[i], x);
+                if (k) { sc += 30 * k; continue; }
+                k = SearchWordK(h.grpTitle, x);
+                if (k) { sc += 12 * k; continue; }
+                sc += 4 * SearchWordK(h.help[i], x);
+            }
+            if (w.size() > 1 && (" " + h.lab[i] + " ").find(" " + phrase) != std::string::npos) sc += 60;
+            if (w.size() == 1 && SearchWordK(h.lab[i], w[0]) == 3 && w[0].size() >= 3 && w[0].find_first_of("0123456789") != std::string::npos
+                && w[0].find_first_not_of("0123456789", 1) != std::string::npos && strchr("xyzw", w[0][0])) sc += 400;   // clave (x496)
+            best = (std::max)(best, sc);
+            if (hit.strict[i]) bestS = (std::max)(bestS, sc);
         }
         const bool grpHit = HasAll(h.grp, w);
+        if (grpHit) { int sc = 0; for (auto& x : w) { int k = SearchWordK(h.grpTitle, x); sc += k ? 12 * k : 3 * SearchWordK(h.grp, x); }
+                      if (w.size() > 1 && (" " + h.grpTitle + " ").find(" " + phrase) != std::string::npos) sc += 30;
+                      best = (std::max)(best, sc); }
         if (nLab > 0) { hit.score = 3; hit.show = byLab; hit.nShow = nLab; }
         else if (grpHit) { hit.score = 2; hit.show.assign(n, 1); hit.nShow = (int)n; }
         else if (nHelp > 0) { hit.score = 1; hit.show = byHelp; hit.nShow = nHelp; }
         else continue;
+        hit.rank = best; hit.rankS = bestS;
         s_hits.push_back(std::move(hit));
     }
-    std::stable_sort(s_hits.begin(), s_hits.end(), [](const SearchHit& a, const SearchHit& b) { return a.score > b.score; });
+    // (14/11, Agustin: "si se trata de sliders, por ejemplo el pasto sigue a la pelota o un slider de fuerza de cualquier cosa, que al buscar
+    // me salga como primer resultado y lo demas se oculte") si alguna OPCION tiene todas las palabras en su propio nombre (o su clave), se
+    // ven solo esas opciones: las tarjetas que coinciden solo por el titulo o por la ayuda se ocultan. Si ninguna, como antes
+    bool anyStrict = false; for (auto& x : s_hits) if (x.nStrict > 0) { anyStrict = true; break; }
+    if (anyStrict) {
+        std::vector<SearchHit> keep;
+        for (auto& x : s_hits) if (x.nStrict > 0) { x.score = 3; x.rank = x.rankS; x.show = x.strict; x.nShow = x.nStrict; keep.push_back(std::move(x)); }
+        s_hits.swap(keep);
+    }
+    std::stable_sort(s_hits.begin(), s_hits.end(), [](const SearchHit& a, const SearchHit& b) { return a.rank != b.rank ? a.rank > b.rank : a.score > b.score; });
     for (size_t i = 0; i < s_hits.size(); i++) s_hitOf[s_hits[i].gid] = i;
     return s_hits;
 }
