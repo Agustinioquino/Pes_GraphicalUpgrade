@@ -139,6 +139,9 @@ void HeadShadowPresent() {
         float nx = clip[0] / clip[3], ny = clip[1] / clip[3];
         if (fabsf(nx) > 1.4f || fabsf(ny) > 1.4f) { cOff++; continue; }
         if (c.d > 60.0f) { cFar++; continue; }
+        // (14/11 0kygek) optimizacion: cabeza de menos de 32 px de alto en pantalla (camara del partido) = la sombra fina de nariz / cejas
+        // ocupa menos de un pixel: se queda con la del estadio (como las de mas de 60 m) y no se repite la cascada entera para ella
+        if (g_bbH && 0.25f * fabsf(P[5]) / clip[3] * 0.5f * (float)g_bbH < 32.0f) { cFar++; continue; }
         cand.push_back(c);
     }
     s_cAlive = cAlive; s_cNoPos = cNoPos; s_cBehind = cBehind; s_cOff = cOff; s_cFar = cFar; s_cOk = (int)cand.size();
