@@ -297,6 +297,17 @@ static ID3D11DepthStencilState* PrepassDSS2(ID3D11DepthStencilState* cur) {   //
     D3D11_DEPTH_STENCIL_DESC d = {};
     if (cur) cur->GetDesc(&d); else { d.DepthEnable = TRUE; d.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; d.DepthFunc = D3D11_COMPARISON_LESS; d.StencilReadMask = d.StencilWriteMask = 0xff; }
     if (d.DepthFunc == D3D11_COMPARISON_LESS) d.DepthFunc = D3D11_COMPARISON_LESS_EQUAL; else if (d.DepthFunc == D3D11_COMPARISON_GREATER) d.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL; else return nullptr;
+    // (14/11, prueba de Agustin: de cerca 18afff = 91 de 106 ms) la segunda pasada ya NO escribe profundidad: la prepasada la dejo escrita
+    // con el mismo VS y el mismo recorte. 18afff tiene discard, y un PS con discard que escribe profundidad (o stencil) obliga a la placa a
+    // probar la profundidad DESPUES del PS: cada capa de hojas tapada se sombreaba entera igual. Sin escritura, la prueba va antes del PS
+    // y solo se sombrea la hoja de adelante. El stencil tampoco se escribe de nuevo si sus operaciones son KEEP / REPLACE (la prepasada ya
+    // lo dejo con el mismo valor); con INCR / DECR / INVERT se deja como estaba (escribir dos veces cambiaria el resultado)
+    d.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+    if (d.StencilEnable) {
+        auto sOk = [](D3D11_STENCIL_OP o) { return o == D3D11_STENCIL_OP_KEEP || o == D3D11_STENCIL_OP_REPLACE; };
+        auto fOk = [&](const D3D11_DEPTH_STENCILOP_DESC& f) { return sOk(f.StencilFailOp) && sOk(f.StencilDepthFailOp) && sOk(f.StencilPassOp); };
+        if (fOk(d.FrontFace) && fOk(d.BackFace)) d.StencilWriteMask = 0;
+    }
     // (08/11) cache por descripcion (statecache.cpp): antes un anillo de 4 que soltaba y recreaba estados por dibujo
     ID3D11DepthStencilState* n = CachedDSS(d); if (!n) return nullptr;
     n->AddRef(); return n;
