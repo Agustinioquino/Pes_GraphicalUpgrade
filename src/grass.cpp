@@ -296,7 +296,11 @@ static ID3D11DepthStencilState* PrepassDSS2(ID3D11DepthStencilState* cur) {   //
     std::lock_guard<std::mutex> lk(s_preMx);
     D3D11_DEPTH_STENCIL_DESC d = {};
     if (cur) cur->GetDesc(&d); else { d.DepthEnable = TRUE; d.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; d.DepthFunc = D3D11_COMPARISON_LESS; d.StencilReadMask = d.StencilWriteMask = 0xff; }
-    if (d.DepthFunc == D3D11_COMPARISON_LESS) d.DepthFunc = D3D11_COMPARISON_LESS_EQUAL; else if (d.DepthFunc == D3D11_COMPARISON_GREATER) d.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL; else return nullptr;
+    // (14/11) su log: las hojas usan GREATER_EQUAL (func 7, profundidad invertida); antes esto devolvia nullptr y la segunda pasada seguia
+    // con el estado de la prepasada (escribiendo profundidad): ahora los _EQUAL tambien pasan y solo se les saca la escritura
+    if (d.DepthFunc == D3D11_COMPARISON_LESS) d.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+    else if (d.DepthFunc == D3D11_COMPARISON_GREATER) d.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL;
+    else if (d.DepthFunc != D3D11_COMPARISON_LESS_EQUAL && d.DepthFunc != D3D11_COMPARISON_GREATER_EQUAL && d.DepthFunc != D3D11_COMPARISON_EQUAL) return nullptr;
     // (14/11, prueba de Agustin: de cerca 18afff = 91 de 106 ms) la segunda pasada ya NO escribe profundidad: la prepasada la dejo escrita
     // con el mismo VS y el mismo recorte. 18afff tiene discard, y un PS con discard que escribe profundidad (o stencil) obliga a la placa a
     // probar la profundidad DESPUES del PS: cada capa de hojas tapada se sombreaba entera igual. Sin escritura, la prueba va antes del PS
@@ -1389,6 +1393,9 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             D3D11_DEPTH_STENCIL_DESC dd = DssDesc(preCur);
             if (!dd.DepthEnable || dd.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ZERO) preLevels = 0;
             else { preDss2 = PrepassDSS2(preCur);
+                   { static std::atomic<int> s_preLog{0};
+                     if (s_preLog.fetch_add(1) < 2) { char b[400] = "-"; if (preDss2) DescDSS(b, sizeof(b), preDss2, preRef);
+                       Log("pasto: segunda pasada de las hojas (tras la prepasada) %s: %s", preDss2 ? "sin escribir profundidad" : "con el mismo estado (no se pudo armar la variante)", b); } }
                    // sin la variante LESS_EQUAL la segunda pasada fallaria la profundidad contra la propia hoja: no hacer prepasada
                    if (!preDss2 && (dd.DepthFunc == D3D11_COMPARISON_LESS || dd.DepthFunc == D3D11_COMPARISON_GREATER)) preLevels = 0; }
             if (!preLevels && preCur) { preCur->Release(); preCur = nullptr; }
