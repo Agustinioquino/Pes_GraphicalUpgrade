@@ -1,0 +1,283 @@
+// ---- Created with 3Dmigoto v1.3.16 on Thu Oct 08 21:08:15 2026
+
+cbuffer cPSObject : register(b5)
+{
+
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[16];
+  } g_psObject : packoffset(c0);
+
+}
+
+cbuffer cPSSystem : register(b0)
+{
+
+  struct
+  {
+    float4 m_param;
+    float4 m_renderInfo;
+    float4 m_renderBuffer;
+    float4 m_dominantLightDir;
+    float4 m_timeParam;
+  } g_psSystem : packoffset(c0);
+
+}
+
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+SamplerState g_samplerLinear_Clamp_s : register(s11);
+Texture2D<float4> inImage : register(t0);
+Texture2D<float4> inColorLUT : register(t6);
+Texture2D<float4> inBloom : register(t7);
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+
+
+void main(
+  float2 v0 : TEXCOORD0,
+  float4 v1 : SV_Position0,
+  out float4 o0 : SV_Target0)
+{
+  float4 r0,r1,r2,r3,r4,r5,r6,r7,r8;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  r0.xy = g_psSystem.m_renderBuffer.zw * v1.xy;
+  r1.xyzw = inImage.Sample(g_samplerPoint_Wrap_s, r0.xy).xyzw;
+  r0.yz = max(float2(0,0), r0.xy);
+  r0.yz = min(g_psObject.m_localParam[2].zw, r0.yz);
+  r2.x = inBloom.Sample(g_samplerLinear_Clamp_s, r0.yz).y;
+  r0.yz = g_psObject.m_localParam[1].yy * g_psSystem.m_renderBuffer.zw;
+  r0.yz = float2(8,8) * r0.yz;
+  r3.xy = v1.xy * g_psSystem.m_renderBuffer.zw + r0.yz;
+  r3.xy = max(float2(0,0), r3.xy);
+  r3.xy = min(g_psObject.m_localParam[2].zw, r3.xy);
+  r2.z = inBloom.Sample(g_samplerLinear_Clamp_s, r3.xy).x;
+  r0.yz = v1.xy * g_psSystem.m_renderBuffer.zw + -r0.yz;
+  r0.yz = max(float2(0,0), r0.yz);
+  r0.yz = min(g_psObject.m_localParam[2].zw, r0.yz);
+  r0.y = inBloom.Sample(g_samplerLinear_Clamp_s, r0.yz).z;
+  r2.yw = r0.yy;
+  {
+    // PES21: atenuar el bloom que se derrama en los bordes de la pantalla (halo naranja)
+    float2 uvE = v1.xy * g_psSystem.m_renderBuffer.zw;
+    float edgeM = smoothstep(0.0, 0.07, uvE.x) * smoothstep(0.0, 0.07, 1.0 - uvE.x) * smoothstep(0.0, 0.09, uvE.y) * smoothstep(0.0, 0.09, 1.0 - uvE.y);
+    r2.xyzw *= lerp(0.2, 1.0, edgeM);
+  }
+  r2.xyzw = r2.xyzw + r1.yzxz;
+  r0.y = g_psObject.m_localParam[1].w * g_psObject.m_localParam[1].y;
+  r0.x = cmp(r0.y < r0.x);
+  r0.y = r0.x ? 0.000000 : 0;
+  r0.x = r0.x ? 6 : 4;
+  r0.zw = g_psObject.m_localParam[r0.y+12].yy * float2(1.00055635,1.28641219e-007);
+  r1.x = cmp(6996.10791 >= g_psObject.m_localParam[r0.y+12].y);
+  r1.yz = float2(4.60700006e+009,2.0064e+009) / r0.zz;
+  r1.yz = float2(2967800,1901800) + -r1.yz;
+  r1.yz = r1.yz / r0.zz;
+  r1.yz = float2(99.1100006,247.479996) + r1.yz;
+  r1.yz = r1.yz / r0.zz;
+  r1.yz = float2(0.244063005,0.237039998) + r1.yz;
+  r1.x = r1.x ? r1.y : r1.z;
+  r0.z = r1.x * r1.x;
+  r1.z = 2.86999989 * r1.x;
+  r0.z = r0.z * -3 + r1.z;
+  r1.y = -0.275000006 + r0.z;
+  r3.xy = g_psObject.m_localParam[r0.y+12].yy * float2(0.000154118257,0.00084242021) + float2(0.860117733,1);
+  r0.z = r0.w * g_psObject.m_localParam[r0.y+12].y + r3.x;
+  r3.xz = g_psObject.m_localParam[r0.y+12].yy * float2(7.08145137e-007,4.20481676e-008);
+  r0.w = r3.x * g_psObject.m_localParam[r0.y+12].y + r3.y;
+  r3.x = r0.z / r0.w;
+  r0.z = g_psObject.m_localParam[r0.y+12].y * 4.22806261e-005 + 0.317398727;
+  r0.z = r3.z * g_psObject.m_localParam[r0.y+12].y + r0.z;
+  r0.w = -g_psObject.m_localParam[r0.y+12].y * 2.8974182e-005 + 1;
+  r3.zw = g_psObject.m_localParam[r0.y+12].yw * float2(1.61456057e-007,-2);
+  r0.w = r3.z * g_psObject.m_localParam[r0.y+12].y + r0.w;
+  r3.y = r0.z / r0.w;
+  r0.zw = r3.xy + r3.xy;
+  r1.z = 3 * r3.x;
+  r0.z = -r3.y * 8 + r0.z;
+  r0.z = 4 + r0.z;
+  r4.x = r1.z / r0.z;
+  r4.y = r0.w / r0.z;
+  r0.z = cmp(g_psObject.m_localParam[r0.y+12].y < 4000);
+  r0.zw = r0.zz ? r4.xy : r1.xy;
+  r1.x = dot(r3.xy, r3.xy);
+  r1.x = rsqrt(r1.x);
+  r1.xy = r3.xy * r1.xx;
+  r1.y = g_psObject.m_localParam[r0.y+12].z * -r1.y;
+  r1.y = r1.y * 0.0500000007 + r3.x;
+  r1.x = g_psObject.m_localParam[r0.y+12].z * r1.x;
+  r1.x = r1.x * 0.0500000007 + r3.y;
+  r1.z = 3 * r1.y;
+  r1.y = r1.y + r1.y;
+  r1.y = -r1.x * 8 + r1.y;
+  r1.y = 4 + r1.y;
+  r1.x = r1.x + r1.x;
+  r3.xy = r1.zx / r1.yy;
+  r1.xy = r3.xy + -r4.xy;
+  r0.zw = r1.xy + r0.zw;
+  r1.x = max(1.00000001e-010, r0.w);
+  r3.x = r0.z / r1.x;
+  r0.z = 1 + -r0.z;
+  r0.z = r0.z + -r0.w;
+  r3.z = r0.z / r1.x;
+  r3.y = 1;
+  r0.z = dot(float3(0.895099998,0.266400009,-0.161400005), r3.xyz);
+  r0.w = dot(float3(-0.750199974,1.71350002,0.0366999991), r3.xyz);
+  r1.x = dot(float3(0.0388999991,-0.0684999973,1.02960002), r3.xyz);
+  r0.zw = float2(0.941379249,1.04043639) / r0.zw;
+  r1.x = 1.0897665 / r1.x;
+  r3.xyz = float3(0.895099998,0.266400009,-0.161400005) * r0.zzz;
+  r4.xyz = float3(-0.750199974,1.71350002,0.0366999991) * r0.www;
+  r1.xyz = float3(0.0388999991,-0.0684999973,1.02960002) * r1.xxx;
+  r5.x = r3.x;
+  r5.y = r4.x;
+  r5.z = r1.x;
+  r6.x = dot(float3(0.986992896,-0.1470543,0.159962699), r5.xyz);
+  r7.x = r3.y;
+  r7.y = r4.y;
+  r7.z = r1.y;
+  r6.y = dot(float3(0.986992896,-0.1470543,0.159962699), r7.xyz);
+  r1.x = r3.z;
+  r1.y = r4.z;
+  r6.z = dot(float3(0.986992896,-0.1470543,0.159962699), r1.xyz);
+  r3.x = dot(float3(0.432305306,0.518360317,0.0492912009), r5.xyz);
+  r3.y = dot(float3(0.432305306,0.518360317,0.0492912009), r7.xyz);
+  r3.z = dot(float3(0.432305306,0.518360317,0.0492912009), r1.xyz);
+  r4.x = dot(float3(-0.0085287001,0.040042799,0.968486726), r5.xyz);
+  r4.y = dot(float3(-0.0085287001,0.040042799,0.968486726), r7.xyz);
+  r4.z = dot(float3(-0.0085287001,0.040042799,0.968486726), r1.xyz);
+  r1.x = dot(r6.xyz, float3(0.412456393,0.212672904,0.0193339009));
+  r5.x = dot(r6.xyz, float3(0.357576102,0.715152204,0.119191997));
+  r6.x = dot(r6.xyz, float3(0.180437505,0.0721750036,0.950304091));
+  r1.y = dot(r3.xyz, float3(0.412456393,0.212672904,0.0193339009));
+  r5.y = dot(r3.xyz, float3(0.357576102,0.715152204,0.119191997));
+  r6.y = dot(r3.xyz, float3(0.180437505,0.0721750036,0.950304091));
+  r1.z = dot(r4.xyz, float3(0.412456393,0.212672904,0.0193339009));
+  r5.z = dot(r4.xyz, float3(0.357576102,0.715152204,0.119191997));
+  r6.z = dot(r4.xyz, float3(0.180437505,0.0721750036,0.950304091));
+  r3.x = dot(float3(3.2409699,-1.5373832,-0.498610765), r1.xyz);
+  r3.y = dot(float3(3.2409699,-1.5373832,-0.498610765), r5.xyz);
+  r3.z = dot(float3(3.2409699,-1.5373832,-0.498610765), r6.xyz);
+  r4.x = dot(float3(-0.969243646,1.8759675,0.0415550582), r1.xyz);
+  r4.y = dot(float3(-0.969243646,1.8759675,0.0415550582), r5.xyz);
+  r4.z = dot(float3(-0.969243646,1.8759675,0.0415550582), r6.xyz);
+  r1.x = dot(float3(0.0556300804,-0.203976959,1.05697155), r1.xyz);
+  r1.y = dot(float3(0.0556300804,-0.203976959,1.05697155), r5.xyz);
+  r1.z = dot(float3(0.0556300804,-0.203976959,1.05697155), r6.xyz);
+  r3.x = dot(r3.yxz, r2.xzw);
+  r3.y = dot(r4.yxz, r2.xzw);
+  r3.z = dot(r1.yxz, r2.xzw);
+  r0.zw = g_psObject.m_localParam[r0.x].zw + float2(1,1);
+  r1.xy = -g_psObject.m_localParam[r0.x].xy + r0.zw;
+  r0.z = cmp(0.800000012 < g_psObject.m_localParam[r0.x].x);
+  if (r0.z != 0) {
+    r0.z = -g_psObject.m_localParam[r0.x].x + 0.819999993;
+    r0.z = r0.z / g_psObject.m_localParam[r0.y+12].w;
+    r0.z = -0.744727492 + r0.z;
+  } else {
+    r1.z = g_psObject.m_localParam[r0.x].z + 0.180000007;
+    r1.z = r1.z / r1.x;
+    r4.x = -1 + r1.z;
+    r4.x = 1 + -r4.x;
+    r1.z = r1.z / r4.x;
+    r1.z = log2(r1.z);
+    r1.z = 0.346573591 * r1.z;
+    r4.x = r1.x / g_psObject.m_localParam[r0.y+12].w;
+    r0.z = -r1.z * r4.x + -0.744727492;
+  }
+  r1.z = -g_psObject.m_localParam[r0.x].x + 1;
+  r1.z = r1.z / g_psObject.m_localParam[r0.y+12].w;
+  r1.z = r1.z + -r0.z;
+  r4.x = g_psObject.m_localParam[r0.x].y / g_psObject.m_localParam[r0.y+12].w;
+  r4.x = r4.x + -r1.z;
+  r5.x = dot(float3(0.613191485,0.33951208,0.0473663323), r3.xyz);
+  r5.y = dot(float3(0.0702069029,0.916335821,0.0134500116), r3.xyz);
+  r5.z = dot(float3(0.0206188709,0.109567292,0.869606733), r3.xyz);
+  r3.xyz = max(float3(0,0,0), r5.xyz);
+  r4.y = dot(r3.xyz, float3(0.272228718,0.674081743,0.0536895171));
+  r3.xyz = -r4.yyy + r3.xyz;
+  r3.xyz = r3.xyz * float3(0.959999979,0.959999979,0.959999979) + r4.yyy;
+  r3.xyz = log2(r3.xyz);
+  r4.yzw = float3(0.30103001,0.30103001,0.30103001) * r3.xyz;
+  r5.xyz = r3.xyz * float3(0.30103001,0.30103001,0.30103001) + r1.zzz;
+  r5.xyz = g_psObject.m_localParam[r0.y+12].www * r5.xyz;
+  r6.xy = r1.xy + r1.xy;
+  r1.x = r3.w / r1.x;
+  r7.xyz = r3.xyz * float3(0.30103001,0.30103001,0.30103001) + -r0.zzz;
+  r8.xyz = r7.xyz * r1.xxx;
+  r8.xyz = float3(1.44269502,1.44269502,1.44269502) * r8.xyz;
+  r8.xyz = exp2(r8.xyz);
+  r8.xyz = float3(1,1,1) + r8.xyz;
+  r6.xzw = r6.xxx / r8.xyz;
+  r6.xzw = -g_psObject.m_localParam[r0.x].zzz + r6.xzw;
+  r0.x = g_psObject.m_localParam[r0.y+12].w + g_psObject.m_localParam[r0.y+12].w;
+  r0.x = r0.x / r1.y;
+  r1.xyz = r3.xyz * float3(0.30103001,0.30103001,0.30103001) + -r4.xxx;
+  r1.xyz = r1.xyz * r0.xxx;
+  r1.xyz = float3(1.44269502,1.44269502,1.44269502) * r1.xyz;
+  r1.xyz = exp2(r1.xyz);
+  r1.xyz = float3(1,1,1) + r1.xyz;
+  r1.xyz = r6.yyy / r1.xyz;
+  r1.xyz = -r1.xyz + r0.www;
+  r3.xyz = cmp(r4.yzw < r0.zzz);
+  r3.xyz = r3.xyz ? r6.xzw : r5.xyz;
+  r4.yzw = cmp(r4.xxx < r4.yzw);
+  r1.xyz = r4.yzw ? r1.xyz : r5.xyz;
+  r0.x = r4.x + -r0.z;
+  r4.yzw = saturate(r7.xyz / r0.xxx);
+  r0.x = cmp(r4.x < r0.z);
+  r5.xyz = float3(1,1,1) + -r4.yzw;
+  r0.xzw = r0.xxx ? r5.xyz : r4.yzw;
+  r4.xyz = -r0.xzw * float3(2,2,2) + float3(3,3,3);
+  r0.xzw = r0.xzw * r0.xzw;
+  r0.xzw = r0.xzw * r4.xyz;
+  r1.xyz = r1.xyz + -r3.xyz;
+  r0.xzw = r0.xzw * r1.xyz + r3.xyz;
+  r1.x = dot(r0.xzw, float3(0.272228718,0.674081743,0.0536895171));
+  r0.xzw = -r1.xxx + r0.xzw;
+  r0.xzw = r0.xzw * float3(0.930000007,0.930000007,0.930000007) + r1.xxx;
+  r1.x = dot(float3(1.70505154,-0.621790707,-0.0832583979), r0.xzw);
+  r1.y = dot(float3(-0.130257145,1.14080286,-0.0105485283), r0.xzw);
+  r1.z = dot(float3(-0.0240032747,-0.128968775,1.15297174), r0.xzw);
+  r3.xyzw = max(float4(0,0,0,0), r1.yzxz);
+  r4.xyzw = float4(1.39999998,1.39999998,1.39999998,1.39999998) * r2.xwzw;
+  r5.xyzw = r2.xwzw * float4(0.210000008,0.210000008,0.210000008,0.210000008) + float4(0.0500000007,0.0500000007,0.0500000007,0.0500000007);
+  r5.xyzw = r4.xwzw * r5.xyzw + float4(0.00400000019,0.00400000019,0.00400000019,0.00400000019);
+  r2.xyzw = r2.xyzw * float4(0.210000008,0.210000008,0.210000008,0.210000008) + float4(0.5,0.5,0.5,0.5);
+  r2.xyzw = r4.xyzw * r2.xyzw + float4(0.0599999987,0.0599999987,0.0599999987,0.0599999987);
+  r2.xyzw = r5.xyzw / r2.xyzw;
+  r2.xyzw = float4(-0.0666666701,-0.0666666701,-0.0666666701,-0.0666666701) + r2.xyzw;
+  r4.xyzw = float4(2.45181823,2.45181823,2.45181823,2.45181823) * r2.xyzw;
+  r2.xyzw = -r2.xwzw * float4(2.45181823,2.45181823,2.45181823,2.45181823) + r3.xyzw;
+  r0.xyzw = g_psObject.m_localParam[r0.y+12].xxxx * r2.xyzw + r4.xyzw;
+  r0.xyzw = max(float4(0,0,0,0), r0.xyzw);
+  r0.xyzw = log2(r0.xyzw);
+  r0.xyzw = float4(0.454545468,0.454545468,0.454545468,0.454545468) * r0.xyzw;
+  r0.xyzw = exp2(r0.xyzw);
+  r0.xyzw = min(float4(1,1,1,1), r0.xyzw);
+  r2.yw = float2(0.9375,15) * r0.xw;
+  r0.x = floor(r2.w);
+  r0.x = 0.0625 * r0.x;
+  r0.y = r0.y * 0.9375 + -r0.x;
+  r0.w = 16 * r0.y;
+  r2.x = r0.z * 0.05859375 + r0.x;
+  r2.xyzw = float4(0.001953125,0.03125,0.064453125,0.03125) + r2.xyxy;
+  r1.xyz = inColorLUT.Sample(g_samplerLinear_Clamp_s, r2.xy).xyz;
+  r0.x = -r0.y * 16 + 1;
+  r2.xyz = inColorLUT.Sample(g_samplerLinear_Clamp_s, r2.zw).xyz;
+  r0.yzw = r2.xyz * r0.www;
+  r0.xyz = r1.xyz * r0.xxx + r0.yzw;
+  r0.w = cmp(0.000000 == g_psObject.m_localParam[1].x);
+  r1.xyz = float3(0.25,0.25,0.25) * r0.xyz;
+  o0.xyz = r0.www ? r1.xyz : r0.xyz;
+  o0.w = r1.w;
+  return;
+}
