@@ -464,7 +464,7 @@ enum : unsigned {
     kIcoCamera = 0xf030, kIcoPad = 0xf11b, kIcoDiag = 0xf0f1, kIcoLayers = 0xf5fd, kIcoStar = 0xf005, kIcoPen = 0xf304, kIcoHistory = 0xf1da,
     kIcoSliders = 0xf1de, kIcoTools = 0xf7d9, kIcoGear = 0xf013, kIcoWarn = 0xf071, kIcoSave = 0xf0c7, kIcoUndo = 0xf2ea, kIcoRedo = 0xf2f9,
     kIcoRevert = 0xf0e2, kIcoEye = 0xf06e, kIcoEyeSlash = 0xf070, kIcoReload = 0xf021, kIcoSearch = 0xf002, kIcoX = 0xf00d, kIcoCompress = 0xf066, kIcoExpand = 0xf065,
-    kIcoFilter = 0xf0b0, kIcoDot = 0xf111, kIcoHelp = 0xf059, kIcoDown = 0xf078, kIcoRight = 0xf054, kIcoKeys = 0xf11c, kIcoMuscle = 0xf44b, kIcoSeedling = 0xf4d8,
+    kIcoFilter = 0xf0b0, kIcoDot = 0xf111, kIcoHelp = 0xf059, kIcoDown = 0xf078, kIcoRight = 0xf054, kIcoKeys = 0xf11c, kIcoMuscle = 0xf44b, kIcoSeedling = 0xf4d8, kIcoPointer = 0xf245,
 };
 // categoria (0 escena, 1 jugadores, 2 otros), orden dentro de ella e icono de cada seccion (la clave es la seccion en espanol)
 static void SecInfo(const std::string& s, int& cat, int& ord, unsigned& ico) {
@@ -1950,7 +1950,18 @@ static void DrawSettingsPage() {
     if (ImGui::Checkbox(TRS("Vistas dinamicas y animaciones (sol que se arrastra, cancha del viento)"), &g_cfg.menuVisual)) SaveOption("menu_vistas", g_cfg.menuVisual ? "1" : "0");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Lo mismo que el boton Vistas de arriba. Apagado: menu quieto, sin dibujos que se tocan ni animaciones."));
     if (ImGui::Checkbox(TRS("Usar el mando en el menu"), &g_cfg.menuPad)) SaveOption("menu_mando", g_cfg.menuPad ? "1" : "0");
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con el menu abierto: cruceta o stick para moverse, cruz para elegir, circulo para volver, triangulo para escribir un valor. OJO: el juego tambien ve el mando mientras tanto."));
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con el menu abierto: cruceta o stick para moverse, cruz para elegir, circulo para volver, triangulo para escribir un valor, OPTIONS abre el teclado para buscar."));
+    {   // (14/11) cursor del menu
+        const char* cn[3] = { TRS("Sin cursor"), TRS("Cursor nuevo (sombra, verde sobre lo que se toca, onda al clic)"), TRS("Cursor clasico") };
+        int cc = std::clamp(g_cfg.menuCursor, 0, 2); ImGui::SetNextItemWidth(320.0f * UIK());
+        if (ImGui::Combo(TRS("Cursor del menu"), &cc, cn, 3)) { g_cfg.menuCursor = cc; char b[8]; snprintf(b, sizeof(b), "%d", cc); SaveOption("menu_cursor", b); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Tambien con el boton Cursor de arriba. Con un mando conectado el cursor nuevo se esconde solo si no moves el mouse."));
+    }
+    if (ImGui::Checkbox(TRS("L3 + R3 abre y cierra el menu"), &g_cfg.menuPadOpen)) SaveOption("menu_mando_abrir", g_cfg.menuPadOpen ? "1" : "0");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Apretar los dos analogicos juntos (L3 + R3) abre el menu y lo cierra, como la tecla Insert."));
+    { bool bp = g_cfg.blockPad != 0;
+      if (ImGui::Checkbox(TRS("El juego no ve el mando con el menu abierto"), &bp)) { g_cfg.blockPad = bp ? 1 : 0; SaveOption("bloquear_mando", bp ? "1" : "0"); }
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mientras el menu esta abierto el partido y los menus del juego no reciben los botones ni los analogicos (y al cerrar, hasta que sueltes todo).")); }
     if (ImGui::Checkbox(TRS("Dibujo del mando con lo que se aprieta"), &g_cfg.menuPadDraw)) SaveOption("menu_mando_dibujo", g_cfg.menuPadDraw ? "1" : "0");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con el menu abierto y un mando conectado: un mando chico y transparente abajo que marca los botones y los analogicos."));
     {   // (14/11 d) Agustin: "puede cambiar por uno de xbox dependiendo el display del mod de sider controller"
@@ -2147,6 +2158,14 @@ static void DrawMenu() {
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(vv ? "Vistas dinamicas PRENDIDAS: el sol que se arrastra, la cancha del viento y las animaciones del menu. Clic para apagarlas (menu quieto y simple)." : "Vistas dinamicas APAGADAS: menu sin dibujos ni animaciones. Clic para prenderlas."));
         }
         ImGui::SameLine();
+        {   // (14/11, Agustin: "anadir un boton para activar y desactivar el cursor") [PES21FX] menu_cursor
+            const bool cv = g_cfg.menuCursor != 0;
+            ImGui::PushStyleColor(ImGuiCol_Button, cv ? ImVec4(0.16f, 0.42f, 0.32f, 1) : ImGui::GetStyleColorVec4(ImGuiCol_Button));
+            if (ImGui::Button((s_rail || s_slim ? (s_iconsOk ? Ico(kIcoPointer) : std::string("[C]")) + "##cursor" : IcoL(kIcoPointer, TRS("Cursor"))).c_str())) { g_cfg.menuCursor = cv ? 0 : 1; SaveOption("menu_cursor", cv ? "0" : "1"); }
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(cv ? "Cursor PRENDIDO. Clic para esconderlo (para usar solo el mando o mirar el juego limpio)." : "Cursor APAGADO: el mouse sigue andando pero no se dibuja. Clic para mostrarlo."));
+        }
+        ImGui::SameLine();
         {   // (14/11) Agustin: "una opcion de bajar la opacidad del menu": a mano, sin ir a Ajustes
             if (ImGui::Button(s_iconsOk ? (Ico(kIcoShadow) + "##opac").c_str() : "[%]")) ImGui::OpenPopup("opac_pop");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip(TRS("Opacidad del menu: %.0f %%"), g_cfg.menuAlpha * 100.0f);
@@ -2187,7 +2206,10 @@ static void DrawMenu() {
         if (ImGui::GetContentRegionAvail().x - ImGui::GetItemRectMax().x + ImGui::GetWindowPos().x > 210.0f * UIK()) ImGui::SameLine();   // (08/11) si no entra, el buscador baja a su propia fila
         if (s_focusSearch) { ImGui::SetKeyboardFocusHere(); s_focusSearch = false; }
         ImGui::SetNextItemWidth(std::max(140.0f * UIK(), ImGui::GetContentRegionAvail().x - (s_search[0] ? ImGui::GetFrameHeight() + 6.0f * UIK() : 0.0f)));
-        ImGui::InputTextWithHint("##buscar", IcoL(kIcoSearch, TRS("Buscar opcion (Ctrl+F)")).c_str(), s_search, sizeof(s_search));
+        ImGui::InputTextWithHint("##buscar", IcoL(kIcoSearch, TRS(s_pad.connected && g_cfg.menuPad ? "Buscar opcion (OPTIONS: teclado del mando)" : "Buscar opcion (Ctrl+F)")).c_str(), s_search, sizeof(s_search));
+        // (14/11) con el mando: elegir el buscador (cruz / triangulo) abre el teclado en pantalla; mientras esta abierto el campo se suelta
+        if (ImGui::IsItemActivated() && s_pad.connected && g_cfg.menuPad && GImGui->NavInputSource == ImGuiInputSource_Gamepad) MvVkOpen();
+        if (MvVkIsOpen() && ImGui::IsItemActive()) ImGui::ClearActiveID();
         if (s_search[0]) { ImGui::SameLine(0, 4.0f * UIK()); if (ImGui::Button(s_iconsOk ? (Ico(kIcoX) + "##limpiar").c_str() : "x", ImVec2(ImGui::GetFrameHeight(), 0))) s_search[0] = 0; }
     }
     ImGui::Spacing();
@@ -2705,14 +2727,52 @@ void OverlayPresent(IDXGISwapChain* sc) {
         ImGuiIO& io2 = ImGui::GetIO();
         static int s_autoStyle = -1; if (s_autoStyle < 0) s_autoStyle = MvPadDetectStyle(GameDir().c_str());   // una vez: los iconos del juego no cambian en la partida
         MvPadSetStyle(g_cfg.menuPadStyle == 0 ? s_autoStyle : g_cfg.menuPadStyle - 1, g_cfg.menuPadColor);
-        if (menuShown && (g_cfg.menuPad || g_cfg.menuPadDraw)) MvPadPoll(s_pad); else s_pad = MvPad();
-        if (g_menuOpen && g_cfg.menuPad) { io2.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad; MvPadFeedImGui(s_pad); }
+        // (14/11) tambien con el menu cerrado si L3 + R3 lo abre, o mientras se espera que suelten los botones al cerrarlo
+        static bool s_padHold = false; static double s_holdT = 0.0; static bool s_openWas = false, s_comboWas = false;
+        const bool comboOn = g_cfg.menuPad && g_cfg.menuPadOpen;
+        if ((menuShown && (g_cfg.menuPad || g_cfg.menuPadDraw)) || comboOn || s_padHold) MvPadPoll(s_pad); else s_pad = MvPad();
+        {   // (14/11, Agustin: "al abrir el menu con l3+r3 por ejemplo") L3 + R3 juntos abren y cierran el menu
+            const bool combo = s_pad.b[kPadL3] && s_pad.b[kPadR3];
+            if (comboOn && combo && !s_comboWas && !MotorPageActive()) { g_menuOpen = !g_menuOpen; Log("menu: %s con L3 + R3", g_menuOpen.load() ? "abierto" : "cerrado"); }
+            s_comboWas = combo;
+        }
+        {   // (14/11) el juego no ve el mando con el menu abierto; al cerrar sigue bloqueado hasta soltar todo (o 1.5 s)
+            const bool open = g_menuOpen.load();
+            if (s_openWas && !open) { s_padHold = true; s_holdT = Now(); }
+            s_openWas = open;
+            if (s_padHold) { bool any = fabsf(s_pad.lx) + fabsf(s_pad.ly) + fabsf(s_pad.rx) + fabsf(s_pad.ry) > 0.3f || s_pad.l2 > 0.2f || s_pad.r2 > 0.2f;
+                for (int i = 0; i < kPadCount; i++) any |= s_pad.b[i];
+                if (!any || Now() - s_holdT > 1.5 || open) s_padHold = false; }
+            g_blockGamePad = g_cfg.blockPad != 0 && (open || s_padHold);
+            if (!open) MvVkClose();
+        }
+        if (g_menuOpen && g_cfg.menuPad && !MvVkIsOpen()) { io2.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad; MvPadFeedImGui(s_pad); }
         else io2.ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
     }
     ImGui::NewFrame();
-    ImGui::GetIO().MouseDrawCursor = g_menuOpen.load();
+    ImGui::GetIO().MouseDrawCursor = g_menuOpen.load() && g_cfg.menuCursor == 2;   // (14/11) 1 = cursor propio (se dibuja despues del menu)
     const double menuT0 = Now();
     if (menuShown) { if (fis && !s_fullMenu && g_menuOpen) DrawPhysiqueWindow(); else if (!fis || s_fullMenu) DrawMenu(); }
+    if (g_menuOpen && g_cfg.menuPad && !MvVkIsOpen() && s_pad.connected) {   // (14/11) OPTIONS / MENU: teclado en pantalla para buscar
+        static bool s_optWas = false; const bool opt = s_pad.b[kPadOptions];
+        if (opt && !s_optWas) MvVkOpen();
+        s_optWas = opt;
+    }
+    if (menuShown && MvVkVisible()) MvVirtualKeyboard(s_search, (int)sizeof(s_search), s_pad, UIK(), Ease(s_menuVis), g_cfg.menuVisual, &GlassBackdrop);   // (14/11 b) mismo vidrio y colores del menu
+    if (g_menuOpen && g_cfg.menuCursor == 1) {   // (14/11) cursor nuevo: flecha con sombra, verde sobre lo que se toca, onda al clic, barra I en texto
+        ImGuiIO& mio = ImGui::GetIO();
+        static float s_curA = 1.0f; static double s_mMoveT = 0.0;   // con el mando: si el mouse no se mueve en 2.5 s el cursor se va
+        if (mio.MouseDelta.x != 0.0f || mio.MouseDelta.y != 0.0f || ImGui::IsAnyMouseDown()) s_mMoveT = Now();
+        const bool idle = s_pad.connected && Now() - s_mMoveT > 2.5;
+        s_curA = std::clamp(s_curA + (idle ? -1.0f : 1.0f) * mio.DeltaTime * (idle ? 3.0f : 10.0f), 0.0f, 1.0f);
+        if (ImGui::IsMousePosValid()) {
+            const ImGuiMouseCursor mc = ImGui::GetMouseCursor();
+            const int kind = mc == ImGuiMouseCursor_TextInput ? 2 : (ImGui::IsAnyItemHovered() || mc == ImGuiMouseCursor_Hand) ? 1 : 0;
+            if (mc == ImGuiMouseCursor_Arrow || mc == ImGuiMouseCursor_Hand || mc == ImGuiMouseCursor_TextInput)
+                MvCursorDraw(ImGui::GetForegroundDrawList(), mio.MousePos, kind, ImGui::IsMouseDown(0), UIK(), s_curA * Ease(s_menuVis), g_cfg.menuVisual);
+            else mio.MouseDrawCursor = true;   // flechas de agrandar / mover ventana: las de ImGui
+        }
+    }
     if (menuShown) { const double ms = (Now() - menuT0) * 1000.0; s_menuMsAvg = s_menuMsAvg <= 0.0 ? ms : s_menuMsAvg + (ms - s_menuMsAvg) * 0.05; }
     if (menuShown && s_pad.connected && g_cfg.menuPadDraw && s_menuVis > 0.01f) {   // (14/11) el mando chico y transparente, abajo (del lado contrario al panel)
         const float k = UIK(); const ImVec2 ds2 = ImGui::GetIO().DisplaySize, sz = MvPadSize(k);
@@ -2742,6 +2802,12 @@ void OverlayPresent(IDXGISwapChain* sc) {
     g_blockGameKeys = (g_menuOpen && (g_cfg.blockKeys == 2 || (g_cfg.blockKeys == 1 && ImGui::GetIO().WantTextInput))) || FreeCamBlocksKeys();
     if (!s_btnPending.empty()) {
         std::string a = s_btnPending; s_btnPending.clear();
+        if (a == "repe_libre_lenta") {   // (14/11, Agustin: "camara libre con camara lenta en repeticion") las dos solas durante la repeticion
+            std::lock_guard<std::mutex> lk(g_cfgMutex);
+            g_cfg.live[344][0] = 3.0f; g_cfg.live[343][1] = 1.0f; g_cfg.live[343][2] = 2.0f;
+            if (g_cfg.live[343][0] > 0.95f) g_cfg.live[343][0] = 0.25f;
+            s_status = TRS("Repeticion: camara libre y lenta (se prenden solas en cada repeticion; guardar con Ctrl+S)");
+        }
         if (a == "hair_export") { std::string st; FaceGenExportHair(st); s_status = st; }
         else if (a == "brow_save") { s_status = BrowSaveCurrent(); }
         else if (a == "tess_save") { s_status = FaceTessSaveCurrent(); }

@@ -179,6 +179,7 @@ struct Config {
     int keyHud = 4;                            // (11/11) cuadrito con la ultima tecla apretada: 0 apagado, 1..4 esquina ([PES21FX] ultima_tecla)
     int motorHelpBar = 0; int motorBg = 1, motorCam = 1, motorGizmo = 1, motorKeys = 1; float motorPanelX = 0, motorPanelY = 0; int motorPage = 1;                         // (11/11) motorpage.cpp: el estudio del Motor con filas nativas del juego ([PES21FX] motor_pagina)
     int motorDress = 1;                        // (11/11) motorpage.cpp: vestir al jugador del estudio por la via nativa ([PES21FX] motor_vestir)
+    int blockPad = 1; bool menuPadOpen = true; int menuCursor = 1;   // menu_cursor: 0 sin cursor, 1 cursor nuevo, 2 el clasico de ImGui   // (14/11) [PES21FX] bloquear_mando 0 nunca / 1 con el menu abierto; menu_mando_abrir: L3 + R3 abre y cierra el menu
     int blockKeys = 1;                         // (31/10) teclas del juego con el menu: 0 nunca se bloquean, 1 al escribir en un campo, 2 con el menu abierto ([PES21FX] bloquear_teclado)
     int lang = 0;                              // (27/10) idioma del menu: 0 espanol, 1 ingles ([PES21FX] language = es / en)
     bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150; bool autoCapAB = false; bool exeDump = true; bool motorPatch = true; bool motorSunFix = true; int motorShadowFix = 1; int motorShadowRes = 0; float motorCascadeScale = 0.0f;   // [Motor]: parches en memoria (exepatch.cpp)   // exe_dump: volcado del exe desempaquetado (una vez por version)   // auto_captura_ab: pares A (todo) / B (un grupo del menu apagado 3 cuadros)
@@ -469,6 +470,7 @@ void RelWatchPresent();
 void FreeCamWheel(int delta);
 bool FreeCamWantsHead();   // (1/11) camara libre prendida con "seguir la cara": hace falta la cabeza (expr.cpp)   // (1/11) rueda del mouse (WM_MOUSEWHEEL / raw input) -> zoom   // (1/11) gancho a la camara del visor del editor (primer Present) + log
 bool FreeCamActive();
+bool ReplayNow();                                 // (14/11) pitchwear.cpp: repeticion en curso (detector v2, y448)
 bool FreeCamBlocksKeys();                         // x344 = 1: el juego no ve el teclado mientras la camara libre esta prendida
 // (31/10) camara lenta (tiempo.cpp): gancho al reloj de juego del motor (0x14035dcb0), 343 (ini: x velocidad, y prendida; DLL: z, w)
 void TiempoPresent();
@@ -738,6 +740,7 @@ bool PelvisDetailFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView*
 bool TiltTexturesFor(uint64_t vsHash, UINT indexCount, ID3D11ShaderResourceView* out[3]);   // (26/10 d) manos.cpp: tope del relieve (t31..t33, x307)
 float MuscleVariantT(uint32_t id, bool* own);   // (26/10) musculo.cpp: variante del jugador (-1 robusto .. 1 atletico; propia o la general)
 extern std::atomic<bool> g_menuOpen;
+extern std::atomic<bool> g_blockGamePad;    // (14/11) keyblock.cpp: el juego no ve el mando (XInput / DirectInput) mientras esta prendido
 extern std::atomic<bool> g_blockGameKeys;   // (31/10) keyblock.cpp: el juego no ve el teclado mientras esta prendido
 extern std::atomic<bool> g_menuTyping;      // (31/10) overlay.cpp: hay un campo de texto del menu activo (la camara libre no lee W A S D)
 void KeyBlockInstall();

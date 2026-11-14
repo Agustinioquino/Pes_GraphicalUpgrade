@@ -63,7 +63,7 @@ static float Factor() {
     if (!(v == v)) return 1.0f;
     return std::clamp(v, 0.02f, 4.0f);
 }
-static bool MatchToo() { return g_cfg.live[343][2] > 0.5f; }
+static bool MatchToo() { const float z = g_cfg.live[343][2]; return z > 1.5f ? ReplayNow() : z > 0.5f; }   // (14/11) z343 = 2: solo en la repeticion
 
 // partido: escala del reloj de juego (solo con z343 = 1)
 static void hk_Step(void* holder, float delta, void* r8) {

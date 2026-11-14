@@ -139,6 +139,9 @@ static bool LoadConfigLocked() {
             if (kl == "menu_key") c.menuKey = VkFromName(v);
             else if (kl == "tutorials") c.tutorials = atoi(v.c_str()) != 0;
             else if (kl == "bloquear_teclado") c.blockKeys = std::clamp(atoi(v.c_str()), 0, 2);
+            else if (kl == "bloquear_mando") c.blockPad = std::clamp(atoi(v.c_str()), 0, 1);       // (14/11) el juego no ve el mando con el menu abierto
+            else if (kl == "menu_cursor") c.menuCursor = std::clamp(atoi(v.c_str()), 0, 2);           // (14/11) cursor del menu
+            else if (kl == "menu_mando_abrir") c.menuPadOpen = atoi(v.c_str()) != 0;             // (14/11) L3 + R3 abre / cierra el menu
             else if (kl == "mouse_menus") c.menuMouse = atoi(v.c_str()) != 0 ? 1 : 0;   // (11/11) mouse en los menus nativos del juego
             else if (kl == "mouse_menus_retraso") c.menuMouseDelay = std::clamp(atoi(v.c_str()), 0, 4);
             else if (kl == "mouse_menus_cerca") c.menuMouseNear = atoi(v.c_str()) != 0 ? 1 : 0;

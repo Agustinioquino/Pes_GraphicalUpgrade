@@ -85,5 +85,17 @@ void MvPadDraw(ImDrawList* dl, ImVec2 where, float k, const MvPad& p, float alph
 ImVec2 MvPadSize(float k);
 // fila de ayuda: "X Elegir  O Volver  ..." con los simbolos; devuelve el alto usado
 void MvPadHints(float k, float alpha);
+// (14/11) teclado en pantalla para escribir con el mando (buscador del menu). Cruceta / stick mueven, cruz escribe, cuadrado borra,
+// triangulo = espacio, L1 borra todo, circulo u OPTIONS cierran. Tambien con el mouse.
+// (14/11) cursor propio del menu: flecha con sombra y filo de luz; sobre algo que se toca se pinta con el verde del menu y crece un poco,
+// al hacer clic sale una onda; sobre un campo de texto es una barra I. kind: 0 flecha, 1 sobre algo que se toca, 2 texto
+void MvCursorDraw(ImDrawList* dl, ImVec2 pos, int kind, bool down, float k, float alpha, bool anim);
+void MvVkOpen();
+void MvVkClose();
+bool MvVkIsOpen();
+// dibuja y maneja el teclado (llamar una vez por cuadro despues del menu); escribe en buf (UTF-8). Devuelve true si cambio el texto
+bool MvVkVisible();   // abierto o terminando de desvanecerse
+// backdrop: el fondo de vidrio del menu (overlay.cpp GlassBackdrop); nullptr = panel oscuro
+bool MvVirtualKeyboard(char* buf, int cap, const MvPad& p, float k, float alpha, bool anim, void (*backdrop)(ImVec2, ImVec2, float, float) = nullptr);
 
 } // namespace fx

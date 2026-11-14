@@ -67,7 +67,8 @@ static std::atomic<int> s_applies{0}, s_editorCalls{0}, s_editorApplied{0};
 static int s_logged = 0;
 static const char* s_origen = "";
 
-bool FreeCamActive() { return g_cfg.live[344][0] > 0.5f; }
+// (14/11) x344 = 3: solo mientras dura la repeticion (pitchwear.cpp ReplayNow, detector v2 y448); al terminar vuelve la camara del juego
+bool FreeCamActive() { const float v = g_cfg.live[344][0]; return v > 2.5f ? ReplayNow() : v > 0.5f; }
 // (11/11, Agustin 23:33 / 23:36: el Motor "que venga con la camara libre", manejada como en Blender) Dentro del estudio del Motor
 // (MotorPageActive) la camara libre se maneja como en un editor: las teclas W A S D Q E y el giro con el mouse valen SOLO con el
 // boton derecho apretado (mientras tanto el juego no ve el teclado); las flechas quedan para el menu del juego. El gizmo de ejes
@@ -77,7 +78,7 @@ static float s_pivot[3] = {}; static bool s_pivotOk = false;
 static float s_homePos[3] = {}, s_homePiv[3] = {}, s_homeYaw = 0, s_homePitch = 0; static bool s_homeOk = false;   // pose al prender (el visor no reescribe su camara: "inicio" vuelve aca)
 static std::atomic<int> s_gzAxis{-1}; static std::atomic<int> s_gzHome{0};
 static std::mutex s_gzMx; static float s_gzDYaw = 0, s_gzDPitch = 0;
-static bool MotorFly() { return MotorPageActive() && g_cfg.live[344][0] > 0.5f; }
+static bool MotorFly() { return MotorPageActive() && FreeCamActive(); }
 void FreeCamGizmoOrbit(float dyaw, float dpitch) { std::lock_guard<std::mutex> lk(s_gzMx); s_gzDYaw += dyaw; s_gzDPitch += dpitch; }
 void FreeCamGizmoAxis(int a) { s_gzAxis.store(a); }      // 0 +X, 1 -X, 2 +Y, 3 -Y, 4 +Z, 5 -Z: la camara se pone de ese lado del pivote
 void FreeCamGizmoHome() { s_gzHome.store(1); }
@@ -94,8 +95,8 @@ bool FreeCamBlocksKeys() {
     // motor") con el estudio del Motor abierto el juego no ve el teclado: el Motor se maneja con el mouse (y el mando sigue
     // andando); Esc = salir lo pone menumouse.cpp. [PES21FX] motor_teclado = 0 lo deja como antes
     if (g_cfg.motorKeys != 0 && MotorPageActive()) return true;
-    if (v > 0.5f && MotorPageActive()) return (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;   // en el Motor: solo mientras se vuela
-    return v > 0.5f && v < 1.5f;
+    if (FreeCamActive() && MotorPageActive()) return (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;   // en el Motor: solo mientras se vuela
+    return FreeCamActive() && (v < 1.5f || v > 2.5f);   // 1 y 3 (solo en la repeticion) bloquean el teclado mientras vuela
 }
 
 static bool Key(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }

@@ -101,6 +101,9 @@ static inline bool InReplay() { return RpV2() ? (s_rpClock || (HookPlaying() && 
 // reloj crudo). y = pisadas en la posicion real del botin (ver FootPt)
 static inline bool ReplayMode() { return g_cfg.live[441][0] > 0.5f && (g_replayHook.load(std::memory_order_relaxed) != 0 || RpV2()); }
 static bool WearTestsOn() { return !RpV2() || (ReplayMode() && InReplay()); }
+// (14/11, Agustin: "una opcion de camara libre con camara lenta en repeticion") x344 = 3 / z343 = 2: la camara libre y la camara lenta
+// se prenden solas mientras dura la repeticion. Solo con el detector v2 (y448): el visor solo decia "reproduciendo" todo el partido
+bool ReplayNow() { return RpV2() && InReplay(); }
 static inline bool FootOn() { return g_cfg.live[441][1] > 0.5f && g_cfg.live[115][3] > 0.5f; }
 // (12/11 16:55, Agustin: "un slider para exagerar esas pisadas") z441 EXAGERAR LAS PISADAS (0 o 1 = normal, hasta 10): cada huella marca mas
 // (aplastado, huella del desgaste y gasto por pisada) y es mas grande (x1 + 0.12 por punto: 10 = ~2x de tamano); con mas de 1 tambien
@@ -1068,7 +1071,7 @@ static void ReplayV2Present() {
             for (int kk = 1; kk < ringN; kk++) { const int j = (ringI + 63 - kk) % 64; const double dT = ringT[nI] - ringT[j];
                 if (dT >= 0.25) { if (dT < 1.0) rate = (float)((double)(ringV[nI] - ringV[j]) / dT); break; } } }
     } else rate = -1.f;
-    const bool modSlow = g_cfg.live[343][1] > 0.5f && g_cfg.live[343][2] > 0.5f;   // la camara lenta del mod en el partido (tiempo.cpp, fila 343) no es una repeticion
+    const bool modSlow = g_cfg.live[343][1] > 0.5f && g_cfg.live[343][2] > 0.5f && g_cfg.live[343][2] < 1.5f;   // (14/11) z343 = 2 (solo en la repeticion) frena recien cuando ya se detecto   // la camara lenta del mod en el partido (tiempo.cpp, fila 343) no es una repeticion
     const bool slow = !modSlow && rate > 0.05f && rate < 0.85f;
     slowT = slow ? slowT + dR : 0.f;
     s_rpClock = rewound || slowT >= 0.3f;
