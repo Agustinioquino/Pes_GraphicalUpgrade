@@ -89,42 +89,35 @@ float RplSpeedConst(uintptr_t mulss, float def) {
     float v = 0.0f; if (!Rd((const void*)a, &v, 4)) return def;
     return (v == v && fabsf(v) >= 0.005f && fabsf(v) <= 4.0f) ? v : def;
 }
-void PhotoReplayCtl(void* line) {
-    // (14/11 k, Agustin: "un switcher para que la repeticion funcione normal cuando no esta activa la camara libre y que al activar la
-    // camara libre estos ganchos se trasladen y en reversa") con la camara libre volando (x344 != 2, mando no devuelto) la linea la maneja
-    // SIEMPRE esta funcion (tambien la reproduccion normal); al prenderla con el visor en pausa arranca en pausa; apagada, el visor del
-    // juego queda como siempre (el mando vuelve al juego, overlay.cpp g_blockGamePad)
-    static const void* s_prevLine = nullptr; static float s_prevPos = -1.0f;
-    float posNow = -1.0f; __try { posNow = *(const float*)((const char*)line + 0x14); } __except (EXCEPTION_EXECUTE_HANDLER) {}
-    const bool wasStill = line == s_prevLine && posNow == s_prevPos; s_prevLine = line; s_prevPos = posNow;
+// (14/11 l) LA CAMARA LIBRE MANEJA EL VISOR CON LA MISMA VELOCIDAD QUE DEVUELVE EL CONTROL DEL JUEGO (FUN_14217c0b0 devuelve la velocidad
+// del cuadro y FUN_14217bf20 la aplica): sin saltos por cuadro. Pausa = 0, cruceta derecha / izquierda = +0x1C x constante del exe o de
+// SlowMoServer, cuadrado en pausa = avanzar lento, L1 + cruceta = pasos del reloj, si no normal (o lenta con repeticion_lenta).
+// Interruptor: al prenderse toma la pausa del visor (+0xC = reproduciendo) y mientras vuela escribe +0xC = !pausa, asi al apagarse el
+// visor del juego queda como lo dejo la camara (pausado o andando). Apagada la camara libre no toca nada.
+void PhotoReplayCtl(void* line, uint64_t* ret) {
     const FreeCamPadInfo pi0 = FreeCamPadState();
     if (!line || !FreeCamActive() || lroundf(g_cfg.live[344][0]) == 2 || pi0.given) { s_pfLine = nullptr; return; }
-    const float ph = FreeCamPhotoScale(); const int dpad = FreeCamReplayDpad();
-    if (s_seekOk < 0) { s_seekOk = SigAt(kRplSeek, kRplSeekSig, sizeof kRplSeekSig) ? 1 : 0; Log("modo foto en la repeticion: salto del visor %s", s_seekOk ? "listo (0x14217e800)" : "NO (firma distinta)"); }
-    if (!s_seekOk) return;
     __try {
-        if (*(const int*)line != 5) { s_pfLine = nullptr; return; }
-        const float pos = *(const float*)((const char*)line + 0x14);
-        if (!(pos >= 0.0f && pos < 65536.0f)) return;
-        if (s_pfLine != line) { s_pfLine = line; s_pf = pos; if (wasStill) { FreeCamPhotoPause(true); Log("camara libre en la repeticion: el visor estaba en pausa, sigue en pausa"); } }
-        float spd = *(const float*)((const char*)line + 0x1c); if (!(spd > 0.0f && spd < 10.0f)) spd = 1.0f;   // velocidad del visor (1 = normal)
+        unsigned char* L = (unsigned char*)line;
+        if (*(const int*)L != 5) { s_pfLine = nullptr; return; }
+        if (s_pfLine != line) {
+            s_pfLine = line; const bool playing = L[0xc] != 0;
+            FreeCamPhotoPause(!playing);
+            Log("camara libre en la repeticion: toma el visor (%s)", playing ? "andando" : "en pausa");
+        }
+        float spd = *(const float*)(L + 0x1c); if (!(spd > 0.0f && spd < 10.0f)) spd = 1.0f;
         const FreeCamPadInfo pi = FreeCamPadState();
-        // como el visor del juego: cruceta derecha / izquierda mantenida = lento adelante / atras (0x14217C133 / 0x14217C154, lo que
-        // ponga SlowMoServer); cruz = pausa; cuadrado (u O) en pausa = avanzar lento; si no, los pasos del modo foto (L1 + cruceta)
-        double rate;
+        const float ph = FreeCamPhotoScale(); const int dpad = FreeCamReplayDpad();
+        float rate;
         if (dpad > 0 || (pi.paused && pi.advancing)) rate = spd * RplSpeedConst(0x14217C133ull, 0.5f);
         else if (dpad < 0) rate = spd * RplSpeedConst(0x14217C154ull, -0.5f);
-        else if (pi.paused) rate = 0.0;
-        else if (ph > 0.0f && fabsf(ph - 1.0f) > 1e-3f) rate = (double)std::clamp(ph, 0.0f, 4.0f);   // pasos del reloj del modo foto (L1 + cruceta)
-        else rate = spd * (g_cfg.replaySlow ? RplSpeedConst(0x14217C133ull, 0.5f) : 1.0f);   // reproduccion normal (lenta con repeticion_lenta)
-        s_pf = std::max(0.0, s_pf + rate);
-        const int want = (int)s_pf;
-        if (want != (int)pos) {
-            ((RplSeekFn)kRplSeek)(line, (unsigned short)want);
-            const float now = *(const float*)((const char*)line + 0x14);
-            if ((int)now != want) s_pf = now;   // el juego lo recorto (principio / final de lo grabado)
-            if (s_pfLogs < 6) { s_pfLogs++; Log("modo foto en la repeticion: cuadro %d (x%.2f%s)", want, rate, pi.paused ? ", pausa" : ""); }
-        }
+        else if (pi.paused) rate = 0.0f;
+        else if (ph > 0.0f && fabsf(ph - 1.0f) > 1e-3f) rate = std::clamp(ph, 0.0f, 4.0f);
+        else { const float m = RplSpeedConst(0x14217C133ull, 0.5f); rate = (g_cfg.replaySlow && m > 0.0f && m < 1.0f) ? m : 1.0f; }
+        L[0xc] = pi.paused ? 0 : 1;   // el estado del visor sigue al de la camara (al apagarla queda igual)
+        uint32_t bits; memcpy(&bits, &rate, 4);
+        *ret = (*ret & 0xffffffff00000000ull) | bits;
+        if (s_pfLogs < 6 && rate != 1.0f) { s_pfLogs++; Log("camara libre en la repeticion: velocidad x%.2f%s", rate, pi.paused ? " (pausa)" : ""); }
         g_replayMoveMs.store(GetTickCount64(), std::memory_order_relaxed);   // la camara libre sigue viendo la repeticion aunque este quieta
     } __except (EXCEPTION_EXECUTE_HANDLER) { s_pfLine = nullptr; }
 }
@@ -138,32 +131,19 @@ uint64_t hk_rpl(void* obj, unsigned pad, unsigned char p3) {
         const bool mv = RplCursorMoved(obj, cur) || (stp & 0x7fffffffu) != 0u;
         g_replayPlayV2.fetch_add(1, std::memory_order_relaxed); if (mv) { g_replayMoveV2.fetch_add(1, std::memory_order_relaxed); g_replayMoveMs.store(GetTickCount64(), std::memory_order_relaxed); }
         if (v2 && mv) { g_replayMs.store(GetTickCount64(), std::memory_order_relaxed); g_replayPlay.fetch_add(1, std::memory_order_relaxed); } } } __except (EXCEPTION_EXECUTE_HANDLER) {}
-    // (14/11 g, Agustin: "que el slow mo del lua tambien permita que la reproduccion normal ... vaya en camara lenta") REPETICION NORMAL
-    // EN CAMARA LENTA ([PES21FX] repeticion_lenta): mientras la linea avanza a velocidad normal (sin flechas ni pausa del visor), su
-    // velocidad (+0x1C) se multiplica por la de la flecha derecha (0.5 del exe o la de SlowMoServer) solo durante la llamada. Si el paso
-    // del cuadro no es el normal (flechas, stick, pausa, salto) no se toca: se vuelve a escalar en cuanto la reproduccion vuelve a la normal.
-    static const void* s_nlLine = nullptr; static bool s_nlScale = false;
-    float spd0 = 0.0f, pos0 = 0.0f, mul = 1.0f; bool scaled = false, st5 = false;
-    // (14/11 k, Agustin: "que la opcion de camara lenta afecte a la repeticion normal bien, pero que no se choquen") sin camara libre la
-    // lenta la hace esto (repeticion_lenta); con la camara libre volando la linea es de PhotoReplayCtl (s_pfLine) y esto no toca nada
-    const bool nlOn = g_cfg.replaySlow != 0 && obj && s_pfLine == nullptr;
-    if (nlOn) { __try {
-        st5 = *(const int*)obj == 5;
-        if (st5) {
-            if (s_nlLine != obj) { s_nlLine = obj; s_nlScale = false; }
-            pos0 = *(const float*)((const char*)obj + 0x14); spd0 = *(const float*)((const char*)obj + 0x1c);
-            mul = RplSpeedConst(0x14217C133ull, 0.5f);
-            if (s_nlScale && spd0 > 0.0f && spd0 < 10.0f && mul > 0.0f && mul < 1.0f) { *(float*)((char*)obj + 0x1c) = spd0 * mul; scaled = true; }
+    // (14/11 l) LEIDO FUN_14217c0b0: NO mueve la linea; DEVUELVE la velocidad del cuadro (float bajo de rax): 1.0 si +0xC (reproduciendo,
+    // cruz lo invierte) esta prendido, flechas = +0x1C x 0.25 (lo que ponga SlowMoServer), stick = x1.25, si no 0 (pausa). La aplica
+    // FUN_14217bf20 (lo llama FUN_14217ea90). Antes se escalaba +0x1C durante la llamada y se media +0x14: nunca hacia nada.
+    // REPETICION NORMAL EN CAMARA LENTA (repeticion_lenta, sin camara libre): solo cuando devuelve exactamente 1.0 reproduciendo
+    uint64_t r = o_rpl(obj, pad, p3);
+    if (g_cfg.replaySlow && obj && s_pfLine == nullptr) { __try {
+        float rate; memcpy(&rate, &r, 4);
+        if (rate == 1.0f && *(const unsigned char*)((const char*)obj + 0xc) != 0) {
+            const float mul = RplSpeedConst(0x14217C133ull, 0.5f);
+            if (mul > 0.0f && mul < 1.0f) { rate = mul; r = (r & 0xffffffff00000000ull) | (uint64_t)*(const uint32_t*)&rate; }
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) { st5 = false; } }
-    const uint64_t r = o_rpl(obj, pad, p3);
-    if (nlOn && st5) { __try {
-        if (scaled && *(const float*)((const char*)obj + 0x1c) == spd0 * mul) *(float*)((char*)obj + 0x1c) = spd0;
-        const float d = *(const float*)((const char*)obj + 0x14) - pos0, expect = scaled ? spd0 * mul : spd0;
-        s_nlScale = spd0 > 0.0f && fabsf(d - expect) < 0.02f + 0.05f * expect;   // reproduccion normal: en la siguiente llamada, lenta
-    } __except (EXCEPTION_EXECUTE_HANDLER) { s_nlScale = false; } }
-    else s_nlScale = false;
-    PhotoReplayCtl(obj);   // (14/11 g) pausa / avance / pasos del modo foto sobre la linea del visor
+    } __except (EXCEPTION_EXECUTE_HANDLER) {} }
+    PhotoReplayCtl(obj, &r);   // (14/11 l) con la camara libre: la velocidad que devuelve el control la pone la camara
     return r;
 }
 
@@ -513,7 +493,7 @@ void RastroPresent() {
 // ponia con el desgaste real (x431). Se pone apenas se elige uno de esos modos (una vez, misma firma y mismo gancho).
 void RastroReplayHookEnsure() {
     static bool tried = false;
-    if (tried || g_replayHook.load() || !(g_cfg.live[344][0] > 0.5f || g_cfg.live[343][2] > 1.5f)) return;   // cualquier camara libre: el modo foto tambien maneja el visor
+    if (tried || g_replayHook.load() || !(g_cfg.live[344][0] > 0.5f || g_cfg.live[343][2] > 1.5f || g_cfg.replaySlow)) return;   // (14/11 l) tambien para la repeticion lenta sin camara   // cualquier camara libre: el modo foto tambien maneja el visor
     tried = true;
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);

@@ -177,7 +177,7 @@ struct BarGeo { float x0, x1, y, h, hit; };
 BarGeo Geo(const ImVec2& ds) {
     const float sx = ds.x / 1920.0f, sy = ds.y / 1080.0f, k = std::max(1.0f, sy);
     const int n = std::max(s_n.load(), 1); const float lenS = (float)Wrap(s_last.load() - s_first.load(), n) / 54.0f;
-    const float grow = std::clamp((lenS - 15.0f) / 105.0f, 0.0f, 1.0f);          // 15 s o menos: como la del juego; 2 min o mas: ancha
+    const float grow = 0.0f * lenS;   // (14/11 l, Agustin: "no hagas que la barra se estire") siempre en el lugar de la del juego          // 15 s o menos: como la del juego; 2 min o mas: ancha
     const float t = (float)std::clamp((Now() - s_openT - 0.25) / 0.45, 0.0, 1.0); const float e = grow * t * t * (3.0f - 2.0f * t);
     BarGeo g;
     g.x0 = (860.0f + (104.0f - 860.0f) * e) * sx; g.x1 = (1764.0f + (1816.0f - 1764.0f) * e) * sx;
@@ -219,7 +219,8 @@ bool RepeticionPresent(IDXGISwapChain* sc) {
     const bool vOpen = live && ViewerOpen();
     const bool open = live && (vOpen || now - s_moveT < 3.0 || s_drag);
     { static int s_vLog = -1; const int st = !live ? 0 : vOpen ? 2 : 1;
-      if (st != s_vLog) { s_vLog = st; Log("repeticion: %s", st == 0 ? "sin repeticion" : st == 2 ? "visor abierto (barra a la vista)" : "repeticion andando, visor no abierto segun el estado (la barra sale al mover el mouse)"); } }
+      static int s_vLogN = 0;   // (14/11 l) en su PC cambiaba cada 5-70 ms: solo los primeros 16 cambios van al log
+      if (st != s_vLog && s_vLogN < 16) { s_vLogN++; s_vLog = st; Log("repeticion: %s", st == 0 ? "sin repeticion" : st == 2 ? "visor abierto (barra a la vista)" : "repeticion andando, visor no abierto segun el estado (la barra sale al mover el mouse)"); } }
     if (open && !s_openWas) s_openT = now;
     s_openWas = open;
     const bool bar = open && g_cfg.replayBar && !g_menuOpen.load();
@@ -274,50 +275,24 @@ void RepeticionDraw() {
             bg->AddImage(old, ImVec2(o, 0), ImVec2(ds.x + o, ds.y), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, (int)(aj * 255.0f + 0.5f)));
         }
     }
-    // 2) barra propia: casi de borde a borde, con el minuto donde apunta el mouse
+    // 2) (14/11 l, Agustin: "que esta interfaz sea la del propio juego, no una externa; que el tiempo se muestre sobre la barra de
+    // repeticion que se puede ocultar con SHARE") NO se dibuja ninguna barra: el clic / arrastre es sobre la barra DEL JUEGO (mismo
+    // lugar, Geo sin agrandar) y solo se muestra el minuto donde caeria el clic, chico, encima de la barra del juego
     if (!g_cfg.replayBar || !ReplayLive() || g_menuOpen.load() || !s_openWas) return;
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const float k = std::max(1.0f, ds.y / 1080.0f);
     const BarGeo g = Geo(ds);
-    const float a = std::clamp((float)(now - s_openT) * 4.0f, 0.0f, 1.0f);
-    const float ca = std::clamp((float)(3.0 - (now - s_moveT)) * 2.0f, 0.0f, 1.0f);   // la flecha se va si el mouse no se mueve
-    auto A = [&](int v) { return (int)(v * a); };
     const int n = std::max(s_n.load(), 1), f0 = s_first.load(), len = std::max(Wrap(s_last.load() - f0, n), 1);
-    const float pos = std::clamp((float)Wrap(s_cur.load() - f0, n) / (float)len, 0.0f, 1.0f);
     const float mx = s_mx * ds.x, my = s_my * ds.y;
     const bool over = s_front && mx >= g.x0 - 8.0f && mx <= g.x1 + 8.0f && fabsf(my - (g.y + g.h * 0.5f)) <= g.hit;
-    // fondo
-    // (14/11 07:52, Agustin: "que el fondo de la barra siga eso") fondo con el mismo estilo de los paneles del juego (gris oscuro
-    // translucido, borde fino claro); crece junto con la barra. Sin crecer queda dentro del panel del juego (no se dibuja)
-    { const float grownW = (g.x1 - g.x0) / (ds.x * (1764.0f - 860.0f) / 1920.0f) - 1.0f;   // 0 = como la del juego
-      const float fa = std::clamp(grownW * 4.0f, 0.0f, 1.0f) * a;
-      if (fa > 0.01f) {
-          const ImVec2 b0(g.x0 - 16 * k, g.y - 32 * k), b1(g.x1 + 16 * k, g.y + g.h + 12 * k);
-          dl->AddRectFilled(b0, b1, IM_COL32(28, 30, 34, (int)(205 * fa)));
-          dl->AddRect(b0, b1, IM_COL32(255, 255, 255, (int)(40 * fa)), 0.0f, 0, 1.0f * k);
-      } }
-    dl->AddRectFilled(ImVec2(g.x0, g.y), ImVec2(g.x1, g.y + g.h), IM_COL32(255, 255, 255, A(60)), g.h * 0.5f);
-    const float px = g.x0 + (g.x1 - g.x0) * pos;
-    dl->AddRectFilled(ImVec2(g.x0, g.y), ImVec2(px, g.y + g.h), IM_COL32(120, 210, 90, A(230)), g.h * 0.5f);
-    dl->AddCircleFilled(ImVec2(px, g.y + g.h * 0.5f), g.h * 0.95f, IM_COL32(255, 255, 255, A(255)));
+    if (!over && !s_drag) return;
     char buf[16];
-    if (FrameClock(f0, buf, sizeof buf)) dl->AddText(ImVec2(g.x0, g.y - 22 * k), IM_COL32(255, 255, 255, A(200)), buf);
-    if (FrameClock(Wrap(f0 + len, n), buf, sizeof buf)) { const ImVec2 ts = ImGui::CalcTextSize(buf); dl->AddText(ImVec2(g.x1 - ts.x, g.y - 22 * k), IM_COL32(255, 255, 255, A(200)), buf); }
-    if (over || s_drag) {   // donde caeria el clic: linea fina y minuto exacto
-        const float fx = std::clamp(mx, g.x0, g.x1), fr = (fx - g.x0) / (g.x1 - g.x0);
-        dl->AddLine(ImVec2(fx, g.y - 6 * k), ImVec2(fx, g.y + g.h + 6 * k), IM_COL32(255, 230, 120, A(255)), 2.0f * k);
-        if (FrameClock(Wrap(f0 + (int)lroundf(fr * (float)len), n), buf, sizeof buf)) {
-            const ImVec2 ts = ImGui::CalcTextSize(buf);
-            const float bx = std::clamp(fx - ts.x * 0.5f, g.x0, g.x1 - ts.x);
-            dl->AddRectFilled(ImVec2(bx - 6 * k, g.y - 28 * k), ImVec2(bx + ts.x + 6 * k, g.y - 6 * k), IM_COL32(20, 20, 20, A(230)), 4 * k);
-            dl->AddText(ImVec2(bx, g.y - 26 * k), IM_COL32(255, 230, 120, A(255)), buf);
-        }
-    }
-    // flecha del mouse (el juego esconde la de Windows)
-    if (s_front && ca > 0.01f) {
-        const ImVec2 p0(mx, my), b(mx, my + 19.0f * k), c(mx + 5.2f * k, my + 14.6f * k), d(mx + 13.5f * k, my + 13.5f * k);
-        dl->AddTriangleFilled(p0, b, c, IM_COL32(255, 255, 255, (int)(255 * ca))); dl->AddTriangleFilled(p0, c, d, IM_COL32(255, 255, 255, (int)(255 * ca)));
-        const ImVec2 pts[4] = { p0, b, c, d }; dl->AddPolyline(pts, 4, IM_COL32(0, 0, 0, (int)(255 * ca)), ImDrawFlags_Closed, 1.4f * k);
+    const float fx = std::clamp(mx, g.x0, g.x1), fr = (fx - g.x0) / (g.x1 - g.x0);
+    if (FrameClock(Wrap(f0 + (int)lroundf(fr * (float)len), n), buf, sizeof buf)) {
+        const ImVec2 ts = ImGui::CalcTextSize(buf);
+        const float bx = std::clamp(fx - ts.x * 0.5f, g.x0, g.x1 - ts.x);
+        dl->AddRectFilled(ImVec2(bx - 5 * k, g.y - 26 * k), ImVec2(bx + ts.x + 5 * k, g.y - 6 * k), IM_COL32(16, 16, 16, 200), 3 * k);
+        dl->AddText(ImVec2(bx, g.y - 24 * k), IM_COL32(255, 255, 255, 240), buf);
     }
 }
 
