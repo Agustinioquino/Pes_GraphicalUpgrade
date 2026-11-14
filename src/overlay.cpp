@@ -1960,6 +1960,14 @@ static void DrawSettingsPage() {
             row(TRS("Rueda sobre una opcion: cambiarla"));
             if (ImGui::Checkbox("##mousemenusrueda", &wo)) { g_cfg.menuMouseWheelOpt = wo ? 1 : 0; SaveOption("mouse_rueda_opciones", wo ? "1" : "0"); }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con el mouse quieto sobre una fila con opciones (izquierda / derecha), la rueda cambia la opcion en vez de subir o bajar."));
+            bool hg = g_cfg.menuMouseHideGuide != 0;   // (14/11 e)
+            row(TRS("Con el mouse: esconder los botones del mando"));
+            if (ImGui::Checkbox("##mousemenusguia", &hg)) { g_cfg.menuMouseHideGuide = hg ? 1 : 0; SaveOption("mouse_oculta_botones", hg ? "1" : "0"); }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mientras se usa el mouse en los menus del juego se esconde la barra de botones del mando. Vuelve apenas se usa el mando."));
+            bool dr = g_cfg.menuMouseDrawn != 0;
+            row(TRS("Mouse: medir lo que dibuja cada boton"));
+            if (ImGui::Checkbox("##mousemenusdibujo", &dr)) { g_cfg.menuMouseDrawn = dr ? 1 : 0; SaveOption("mouse_menus_dibujo", dr ? "1" : "0"); }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Para menus cambiados por un parche: el mouse usa el lugar donde cada boton esta dibujado y no solo el del menu original."));
         }
     }
     {   // (11/11) cuadrito con la ultima tecla apretada: [PES21FX] ultima_tecla

@@ -179,6 +179,9 @@ struct Config {
     int menuMouseDelay = 2;                    // (11/11 v2) cuadros de retraso de la flecha, para que vaya junto con la fila marcada ([PES21FX] mouse_menus_retraso, 0..4)
     int menuMouseNear = 1;                     // (11/11 v2) en los huecos entre filas de un grupo vale la mas cercana ([PES21FX] mouse_menus_cerca; 14/11 ythnmm: 1 = solo a pocos pixeles, 2 = lejos como antes)
     int menuMouseWheelOpt = 1;                 // (14/11 ythnmm) rueda sobre un selector = cambiar la opcion ([PES21FX] mouse_rueda_opciones)
+    int menuMouseDrawn = 1;                    // (14/11 e) probar tambien con lo que cada fila DIBUJA, para menus redibujados por parches ([PES21FX] mouse_menus_dibujo)
+    int menuMouseTeamSel = 1;                  // (14/11 e) Elegir equipo: rueda y clic sobre la lista de ligas / equipos ([PES21FX] mouse_elegir_equipo)
+    int menuMouseHideGuide = 1;                // (14/11 e) esconder la barra de botones del juego mientras se usa el mouse ([PES21FX] mouse_oculta_botones)
     int mouseHint = 1;                         // (14/11 d) [PES21FX] ayuda_mouse: clic izq. / der. abajo a la derecha al usar el mouse en los menus del juego
     int camShareHold = 1;                      // (14/11 j) [PES21FX] camara_share: mantener SHARE / SELECT = camara libre en la repeticion
     int camNoDof = 1;                          // (14/11 h) [PES21FX] camara_sin_dof: con la camara libre prendida no hay desenfoque de profundidad (w41 = 2, x137 = 0)
