@@ -108,6 +108,17 @@ static const unsigned char kAfpSetVisibleSig[13] = { 0x8b,0x49,0x0c,0x44,0x0f,0x
 static bool s_guideOk = false, s_guideHidden = false; static double s_guideT = 0;
 static std::atomic<double> s_padT{0};                                    // ultima vez que el mando / teclado movio o apreto algo en un menu
 
+// (14/11 g, Agustin: "al usar mando, para que funcione bien, que se reinicie la seleccion") por ventana: la fila que tenia elegida el
+// mando antes de que el mouse eligiera otra. La primera direccion del mando despues del mouse vuelve a esa fila (y no mueve).
+struct PadSel { void* win; uintptr_t vt; int g, r; bool dirty; double t; };   // vt: la misma direccion puede ser otra pagina despues
+static PadSel s_padSel[8] = {};
+static PadSel* PadSelFor(void* win, bool create) {
+    PadSel* old = &s_padSel[0];
+    for (PadSel& e : s_padSel) { if (e.win == win) return &e; if (e.t < old->t) old = &e; }
+    if (!create) return nullptr;
+    *old = PadSel{ win, 0, -1, -1, false, 0 }; return old;
+}
+
 static void* s_pendWin = nullptr; static int s_pendAction = -1;
 static void* s_pendDxWin = nullptr; static int s_pendDx = 0;              // (v3) clic sobre una fila con selector: "derecha" / "izquierda" para el juego
 static POINT s_last = { -32000, -32000 }; static bool s_lWas = false, s_rWas = false; static double s_stepT = 0;
@@ -603,6 +614,7 @@ static void Step(void* win) {
     if (s_m.moved) s_over.store(s_overB);
     bool chose = false;
     if (on && !((int)U32(I + 0xa0) == hit.group && (int)U32(I + 0xd8) == hitAbs)) {
+        if (PadSel* ps = PadSelFor(win, true)) { if (!ps->dirty || ps->vt != *(uintptr_t*)win) { ps->vt = *(uintptr_t*)win; ps->g = (int)U32(I + 0xa0); ps->r = (int)U32(I + 0xd8); ps->dirty = true; } ps->t = now; }
         SelectLikeGame(win, hit.group, hitAbs); chose = true;
         const int k = s_nSel.fetch_add(1, std::memory_order_relaxed);
         if (hit.dist > 0) s_nNear.fetch_add(1, std::memory_order_relaxed);
@@ -636,7 +648,21 @@ static void hk_Hover(void* win) {
 
 static void hk_Dirs(void* win, int* dx, int* dy, unsigned char* trig) {
     o_dirs(win, dx, dy, trig);
-    if (dx && dy && (*dx != 0 || *dy != 0)) s_padT.store(Now());         // (14/11 e) el mando / teclado movio: vuelve la barra de botones, se va la flecha
+    if (dx && dy && (*dx != 0 || *dy != 0)) {                            // (14/11 e) el mando / teclado movio: vuelve la barra de botones, se va la flecha
+        const bool mouseLast = s_moveT.load() > s_padT.load();
+        s_padT.store(Now());
+        PadSel* ps = PadSelFor(win, false);
+        if (ps && ps->dirty) {                                           // (14/11 g) vuelve la seleccion que tenia el mando
+            ps->dirty = false;
+            uint8_t* I = Ptr(win) ? P8((uint8_t*)win + 0x88) : nullptr;
+            if (mouseLast && g_cfg.menuMousePadReset != 0 && Enabled() && Ptr(I) && ps->vt == *(uintptr_t*)win && Now() - ps->t < 300.0 && ps->g >= 0 && ps->r >= 0 && (uint32_t)ps->g < U32(I + 0xa4) &&
+                !((int)U32(I + 0xa0) == ps->g && (int)U32(I + 0xd8) == ps->r)) {
+                SelectLikeGame(win, ps->g, ps->r);
+                *dx = 0; *dy = 0; if (trig) *trig = 0;
+                static int s_n = 0; if (s_n++ < 8) Log("mouse en menus: se uso el mando -> vuelve la seleccion a grupo %d fila %d", ps->g, ps->r);
+            }
+        }
+    }
     const bool ts = s_tsWin != nullptr && Now() - s_tsT < 0.2;           // el mouse esta sobre la lista de Elegir equipo: la rueda es de esa ventana (TeamSelStep)
     const int w = ts ? 0 : s_wheel.exchange(0);
     void* const optWin = s_pendDxWin; s_pendDxWin = nullptr;
