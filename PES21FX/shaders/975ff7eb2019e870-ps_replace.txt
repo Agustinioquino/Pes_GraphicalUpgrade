@@ -1,0 +1,83 @@
+// PES 2021 - Anillos de carteles LED alrededor de la cancha (capa con alfa sobre el G-buffer)  [hash 975ff7eb2019e870]
+// PES21 (20/10, 141 / 144). Traducido a HLSL desde el ensamblador (catalogo PES21 FX), instruccion por instruccion:
+// capa que se mezcla con alfa sobre el G-buffer (o1.w / o2.w = alfa de la mezcla, sin bits bajos de la normal),
+// antialiasing especular del juego. PES21 FX (x144 = 1 y x141 = 1): el contenido del anillo se marca como LED
+// (rugosidad 253/255 + especular 1/255 + metal 0) y la composicion le suma luz propia (ver 85e1d2af y 619b86cb).
+cbuffer cPSSystem : register(b0) { float4 m_param; float4 m_renderInfo; float4 m_renderBuffer; float4 m_dominantLightDir; float4 m_timeParam; }
+
+SamplerState g_sampler_diffuse_s : register(s0);
+SamplerState g_sampler_normal_s : register(s1);
+SamplerState g_sampler_srm_s : register(s2);
+SamplerState g_sampler_metalnessmap_s : register(s3);
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+Texture2D<float4> g_tex_diffuse : register(t0);
+Texture2D<float4> g_tex_normal : register(t1);
+Texture2D<float4> g_tex_srm : register(t2);
+Texture2D<float4> g_tex_metalnessmap : register(t3);
+Texture2D<float4> g_tex_mesh : register(t15);
+Texture1D<float4> IniParams : register(t120);
+
+void main(
+  float4 v0 : SV_Position0,
+  float4 v1 : COLOR0,
+  float2 v2 : TEXCOORD0,
+  float2 w2 : TEXCOORD9,
+  float3 v3 : TEXCOORD5,
+  float3 v4 : TEXCOORD6,
+  float3 v5 : TEXCOORD7,
+  float4 v6 : TEXCOORD8,
+  out float4 o0 : SV_Target0,
+  out float4 o1 : SV_Target1,
+  out float4 o2 : SV_Target2,
+  out float4 o4 : SV_Target4)
+{
+  float4 r1, r3;
+  r1 = v0.xyxy + float4(-0.5, -0.5, -1.0, -1.0);
+  float2 par = (float2)((int2)r1.zw & 1) - 0.5;
+  float4 tm = g_tex_mesh.Sample(g_samplerPoint_Wrap_s, r1.xy * 0.125);
+  r3 = g_tex_diffuse.Sample(g_sampler_diffuse_s, v2.xy);
+  o0 = r3;
+  if (r3.w - tm.w * m_param.w < 0.0 || v1.w - tm.x < 0.0) discard;
+  if (!(v1.w >= 0.9)) discard;
+  float3 n0 = normalize(v3), n1 = normalize(v4);
+  float4 tn = g_tex_normal.Sample(g_sampler_normal_s, v2.xy);
+  float2 nm = float2(tn.w * tn.x, tn.y) * 2.0 - 1.0;
+  float3 nt = n0 * nm.x + n1 * nm.y;
+  float3 n2 = normalize(v5);
+  float nz = max(1.0 - nm.x * nm.x - nm.y * nm.y, 0.0) + 0.0001;
+  nz = nz * rsqrt(nz);
+  float3 N = normalize(n2 * nz + nt);
+  {
+    float s = abs(N.y) + abs(N.x) + abs(N.z);
+    float2 p = N.xy / s;
+    float2 sg = float2(p.x >= 0.0 ? 1.0 : -1.0, p.y >= 0.0 ? 1.0 : -1.0);
+    float2 wr = sg * (1.0 - abs(p.yx));
+    p = (0.0 < -N.z) ? p : wr;
+    uint2 q = (uint2)((p * 0.5 + 0.5) * 2047.0);
+    q >>= 1;
+    o1.xy = (float2)q * 0.000977517106;
+  }
+  o1.w = r3.w;
+  o2.w = r3.w;
+  o1.z = 0.000977517106;
+  // antialiasing especular del juego
+  float3 dX = ddx_fine(N);
+  float3 nA = N - dX * par.x;
+  float3 dY = ddy_fine(nA);
+  float3 nB = nA - dY * par.y;
+  nB /= dot(N, nB);
+  float3 T = normalize(v3 - N * dot(N, v3));
+  float3 Bt = N.yzx * T.zxy - N.zxy * T.yzx;
+  float ct = dot(nB, T), cb = dot(nB, Bt);
+  float2 vv = float2(abs(ddy_fine(ct)) + abs(ddx_fine(ct)), abs(ddy_fine(cb)) + abs(ddx_fine(cb)));
+  vv = min(vv * 0.5, 0.300010);
+  vv = vv * vv * 2.0;
+  float aa = max(vv.y, vv.x);
+  float2 srm = g_tex_srm.Sample(g_sampler_srm_s, v2.xy).xy;
+  o2.y = srm.x;
+  o2.x = sqrt(srm.y * srm.y + aa);
+  o2.z = g_tex_metalnessmap.Sample(g_sampler_metalnessmap_s, v2.xy).x;
+  o4 = float4(0.0, 0.0, 0.0, 0.0);
+  // PES21 anillos LED (x144 + x141)
+  if (IniParams.Load(int2(141, 0)).x > 0.5 && IniParams.Load(int2(144, 0)).x > 0.5) { o2.x = 0.99215686; o2.y = 0.00392157; o2.z = 0.0; }
+}
