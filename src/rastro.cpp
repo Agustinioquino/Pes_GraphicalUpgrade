@@ -35,6 +35,7 @@ namespace fx {
 std::atomic<int> g_simTick{-1};   // (12/11) tick del partido para el desgaste real (pitchwear.cpp), lo escribe hk_rel al final de cada tick
 std::atomic<unsigned long long> g_replayMs{0};   // (12/11 16:45) visor de repeticiones reproduciendo (ver hk_rpl)
 std::atomic<int> g_replayHook{0}, g_replayCalls{0}, g_replayPlay{0};
+std::atomic<unsigned long long> g_replayMoveMs{0};   // (14/11 g) ultima llamada del visor con el cursor avanzando, sin depender de y448 (camara libre / lenta en la repeticion)
 std::atomic<int> g_replayCallsV2{0}, g_replayPlayV2{0}, g_replayMoveV2{0};   // (13/11 tanda 2) y448: llamadas / estado 5 / con el cursor avanzando (log "repeticiones v2" de pitchwear.cpp)
 
 std::string ModOff(void* p);
@@ -73,7 +74,7 @@ uint64_t hk_rpl(void* obj, unsigned pad, unsigned char p3) {
         if (!v2) { g_replayMs.store(GetTickCount64(), std::memory_order_relaxed); g_replayPlay.fetch_add(1, std::memory_order_relaxed); }   // y448 0: como antes
         const unsigned cur = *(const unsigned*)((const char*)obj + 0x14), stp = *(const unsigned*)((const char*)obj + 0x18);
         const bool mv = RplCursorMoved(obj, cur) || (stp & 0x7fffffffu) != 0u;
-        g_replayPlayV2.fetch_add(1, std::memory_order_relaxed); if (mv) g_replayMoveV2.fetch_add(1, std::memory_order_relaxed);
+        g_replayPlayV2.fetch_add(1, std::memory_order_relaxed); if (mv) { g_replayMoveV2.fetch_add(1, std::memory_order_relaxed); g_replayMoveMs.store(GetTickCount64(), std::memory_order_relaxed); }
         if (v2 && mv) { g_replayMs.store(GetTickCount64(), std::memory_order_relaxed); g_replayPlay.fetch_add(1, std::memory_order_relaxed); } } } __except (EXCEPTION_EXECUTE_HANDLER) {}
     return o_rpl(obj, pad, p3);
 }
@@ -417,6 +418,21 @@ void RastroPresent() {
     Log("rastro: registro de depuracion del juego %s, foto del partido %s, vigia de faltas %s -> PES21FX\\rastro\\%ls\\ (tope %llu MB)",
         logOk ? "enganchado" : "NO (firma distinta)", relOk ? "enganchada" : "NO (firma distinta)",
         !g_cfg.rastroFalta ? "apagado" : mcOk ? "enganchado" : "NO (firma distinta)", name, (unsigned long long)(s_cap >> 20));
+}
+
+// (14/11 g, Agustin: "la camara libre no esta linkeada a la repeticion, las opciones no funcionan") la camara libre solo en la
+// repeticion (x344 = 3) y la lenta solo en la repeticion (z343 = 2) necesitan el gancho del visor de repeticiones, que antes solo se
+// ponia con el desgaste real (x431). Se pone apenas se elige uno de esos modos (una vez, misma firma y mismo gancho).
+void RastroReplayHookEnsure() {
+    static bool tried = false;
+    if (tried || g_replayHook.load() || !(g_cfg.live[344][0] > 2.5f || g_cfg.live[343][2] > 1.5f)) return;
+    tried = true;
+    HMODULE mod = GetModuleHandleW(nullptr);
+    auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
+    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("camara en la repeticion: exe distinto, sin gancho del visor"); return; }
+    const bool sig = SigAt(kReplayCtl, kReplaySig, sizeof kReplaySig);
+    if (sig && MH_CreateHook((void*)kReplayCtl, (void*)&hk_rpl, (void**)&o_rpl) == MH_OK && MH_EnableHook((void*)kReplayCtl) == MH_OK) g_replayHook = 1;
+    Log("camara libre / lenta en la repeticion: visor de repeticiones %s", g_replayHook.load() ? "enganchado (0x14217c0b0)" : sig ? "NO (MinHook)" : "NO (firma distinta)");
 }
 
 // (08/11) solo el gancho del final del tick, para los eventos del partido que usan los gestos del publico (fila 394), aunque

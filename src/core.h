@@ -607,7 +607,7 @@ void SunWatchFrame(const float* w, float devSky, int frame);
 void SunWatchRequestArm(uintptr_t a);   // (27/10) vigilar escrituras en el origen del cbuffer de la luz (sunwatch.cpp)   // (26/10) sol de la luz en mundo por cuadro (sunwatch.cpp)
 void CoverStart(); void CoverNextPhase(); void CoverFlush();
 void RastroV4Start(); void RastroV4Flush(bool final);   // (10/11 d) rastro v4 (src-rastro/rastrodll.cpp)
-void RastroPresent(); void RastroFlush(bool final); void RastroEventosPresent();   // (08/11 i) rastro del motor (rastro.cpp)   // (08/11 h) medidor de cobertura del codigo del juego (cobertura.cpp)
+void RastroPresent(); void RastroFlush(bool final); void RastroEventosPresent(); void RastroReplayHookEnsure();   // (08/11 i) rastro del motor (rastro.cpp)   // (08/11 h) medidor de cobertura del codigo del juego (cobertura.cpp)
 void CodeWatchStart();                            // (24/10) vigila la seccion .text del exe: anota en el log lo que cambie (codewatch.cpp)
 bool CodeWatchOrig(uintptr_t a, unsigned char* out, size_t n);   // bytes de la copia (registro de cierres)
 void MemWatchStart();                             // (26/10) vigila el liberador de memoria del juego y VirtualProtect/VirtualFree (memwatch.cpp)

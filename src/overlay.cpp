@@ -2722,6 +2722,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     // la barra de botones
     const bool hint = false;
     if (!g_menuOpen) { g_blockGameKeys = FreeCamBlocksKeys(); g_menuTyping = false; }   // (31/10) con la camara libre el juego tampoco ve el teclado
+    RastroReplayHookEnsure();   // (14/11 g) gancho del visor de repeticiones si la camara libre / lenta van solo en la repeticion
     const bool camFree = FreeCamActive() && !MotorPageActive(); const float camSlow = TiempoFactor();   // (1/11) aviso en pantalla
     const bool camHud = !g_menuOpen && camFree;   // (14/11 g) la camara lenta sola ya no muestra nada abajo
     const bool lightIcons = g_cfg.live[319][0] > 0.5f && g_cfg.live[297][0] > 0.5f && g_cfg.live[378][2] < 0.5f && SSSSEditorLightAge() < 0.5;   // (08/11) con la luz fija al mundo (z378) el icono (relativo a la camara) mentiria: no se dibuja   // (1/11) iconos de la luz del editor

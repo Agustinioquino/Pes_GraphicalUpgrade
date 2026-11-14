@@ -103,7 +103,10 @@ static inline bool ReplayMode() { return g_cfg.live[441][0] > 0.5f && (g_replayH
 static bool WearTestsOn() { return !RpV2() || (ReplayMode() && InReplay()); }
 // (14/11, Agustin: "una opcion de camara libre con camara lenta en repeticion") x344 = 3 / z343 = 2: la camara libre y la camara lenta
 // se prenden solas mientras dura la repeticion. Solo con el detector v2 (y448): el visor solo decia "reproduciendo" todo el partido
-bool ReplayNow() { return RpV2() && InReplay(); }
+// (14/11 g) para la camara libre / lenta en la repeticion: el cursor del visor avanzando hace < 0.3 s, con o sin y448 (antes pedia y448 y el
+// gancho del desgaste real: sin eso nunca daba repeticion)
+extern std::atomic<unsigned long long> g_replayMoveMs;
+bool ReplayNow() { const unsigned long long t = g_replayMoveMs.load(std::memory_order_relaxed); return t != 0 && GetTickCount64() - t < 300; }
 static inline bool FootOn() { return g_cfg.live[441][1] > 0.5f && g_cfg.live[115][3] > 0.5f; }
 // (12/11 16:55, Agustin: "un slider para exagerar esas pisadas") z441 EXAGERAR LAS PISADAS (0 o 1 = normal, hasta 10): cada huella marca mas
 // (aplastado, huella del desgaste y gasto por pisada) y es mas grande (x1 + 0.12 por punto: 10 = ~2x de tamano); con mas de 1 tambien
