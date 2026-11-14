@@ -63,6 +63,7 @@ bool Readable(const void* p, size_t n) {
 }
 bool SigAt(uintptr_t a, const unsigned char* s, size_t n) { return Readable((const void*)a, n) && memcmp((const void*)a, s, n) == 0; }
 // viento de este cuadro (lo arma RedesPresent, lo leen los ganchos en el hilo del juego)
+constexpr float kNetRef = 6.0f;   // (14/11) referencia del arrastre del aire (el peso de la red del juego)
 struct NetWind { float ax, az, ay, dx, dz, D, turb, on, up; WindHeight hp; };   // (14/11) up = empuje desde abajo, hp = perfil por altura
 NetWind s_w{};
 
@@ -133,11 +134,15 @@ void RedesPresent() {
         // empuje en proporcion al peso BASE de la red (el del juego 6.0 o el de su mod 0.25): asi el viento la mueve igual de
         // "en serio" con o sin reactive_nets. Red real: arrastre / peso ~ 0.015 v2 -> 5 m/s = 0.37 del peso, 10 m/s = 1.5
         const float gNow = s_constOk ? *(const volatile float*)kGravity : bG;   // el peso que haya ahora (preset del Lua)
-        const float a = 0.015f * k * v * v * std::clamp(gNow, 0.1f, 10.0f);
+        // (14/11, Agustin: "para las redes no veo que le afecte") antes el empuje iba en proporcion al peso de la red: con el preset
+        // reactiva (peso 0.25) a 2 m/s quedaba en 0.015 m/s2 y no se veia nada. El arrastre del aire no depende del peso que elija
+        // el preset: ahora va contra una referencia fija (6 = el peso del juego): 2 m/s = 0.36 m/s2, 5 m/s = 2.3, 10 m/s = 9
+        (void)gNow;
+        const float a = 0.015f * k * v * v * kNetRef;
         w.ax = a * p[494][0]; w.az = a * p[494][1]; w.ay = 0.15f * a; w.dx = p[494][0]; w.dz = p[494][1]; w.D = p[494][3];
         w.turb = std::clamp(p[495][1], 0.0f, 1.0f); w.on = v * sqrtf(k) > 0.3f ? 1.0f : 0.0f;
         // (14/11) viento desde abajo (x511, solo "Probar el viento" por ahora): mismo arrastre, hacia arriba
-        const float u = p[511][0]; w.up = 0.015f * k * u * fabsf(u) * std::clamp(gNow, 0.1f, 10.0f);
+        const float u = p[511][0]; w.up = 0.015f * k * u * fabsf(u) * kNetRef;
         if (fabsf(u) * sqrtf(k) > 0.3f) w.on = 1.0f;
         w.hp = g_windHeight;
     }
