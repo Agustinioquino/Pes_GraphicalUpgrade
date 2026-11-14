@@ -59,6 +59,14 @@ static const uintptr_t kChildByType = 0x140e4f5d0ull;
 static PFN_Hover o_hover = nullptr; static PFN_Dirs o_dirs = nullptr; static PFN_Action o_action = nullptr;
 
 static bool s_tried = false, s_ok = false;
+// (14/11 ythnmm, Agustin: "continuar al igual que en el primer menu de apretar cualquier tecla") pantalla del titulo menu::TitleStart
+// (vtable 0x142671970): su vf40 0x140a9ae40 -> 0x140a9ac10 lee el mando 0 boton por boton (vf+0x40) y si hay alguno llama a
+// 0x141b58200(1) (mando activo) y 0x140a99250(pagina) ("titleOut", +0x9c = 1). Con el mouse: el clic izquierdo hace lo mismo, cuando
+// el "pressStart_on" ya se mostro (+0xd8) y no salio todavia (+0x9c != 1).
+static const uintptr_t kTitleVt = 0x142671970ull, kPadActive = 0x141b58200ull, kTitleGo = 0x140a99250ull;
+static const unsigned char kPadActiveSig[14] = { 0x8b,0xd1,0x48,0x8b,0x0d,0x8f,0x6c,0xca,0x01,0x48,0x85,0xc9,0x74,0x07 };
+static const unsigned char kTitleGoSig[14] = { 0x40,0x53,0x48,0x83,0xec,0x20,0xba,0x13,0x00,0x00,0x00,0x48,0x8b,0xd9 };
+static bool s_titleOk = false;
 // estado del hilo del menu (los tres ganchos corren ahi)
 static void* s_pendWin = nullptr; static int s_pendAction = -1;
 static void* s_pendDxWin = nullptr; static int s_pendDx = 0;              // (v3) clic sobre una fila con selector: "derecha" / "izquierda" para el juego
@@ -236,6 +244,27 @@ static void Step(void* win) {
     uint8_t* I = P8((uint8_t*)win + 0x88); if (!Ptr(I)) return;
     s_liveT.store(now); s_nStep.fetch_add(1, std::memory_order_relaxed);
     if (!s_m.ok) return;
+    if (s_m.lEdge && s_titleOk && *(uintptr_t*)win == kTitleVt) {        // titulo: clic = "apreta cualquier boton"
+        uint8_t* w = (uint8_t*)win;
+        if (U32(w + 0x9c) != 1 && w[0xd8] != 0) {
+            s_m.lEdge = false; s_moveT.store(now);
+            ((void (*)(int))kPadActive)(1); ((void (*)(void*))kTitleGo)(win);
+            Log("mouse en menus: clic en la pantalla del titulo -> continuar");
+            return;
+        }
+    }
+    {   // (14/11 ythnmm) diagnostico: la primera vez que se usa el mouse en cada clase de pagina, cuantos grupos / filas ve la DLL
+        static uintptr_t s_seen[32] = {}; static int s_nSeen = 0; const uintptr_t vt = *(uintptr_t*)win;
+        bool seen = false; for (int i = 0; i < s_nSeen; i++) if (s_seen[i] == vt) { seen = true; break; }
+        if (!seen && s_nSeen < 32 && (s_m.moved || s_m.lEdge)) {
+            s_seen[s_nSeen++] = vt;
+            int rows = 0, rowsOk = 0; uint8_t* root = P8(I + 0x98); const uint32_t ng = Ptr(root) ? std::min<uint32_t>(U32(I + 0xa4), 64) : 0;
+            for (uint32_t g = 0; g < ng; g++) { uint8_t* grp = Child(root, g); if (!Ptr(grp)) continue; const uint32_t n = std::min<uint32_t>(ChildCount(grp), 512);
+                for (uint32_t r = 0; r < n; r++) { uint8_t* nd = Child(grp, r); if (!Ptr(nd)) continue; rows++; void** v = *(void***)nd; if (Ptr(v) && RowClass(v)) rowsOk++; } }
+            Log("mouse en menus: pagina vtable %p: puntero propio %d, grupos %u, filas %d (%d que la DLL sabe medir), grupo / fila actual %d / %d",
+                (void*)vt, (int)I[0x44], ng, rows, rowsOk, (int)U32(I + 0xa0), (int)U32(I + 0xd8));
+        }
+    }
     if (I[0x44]) return;                              // pagina con puntero propio del juego: no se toca (por ahora)
     if (s_latchWin == win) {                          // clic del paso anterior que primero tuvo que elegir la fila
         const bool same = (int)U32(I + 0xa0) == s_latchG && (int)U32(I + 0xd8) == s_latchR && now - s_latchT < 0.25;
@@ -371,6 +400,8 @@ static void Install() {
         MH_DisableHook((void*)kHover); MH_DisableHook((void*)kDirs); MH_DisableHook((void*)kAction);
         Log("mouse en menus: MinHook no pudo prender los ganchos: se omite"); return;
     }
+    s_titleOk = SigAt(kPadActive, kPadActiveSig, sizeof kPadActiveSig) && SigAt(kTitleGo, kTitleGoSig, sizeof kTitleGoSig);
+    if (!s_titleOk) Log("mouse en menus: firma del titulo distinta (0x141b58200 / 0x140a99250): sin clic en el titulo");
     s_ok = true;
     Log("mouse en menus: listo (prueba del puntero 0x140e400d0, direcciones 0x140e3e6b0, acciones 0x140e48f80); mouse_menus = %d (0 lo apaga)", g_cfg.menuMouse);
 }
