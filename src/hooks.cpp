@@ -547,6 +547,8 @@ static const GrassVerOv kGrassVer[] = {
     {1, 507, 0, 0.0f},   // (13/11 siguiente) x507 el pasto acompana a la pelota
     {1, 506, 0, 0.0f}, {1, 506, 1, 0.0f},   // (13/11 siguiente) x506 sol en las puntas segun su altura, y506 rayos en algunas hojas
     {1, 505, 0, 0.0f},   // (13/11) x505 botines en el pasto (como antes)
+    {1, 512, 0, 0.0f}, {1, 512, 1, 0.0f}, {1, 512, 2, 0.0f},   // (14/11) contraluz con el color de la hoja, verde siempre verde, menos paja desde arriba
+    {1, 513, 0, 0.0f}, {1, 513, 1, 0.0f}, {1, 513, 2, 0.0f}, {1, 513, 3, 0.0f},   // (14/11) hondura de la mata, contacto, cielo en la sombra, cera
     // >= 2: 12/11 00:00 - 01:40
     {2, 432, 0, 0.0f}, {2, 432, 3, 0.0f}, {2, 433, 0, 1.0f}, {2, 433, 1, 0.0f}, {2, 433, 3, 0.0f},
     {2, 436, 0, 0.0f}, {2, 436, 1, 0.0f}, {2, 436, 2, 0.0f}, {2, 436, 3, 0.0f}, {2, 431, 0, 0.0f},

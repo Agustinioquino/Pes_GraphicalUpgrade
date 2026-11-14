@@ -413,6 +413,11 @@ void main(
     if (pesNat) { float densR = saturate((1.0 - r0.y) * 2.0);
       float kR = (1.0 - smoothstep(0.0, 0.55, relH)) * (0.6 + 0.4 * densR) * pesCf * (1.0 - pesPaintF);
       r1.xyz *= lerp(float3(1.0, 1.0, 1.0), float3(0.60, 0.78, 0.50), kR); }
+    // (14/11, Agustin: "la translucidez y el sombreado como podria mejorar?") x513 HONDURA DENTRO DE LA MATA: el tercio de abajo de cada hoja
+    // natural queda mas hondo y verde (alli llega solo la luz que ya paso por las hojas de arriba), mas en el pasto denso. 0 = como antes
+    { float kDp = pesNat ? clamp(IniParams.Load(int2(513,0)).x, 0.0, 2.0) : 0.0;
+      if (kDp > 0.001) { float dD = (1.0 - smoothstep(0.0, 0.40, relH)) * (0.5 + 0.5 * saturate((1.0 - r0.y) * 2.0)) * pesCf * (1.0 - pesPaintF);
+        r1.xyz *= lerp(float3(1.0, 1.0, 1.0), float3(0.74, 0.86, 0.68), saturate(0.5 * kDp * dD)); } }
     if (pesBladeM) r1.xyz *= lerp(1.0, lerp(0.62, 1.0, smoothstep(0.0, 0.45, relH)), saturate(IniParams.Load(int2(496,0)).z) * pesCf);   // (13/11 tanda 2) z496: raiz de la hoja 3D, neutra (sin verde azulado ni oliva)
   }
   o0.xyz = v1.zzz * r1.xyz;
