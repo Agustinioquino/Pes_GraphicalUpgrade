@@ -25,9 +25,25 @@ def rs(im, size, filt):
     r, g, b, a = im.split()
     return Image.merge('RGBA', [c.resize(size, filt) for c in (r, g, b, a)])
 
-def mips_of(im, fmt):
+def keep_coverage(im, ref_cov, thr=0.5):
+    # (14/11 0kygek, Agustin: "mejorar los peinados") los peinados del publico se recortan por el alfa: al achicar la mip el alfa
+    # se promedia y el pelo se afinaba / desaparecia a distancia. Cada mip escala su alfa para cubrir la misma fraccion que la mip 0
+    # (preservacion de cobertura de alfa, umbral 0.5)
+    r, g, b, a = im.split(); A = np.asarray(a).astype(np.float32) / 255
+    if ref_cov <= 0 or A.max() <= 0: return im
+    lo, hi = 0.25, 8.0
+    for _ in range(24):
+        m = 0.5 * (lo + hi)
+        if (np.clip(A * m, 0, 1) > thr).mean() < ref_cov: lo = m
+        else: hi = m
+    a2 = Image.fromarray((np.clip(A * hi, 0, 1) * 255 + 0.5).astype(np.uint8), 'L')
+    return Image.merge('RGBA', (r, g, b, a2))
+
+def mips_of(im, fmt, coverage=False):
     out = []; cur = im
+    cov = (np.asarray(im.split()[3]).astype(np.float32) / 255 > 0.5).mean() if coverage and im.mode == 'RGBA' else 0
     while True:
+        if cov > 0 and out: cur = keep_coverage(cur, cov)
         w, h = cur.size
         if fmt in (2, 4):
             pw, ph = max(4, (w + 3) // 4 * 4), max(4, (h + 3) // 4 * 4)
@@ -40,11 +56,11 @@ def mips_of(im, fmt):
         cur = rs(cur, (max(1, w // 2), max(1, h // 2)), Image.LANCZOS)
     return out
 
-def build(src, im, fmt):
+def build(src, im, fmt, coverage=False):
     f = Ftex.__new__(Ftex)
     f.header = bytearray(src.header)
     f.fmt, f.w, f.h, f.d = fmt, im.size[0], im.size[1], 1
-    f.mips = mips_of(im, fmt); f.mipCount = len(f.mips)
+    f.mips = mips_of(im, fmt, coverage); f.mipCount = len(f.mips)
     return f.to_bytes(chunk=65536, small_first=True)
 
 def up(im, k, sharp=True):
@@ -79,7 +95,7 @@ def main(root, out):
             'au_h_parts_bsm': lambda im: up(im, 4), 'au_l_nrm': lambda im: up(im, 4, False), 'au_l_srm': lambda im: up(im, 4, False)}
     for n, fn in jobs.items():
         src = Ftex(open(os.path.join(src_dir, n + '.ftex'), 'rb').read())
-        im = fn(load(src)); data = build(src, im, src.fmt)
+        im = fn(load(src)); data = build(src, im, src.fmt, coverage=(n == 'au_h_face_bsm_alp'))
         open(os.path.join(dst, n + '.ftex'), 'wb').write(data)
         Ftex(data)   # verifica que se relee
         im.convert('RGB').save(os.path.join(out, n + '_vista.png'))
