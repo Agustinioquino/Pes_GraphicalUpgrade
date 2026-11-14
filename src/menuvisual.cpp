@@ -1598,18 +1598,18 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
         const float breath = anim ? 0.5f + 0.5f * sinf((float)now * 4.2f) : 0.5f;
         const float gl = (0.55f + 0.45f * breath) * s_hov + 0.8f * s_flash;
         const ImVec2 tip(m.x, m.y + 0.8f * sc);
-        {   // (14/11 e, Agustin: "saca esas ondas, y solo manten el brillo verde") brillo PAREJO: muchas capas finas, sin anillos que se vean
-            const float R = (4.2f + 1.0f * breath) * k;
-            for (int i = 12; i >= 1; i--) { const float u = i / 12.0f; dl->AddCircleFilled(tip, R * u, ColA(acc, 0.050f * gl * alpha * (1.0f - u * 0.6f)), 24); }
-        }
         auto R = [&](float x0, float y0, float x1, float y1) { return std::make_pair(ImVec2(m.x + x0 * sc, m.y + y0 * sc), ImVec2(m.x + x1 * sc, m.y + y1 * sc)); };
         struct Part { float x0, y0, x1, y1, r; };
         static const Part parts[5] = { { -1.7f, 0.0f, 1.7f, 11.5f, 1.7f }, { 1.5f, 5.2f, 4.6f, 12.0f, 1.5f }, { 4.4f, 6.0f, 7.4f, 12.4f, 1.5f }, { 7.2f, 7.4f, 9.8f, 12.8f, 1.3f }, { -1.7f, 9.0f, 9.8f, 17.6f, 3.0f } };
         for (const Part& q : parts) { auto r = R(q.x0, q.y0, q.x1, q.y1); dl->AddRectFilled(ImVec2(r.first.x + 1.6f * k, r.first.y + 2.2f * k), ImVec2(r.second.x + 1.6f * k, r.second.y + 2.2f * k), Col(0, 0, 0, 0.22f * alpha), q.r * sc); }
-        const float e = 1.1f * k;
-        for (const Part& q : parts) { auto r = R(q.x0, q.y0, q.x1, q.y1); dl->AddRectFilled(ImVec2(r.first.x - e, r.first.y - e), ImVec2(r.second.x + e, r.second.y + e), edge, q.r * sc + e); }
+        // (14/11 f, Agustin: "un borde verde con sombra") borde verde del menu, con un filo oscuro afuera para que se lea sobre cualquier fondo
         const ImVec2 t0(m.x - 1.0f * sc, m.y + 14.2f * sc), t1(m.x - 4.6f * sc, m.y + 9.6f * sc);
-        dl->AddLine(t0, t1, edge, 3.4f * sc + 2 * e); dl->AddCircleFilled(t1, 1.7f * sc + e, edge, 12);
+        const ImU32 green = ColA(Lerp4(acc, ImVec4(1, 1, 1, 1), 0.10f + 0.25f * s_flash), alpha);
+        for (int pass = 0; pass < 2; pass++) {
+            const float e = pass == 0 ? 2.1f * k : 1.25f * k; const ImU32 c = pass == 0 ? Col(0.02f, 0.05f, 0.04f, 0.75f * alpha) : green;
+            for (const Part& q : parts) { auto r = R(q.x0, q.y0, q.x1, q.y1); dl->AddRectFilled(ImVec2(r.first.x - e, r.first.y - e), ImVec2(r.second.x + e, r.second.y + e), c, q.r * sc + e); }
+            dl->AddLine(t0, t1, c, 3.4f * sc + 2 * e); dl->AddCircleFilled(t1, 1.7f * sc + e, c, 16);
+        }
         const ImU32 top = white, bot = Col(0.84f, 0.87f, 0.91f, alpha);
         dl->AddLine(t0, t1, top, 3.4f * sc); dl->AddCircleFilled(t1, 1.7f * sc, top, 12);
         for (const Part& q : parts) { auto r = R(q.x0, q.y0, q.x1, q.y1); const int v0 = dl->VtxBuffer.Size; dl->AddRectFilled(r.first, r.second, IM_COL32_WHITE, q.r * sc);
@@ -1621,10 +1621,30 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
         dl->AddLine(ImVec2(m.x - 0.6f * sc, m.y + 1.6f * sc), ImVec2(m.x - 0.6f * sc, m.y + 7.0f * sc), Col(1, 1, 1, 0.9f * alpha), 1.0f * k);
         // la una del indice, con un toque del verde cuando late
         dl->AddRectFilled(ImVec2(m.x - 1.0f * sc, m.y + 0.6f * sc), ImVec2(m.x + 1.0f * sc, m.y + 2.4f * sc), ColA(Lerp4(ImVec4(1, 1, 1, 1), acc, 0.35f * gl), alpha), 0.8f * sc);
+        {   // (14/11 f, Agustin: "el brillo me referia como un lens flare") DESTELLO en la punta del indice: nucleo chico y brillante, dos
+            // rayos finos (horizontal largo, vertical corto) que se apagan hacia las puntas y un halo suave; late y gira apenas. Sin anillos.
+            const float pulse = 0.65f + 0.35f * breath, fl = std::min(1.0f, (0.55f * s_hov + 0.9f * s_flash) * pulse) * alpha;
+            const ImVec4 hot = Lerp4(acc, ImVec4(1, 1, 1, 1), 0.55f);
+            for (int i = 10; i >= 1; i--) { const float u = i / 10.0f; dl->AddCircleFilled(tip, 5.5f * k * u, ColA(acc, 0.045f * fl * (1.0f - u * 0.7f)), 24); }
+            const float rot = anim ? 0.10f * sinf((float)now * 1.3f) : 0.0f;
+            auto Ray = [&](float ang, float len, float th, float a0) {
+                const ImVec2 d(cosf(ang), sinf(ang)); const int n = 10;
+                for (int sgn = -1; sgn <= 1; sgn += 2) for (int i = 0; i < n; i++) {
+                    const float u0 = (float)i / n, u1 = (float)(i + 1) / n, fa = (1.0f - u0) * (1.0f - u0);
+                    dl->AddLine(ImVec2(tip.x + d.x * sgn * len * u0, tip.y + d.y * sgn * len * u0), ImVec2(tip.x + d.x * sgn * len * u1, tip.y + d.y * sgn * len * u1),
+                                ColA(hot, a0 * fa * fl), th * (1.0f - 0.6f * u0));
+                }
+            };
+            Ray(rot, (8.0f + 3.0f * breath) * k, 1.3f * k, 0.75f);
+            Ray(rot + 1.5708f, (5.0f + 2.0f * breath) * k, 1.1f * k, 0.6f);
+            Ray(rot + 0.7854f, 2.8f * k, 0.9f * k, 0.30f); Ray(rot - 0.7854f, 2.8f * k, 0.9f * k, 0.30f);
+            dl->AddCircleFilled(tip, 1.7f * k, ColA(ImVec4(1, 1, 1, 1), 0.85f * fl), 16);
+            dl->AddCircleFilled(tip, 2.6f * k, ColA(hot, 0.35f * fl), 16);
+        }
         return;
     }
     // (14/11 c / d, Agustin: "el dardo esta bien en todos lados") DARDO: flecha moderna sin cola, se achica apenas al apretar; sin ondas
-    const float sd = k * (1.0f - 0.10f * s_dn);
+    const float sd = k * 1.12f * (1.0f - 0.10f * s_dn);   // (14/11 f) un poco mas grande: mas nitido
     static const float D[5][2] = { { 0, 0 }, { 0.6f, 17.0f }, { 5.0f, 12.6f }, { 6.2f, 12.3f }, { 12.4f, 12.0f } };
     ImVec2 pts[5]; for (int i = 0; i < 5; i++) pts[i] = ImVec2(m.x + D[i][0] * sd, m.y + D[i][1] * sd);
     { ImVec2 sp[5]; for (int j = 0; j < 5; j++) sp[j] = ImVec2(pts[j].x + 1.4f * k, pts[j].y + 2.0f * k);   // (14/11 e) una sola sombra suave (sin escalones)
@@ -1644,7 +1664,7 @@ float MvMouseHint(ImDrawList* dl, ImVec2 br, float k, float alpha, const char* l
     if (alpha <= 0.01f) return 0.0f;
     const ImVec4 acc = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
     const float fs = ImGui::GetFontSize() * 0.82f * std::max(1.0f, k * 0.9f); ImFont* f = ImGui::GetFont();
-    const float mw = 9.0f * k, mh = 13.0f * k, gap = 5.0f * k, sep = 14.0f * k, pad = 8.0f * k;
+    const float mw = 13.0f * k, mh = 19.0f * k, gap = 6.0f * k, sep = 16.0f * k, pad = 9.0f * k;   // (14/11 f) iconos mas grandes (pedido de Agustin)
     const ImVec2 tl = f->CalcTextSizeA(fs, FLT_MAX, 0, left), tr = f->CalcTextSizeA(fs, FLT_MAX, 0, right);
     const float h = std::max(mh, fs) + pad * 1.2f, w = pad * 2 + mw * 2 + gap * 2 + tl.x + tr.x + sep;
     const ImVec2 a(br.x - w, br.y - h);
