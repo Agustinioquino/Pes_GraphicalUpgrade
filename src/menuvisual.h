@@ -133,7 +133,7 @@ void MvPhotoHud(ImDrawList* dl, ImVec2 scrMin, ImVec2 scrMax, const MvHudIn& in)
 // triangulo = espacio, L1 borra todo, circulo u OPTIONS cierran. Tambien con el mouse.
 // (14/11) cursor propio del menu: flecha con sombra y filo de luz; sobre algo que se toca se pinta con el verde del menu y crece un poco,
 // al hacer clic sale una onda; sobre un campo de texto es una barra I. kind: 0 flecha, 1 sobre algo que se toca, 2 texto
-void MvCursorDraw(ImDrawList* dl, ImVec2 pos, int kind, bool down, float k, float alpha, bool anim);
+void MvCursorDraw(ImDrawList* dl, ImVec2 pos, int kind, bool down, float k, float alpha, bool anim, int style = 0);   // style 0 = dardo (v9), 1 = flecha clasica / mano
 void MvVkOpen();
 void MvVkClose();
 bool MvVkIsOpen();

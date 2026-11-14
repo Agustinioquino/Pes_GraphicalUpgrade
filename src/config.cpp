@@ -142,11 +142,12 @@ static bool LoadConfigLocked() {
             else if (kl == "bloquear_mando") c.blockPad = std::clamp(atoi(v.c_str()), 0, 1);       // (14/11) el juego no ve el mando con el menu abierto
             else if (kl == "camara_hud") c.camHud = std::clamp(atoi(v.c_str()), 0, 2);              // (14/11) HUD de la camara libre / modo foto
             else if (kl == "camara_mando") c.camPad = std::clamp(atoi(v.c_str()), 0, 1);           // (14/11) el mando mueve la camara libre (modo foto)
-            else if (kl == "menu_cursor") c.menuCursor = std::clamp(atoi(v.c_str()), 0, 2);           // (14/11) cursor del menu
+            else if (kl == "menu_cursor") c.menuCursor = std::clamp(atoi(v.c_str()), 0, 3);   // 0 no, 1 dardo, 2 Windows, 3 mano           // (14/11) cursor del menu
             else if (kl == "menu_mando_abrir") c.menuPadOpen = atoi(v.c_str()) != 0;             // (14/11) L3 + R3 abre / cierra el menu
             else if (kl == "mouse_menus") c.menuMouse = atoi(v.c_str()) != 0 ? 1 : 0;   // (11/11) mouse en los menus nativos del juego
             else if (kl == "mouse_menus_retraso") c.menuMouseDelay = std::clamp(atoi(v.c_str()), 0, 4);
             else if (kl == "mouse_menus_cerca") c.menuMouseNear = atoi(v.c_str()) != 0 ? 1 : 0;
+            else if (kl == "tecla_cursor") c.cursorKey = (v == "0" || v.empty()) ? 0 : VkFromName(v);   // (14/11 c) F1 de fabrica
             else if (kl == "tecla_mouse_menus") c.menuMouseKey = (v == "0" || v.empty()) ? 0 : VkFromName(v);
             else if (kl == "ultima_tecla") c.keyHud = std::clamp(atoi(v.c_str()), 0, 4);   // (11/11) cuadrito con la ultima tecla apretada
             else if (kl == "motor_pagina") c.motorPage = atoi(v.c_str()) != 0 ? 1 : 0;   // (11/11) filas nativas del Motor en el estudio

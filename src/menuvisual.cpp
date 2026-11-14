@@ -1575,7 +1575,7 @@ static void CurShape(ImDrawList* dl, const ImVec2* p, int n, ImU32 fillTop, ImU3
     ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, g0, g1, fillTop, fillBot);
     dl->AddPolyline(p, n, edge, ImDrawFlags_Closed, edgeW);
 }
-void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float alpha, bool anim) {
+void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float alpha, bool anim, int style) {
     if (alpha <= 0.0f) return;
     const ImVec4 acc = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
     const float dt = ImGui::GetIO().DeltaTime; const double now = ImGui::GetTime();
@@ -1593,6 +1593,23 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
             dl->AddLine(ImVec2(m.x - w, m.y - h), ImVec2(m.x + w, m.y - h), c, th); dl->AddLine(ImVec2(m.x - w, m.y + h), ImVec2(m.x + w, m.y + h), c, th);
         }
         return;
+    }
+    if (style == 0) {   // (14/11 c, Agustin: "el cursor me gustaba el que me habias mostrado antes") DARDO de la v9: flecha moderna sin
+        // cola, crece un poco sobre lo que se toca y se tine de verde, se achica al apretar. Sin la onda del clic (no le gusto).
+        const float sd = k * (1.0f + 0.10f * s_hov - 0.10f * s_dn);
+        static const float D[5][2] = { { 0, 0 }, { 0.6f, 17.0f }, { 5.0f, 12.6f }, { 6.2f, 12.3f }, { 12.4f, 12.0f } };
+        ImVec2 pts[5]; for (int i = 0; i < 5; i++) pts[i] = ImVec2(m.x + D[i][0] * sd, m.y + D[i][1] * sd);
+        for (int i = 4; i >= 1; i--) { ImVec2 sp[5]; for (int j = 0; j < 5; j++) sp[j] = ImVec2(pts[j].x + (0.8f + i * 0.7f) * k, pts[j].y + (1.4f + i * 0.9f) * k);
+            dl->AddConcavePolyFilled(sp, 5, Col(0, 0, 0, 0.08f * alpha)); }
+        if (s_hov > 0.02f) for (int i = 3; i >= 1; i--) dl->AddCircleFilled(ImVec2(m.x + 4.0f * sd, m.y + 7.0f * sd), (6.0f + i * 4.0f) * k, ColA(acc, 0.07f * s_hov * alpha), 24);
+        const ImVec4 top = Lerp4(ImVec4(1, 1, 1, 1), ImVec4(0.85f, 1.0f, 0.92f, 1), s_hov), bot = Lerp4(ImVec4(0.80f, 0.83f, 0.88f, 1), acc, 0.85f * s_hov);
+        const int v0 = dl->VtxBuffer.Size;
+        dl->AddConcavePolyFilled(pts, 5, Col(1, 1, 1, alpha));
+        ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, m, ImVec2(m.x + 6.0f * sd, m.y + 20.0f * sd), ColA(top, alpha), ColA(bot, alpha));
+        dl->AddPolyline(pts, 5, ColA(Lerp4(ImVec4(0.05f, 0.06f, 0.08f, 0.95f), ImVec4(acc.x * 0.35f, acc.y * 0.35f, acc.z * 0.35f, 1), s_hov), alpha), ImDrawFlags_Closed, 1.3f * k);
+        dl->AddLine(ImVec2(pts[0].x + 1.5f * k, pts[0].y + 3.2f * k), ImVec2(pts[1].x + 1.6f * k, pts[1].y - 4.5f * k), Col(1, 1, 1, 0.9f * alpha), 1.0f * k);
+        dl->AddLine(ImVec2(pts[0].x + 2.6f * k, pts[0].y + 2.6f * k), ImVec2(pts[4].x - 4.0f * k, pts[4].y - 1.6f * k), Col(1, 1, 1, 0.5f * alpha), 1.0f * k);
+        (void)grey; (void)now; return;
     }
     const float sc = k * (1.0f - 0.08f * s_dn);
     if (kind == 1) {
