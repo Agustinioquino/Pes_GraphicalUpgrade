@@ -144,7 +144,9 @@ uint64_t hk_rpl(void* obj, unsigned pad, unsigned char p3) {
     // del cuadro no es el normal (flechas, stick, pausa, salto) no se toca: se vuelve a escalar en cuanto la reproduccion vuelve a la normal.
     static const void* s_nlLine = nullptr; static bool s_nlScale = false;
     float spd0 = 0.0f, pos0 = 0.0f, mul = 1.0f; bool scaled = false, st5 = false;
-    const bool nlOn = false;   // (14/11 k) sin camara libre la repeticion va normal; con ella la lenta la hace PhotoReplayCtl
+    // (14/11 k, Agustin: "que la opcion de camara lenta afecte a la repeticion normal bien, pero que no se choquen") sin camara libre la
+    // lenta la hace esto (repeticion_lenta); con la camara libre volando la linea es de PhotoReplayCtl (s_pfLine) y esto no toca nada
+    const bool nlOn = g_cfg.replaySlow != 0 && obj && s_pfLine == nullptr;
     if (nlOn) { __try {
         st5 = *(const int*)obj == 5;
         if (st5) {
