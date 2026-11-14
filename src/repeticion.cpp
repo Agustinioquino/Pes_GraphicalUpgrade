@@ -288,6 +288,16 @@ void RepeticionDraw() {
     if (!over && !s_drag) return;
     char buf[16];
     const float fx = std::clamp(mx, g.x0, g.x1), fr = (fx - g.x0) / (g.x1 - g.x0);
+    {   // (14/11 l, Agustin: "que aparezca el icono de donde se va a hacer click sobre la barra, que sea preciso, y que permita
+        // arrastrar") marca fina sobre la barra del juego en el punto exacto + triangulo verde abajo como el cabezal del juego
+        const float yc = g.y + g.h * 0.5f, hh = 9.0f * k;
+        const ImU32 col = s_drag ? IM_COL32(255, 230, 120, 255) : IM_COL32(120, 220, 90, 255);
+        dl->AddLine(ImVec2(fx, yc - hh), ImVec2(fx, yc + hh), IM_COL32(0, 0, 0, 160), 3.0f * k);
+        dl->AddLine(ImVec2(fx, yc - hh), ImVec2(fx, yc + hh), col, 1.5f * k);
+        const float ty = yc + hh + 1.0f * k, tw = 6.0f * k;
+        dl->AddTriangleFilled(ImVec2(fx, ty), ImVec2(fx - tw, ty + tw * 1.4f), ImVec2(fx + tw, ty + tw * 1.4f), col);
+        dl->AddTriangle(ImVec2(fx, ty), ImVec2(fx - tw, ty + tw * 1.4f), ImVec2(fx + tw, ty + tw * 1.4f), IM_COL32(0, 0, 0, 170), 1.0f * k);
+    }
     if (FrameClock(Wrap(f0 + (int)lroundf(fr * (float)len), n), buf, sizeof buf)) {
         const ImVec2 ts = ImGui::CalcTextSize(buf);
         const float bx = std::clamp(fx - ts.x * 0.5f, g.x0, g.x1 - ts.x);
