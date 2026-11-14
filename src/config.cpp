@@ -161,7 +161,10 @@ static bool LoadConfigLocked() {
             else if (kl == "menu_avanzado") c.menuAdvanced = atoi(v.c_str()) != 0;                // (08/11) todas las opciones de las tarjetas largas a la vista
             else if (kl == "menu_columnas") c.menuCols = atoi(v.c_str()) != 0;                    // (08/11) dos columnas de tarjetas en ventanas anchas
             else if (kl == "menu_tamano") c.menuSize = std::clamp(atoi(v.c_str()), 0, 2);          // (08/11) 0 ventana, 1 grande, 2 panel a la derecha
-            else if (kl == "menu_opacidad") c.menuAlpha = std::clamp((float)atof(v.c_str()), 0.5f, 1.0f);
+            else if (kl == "menu_opacidad") c.menuAlpha = std::clamp((float)atof(v.c_str()), 0.15f, 1.0f);   // (14/11) desde 0.15 (Agustin: "bajar la opacidad del menu")
+            else if (kl == "menu_vistas") c.menuVisual = atoi(v.c_str()) != 0;                   // (14/11) tarjetas con dibujos que se tocan y animaciones
+            else if (kl == "menu_mando") c.menuPad = atoi(v.c_str()) != 0;                       // (14/11) leer el mando en el menu
+            else if (kl == "menu_mando_dibujo") c.menuPadDraw = atoi(v.c_str()) != 0;            // (14/11) dibujo del mando al abrir el menu
             else if (kl == "menu_vidrio") c.menuGlass = atoi(v.c_str()) != 0;                     // (08/11) fondo de vidrio (juego desenfocado)
             else if (kl == "menu_autoguardar") c.menuAutoSave = std::clamp(atoi(v.c_str()), 0, 2);    // (08/11) guardado automatico de los cambios del menu
             else if (kl == "menu_letra") c.menuFont = atoi(v.c_str()) != 0;                       // (08/11) letra Saira (textures\pes_ui.ttf)
@@ -217,6 +220,7 @@ static bool LoadConfigLocked() {
             else if (kl == "desc") grp->desc = v;
             else if (kl == "section") grp->section = v;
             else if (kl == "special") grp->special = Lower(v);
+            else if (kl == "icon" || kl == "icono") grp->icon = Lower(v);
             else if (kl == "toggle") { int i2, c2; if (ParseParamName(v, i2, c2)) { grp->tIdx = i2; grp->tComp = c2; } }
             else if (kl == "button") {
                 std::vector<std::string> parts; std::string cur2;

@@ -8,6 +8,7 @@
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
 #include <DDSTextureLoader.h>
+#include "menuvisual.h"   // (14/11) tarjetas visuales, iconos dibujados y el mando
 #include <psapi.h>
 #include <cstring>
 
@@ -274,6 +275,9 @@ static std::vector<std::string> s_recent;         // (04/11 n) titulos de los ul
 static bool s_rail = false;                       // barra lateral solo con iconos (ventana angosta)
 static bool s_slim = false;                       // botones de arriba solo con iconos (ventana muy angosta)
 static int s_winReq = -1;                         // 0 ventana, 1 grande, 2 panel a la derecha: se aplica al proximo Begin
+static MvPad s_pad;                               // (14/11) el mando de este cuadro (menuvisual.cpp)
+static double s_menuMsAvg = 0.0;                  // (14/11) tiempo de CPU que lleva armar el menu (promedio)
+static double MenuCpuMs() { return s_menuMsAvg; }
 static std::set<std::string> s_moreOpen;          // tarjetas largas con "mas opciones" desplegado
 static std::string LowerU(std::string x) { for (auto& ch : x) ch = (char)tolower((unsigned char)ch); return x; }
 static bool IsFav(const std::string& title) { return (g_cfg.favorites.find("|" + title + "|") != std::string::npos); }
@@ -614,12 +618,12 @@ static const char* kGlassUp =
     "  c += s0.SampleLevel(L, uv + float2(0, -2 * d.y), 0).rgb + s0.SampleLevel(L, uv + float2(0, 2 * d.y), 0).rgb;\n"
     "  c += (s0.SampleLevel(L, uv + float2(-d.x, -d.y), 0).rgb + s0.SampleLevel(L, uv + float2(d.x, -d.y), 0).rgb\n"
     "      + s0.SampleLevel(L, uv + float2(-d.x, d.y), 0).rgb + s0.SampleLevel(L, uv + float2(d.x, d.y), 0).rgb) * 2.0;\n"
-    "  c /= 12.0; float l = dot(c, float3(0.299, 0.587, 0.114)); c = max(0, lerp(l.xxx, c, 1.12));\n"
+    "  c /= 12.0; float l = dot(c, float3(0.299, 0.587, 0.114)); c = max(0, lerp(l.xxx, c, 1.22)); c = c / (1.0 + 0.10 * max(0, l - 0.6));\n"
     "  return float4(c, 1); }\n";
 static ID3D11VertexShader* s_gVS = nullptr; static ID3D11PixelShader *s_gDown = nullptr, *s_gUp = nullptr;
 static ID3D11SamplerState* s_gSamp = nullptr; static ID3D11RasterizerState* s_gRS = nullptr; static ID3D11DepthStencilState* s_gDSS = nullptr; static ID3D11BlendState* s_gBS = nullptr;
 static ID3D11Texture2D* s_gSnap = nullptr; static ID3D11ShaderResourceView* s_gSnapSRV = nullptr;
-static constexpr int kGLv = 6;   // 1/2, 1/4, 1/8, 1/16 (bajada), 1/8, 1/4 (subida: la que se usa)
+static constexpr int kGLv = 7;   // 1/2, 1/4, 1/8, 1/16 (bajada), 1/8, 1/4, 1/2 (subida: la ultima es la que se usa; (14/11) + 1/2: mas suave)
 static ID3D11Texture2D* s_gLv[kGLv] = {}; static ID3D11RenderTargetView* s_gLvRTV[kGLv] = {}; static ID3D11ShaderResourceView* s_gLvSRV[kGLv] = {};
 static UINT s_gW = 0, s_gH = 0; static DXGI_FORMAT s_gFmt = DXGI_FORMAT_UNKNOWN; static bool s_gTried = false, s_gReady = false;
 template<class T> static void GRel(T*& p) { if (p) { p->Release(); p = nullptr; } }
@@ -653,7 +657,7 @@ static bool GlassEnsure(ID3D11Texture2D* bb) {
     if (FAILED(d->CreateTexture2D(&td, nullptr, &s_gSnap))) return false;
     D3D11_SHADER_RESOURCE_VIEW_DESC sv{}; sv.Format = TypedFmt(bd.Format); sv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D; sv.Texture2D.MipLevels = 1;
     if (FAILED(d->CreateShaderResourceView(s_gSnap, &sv, &s_gSnapSRV))) return false;
-    static const UINT kDiv[kGLv] = { 2, 4, 8, 16, 8, 4 };
+    static const UINT kDiv[kGLv] = { 2, 4, 8, 16, 8, 4, 2 };
     for (int i = 0; i < kGLv; i++) {
         D3D11_TEXTURE2D_DESC ld = td; ld.Width = (std::max)(1u, bd.Width / kDiv[i]); ld.Height = (std::max)(1u, bd.Height / kDiv[i]);
         ld.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; ld.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
@@ -693,7 +697,7 @@ static void GlassBlur(ID3D11Texture2D* bb) {
         c->PSSetShaderResources(0, 1, &src); c->PSSetShader(ps, nullptr, 0); c->Draw(3, 0);
     };
     pass(s_gDown, s_gSnapSRV, 0); pass(s_gDown, s_gLvSRV[0], 1); pass(s_gDown, s_gLvSRV[1], 2); pass(s_gDown, s_gLvSRV[2], 3);
-    pass(s_gUp, s_gLvSRV[3], 4); pass(s_gUp, s_gLvSRV[4], 5);
+    pass(s_gUp, s_gLvSRV[3], 4); pass(s_gUp, s_gLvSRV[4], 5); pass(s_gUp, s_gLvSRV[5], 6);
     { ID3D11ShaderResourceView* nul = nullptr; c->PSSetShaderResources(0, 1, &nul); }
 
     c->OMSetRenderTargets(8, oRT, oDS); for (auto* r : oRT) if (r) r->Release(); if (oDS) oDS->Release();
@@ -715,8 +719,10 @@ static std::string s_pageShown;
 static std::map<std::string, double> s_cardOpenT;   // cuando se desplego cada tarjeta (el contenido aparece)
 static float s_navY = -1.0f, s_navH = 0.0f, s_navTgtY = -1.0f; // barra lateral: el resaltado de la pagina elegida se desliza
 // animacion por elemento (pasar el mouse): sube hacia 1 o baja hacia 0 en ~0.12 s
+static bool Anim() { return g_cfg.menuVisual; }   // (14/11) boton "Vistas" al lado de Original: apaga vistas dinamicas y animaciones
 static float HoverAnim(ImGuiID id, bool on, float speed = 9.0f) {
     float* v = ImGui::GetStateStorage()->GetFloatRef(id, 0.0f);
+    if (!Anim()) { *v = on ? 1.0f : 0.0f; return *v; }
     const float dt = ImGui::GetIO().DeltaTime;
     *v = on ? std::min(1.0f, *v + dt * speed) : std::max(0.0f, *v - dt * speed);
     return Ease(*v);
@@ -770,11 +776,24 @@ static void GlassBackdrop(ImVec2 a, ImVec2 b, float rounding, float alpha) {
         for (int i = 1; i <= 8; i++) { const float k = 1.0f - i / 9.0f; bg->AddRect(ImVec2(a.x - i * s, a.y - i * s + 4 * UIK()), ImVec2(b.x + i * s, b.y + i * s + 6 * UIK()), IM_COL32(0, 0, 0, (int)(70 * k * k * alpha)), rounding + i * s, 0, s * 1.2f); }
     }
     ImGui::PushClipRect(a, b, false);
+    // (14/11) Opacidad del menu 0.15..1: de 0.5 para arriba oscurece el vidrio (lectura); de 0.5 para abajo el vidrio mismo se
+    // vuelve transparente y se ve el juego nitido a traves del menu
+    const float op = std::clamp(g_cfg.menuAlpha, 0.15f, 1.0f), see = std::clamp((op - 0.15f) / 0.35f, 0.0f, 1.0f);
     if (ID3D11ShaderResourceView* srv = GlassSRV()) {
-        dl->AddImageRounded((ImTextureID)(intptr_t)srv, a, b, ImVec2(a.x / ds.x, a.y / ds.y), ImVec2(b.x / ds.x, b.y / ds.y), IM_COL32(255, 255, 255, (int)(255 * alpha)), rounding);
-        const float tint = std::clamp(g_cfg.menuAlpha, 0.5f, 1.0f);   // Opacidad del menu: cuanto oscurece el vidrio (lectura)
-        dl->AddRectFilled(a, b, IM_COL32(12, 15, 21, (int)(255 * alpha * (0.30f + 0.50f * (tint - 0.5f) / 0.5f))), rounding);
-    } else dl->AddRectFilled(a, b, IM_COL32(18, 20, 26, (int)(255 * alpha * std::clamp(g_cfg.menuAlpha, 0.5f, 1.0f))), rounding);
+        dl->AddImageRounded((ImTextureID)(intptr_t)srv, a, b, ImVec2(a.x / ds.x, a.y / ds.y), ImVec2(b.x / ds.x, b.y / ds.y), IM_COL32(255, 255, 255, (int)(255 * alpha * see)), rounding);
+        const float tint = std::max(op, 0.5f);   // Opacidad del menu: cuanto oscurece el vidrio (lectura)
+        dl->AddRectFilled(a, b, IM_COL32(12, 15, 21, (int)(255 * alpha * (0.30f + 0.50f * (tint - 0.5f) / 0.5f) * (0.35f + 0.65f * see))), rounding);
+    } else dl->AddRectFilled(a, b, IM_COL32(18, 20, 26, (int)(255 * alpha * op)), rounding);
+    if (Anim()) {   // (14/11) vidrio que reacciona: una luz suave sigue al mouse por encima del vidrio, y un brillo lento cruza el filo de arriba
+        const ImVec2 m = ImGui::GetIO().MousePos;
+        float* ml = ImGui::GetStateStorage()->GetFloatRef(ImGui::GetID("##glasslight"), 0.0f);
+        const bool in = m.x > a.x && m.x < b.x && m.y > a.y && m.y < b.y;
+        *ml = std::clamp(*ml + (in ? 1.0f : -1.0f) * ImGui::GetIO().DeltaTime * 4.0f, 0.0f, 1.0f);
+        if (*ml > 0.01f) { const float R = 260.0f * UIK(); for (int i = 6; i >= 1; i--) dl->AddCircleFilled(m, R * i / 6.0f, IM_COL32(255, 255, 255, (int)(3.0f * *ml * alpha)), 40); }
+        const float t = (float)fmod(Now() * 0.08, 1.4) - 0.2f, sx = a.x + (b.x - a.x) * t;
+        dl->AddRectFilledMultiColor(ImVec2(sx - 120.0f * UIK(), a.y), ImVec2(sx, a.y + 2.0f * UIK()), IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, (int)(90 * alpha)), IM_COL32(255, 255, 255, (int)(90 * alpha)), IM_COL32(255, 255, 255, 0));
+        dl->AddRectFilledMultiColor(ImVec2(sx, a.y), ImVec2(sx + 120.0f * UIK(), a.y + 2.0f * UIK()), IM_COL32(255, 255, 255, (int)(90 * alpha)), IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, (int)(90 * alpha)));
+    }
     {   // reflejo de arriba: luz suave que se apaga hacia abajo
         const float h = std::min(140.0f * UIK(), (b.y - a.y) * 0.35f), y0 = a.y + rounding * 0.6f;
         dl->AddRectFilled(ImVec2(a.x, a.y), ImVec2(b.x, y0), IM_COL32(255, 255, 255, (int)(16 * alpha)), rounding, ImDrawFlags_RoundCornersTop);
@@ -919,10 +938,16 @@ static void CardGlow() {
     ImGuiWindow* w = ImGui::GetCurrentWindow();
     const bool hv = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     const float h = HoverAnim(w->ID + 5, hv, 7.0f);
-    if (h < 0.01f) return;
+    ImGuiStorage* st = ImGui::GetStateStorage();
+    float* clickT = st->GetFloatRef(w->ID + 6, -100.0f); float* cx = st->GetFloatRef(w->ID + 7, 0.0f); float* cy = st->GetFloatRef(w->ID + 8, 0.0f);
+    if (hv && Anim() && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false))) {   // (14/11) onda donde se toco
+        *clickT = (float)fmod(Now(), 10000.0); *cx = ImGui::GetIO().MousePos.x - w->Pos.x; *cy = ImGui::GetIO().MousePos.y - w->Pos.y; }
+    const float ct = (float)fmod(Now(), 10000.0) - *clickT;
+    if (h < 0.01f && !(ct >= 0.0f && ct < 0.45f)) return;
     ImDrawList* dl = w->DrawList; const ImVec2 a = w->Pos, b(w->Pos.x + w->Size.x, w->Pos.y + w->Size.y);
     const float rr = ImGui::GetStyle().FrameRounding;
-    dl->PushClipRect(a, b, true);   // (08/11 e) intersecta con el recorte de la pagina: con la tarjeta medio fuera de la vista el filo y el reflejo se dibujaban encima del titulo
+    dl->PushClipRect(a, b, true);
+    if (ct >= 0.0f && ct < 0.45f) { const float e = Ease(ct / 0.45f); dl->AddCircleFilled(ImVec2(a.x + *cx, a.y + *cy), (30.0f + 260.0f * e) * UIK(), ImGui::GetColorU32(ImVec4(0.45f, 0.92f, 0.66f, 0.10f * (1.0f - e))), 40); }   // (08/11 e) intersecta con el recorte de la pagina: con la tarjeta medio fuera de la vista el filo y el reflejo se dibujaban encima del titulo
     dl->AddRectFilledMultiColor(ImVec2(a.x + 2, a.y + 1), ImVec2(b.x - 2, a.y + std::min(36.0f * UIK(), w->Size.y * 0.5f)), IM_COL32(255, 255, 255, (int)(14 * h)), IM_COL32(255, 255, 255, (int)(14 * h)), IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0));
     dl->AddRect(ImVec2(a.x + 0.5f, a.y + 0.5f), ImVec2(b.x - 0.5f, b.y - 0.5f), ImGui::GetColorU32(ImVec4(0.45f, 0.92f, 0.66f, 0.38f * h)), rr, 0, 1.2f);
     dl->PopClipRect();
@@ -940,8 +965,22 @@ static const char* BeaufortName(float v) {
 static void DrawWindNowPanel() {
     const WindNow w = g_windNow;
     ImGui::Spacing();
-    if (!w.on) { ImGui::TextDisabled("%s", TRS("Viento unico apagado: prende 'Viento distinto en cada partido' y 'Viento unico (rachas reales)'.")); return; }
+    if (!w.on) {
+        ImGui::TextDisabled("%s", TRS("Viento unico apagado: prende 'Viento distinto en cada partido' y 'Viento unico (rachas reales)'."));
+        if (Anim()) {   // (14/11) igual se puede elegir el rumbo fijo en la cancha
+            MvWindIn wi; wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now();
+            MvWindWidget(wi);
+        }
+        return;
+    }
     ImGui::Text(TRS("Ahora: %.1f m/s (%.0f km/h), %s"), w.speed, w.speed * 3.6f, BeaufortName(w.speed));
+    if (Anim()) {   // (14/11) la cancha con el viento que vuela; arrastrar fija el rumbo
+        ImGui::TextDisabled(TRS("En 2 s: %.1f m/s. Promedio del partido: %.1f m/s"), w.soonSpeed, w.base);
+        MvWindIn wi; wi.live = true; wi.speed = w.speed; wi.dirDeg = w.dirDeg; wi.soonSpeed = w.soonSpeed; wi.soonDirDeg = w.soonDirDeg; wi.gust = w.gust; wi.turb = w.turb;
+        wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now();
+        MvWindWidget(wi);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled)); ImGui::TextWrapped("%s", TRS("Arrastra la flecha para fijar el rumbo (clic derecho: el del partido); la rueda del mouse cambia la fuerza.")); ImGui::PopStyleColor();
+    } else {
     ImGui::TextDisabled(TRS("En 2 s: %.1f m/s. Promedio del partido: %.1f m/s"), w.soonSpeed, w.base);
     // cancha desde arriba: X del mundo = el largo (105 m), Z = el ancho (68 m); la flecha va hacia donde sopla
     const float k = UIK(), W = 210.0f * k, H = W * 68.0f / 105.0f;
@@ -964,7 +1003,9 @@ static void DrawWindNowPanel() {
     arrow(w.dirDeg, L0 + (L1 - L0) * std::clamp(w.speed / 12.0f, 0.0f, 1.0f), IM_COL32(255, 235, 120, 235), 3.0f * k);
     ImGui::Dummy(ImVec2(W + 2.0f * gd, H + 4.0f * k));
     ImGui::TextDisabled(TRS("Hacia donde sopla (amarilla) y dentro de 2 s (clara). Arcos a los costados."));
+    }
     char ov[48];
+    const float W = 210.0f * UIK();
     snprintf(ov, sizeof ov, TRS("Racha %.0f %%"), w.gust * 100.0f); ImGui::ProgressBar(std::clamp(w.gust, 0.0f, 1.0f), ImVec2(W * 0.75f, 0), ov);
     snprintf(ov, sizeof ov, TRS("Revuelto %.0f %%"), w.turb * 100.0f); ImGui::ProgressBar(std::clamp(w.turb, 0.0f, 1.0f), ImVec2(W * 0.75f, 0), ov);
     static const char* kPre[] = { "Segun el partido", "Calmo", "Brisa", "Ventoso", "Tormenta" };
@@ -995,6 +1036,18 @@ static void DrawGroup(MenuGroup& g, int gid) {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(col ? "Expandir" : "Contraer"));
     ImGui::PopStyleColor();
     ImGui::SameLine();
+    {   // (14/11) icono dibujado (sol, viento) al lado del titulo: "icon =" en la tarjeta o el de fabrica de la tarjeta
+        const MvIcon mi = MvIconFromName(g.icon.empty() ? (g.id == "SunFree" ? "sol" : (g.id == "Viento" || g.id == "VientoRachas") ? "viento" : "") : g.icon.c_str());
+        if (mi != kMvIcoNone) {
+            const float sz = ImGui::GetFrameHeight(); const ImVec2 ip = ImGui::GetCursorScreenPos();
+            ImGui::Dummy(ImVec2(sz, sz));
+            const bool cardHov = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+            const float ha = HoverAnim(ImGui::GetID("##mvico"), cardHov, 6.0f);
+            const ImVec4 ic = mi == kMvIcoSun ? ImVec4(1.0f, 0.80f, 0.35f, 1) : ImVec4(0.72f, 0.90f, 1.0f, 1);
+            MvDrawIcon(ImGui::GetWindowDrawList(), ImVec2(ip.x + sz * 0.5f, ip.y + sz * 0.5f), sz * (0.92f + 0.10f * ha), mi, ImGui::GetColorU32(Mix(ImVec4(ic.x, ic.y, ic.z, 0.75f), ic, ha)), Anim() ? (float)fmod(Now(), 3600.0) * (0.3f + 0.7f * ha) : -1.0f);
+            ImGui::SameLine();
+        }
+    }
     if (s_fontBold) ImGui::PushFont(s_fontBold);
     const std::string gTitleFull = Utf8(LS(g.title, g.titleEn)), gDesc = LS(g.desc, g.descEn);
     // (08/11) titulo recortado con "..." si no entra (ventana angosta): no pisa la estrella ni el aviso de cambios
@@ -1030,7 +1083,7 @@ static void DrawGroup(MenuGroup& g, int gid) {
     if (col && !s_search[0]) { if (!gDesc.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.52f, 0.56f, 1)); ImGui::TextUnformatted(Utf8(gDesc.substr(0, 90) + (gDesc.size() > 90 ? "..." : "")).c_str()); ImGui::PopStyleColor(); } ImGui::PopStyleColor(3); CardGlow(); ImGui::EndChild(); ImGui::Spacing(); ImGui::PopID(); return; }
     // (08/11) al desplegar, el contenido aparece suave (0.22 s)
     float openA = 1.0f;
-    { auto it = s_cardOpenT.find(g.title); if (it != s_cardOpenT.end()) { const float t = (float)(Now() - it->second) / 0.22f; if (t >= 1.0f) s_cardOpenT.erase(it); else openA = Ease(t); } }
+    { auto it = s_cardOpenT.find(g.title); if (it != s_cardOpenT.end()) { const float t = (float)(Now() - it->second) / 0.22f; if (t >= 1.0f || !Anim()) s_cardOpenT.erase(it); else openA = Ease(t); } }
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * (0.15f + 0.85f * openA));
     if (!gDesc.empty()) {   // (04/11 n) descripcion corta; clic para leerla entera
         const bool open = s_descOpen.count(g.title) != 0;
@@ -1046,6 +1099,20 @@ static void DrawGroup(MenuGroup& g, int gid) {
             if (ImGui::SmallButton(TRS(open ? "menos" : "mas..."))) { if (open) s_descOpen.erase(g.title); else s_descOpen.insert(g.title); }
             ImGui::PopStyleColor(2);
         }
+    }
+    if (Anim() && (g.special == "sol_visual" || (g.special.empty() && g.id == "SunFree"))) {   // (14/11) Agustin: "mover un icono de sol"
+        ImGui::Spacing();
+        MvSunIn si; float* p = &g_cfg.live[0][0];
+        si.on = &g_cfg.live[101][0]; si.az = &g_cfg.live[101][1]; si.el = &g_cfg.live[101][2];
+        si.intensity = g_cfg.live[101][3]; si.warm = g_cfg.live[102][0]; si.relative = g_cfg.live[450][1] > 0.5f;
+        si.realOk = SolLibreRealSun(si.realAz, si.realEl);
+        { const float* w = g_cfg.live[452]; const float n = sqrtf(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+          if (w[3] > 0.5f && n > 0.5f) { si.finalOk = true; si.finalAz = atan2f(w[0], w[2]) * 57.29578f; if (si.finalAz < 0) si.finalAz += 360.0f; si.finalEl = asinf(std::clamp(w[1] / n, -1.0f, 1.0f)) * 57.29578f; } }
+        if (g_cfg.live[453][3] > 0.5f) for (int k = 0; k < 3; k++) si.tint[k] = g_cfg.live[453][k];
+        si.anim = Anim(); si.k = UIK(); si.now = Now(); (void)p;
+        ImGui::BeginDisabled(false);
+        if (MvSunWidget(si)) PushRecent(g.title);
+        ImGui::EndDisabled();
     }
     bool anyExt = false; for (auto& sl : g.sliders) anyExt |= !sl.ext.empty();
     if (anyExt && !g_cfg.clothFound) ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1), "%s", TRS("No se encontro cloth-mod\\cloth.ini"));
@@ -1697,10 +1764,16 @@ static void EmptyState(const char* txt) { ImGui::Dummy(ImVec2(0, 20.0f * UIK()))
 // (08/11) tarjetas en una o dos columnas: dos si la pagina es ancha (Ajustes: menu_columnas). Reparto alternado (izquierda, derecha,
 // izquierda...) para que abrir o cerrar una tarjeta no mueva las demas de columna. Con 'labels' se pone el nombre de la seccion arriba
 // de cada tarjeta cuando cambia (paginas que mezclan secciones).
+// (14/11) Agustin: "optimizar el menu ... sin quitar animaciones": una tarjeta que esta entera fuera de la vista (arriba o abajo de lo
+// que se ve, con 300 px de margen) no se arma: se deja su lugar con el alto que tuvo la ultima vez que se vio. En paginas largas
+// (Pasto, Iluminacion) se arman 4 a 8 tarjetas en vez de 30 a 60. La que nunca se vio se arma igual (asi se conoce su alto).
+static std::map<std::string, float> s_cardH;
+static int s_cardsBuilt = 0, s_cardsSkipped = 0;
 static void DrawCards(const std::vector<int>& ids, bool labels) {
     const float W = ImGui::GetContentRegionAvail().x;
     const bool two = g_cfg.menuCols && W >= 1000.0f * UIK() && ids.size() > 1;
     const int nc = two ? 2 : 1;
+    { static int s_lastNc = 0; if (s_lastNc && s_lastNc != nc) s_pageT = Now() - 0.06; s_lastNc = nc; }   // (14/11) al pasar de 1 a 2 columnas (o al reves) la pagina se reacomoda con el mismo fundido que al cambiar de pagina
     const float gap = ImGui::GetStyle().ItemSpacing.x * 1.5f, cw = two ? (W - gap) * 0.5f : W;
     for (int c = 0; c < nc; c++) {
         if (c) ImGui::SameLine(0, gap);
@@ -1709,7 +1782,15 @@ static void DrawCards(const std::vector<int>& ids, bool labels) {
         for (size_t i = c; i < ids.size(); i += nc) {
             MenuGroup& g = g_cfg.groups[ids[i]];
             if (labels && SecKey(g) != lastSec) { SectionLabel(g); lastSec = SecKey(g); }
+            const std::string ck = g.title + (two ? "#2" : "#1");
+            auto hit = s_cardH.find(ck);
+            if (hit != s_cardH.end() && !s_search[0]) {
+                const ImVec2 cp = ImGui::GetCursorScreenPos(); const ImRect clip = ImGui::GetCurrentWindow()->ClipRect; const float m = 300.0f * UIK();
+                if (cp.y > clip.Max.y + m || cp.y + hit->second < clip.Min.y - m) { ImGui::Dummy(ImVec2(1.0f, hit->second)); s_cardsSkipped++; continue; }
+            }
+            const float y0 = ImGui::GetCursorPosY();
             DrawGroup(g, ids[i]);
+            s_cardH[ck] = ImGui::GetCursorPosY() - y0 - ImGui::GetStyle().ItemSpacing.y; s_cardsBuilt++;
         }
         if (two) ImGui::EndChild();
     }
@@ -1847,7 +1928,7 @@ static void DrawSettingsPage() {
         row(TRS("Opacidad del menu"));
         ImGui::SetNextItemWidth(200 * UIK());
         float a = g_cfg.menuAlpha;
-        if (ImGui::SliderFloat("##alfa", &a, 0.5f, 1.0f, "%.2f")) g_cfg.menuAlpha = a;
+        if (ImGui::SliderFloat("##alfa", &a, 0.15f, 1.0f, "%.2f")) g_cfg.menuAlpha = a;
         if (ImGui::IsItemDeactivatedAfterEdit()) { char b[32]; snprintf(b, sizeof(b), "%.2f", g_cfg.menuAlpha); SaveOption("menu_opacidad", b); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Mas bajo = se ve el juego a traves del fondo del menu."));
     }
@@ -1865,6 +1946,13 @@ static void DrawSettingsPage() {
     ImGui::Spacing();
     if (ImGui::Checkbox(TRS("Vidrio: el juego desenfocado detras del menu"), &g_cfg.menuGlass)) SaveOption("menu_vidrio", g_cfg.menuGlass ? "1" : "0");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Estilo vidrio (como Apple o Windows Aero). Apagado: fondo liso. 'Opacidad del menu' regula cuanto se oscurece el vidrio para leer mejor."));
+    if (ImGui::Checkbox(TRS("Vistas dinamicas y animaciones (sol que se arrastra, cancha del viento)"), &g_cfg.menuVisual)) SaveOption("menu_vistas", g_cfg.menuVisual ? "1" : "0");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Lo mismo que el boton Vistas de arriba. Apagado: menu quieto, sin dibujos que se tocan ni animaciones."));
+    if (ImGui::Checkbox(TRS("Usar el mando en el menu"), &g_cfg.menuPad)) SaveOption("menu_mando", g_cfg.menuPad ? "1" : "0");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con el menu abierto: cruceta o stick para moverse, cruz para elegir, circulo para volver, triangulo para escribir un valor. OJO: el juego tambien ve el mando mientras tanto."));
+    if (ImGui::Checkbox(TRS("Dibujo del mando con lo que se aprieta"), &g_cfg.menuPadDraw)) SaveOption("menu_mando_dibujo", g_cfg.menuPadDraw ? "1" : "0");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con el menu abierto y un mando conectado: un mando chico y transparente abajo que marca los botones y los analogicos."));
+    ImGui::TextDisabled(TRS("Menu: %.2f ms de CPU por cuadro (promedio)"), MenuCpuMs());
     if (ImGui::Checkbox(TRS("Letra deportiva (Saira, estilo PES 6)"), &g_cfg.menuFont)) { SaveOption("menu_letra", g_cfg.menuFont ? "1" : "0"); s_fontsH = -1.0f; }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Apagado: Segoe UI, la letra de Windows."));
     if (ImGui::Checkbox(TRS("Todas las opciones a la vista en las tarjetas largas"), &g_cfg.menuAdvanced)) SaveOption("menu_avanzado", g_cfg.menuAdvanced ? "1" : "0");
@@ -1897,23 +1985,43 @@ static void DrawMenu() {
     // 2 panel a la derecha de todo el alto (en el editor deja la cara del jugador a la vista)
     if (s_winReq < 0) s_winReq = std::clamp(g_cfg.menuSize, 0, 2);
     const ImVec2 winDef(std::min(1080 * UIK(), ds.x * 0.9f), std::min(820 * UIK(), ds.y * 0.88f));
+    // (14/11) Agustin: "una animacion al abrir y cerrar" y que el cambio de tamano se vea: la ventana entra subiendo un poco y al cambiar
+    // de tamano (boton de arriba) se estira hasta el nuevo en 0.25 s. s_wPos / s_wSz = donde quedo la ventana (sin el corrimiento).
+    static ImVec2 s_wPos(-1, -1), s_wSz(0, 0), s_aFromP, s_aFromS, s_aToP, s_aToS; static double s_aT = -10.0; static int s_lastMode = -1;
     if (s_winReq >= 0) {
-        const ImGuiCond cnd = s_winReq == 0 ? ImGuiCond_Appearing : ImGuiCond_Always;
-        if (s_winReq == 0) { ImGui::SetNextWindowSize(winDef, cnd); ImGui::SetNextWindowPos(ImVec2(40, 60), cnd); }
-        else if (s_winReq == 1) { ImGui::SetNextWindowSize(ImVec2(ds.x * 0.94f, ds.y * 0.92f), cnd); ImGui::SetNextWindowPos(ImVec2(ds.x * 0.03f, ds.y * 0.04f), cnd); }
-        else { const float pw = std::clamp(ds.x * 0.34f, 440.0f * UIK(), 720.0f * UIK()); ImGui::SetNextWindowSize(ImVec2(pw, ds.y * 0.94f), cnd); ImGui::SetNextWindowPos(ImVec2(ds.x - pw - ds.x * 0.01f, ds.y * 0.03f), cnd); }
+        ImVec2 tp, ts;
+        if (s_winReq == 0) { ts = winDef; tp = ImVec2(40, 60); }
+        else if (s_winReq == 1) { ts = ImVec2(ds.x * 0.94f, ds.y * 0.92f); tp = ImVec2(ds.x * 0.03f, ds.y * 0.04f); }
+        else { const float pw = std::clamp(ds.x * 0.34f, 440.0f * UIK(), 720.0f * UIK()); ts = ImVec2(pw, ds.y * 0.94f); tp = ImVec2(ds.x - pw - ds.x * 0.01f, ds.y * 0.03f); }
+        if (s_lastMode >= 0 && s_lastMode != s_winReq && s_wPos.x >= 0 && Anim()) { s_aFromP = s_wPos; s_aFromS = s_wSz; s_aToP = tp; s_aToS = ts; s_aT = Now(); }
+        s_lastMode = s_winReq;
+        if (Now() - s_aT >= 0.25) {   // como antes: la ventana se ubica al aparecer; grande y panel quedan fijos
+            const ImGuiCond cnd = s_winReq == 0 ? ImGuiCond_Appearing : ImGuiCond_Always;
+            ImGui::SetNextWindowSize(ts, cnd); ImGui::SetNextWindowPos(tp, cnd);
+        }
         s_winReq = -2;
     }
+    const float vis0 = Ease(s_menuVis);
+    if (Now() - s_aT < 0.25) {
+        const float e = Ease((float)(Now() - s_aT) / 0.25f);
+        ImGui::SetNextWindowSize(ImVec2(s_aFromS.x + (s_aToS.x - s_aFromS.x) * e, s_aFromS.y + (s_aToS.y - s_aFromS.y) * e), ImGuiCond_Always);
+        ImGui::SetNextWindowPos(ImVec2(s_aFromP.x + (s_aToP.x - s_aFromP.x) * e, s_aFromP.y + (s_aToP.y - s_aFromP.y) * e + (1.0f - vis0) * 26.0f * UIK()), ImGuiCond_Always);
+    } else if (Anim() && vis0 < 0.999f && s_wPos.x >= 0) ImGui::SetNextWindowPos(ImVec2(s_wPos.x, s_wPos.y + (1.0f - vis0) * 26.0f * UIK()), ImGuiCond_Always);
     ImGui::SetNextWindowSizeConstraints(ImVec2(400 * UIK(), 300 * UIK()), ImVec2(ds.x * 0.97f, ds.y * 0.95f));   // (04/11) nunca mas grande que la pantalla
     const bool glass = GlassSRV() != nullptr;
-    ImGui::SetNextWindowBgAlpha(glass ? 0.0f : std::clamp(g_cfg.menuAlpha, 0.5f, 1.0f));   // (08/11) Ajustes: transparencia del menu; con vidrio el fondo lo dibuja GlassBackdrop
+    ImGui::SetNextWindowBgAlpha(glass ? 0.0f : std::clamp(g_cfg.menuAlpha, 0.15f, 1.0f));   // (08/11) Ajustes: transparencia del menu; con vidrio el fondo lo dibuja GlassBackdrop
     bool open = true;
     const float vis = Ease(s_menuVis); const bool closing = !g_menuOpen;   // (08/11) aparece / se desvanece
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, vis);
     if (glass) ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 16.0f * UIK());
     ImGui::Begin("##pes21fx", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar | (closing ? ImGuiWindowFlags_NoInputs : 0));
     if (glass) ImGui::PopStyleVar();
-    if (glass) GlassBackdrop(ImGui::GetWindowPos(), ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowSize().x, ImGui::GetWindowPos().y + ImGui::GetWindowSize().y), 16.0f * UIK(), vis);
+    if (vis >= 0.999f && Now() - s_aT > 0.25) { s_wPos = ImGui::GetWindowPos(); s_wSz = ImGui::GetWindowSize(); }   // (14/11) donde quedo (para la animacion)
+    if (glass) {   // (14/11) al abrir / cerrar el vidrio crece desde el 96 % (zoom suave)
+        const ImVec2 wp = ImGui::GetWindowPos(), wsz = ImGui::GetWindowSize(); const float zs = Anim() ? 0.96f + 0.04f * vis : 1.0f;
+        const ImVec2 cc(wp.x + wsz.x * 0.5f, wp.y + wsz.y * 0.5f);
+        GlassBackdrop(ImVec2(cc.x - wsz.x * 0.5f * zs, cc.y - wsz.y * 0.5f * zs), ImVec2(cc.x + wsz.x * 0.5f * zs, cc.y + wsz.y * 0.5f * zs), 16.0f * UIK(), vis);
+    }
     {   // (08/11) segun el ancho: barra lateral con nombres o solo iconos, botones con texto o solo iconos
         const float cw = ImGui::GetContentRegionAvail().x;
         s_rail = s_iconsOk && cw < 840.0f * UIK();
@@ -1953,7 +2061,14 @@ static void DrawMenu() {
 
     // --- cabecera: logo + nombre + estado de los shaders, X a la derecha ---
     const float headY = ImGui::GetCursorPosY();
-    if (s_logo) { const float h = ImGui::GetTextLineHeightWithSpacing() * 2.0f; ImGui::Image((ImTextureID)(intptr_t)s_logo, ImVec2(h * s_logoAspect, h)); ImGui::SameLine(); }
+    if (s_logo) {   // (14/11) Agustin: "el logo un poco mas pequeno y que reaccione al tamano de la ventana": 1.1 a 1.6 lineas segun el ancho
+        const float lh = ImGui::GetTextLineHeightWithSpacing(), ww = ImGui::GetWindowWidth();
+        const float tgt = lh * std::clamp(1.1f + 0.5f * (ww - 520.0f * UIK()) / (560.0f * UIK()), 1.1f, 1.6f);
+        static float s_logoH = 0.0f; s_logoH = (s_logoH <= 0.0f || !Anim()) ? tgt : s_logoH + (tgt - s_logoH) * std::min(1.0f, io.DeltaTime * 10.0f);
+        const float h = s_logoH, y0 = ImGui::GetCursorPosY();
+        ImGui::SetCursorPosY(y0 + std::max(0.0f, (lh * 2.0f - h) * 0.5f));
+        ImGui::Image((ImTextureID)(intptr_t)s_logo, ImVec2(h * s_logoAspect, h)); ImGui::SameLine(); ImGui::SetCursorPosY(y0);
+    }
     ImGui::BeginGroup();
     if (s_fontBold) ImGui::PushFont(s_fontBold);
     ImGui::TextColored(ImVec4(0.85f, 0.68f, 0.28f, 1), "%s", s_logo ? "FX  0.2" : "PES21 FX  0.2");
@@ -1986,7 +2101,7 @@ static void DrawMenu() {
     // --- barra de arriba: guardar, deshacer, rehacer, descartar, ver original, recargar, buscar ---
     {
         const bool dirty = nChanged > 0;
-        if (dirty) { const float pu = 0.5f + 0.5f * sinf((float)Now() * 3.2f);   // (08/11) late suave mientras hay cambios sin guardar
+        if (dirty) { const float pu = Anim() ? 0.5f + 0.5f * sinf((float)Now() * 3.2f) : 0.5f;   // (08/11) late suave mientras hay cambios sin guardar
             ImGui::PushStyleColor(ImGuiCol_Button, Mix(ImVec4(0.14f, 0.48f, 0.31f, 1), ImVec4(0.20f, 0.60f, 0.40f, 1), pu)); ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.66f, 0.44f, 1)); }
         std::string sv = s_slim ? Ico(kIcoSave) : IcoL(kIcoSave, TRS("Guardar"));
         if (dirty) sv += s_slim ? " " + std::to_string(nChanged) : " (" + std::to_string(nChanged) + ")";
@@ -2015,6 +2130,31 @@ static void DrawMenu() {
             ImGui::PopStyleColor();
         } else ImGui::Checkbox(TRS("Ver original"), &g_cfg.bypass);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(g_cfg.bypass ? "Viendo el juego SIN el mod: clic para volver" : "Ver el juego sin el mod, para comparar"));
+        ImGui::SameLine();
+        {   // (14/11) Agustin: "una opcion al lado de la vista original para desactivar esas vistas dinamicas, o animaciones" ([PES21FX] menu_vistas)
+            const bool vv = g_cfg.menuVisual;
+            ImGui::PushStyleColor(ImGuiCol_Button, vv ? ImVec4(0.16f, 0.42f, 0.32f, 1) : ImGui::GetStyleColorVec4(ImGuiCol_Button));
+            if (ImGui::Button((s_rail || s_slim ? (s_iconsOk ? Ico(kIcoWand) : std::string("[V]")) + "##vistas" : IcoL(kIcoWand, TRS("Vistas"))).c_str())) { g_cfg.menuVisual = !vv; SaveOption("menu_vistas", g_cfg.menuVisual ? "1" : "0"); }
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(vv ? "Vistas dinamicas PRENDIDAS: el sol que se arrastra, la cancha del viento y las animaciones del menu. Clic para apagarlas (menu quieto y simple)." : "Vistas dinamicas APAGADAS: menu sin dibujos ni animaciones. Clic para prenderlas."));
+        }
+        ImGui::SameLine();
+        {   // (14/11) Agustin: "una opcion de bajar la opacidad del menu": a mano, sin ir a Ajustes
+            if (ImGui::Button(s_iconsOk ? (Ico(kIcoShadow) + "##opac").c_str() : "[%]")) ImGui::OpenPopup("opac_pop");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip(TRS("Opacidad del menu: %.0f %%"), g_cfg.menuAlpha * 100.0f);
+            if (ImGui::BeginPopup("opac_pop")) {
+                ImGui::TextUnformatted(TRS("Opacidad del menu"));
+                ImGui::SetNextItemWidth(220 * UIK());
+                static bool s_opDirty = false;
+                float a = g_cfg.menuAlpha;
+                PrettySlider(&a, 0.15f, 1.0f, "%.2f", 220 * UIK(), false, a, TRS("Mas bajo = se ve el juego a traves del menu. Debajo de 0.5 el vidrio se aclara y se ve el juego nitido."));
+                if (a != g_cfg.menuAlpha) { g_cfg.menuAlpha = std::clamp(a, 0.15f, 1.0f); s_opDirty = true; }
+                if (s_opDirty && !ImGui::IsAnyItemActive()) { s_opDirty = false; char b[32]; snprintf(b, sizeof(b), "%.2f", g_cfg.menuAlpha); SaveOption("menu_opacidad", b); }
+                static const float kQ[4] = { 0.3f, 0.55f, 0.8f, 1.0f };
+                for (int i = 0; i < 4; i++) { char b[16]; snprintf(b, sizeof b, "%.0f %%", kQ[i] * 100.0f); if (i) ImGui::SameLine(); if (ImGui::SmallButton(b)) { g_cfg.menuAlpha = kQ[i]; char v[32]; snprintf(v, sizeof v, "%.2f", kQ[i]); SaveOption("menu_opacidad", v); } }
+                ImGui::EndPopup();
+            }
+        }
         ImGui::SameLine();
         {   // (08/11 e) Agustin: "un boton que apague los menus para tener la vista completa (Apariencia, Movimiento)": x392, nunca se guarda
             const bool hid = g_cfg.live[392][0] > 0.5f;
@@ -2073,7 +2213,9 @@ static void DrawMenu() {
         }
 
         // --- barra lateral ---
-        const float navW = s_rail ? ImGui::GetFrameHeight() * 2.1f : std::clamp(ImGui::GetContentRegionAvail().x * 0.24f, 200.0f * UIK(), 270.0f * UIK());
+        const float navTgt = s_rail ? ImGui::GetFrameHeight() * 2.1f : std::clamp(ImGui::GetContentRegionAvail().x * 0.24f, 200.0f * UIK(), 270.0f * UIK());
+        static float s_navW = 0.0f; s_navW = (s_navW <= 0.0f || !Anim()) ? navTgt : s_navW + (navTgt - s_navW) * std::min(1.0f, io.DeltaTime * 14.0f);   // (14/11) se estira suave (responsive)
+        const float navW = fabsf(s_navW - navTgt) < 0.5f ? navTgt : s_navW;
         ImGui::PushStyleColor(ImGuiCol_ChildBg, glass ? ImVec4(0.0f, 0.0f, 0.0f, 0.22f) : ImVec4(0.09f, 0.10f, 0.12f, 1));
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f * UIK());
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 2.0f * UIK()));
@@ -2102,7 +2244,7 @@ static void DrawMenu() {
             navDL->ChannelsSetCurrent(0);
             if (s_navTgtY >= 0.0f) {
                 if (s_navY < 0.0f) s_navY = s_navTgtY;
-                s_navY += (s_navTgtY - s_navY) * std::min(1.0f, io.DeltaTime * 16.0f);
+                s_navY += (s_navTgtY - s_navY) * (Anim() ? std::min(1.0f, io.DeltaTime * 16.0f) : 1.0f);
                 const ImVec2 wp = ImGui::GetWindowPos(); const float y = wp.y + s_navY - ImGui::GetScrollY();
                 const float x0 = wp.x + ImGui::GetStyle().WindowPadding.x * (s_rail ? 1.0f : 1.0f), x1 = wp.x + ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x;
                 navDL->AddRectFilled(ImVec2(x0, y), ImVec2(x1, y + s_navH), ImGui::GetColorU32(glass ? ImVec4(0.20f, 0.62f, 0.42f, 0.30f) : ImVec4(0.15f, 0.33f, 0.25f, 1)), 7.0f * UIK());
@@ -2122,7 +2264,7 @@ static void DrawMenu() {
             const std::string pk = q.empty() ? s_sel : std::string("q");
             if (pk != s_pageShown) { s_pageShown = pk; s_pageT = Now(); }
         }
-        const float pe = Ease((float)(Now() - s_pageT) / 0.20f), pIn = (1.0f - pe) * 18.0f * UIK();
+        const float pe = Anim() ? Ease((float)(Now() - s_pageT) / 0.24f) : 1.0f, pIn = (1.0f - pe) * 22.0f * UIK();
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * (0.2f + 0.8f * pe));
         if (pIn > 0.5f) ImGui::Indent(pIn);
         if (!q.empty()) {
@@ -2201,7 +2343,13 @@ static void DrawMenu() {
         ImGui::TextDisabled("%s", msg.c_str());
         const char* hint = TRS("Ctrl+Z deshacer   Ctrl+S guardar   Ctrl+F buscar   Insert cerrar");
         const float hw = ImGui::CalcTextSize(hint).x;
-        if (ImGui::GetWindowWidth() - hw - 30.0f * UIK() > ImGui::CalcTextSize(msg.c_str()).x + 40.0f * UIK()) {
+        if (s_pad.connected && g_cfg.menuPad) {   // (14/11) con un mando: la ayuda con los simbolos de los botones (estilo PlayStation)
+            const float pw = std::min(560.0f * UIK(), ImGui::GetWindowWidth() * 0.6f);
+            if (ImGui::GetWindowWidth() - pw - 30.0f * UIK() > ImGui::CalcTextSize(msg.c_str()).x + 40.0f * UIK()) {
+                ImGui::SameLine(ImGui::GetWindowWidth() - pw - ImGui::GetStyle().WindowPadding.x);
+                ImGui::BeginGroup(); ImGui::PushItemWidth(pw); MvPadHints(UIK(), 0.9f); ImGui::PopItemWidth(); ImGui::EndGroup();
+            }
+        } else if (ImGui::GetWindowWidth() - hw - 30.0f * UIK() > ImGui::CalcTextSize(msg.c_str()).x + 40.0f * UIK()) {
             ImGui::SameLine(ImGui::GetWindowWidth() - hw - ImGui::GetStyle().WindowPadding.x);
             ImGui::TextDisabled("%s", hint);
         }
@@ -2514,7 +2662,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     const bool sunCompass = g_cfg.live[175][0] > 0.5f && g_cfg.live[93][3] > 0.5f;   // (2/11) brujula del sol, solo en partido
     {   // (08/11) el menu aparece y se desvanece en ~0.16 s
         static double s_visT = 0; const double tn = Now(); const float dt = (float)std::clamp(tn - s_visT, 0.0, 0.1); s_visT = tn;
-        s_menuVis = g_menuOpen ? std::min(1.0f, s_menuVis + dt / 0.16f) : std::max(0.0f, s_menuVis - dt / 0.13f);
+        s_menuVis = !g_cfg.menuVisual ? (g_menuOpen ? 1.0f : 0.0f) : g_menuOpen ? std::min(1.0f, s_menuVis + dt / 0.22f) : std::max(0.0f, s_menuVis - dt / 0.16f);   // (14/11) un poco mas larga: entra deslizandose
     }
     const bool menuShown = g_menuOpen || s_menuVis > 0.0f;
     FrameTimeTick();   // (08/11) diagnostico: tiempo de cada cuadro
@@ -2545,9 +2693,26 @@ void OverlayPresent(IDXGISwapChain* sc) {
     }
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
+    {   // (14/11) el mando: se lee solo con el menu a la vista; ImGui lo usa para moverse (cruceta / stick, cruz, circulo, triangulo)
+        ImGuiIO& io2 = ImGui::GetIO();
+        if (menuShown && (g_cfg.menuPad || g_cfg.menuPadDraw)) MvPadPoll(s_pad); else s_pad = MvPad();
+        if (g_menuOpen && g_cfg.menuPad) { io2.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad; MvPadFeedImGui(s_pad); }
+        else io2.ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
+    }
     ImGui::NewFrame();
     ImGui::GetIO().MouseDrawCursor = g_menuOpen.load();
+    const double menuT0 = Now();
     if (menuShown) { if (fis && !s_fullMenu && g_menuOpen) DrawPhysiqueWindow(); else if (!fis || s_fullMenu) DrawMenu(); }
+    if (menuShown) { const double ms = (Now() - menuT0) * 1000.0; s_menuMsAvg = s_menuMsAvg <= 0.0 ? ms : s_menuMsAvg + (ms - s_menuMsAvg) * 0.05; }
+    if (menuShown && s_pad.connected && g_cfg.menuPadDraw && s_menuVis > 0.01f) {   // (14/11) el mando chico y transparente, abajo (del lado contrario al panel)
+        const float k = UIK(); const ImVec2 ds2 = ImGui::GetIO().DisplaySize, sz = MvPadSize(k);
+        const float anyIn = [&] { float a = 0; for (int i = 0; i < kPadCount; i++) a = std::max(a, s_pad.b[i] ? 1.0f : 0.0f); return std::max(a, std::max(fabsf(s_pad.lx) + fabsf(s_pad.ly), fabsf(s_pad.rx) + fabsf(s_pad.ry)) > 0.2f ? 1.0f : a); }();
+        static float s_padA = 0.0f; const float dtp = ImGui::GetIO().DeltaTime;
+        s_padA = g_cfg.menuVisual ? s_padA + ((anyIn > 0.0f ? 0.85f : 0.42f) - s_padA) * std::min(1.0f, dtp * (anyIn > 0.0f ? 12.0f : 2.0f)) : 0.55f;   // con poca opacidad; se ilumina al usarlo
+        const float e = Ease(s_menuVis);
+        const float x = g_cfg.menuSize == 2 ? 24.0f * k : ds2.x - sz.x - 24.0f * k, y = ds2.y - sz.y - 22.0f * k + (1.0f - e) * 30.0f * k;   // entra subiendo
+        MvPadDraw(ImGui::GetForegroundDrawList(), ImVec2(x, y), k, s_pad, s_padA * e, g_cfg.menuVisual, Now());
+    }
     else if (hint) DrawPhysiqueHint();
     if (camHud) DrawCamaraHud(camFree, camSlow);
     if (lightIcons) DrawEditorLightIcons();

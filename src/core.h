@@ -111,6 +111,7 @@ struct MenuGroup {
     std::vector<MenuSlider> sliders;
     std::vector<MenuButton> buttons;
     std::string special;                 // (24/10) tarjeta dibujada por el codigo: "musculatura_jugador"
+    std::string icon;                    // (14/11) icono dibujado al lado del titulo: "sol" / "viento" (menuvisual.cpp)
 };
 
 // ---------------------------------------------------------------- reglas por shader (lo que eran [ShaderOverride])
@@ -170,7 +171,7 @@ struct Config {
     std::string menuSection;                   // (04/11 n) ultima pagina del menu ([PES21FX] menu_seccion: sec:<seccion>, fav, chg, rec, presets, tools, settings)
     float uiScale = 1.0f;                      // 19/10: tamano del menu ([PES21FX] ui_scale)
     bool compact = false;                      // 19/10: grupos contraidos por defecto ([PES21FX] compacto)
-    int menuHelp = 1; bool menuAdvanced = false, menuCols = true; int menuSize = 0; float menuAlpha = 0.85f; bool menuGlass = true, menuFont = true; int menuAutoSave = 0;   // (08/11) menu_autoguardar 0 no, 1 al soltar (1 s), 2 cada 10 s; [PES21FX] menu_ayuda / menu_avanzado / menu_columnas / menu_tamano / menu_opacidad / menu_vidrio / menu_letra (overlay.cpp)
+    int menuHelp = 1; bool menuAdvanced = false, menuCols = true; int menuSize = 0; float menuAlpha = 0.85f; bool menuGlass = true, menuFont = true; int menuAutoSave = 0; bool menuVisual = true, menuPad = true, menuPadDraw = true;   /* (14/11) [PES21FX] menu_vistas (tarjetas con dibujos que se tocan + animaciones), menu_mando (leer el mando en el menu), menu_mando_dibujo (dibujo del mando al abrir el menu) */   // (08/11) menu_autoguardar 0 no, 1 al soltar (1 s), 2 cada 10 s; [PES21FX] menu_ayuda / menu_avanzado / menu_columnas / menu_tamano / menu_opacidad / menu_vidrio / menu_letra (overlay.cpp)
     int menuMouse = 1;                         // (11/11) mouse en los menus nativos del juego (menumouse.cpp): 0 apagado, 1 prendido ([PES21FX] mouse_menus)
     int menuMouseDelay = 2;                    // (11/11 v2) cuadros de retraso de la flecha, para que vaya junto con la fila marcada ([PES21FX] mouse_menus_retraso, 0..4)
     int menuMouseNear = 1;                     // (11/11 v2) en los huecos entre filas de un grupo vale la mas cercana ([PES21FX] mouse_menus_cerca)
@@ -442,7 +443,8 @@ struct WindNow { bool on = false; float speed = 0, dirDeg = 0, gust = 0, turb = 
                  int preset = 0, stadium = -1, season = -1, src = 0; bool fixedDir = false, shelterManual = false, rain = false, fromCloth = false; };
 extern WindNow g_windNow;
 void WindFrame(float (*p)[4], double tReal);   // (13/11 sk9ema) viento unico: filas 494 / 495 (wind.cpp), despues de la fila 157
-void SolLibreFrame(float (*p)[4], double t);   // UpdateTimeParams
+void SolLibreFrame(float (*p)[4], double t);
+bool SolLibreRealSun(float& azDeg, float& elDeg);   // (14/11) sol del partido para el menu (con g_cfgMutex tomado)   // UpdateTimeParams
 void SudorFrame(float (*p)[4], double t);      // (13/11) sudor 2 por jugador (sudor.cpp): filas 460..492; UpdateTimeParams
 float SudorMedio();                            // sudor medio 0..1 de los personajes (tela mojada)
 void* SolEditorBody();   // cuerpo validado por vtable; nullptr si no hay sol en el editor o se destruyo

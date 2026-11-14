@@ -106,6 +106,19 @@ static void KelvinRgb(float K, float out[3]) {
     for (int i = 0; i < 3; i++) out[i] /= (std::max)(L, 1e-3f);
 }
 
+// (14/11) el sol del partido para el menu visual (tarjeta del sol): la misma cuenta que SolLibreFrame (con el motor movido, lo que
+// la DLL guardo antes de escribir; si no, la fila 111). Con g_cfgMutex tomado.
+bool SolLibreRealSun(float& azDeg, float& elDeg) {
+    float r[3] = {}; bool ok = false, active;
+    { std::lock_guard<std::mutex> lk(s_mx); active = s_active;
+      if (active && s_haveReal) { float sg = s_real[1] < 0 ? -1.0f : 1.0f; for (int k = 0; k < 3; k++) r[k] = s_real[k] * sg; ok = true; } }
+    if (!ok && !active) { for (int k = 0; k < 3; k++) r[k] = g_cfg.live[111][k]; ok = r[0] * r[0] + r[1] * r[1] + r[2] * r[2] > 0.25f; }
+    if (!ok) return false;
+    const float n = sqrtf(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+    azDeg = atan2f(r[0], r[2]) * 57.29578f; if (azDeg < 0) azDeg += 360.0f;
+    elDeg = asinf(std::clamp(r[1] / n, -1.0f, 1.0f)) * 57.29578f;
+    return true;
+}
 // UpdateTimeParams (con g_cfgMutex tomado), cada cuadro
 void SolLibreFrame(float (*p)[4], double t) {
     static double lastT = -1.0, logT = 0.0; static float spin = 0.0f;
