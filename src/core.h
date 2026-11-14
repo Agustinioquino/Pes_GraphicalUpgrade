@@ -177,7 +177,9 @@ struct Config {
     int replayCutMs = 300;                     // (14/11 9vcq5h) cuanto dura ese desenfoque ([PES21FX] repeticion_corte_ms, 100..1000)
     int menuMouse = 1;                         // (11/11) mouse en los menus nativos del juego (menumouse.cpp): 0 apagado, 1 prendido ([PES21FX] mouse_menus)
     int menuMouseDelay = 2;                    // (11/11 v2) cuadros de retraso de la flecha, para que vaya junto con la fila marcada ([PES21FX] mouse_menus_retraso, 0..4)
-    int menuMouseNear = 1;                     // (11/11 v2) en los huecos entre filas de un grupo vale la mas cercana ([PES21FX] mouse_menus_cerca)
+    int menuMouseNear = 1;                     // (11/11 v2) en los huecos entre filas de un grupo vale la mas cercana ([PES21FX] mouse_menus_cerca; 14/11 ythnmm: 1 = solo a pocos pixeles, 2 = lejos como antes)
+    int menuMouseExtra = 1;                    // (14/11 ythnmm) boton del medio / laterales / Ctrl o Shift + rueda = botones del mando en los menus del juego ([PES21FX] mouse_botones_extra)
+    int menuMouseWheelOpt = 1;                 // (14/11 ythnmm) rueda sobre un selector = cambiar la opcion ([PES21FX] mouse_rueda_opciones)
     int mouseHint = 1;                         // (14/11 d) [PES21FX] ayuda_mouse: clic izq. / der. abajo a la derecha al usar el mouse en los menus del juego
     int camShareHold = 1;                      // (14/11 j) [PES21FX] camara_share: mantener SHARE / SELECT = camara libre en la repeticion
     int camNoDof = 1;                          // (14/11 h) [PES21FX] camara_sin_dof: con la camara libre prendida no hay desenfoque de profundidad (w41 = 2, x137 = 0)
@@ -773,7 +775,7 @@ void KeyBlockInstall();
 // (11/11 3icxbh) mouse en los menus nativos del juego (menumouse.cpp): ganchos en el primer Present; la rueda llega por la ventana; cursor para overlay.cpp
 void MotorPagePresent();   // (11/11) motorpage.cpp: filas nativas del Motor en el estudio 3D
 void MotorPageSeen(void* win); bool MotorPageActive(); bool MotorPageIs(void* win); bool MotorPageDrag(void* win, float mx, float my, bool down, bool edge, float tx, float ty, float tw);   // el estudio del Motor esta abierto (lo confirma menumouse.cpp en cada cuadro)
-void MenuMousePresent(); void MenuMouseWheel(int delta); bool MenuMouseCursor(float* x, float* y); bool MenuMouseOverRow(); HWND OverlayHwnd(); bool MotorPanelOpen();
+void MenuMousePresent(); void MenuMouseWheel(int delta); void MenuMouseHWheel(int delta); bool MenuMouseCursor(float* x, float* y); bool MenuMouseOverRow(); HWND OverlayHwnd(); bool MotorPanelOpen();
 extern std::atomic<int> g_replacedCount, g_failedCount;
 extern std::vector<std::string> g_compileErrors;
 extern std::mutex g_errMutex;
