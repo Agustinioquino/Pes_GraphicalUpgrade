@@ -1956,10 +1956,6 @@ static void DrawSettingsPage() {
             if (ImGui::SliderInt("##mousemenusret", &rt, 0, 4)) g_cfg.menuMouseDelay = rt;
             if (ImGui::IsItemDeactivatedAfterEdit()) SaveOption("mouse_menus_retraso", std::to_string(g_cfg.menuMouseDelay));
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("El juego tarda 2 cuadros en marcar la fila elegida. Con 2 la flecha y la fila marcada van juntas; con 0 la flecha va mas pegada a la mano pero la fila la sigue de atras."));
-            bool gb = g_cfg.menuMouseGuide != 0;   // (14/11 ythnmm) barra de botones de abajo clickeable
-            row(TRS("Clic en la barra de botones de abajo"));
-            if (ImGui::Checkbox("##mousemenusbarra", &gb)) { g_cfg.menuMouseGuide = gb ? 1 : 0; SaveOption("mouse_barra_botones", gb ? "1" : "0"); }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Un clic sobre un boton de la barra de ayuda de abajo (cuadrado, triangulo, L1, R1...) hace lo mismo que apretarlo en el mando. Asi todo se maneja con la rueda y los dos clics."));
             bool wo = g_cfg.menuMouseWheelOpt != 0;
             row(TRS("Rueda sobre una opcion: cambiarla"));
             if (ImGui::Checkbox("##mousemenusrueda", &wo)) { g_cfg.menuMouseWheelOpt = wo ? 1 : 0; SaveOption("mouse_rueda_opciones", wo ? "1" : "0"); }
