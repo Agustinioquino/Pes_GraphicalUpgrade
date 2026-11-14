@@ -311,105 +311,135 @@ float2 PESNatMap(float2 x, float2 ref, float2 rtK) {
   float2 d = ref * (rtK - 1.0), y = x * rtK, s = sign(d), u = (x - ref) * s;   // u > 0: pasado ref en la direccion del empuje
   float2 z = x + d * saturate(1.0 - u / max(2.0 * abs(d), 1e-5));
   return (u > 0.0) ? z : y; }
-void PESGrassColorGrade(inout float3 c)
+// (14/11, paso 3 del plan de optimizacion) la parte del color del pasto que no depende del pixel (filas 112 / 456: giro del tono, el verde
+// medio despues de cada ajuste, los empujes rt de y112 / w112 y el color elegido de x456, con sus senos, cosenos y divisiones) se calcula
+// UNA vez (PESGrassColorGradePrep) y se aplica a cada color con PESGrassColorGradeApply. El PS de las hojas (18afff) la aplicaba hasta 4
+// veces por pixel y la recalculaba entera cada vez. Mismas cuentas en el mismo orden: PESGrassColorGrade queda igual que antes
+struct PESCGP { float4 C, C456; bool pre456, skip, natR; float ca, sa; float3 rtY, rtW, gCur, tP; float2 natRefW; };
+PESCGP PESGrassColorGradePrep()
 {
-  float4 C = IniParams.Load(int2(112, 0));
-  float4 C456 = IniParams.Load(int2(456, 0));   // (12/11 22:56) color del pasto elegible (ver el final)
-  const bool pre456 = C456.x > 0.5 && C456.y > 0.001;
-  if (abs(C.x) < 0.01 && abs(C.y) < 0.001 && abs(C.z) < 0.001 && C.w < 0.001 && !pre456) return;
+  PESCGP g;
+  g.C = IniParams.Load(int2(112, 0));
+  g.C456 = IniParams.Load(int2(456, 0));   // (12/11 22:56) color del pasto elegible (ver el final)
+  g.pre456 = g.C456.x > 0.5 && g.C456.y > 0.001;
+  g.skip = abs(g.C.x) < 0.01 && abs(g.C.y) < 0.001 && abs(g.C.z) < 0.001 && g.C.w < 0.001 && !g.pre456;
   const float3 LW = float3(0.2126, 0.7152, 0.0722);
-  float l = dot(c, LW);
   const float3 gRef = float3(0.40, 1.0, 0.25);
   // (13/11, segunda lectura) gCur = el verde medio del pasto tal como queda despues de x / y / w112: x456 mide su corrimiento desde aca
   // (antes lo media desde gRef y se sumaba al "Verde natural" w112 0.5: "Verano" / "Oliva" dejaban la cancha color paja)
   float3 gCur = gRef;
-  if (abs(C.x) > 0.01) {
-    float3 yiq = float3(l, dot(c, float3(0.596, -0.274, -0.322)), dot(c, float3(0.211, -0.523, 0.312)));
-    float a = radians(clamp(C.x, -60.0, 60.0)); float ca = cos(a), sa = sin(a);
-    float2 iq = float2(yiq.y * ca - yiq.z * sa, yiq.y * sa + yiq.z * ca);
-    c = max(float3(yiq.x + 0.956 * iq.x + 0.621 * iq.y, yiq.x - 0.272 * iq.x - 0.647 * iq.y, yiq.x - 1.106 * iq.x + 1.703 * iq.y), 0.0);
-    if (pre456) {
+  g.ca = 1.0; g.sa = 0.0;
+  if (abs(g.C.x) > 0.01) {
+    float a = radians(clamp(g.C.x, -60.0, 60.0)); g.ca = cos(a); g.sa = sin(a);
+    if (g.pre456) {
       float yR = dot(gCur, LW), iR = dot(gCur, float3(0.596, -0.274, -0.322)), qR = dot(gCur, float3(0.211, -0.523, 0.312));
-      float2 iqR = float2(iR * ca - qR * sa, iR * sa + qR * ca);
+      float2 iqR = float2(iR * g.ca - qR * g.sa, iR * g.sa + qR * g.ca);
       gCur = max(float3(yR + 0.956 * iqR.x + 0.621 * iqR.y, yR - 0.272 * iqR.x - 0.647 * iqR.y, yR - 1.106 * iqR.x + 1.703 * iqR.y), 1e-3);
       gCur /= gCur.g;
     }
   }
   // (12/11 20:50, Agustin: "la opcion de color del pasto para que funcione bien con este nuevo pasto natural") natural: "Verde" y "Verde
-  // natural" ya no llevan cada pixel al MISMO color (eso borraba las hojas secas, las puntas paja, las encendidas y las mezclas de pasto:
-  // con w112 0.5 perdian el 42 % de su color): se calcula el corrimiento que necesita el verde medio del pasto (r/g 0.40, b/g 0.25) y se
-  // aplica igual a todos los colores, con la claridad de cada uno. El verde medio llega al mismo lugar que antes; la variedad queda
-  bool natR = PESNatOn();
-  // (12/11) el tono del natural solo mueve lo que tiene color: gris / blanco (lineas de cal, bordes de linea) quedan como estan
-  float mxC = max(c.r, max(c.g, c.b)), mnC = min(c.r, min(c.g, c.b));
-  float kS = saturate(((mxC - mnC) / max(mxC, 1e-3) - 0.12) * 5.0);
+  // natural" ya no llevan cada pixel al MISMO color: se calcula el corrimiento que necesita el verde medio del pasto (r/g 0.40, b/g 0.25)
+  // y se aplica igual a todos los colores, con la claridad de cada uno (PESGrassColorGradeApply)
+  g.natR = PESNatOn();
   float2 natRef = gRef.rb;   // (13/11) donde esta el verde medio (r/g, b/g) antes del w112: si el y112 ya lo movio, el w112 parte de ahi
-  if (abs(C.y) > 0.001) {
-    float3 g = float3(0.19, 0.42, 0.10);
-    if (natR) {
-      float3 rt = max(lerp(gRef, g / g.g, clamp(C.y, -1.0, 1.0) * 0.6), 0.02) / gRef;
+  g.rtY = float3(1.0, 1.0, 1.0);
+  if (abs(g.C.y) > 0.001) {
+    float3 gg = float3(0.19, 0.42, 0.10);
+    if (g.natR) {
+      float3 rt = max(lerp(gRef, gg / gg.g, clamp(g.C.y, -1.0, 1.0) * 0.6), 0.02) / gRef;
       gCur *= rt;
-      float3 rtK = lerp(float3(1.0, 1.0, 1.0), rt, kS);
-      float gN = max(c.g, 1e-4);
-      float3 cn = c; cn.rb = gN * PESNatMap(c.rb / gN, gRef.rb, rtK.rb);   // (13/11 tanda 2) rt.g = 1: el verde no cambia
       natRef *= rt.rb;   // el verde medio (kS = 1) cae justo en ref * rt
-      c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
+      g.rtY = rt;
     } else {
-      { float3 gg = g * (dot(gCur, LW) / dot(g, LW)); gCur = max(lerp(gCur, gg, clamp(C.y, -1.0, 1.0) * 0.6), 1e-3); gCur /= gCur.g; }
-      g *= l / dot(g, LW);
-      c = max(lerp(c, g, clamp(C.y, -1.0, 1.0) * 0.6), 0.0);
+      float3 g2 = gg * (dot(gCur, LW) / dot(gg, LW)); gCur = max(lerp(gCur, g2, clamp(g.C.y, -1.0, 1.0) * 0.6), 1e-3); gCur /= gCur.g;
     }
   }
-  if (abs(C.z) > 0.001) { float k = 1.0 + clamp(C.z, -0.8, 1.0); c = max((c - 0.18) * k + 0.18, 0.0); }
-  // (27/10 n) tanda 11, w112 "verde natural": el cesped real al sol con cielo despejado (foto de Agustin, pelota sobre la linea) tiene
-  // r/g 0.75-0.80 y b/g 0.3-0.5; el del mod daba r/g 0.40 y b/g 0.25 (verde saturado y frio, "no humano"). El "Verde" (y112) acerca a
-  // (0.19, 0.42, 0.10) = r/g 0.45, aun mas saturado. Esto acerca la cromatica a (0.78, 1, 0.42) conservando la luminancia; 1 = casi todo
-  if (C.w > 0.001) {
+  // (27/10 n) tanda 11, w112 "verde natural": acerca la cromatica a (0.78, 1, 0.42) conservando la luminancia; 1 = casi todo
+  g.rtW = float3(1.0, 1.0, 1.0);
+  if (g.C.w > 0.001) {
     float3 t = float3(0.78, 1.0, 0.42);
-    if (natR) {
-      float3 rt = lerp(gRef, t, clamp(C.w, 0.0, 1.0) * 0.85) / gRef;
+    if (g.natR) {
+      float3 rt = lerp(gRef, t, clamp(g.C.w, 0.0, 1.0) * 0.85) / gRef;
       gCur *= rt;
-      float3 rtK = lerp(float3(1.0, 1.0, 1.0), rt, kS);
-      float gN = max(c.g, 1e-4);
-      float3 cn = c; cn.rb = gN * PESNatMap(c.rb / gN, natRef, rtK.rb);   // (13/11 tanda 2) rt.g = 1: el verde no cambia
-      c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
+      g.rtW = rt;
     } else {
-      { float3 tt = t * (dot(gCur, LW) / dot(t, LW)); gCur = max(lerp(gCur, tt, clamp(C.w, 0.0, 1.0) * 0.85), 1e-3); gCur /= gCur.g; }
-      t *= l / dot(t, LW); c = max(lerp(c, t, clamp(C.w, 0.0, 1.0) * 0.85), 0.0);
+      float3 tt = t * (dot(gCur, LW) / dot(t, LW)); gCur = max(lerp(gCur, tt, clamp(g.C.w, 0.0, 1.0) * 0.85), 1e-3); gCur /= gCur.g;
     }
   }
-  // (12/11 22:56, Agustin: "con respecto al verde, podrias hacer que se pueda cambiar por distintos colores" / "pero manteniendo lo
-  // demas") x456 COLOR DEL PASTO: 0 como esta, 1 natural al sol, 2 ingles (azulado profundo), 3 esmeralda, 4 oliva, 5 lima, 6 verano
-  // (amarillento), 7 personalizado (z456 tono en grados: 90 amarillento, 120 verde puro, 150 azulado; w456 saturacion 0..1.5).
-  // y456 cuanto (0..1). Cambia SOLO el tono del verde: el corrimiento que lleva el verde medio del pasto (r/g 0.40, b/g 0.25) al
-  // elegido se aplica a cada color con su misma claridad (las hojas, el dibujo, las puntas y la variedad se conservan) y solo en lo
-  // que es verde: las hojas secas / paja, la tierra del desgaste y el gris / blanco de las lineas quedan como estan. Va despues de
-  // todo lo de arriba (si se usan juntos, el elegido manda en el verde)
-  if (pre456) {
-    int pI = (int)round(clamp(C456.x, 0.0, 7.0));
-    float3 tP = gRef;
-    if (pI == 1) tP = float3(0.62, 1.0, 0.34);
-    else if (pI == 2) tP = float3(0.30, 1.0, 0.34);
-    else if (pI == 3) tP = float3(0.17, 1.0, 0.44);
-    else if (pI == 4) tP = float3(0.74, 1.0, 0.20);
-    else if (pI == 5) tP = float3(0.56, 1.0, 0.07);
-    else if (pI == 6) tP = float3(0.86, 1.0, 0.30);
+  g.natRefW = natRef; g.gCur = gCur;
+  // (12/11 22:56) x456 COLOR DEL PASTO: 0 como esta, 1 natural al sol, 2 ingles (azulado profundo), 3 esmeralda, 4 oliva, 5 lima, 6 verano
+  // (amarillento), 7 personalizado (z456 tono en grados: 90 amarillento, 120 verde puro, 150 azulado; w456 saturacion 0..1.5)
+  g.tP = gRef;
+  if (g.pre456) {
+    int pI = (int)round(clamp(g.C456.x, 0.0, 7.0));
+    if (pI == 1) g.tP = float3(0.62, 1.0, 0.34);
+    else if (pI == 2) g.tP = float3(0.30, 1.0, 0.34);
+    else if (pI == 3) g.tP = float3(0.17, 1.0, 0.44);
+    else if (pI == 4) g.tP = float3(0.74, 1.0, 0.20);
+    else if (pI == 5) g.tP = float3(0.56, 1.0, 0.07);
+    else if (pI == 6) g.tP = float3(0.86, 1.0, 0.30);
     else if (pI == 7) {
-      float hD = C456.z > 1.0 ? clamp(C456.z, 60.0, 180.0) : 112.0, sD = C456.w > 0.001 ? clamp(C456.w, 0.05, 1.5) : 0.75;
+      float hD = g.C456.z > 1.0 ? clamp(g.C456.z, 60.0, 180.0) : 112.0, sD = g.C456.w > 0.001 ? clamp(g.C456.w, 0.05, 1.5) : 0.75;
       float3 hc = saturate(abs(frac(hD / 360.0 + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0);   // tono puro (rojo en 0)
       hc = max(lerp(float3(1.0, 1.0, 1.0), hc, min(sD, 1.0)), 0.0); hc /= max(hc.g, 1e-3);
       if (sD > 1.0) hc = max(lerp(float3(1.0, 1.0, 1.0), hc, sD), 0.02);   // mas de 1: aun mas saturado
-      tP = max(hc, 0.02);
+      g.tP = max(hc, 0.02);
     }
+  }
+  return g;
+}
+void PESGrassColorGradeApply(PESCGP g, inout float3 c)
+{
+  if (g.skip) return;
+  const float3 LW = float3(0.2126, 0.7152, 0.0722);
+  const float3 gRef = float3(0.40, 1.0, 0.25);
+  float l = dot(c, LW);
+  if (abs(g.C.x) > 0.01) {
+    float3 yiq = float3(l, dot(c, float3(0.596, -0.274, -0.322)), dot(c, float3(0.211, -0.523, 0.312)));
+    float2 iq = float2(yiq.y * g.ca - yiq.z * g.sa, yiq.y * g.sa + yiq.z * g.ca);
+    c = max(float3(yiq.x + 0.956 * iq.x + 0.621 * iq.y, yiq.x - 0.272 * iq.x - 0.647 * iq.y, yiq.x - 1.106 * iq.x + 1.703 * iq.y), 0.0);
+  }
+  // (12/11) el tono del natural solo mueve lo que tiene color: gris / blanco (lineas de cal, bordes de linea) quedan como estan
+  float mxC = max(c.r, max(c.g, c.b)), mnC = min(c.r, min(c.g, c.b));
+  float kS = saturate(((mxC - mnC) / max(mxC, 1e-3) - 0.12) * 5.0);
+  if (abs(g.C.y) > 0.001) {
+    if (g.natR) {
+      float3 rtK = lerp(float3(1.0, 1.0, 1.0), g.rtY, kS);
+      float gN = max(c.g, 1e-4);
+      float3 cn = c; cn.rb = gN * PESNatMap(c.rb / gN, gRef.rb, rtK.rb);   // (13/11 tanda 2) rt.g = 1: el verde no cambia
+      c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
+    } else {
+      float3 gg = float3(0.19, 0.42, 0.10);
+      gg *= l / dot(gg, LW);
+      c = max(lerp(c, gg, clamp(g.C.y, -1.0, 1.0) * 0.6), 0.0);
+    }
+  }
+  if (abs(g.C.z) > 0.001) { float k = 1.0 + clamp(g.C.z, -0.8, 1.0); c = max((c - 0.18) * k + 0.18, 0.0); }
+  if (g.C.w > 0.001) {
+    if (g.natR) {
+      float3 rtK = lerp(float3(1.0, 1.0, 1.0), g.rtW, kS);
+      float gN = max(c.g, 1e-4);
+      float3 cn = c; cn.rb = gN * PESNatMap(c.rb / gN, g.natRefW, rtK.rb);   // (13/11 tanda 2) rt.g = 1: el verde no cambia
+      c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
+    } else {
+      float3 t = float3(0.78, 1.0, 0.42);
+      t *= l / dot(t, LW); c = max(lerp(c, t, clamp(g.C.w, 0.0, 1.0) * 0.85), 0.0);
+    }
+  }
+  // x456: cambia SOLO el tono del verde (el corrimiento que lleva el verde medio al elegido, con la misma claridad de cada color) y solo en
+  // lo que es verde: las hojas secas / paja, la tierra del desgaste y el gris / blanco de las lineas quedan como estan
+  if (g.pre456) {
     float lP = dot(c, LW);
     float rgP = c.r / max(c.g, 1e-4), bgP = c.b / max(c.g, 1e-4);
     float mxP = max(c.r, max(c.g, c.b)), mnP = min(c.r, min(c.g, c.b));
     float kSP = saturate(((mxP - mnP) / max(mxP, 1e-3) - 0.12) * 5.0);
     float kG = kSP * smoothstep(1.02, 0.80, rgP) * smoothstep(1.10, 0.85, bgP) * step(mnP + 1e-4, c.g);   // verde (no paja, tierra ni gris)
-    float3 rtP = lerp(float3(1.0, 1.0, 1.0), clamp(tP / gCur, 0.25, 4.0), saturate(C456.y) * kG);
-    rtP.r = min(rtP.r, max(max(tP.r, 0.95) * c.g / max(c.r, 1e-4), 1.0));   // (13/11) un verde nunca termina con mas rojo que verde
-    rtP.b = min(rtP.b, max(max(tP.b, 0.95) * c.g / max(c.b, 1e-4), 1.0));   // ni con mas azul que verde (x112 alto + Esmeralda / Ingles)
+    float3 rtP = lerp(float3(1.0, 1.0, 1.0), clamp(g.tP / g.gCur, 0.25, 4.0), saturate(g.C456.y) * kG);
+    rtP.r = min(rtP.r, max(max(g.tP.r, 0.95) * c.g / max(c.r, 1e-4), 1.0));   // (13/11) un verde nunca termina con mas rojo que verde
+    rtP.b = min(rtP.b, max(max(g.tP.b, 0.95) * c.g / max(c.b, 1e-4), 1.0));   // ni con mas azul que verde (x112 alto + Esmeralda / Ingles)
     float3 cP = c * rtP; c = max(cP * (lP / max(dot(cP, LW), 1e-5)), 0.0);
   }
 }
+void PESGrassColorGrade(inout float3 c) { PESGrassColorGradeApply(PESGrassColorGradePrep(), c); }
 #endif

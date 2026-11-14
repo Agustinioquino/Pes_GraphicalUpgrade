@@ -89,6 +89,10 @@ void main(
   if (r0.x != 0) discard;
   // === PES21 pasto v3: atlas propio
   float4 Q4 = IniParams.Load(int2(104,0));
+  // (14/11, paso 3) lo del color del pasto (112 / 456) que vale para todo el cuadro, calculado una vez por pixel (antes hasta 4 veces)
+  PESCGP pesCG = PESGrassColorGradePrep();
+  // (14/11, paso 3) sol del cielo / de la luz, estado del suelo y brillo estable: valen para todo el cuadro; se leen una vez (antes 2-5 veces)
+  const float3 pesSky = PESSunSky(), pesSunW = PESSunWorld(); const float2 pesGndS = PESGround(); const float pesStK = PESStableK();
   // (11/11) v8.w + 16 = HOJAS 3D de primerisimo plano (VS 498b30, cb5[13].y): la forma es geometria; sin atlas ni recorte por alfa
   bool pesBladeM = PES_BLADE3D ? true : v8.w > 16.5;
   bool pesNarM = v8.w > 40.5;   // (12/11) + 32 = hoja 3D ANGOSTA (escalon de primerisimo plano, x432): su propia textura
@@ -310,7 +314,7 @@ void main(
   // (12/11, Agustin: "el brillo del pasto al mover la camara se nota bastante mas que al estar quieto") x436 brillo estable: cuanto de la punta
   // cubre un pixel (fwidth de relT, fuera de ramas). En las tarjetas solo lejos (de cerca el atlas tiene saltos de relT entre hojas que no son
   // la punta); en las hojas 3D siempre (relT continuo)
-  float pesTipAA = saturate((fwidth(relT) - 0.12) / 0.45) * saturate(PESStableK()) * (pesBladeM ? 1.0 : 1.0 - nearF);
+  float pesTipAA = saturate((fwidth(relT) - 0.12) / 0.45) * saturate(pesStK) * (pesBladeM ? 1.0 : 1.0 - nearF);
   // (13/11 tanda 2) y496 PUNTAS ENCENDIDAS SOLO ARRIBA: el dorado, la luz que atraviesa la punta, las puntas encendidas al azar y la
   // translucidez de la punta empezaban al 35 % de la hoja (con todo junto dos tercios de la hoja de cerca salian lima). capT las deja desde la
   // mitad y enteras solo en el ultimo 15 % del alto real (relH). Con x436 la hoja de menos de un pixel toma su promedio (como PESTipS)
@@ -325,7 +329,7 @@ void main(
   float4 P506 = IniParams.Load(int2(506, 0));
   float pesSeK = 0.0, pesSeLo = 0.0, pesSeHi = 0.0, pesRayK = 0.0;
   if (pesNat && !pesFar && (P506.x > 0.001 || P506.y > 0.001)) {
-    float sYe = PESSunSky().y;
+    float sYe = pesSky.y;
     pesSeLo = smoothstep(0.62, 0.22, sYe) * smoothstep(0.03, 0.10, sYe);
     pesSeHi = smoothstep(0.55, 0.85, sYe);
     pesSeK = clamp(P506.x, 0.0, 2.0) * pesDayK;
@@ -341,7 +345,7 @@ void main(
   r0.y = v3.w * r0.y + r0.w;
   if (pesV3) {
     // sombra entre hojas: oclusion del atlas (2*G), mas fuerte con el sol bajo (las raices quedan en sombra)
-    float sunUp = saturate(PESSunWorld().y);   // (20/10) sol en mundo publicado por la DLL
+    float sunUp = saturate(pesSunW.y);   // (20/10) sol en mundo publicado por la DLL
     float aoK = clamp(Q6.y, 0.0, 2.0) * lerp(0.85, 1.15 - 0.45 * sunUp, pesDayK);   // (02/11 paso 5) de noche / nublado raices ~25 % menos oscuras
     r0.y = 1.0 - (1.0 - r0.w) * aoK;
   }
@@ -378,7 +382,7 @@ void main(
   if (pesV3 && pxA > 0.0 && !pesFar) {   // (27/10 p) tambien las parcelas del juego pegadas a la camara (v4.w < 0)
     // (26/10 d) hojas del mod: sombra raiz -> punta por la altura en la hoja (estable con la distancia; la del atlas se funde con el
     // mip y de 1.5 a 6 px de ancho quedaba en 14-58%): "sombra entre las hojas" que no depende del filtro de sombras ni del SSAO
-    float sunUpC = saturate(PESSunWorld().y);
+    float sunUpC = saturate(pesSunW.y);
     // (26/10 e) 0.4 -> 0.25: la raiz quedaba negra cerca. (27/10 h) y295: + 0.10 por punto de contraste (0.35 natural): bases mas oscuras, como en la foto
     float aoC = lerp(1.0 - saturate((0.25 + 0.10 * kC + 0.07 * kS * nearF) * (1.0 + 0.35 * kShortP) * kRoot) * saturate(Q6.y) * lerp(0.85, 1.15 - 0.45 * sunUpC, pesDayK), 1.0, smoothstep(0.0, 0.85, relH));   // (2/11) z325   // (27/10 p) z334: raiz mas oscura de cerca. (04/11) 0.15 -> 0.07: de cerca la cancha quedaba ~8 % mas oscura que a media distancia
     // (08/11 aa) z413 SOMBRA ENTRE HOJAS por tipo. Natural: la sombra de la raiz depende del lado del sol (la cara de la hoja que mira al sol
@@ -388,7 +392,7 @@ void main(
     float4 P413 = IniParams.Load(int2(413,0));
     float kSh = clamp(P413.z, 0.0, 2.0);
     if (kSh > 0.001) {
-      float3 Sd = PESSunSky();
+      float3 Sd = pesSky;
       float side = saturate(0.5 + 0.5 * dot(normalize(float3(pesN.x * 2.0 - 1.0, 0.0, pesN.y * 2.0 - 1.0) + 1e-4), normalize(float3(Sd.x, 0.0, Sd.z) + 1e-4)));
       if (pesSunV < 1.0) side = lerp(0.5, side, pesSunV);   // (12/11 23:45) w447: en la sombra no hay lado al sol (13/11: con 1 sin tocar, exacto como antes)
       float dens = saturate((1.0 - r0.y) * 2.0);   // oclusion entre hojas ya calculada (r0.y: 1 = nada tapada) -> 0..1
@@ -425,7 +429,7 @@ void main(
     // "amarillo"). El contraste (z112) gira alrededor del mismo gris que en la base (antes de la ganancia x433)
     if (pesNat) {
       PESNatX29(c);   // (13/11 tanda 2) la misma cuenta de antes, ahora en una funcion (tambien la usa y330)
-      float3 cgn = c / max(pesNatG, 1e-3); PESGrassColorGrade(cgn); c = max(cgn, 0.0) * pesNatG;
+      float3 cgn = c / max(pesNatG, 1e-3); PESGrassColorGradeApply(pesCG, cgn); c = max(cgn, 0.0) * pesNatG;
     }
     float tipK = smoothstep(0.55, 1.0, pesN.z) * (0.08 + 0.6 * v8.x) * pesCf;   // (26/10 d) 0.18 -> 0.08: las puntas tenian un 18% de paja aun sin desgaste (r/g 0.45 -> 0.57, lima a media distancia)
     // (11/11) w412: en el pasto de verdad hay hojas sueltas secas o amarillentas entre las verdes (mas hacia la punta); hoja por hoja
@@ -503,8 +507,8 @@ void main(
       float4 P413t = IniParams.Load(int2(413,0));
       float kTx = clamp(P413t.w, 0.0, 2.0);
       if (kTx > 0.001) {
-        float3 Sd = PESSunSky();
-        float sunK = saturate(Sd.y * 1.6) * pesDayK * (1.0 - 0.8 * PESGround().x);
+        float3 Sd = pesSky;
+        float sunK = saturate(Sd.y * 1.6) * pesDayK * (1.0 - 0.8 * pesGndS.x);
         { float sp4 = IniParams.Load(int2(414,0)).w; sunK = saturate(sp4 * 1.2) * pesDayK * pesSunV;   // (08/11 ab) fuerza del sol de la DLL (clima, hora, estacion, altura); (12/11 23:45) w447: nada en la sombra
         }
         float3 Ld = g_psSystem.m_dominantLightDir.xyz; float lv = length(Ld); Ld = lv > 1e-3 ? Ld / lv : Sd;
@@ -533,7 +537,7 @@ void main(
         }
       }
       if (pesRayK > 0.001) {   // (13/11) y506 rayos en algunas hojas (ver arriba)
-        float3 SdR = PESSunSky();
+        float3 SdR = pesSky;
         float3 LdR = g_psSystem.m_dominantLightDir.xyz; float lvR = length(LdR); LdR = lvR > 1e-3 ? LdR / lvR : SdR;
         float backR = saturate(0.5 - 0.5 * dot(normalize(float3(pesN.x * 2.0 - 1.0, pesN.z, pesN.y * 2.0 - 1.0) + 1e-4), LdR));
         float pickR = lerp(step(0.83, frac(pesHvR * 13.71 + 0.27)) * (0.7 + 0.3 * frac(pesHvR * 41.3)), 0.15, pesTipAA);   // hoja de menos de un pixel: el promedio
@@ -557,7 +561,7 @@ void main(
     if (pesNat) c -= max(c - 0.75, 0.0) * 0.6;   // (11/11) natural: hombro suave arriba de 0.75 (el sol fuerte recortaba en 1 y borraba el dibujo de la hoja)
     o0.xyz = saturate(c);
   }
-  if (!pesFar && !(pesV3 && pesNat)) { float3 cg = o0.xyz; PESGrassColorGrade(cg); o0.xyz = saturate(cg); }   // (25/10 b) color del pasto (112), igual que la base (natural: antes de los detalles, 12/11 20:50)
+  if (!pesFar && !(pesV3 && pesNat)) { float3 cg = o0.xyz; PESGrassColorGradeApply(pesCG, cg); o0.xyz = saturate(cg); }   // (25/10 b) color del pasto (112), igual que la base (natural: antes de los detalles, 12/11 20:50)
   if (pesV3 && !pesFar && pesPaintF > 0.001) {   // (27/10 h) hoja pintada: conserva el sombreado (raiz, claridad, sombra plana) pero no el seco, el amarillo,
     // el tinte ni el color del pasto (112: "Verde" la ponia lima). (27/10 j) despues del grade
     o0.xyz = lerp(o0.xyz, saturate(PESNatShoulder(v1.zzz * r1.xyz * clar * pesNatG)), pesPaintF);
@@ -591,14 +595,14 @@ void main(
     float pesWetT = pesNat ? clamp(IniParams.Load(int2(438, 0)).w, 0.0, 2.0) : 0.0;
     if (pesWetT > 0.001) { float wt = pesWetT * pesCfT * PESTipS(0.25, 0.9, relT, pesTipAA) * (1.0 - saturate(v8.x)) * (1.0 - pesPaintF);
       o2.y = saturate(o2.y + 0.22 * wt); o2.x = lerp(o2.x, 0.16, saturate(0.55 * wt)); }
-    { float3 cg = o0.xyz; float sp = o2.y, rg = o2.x; PESGroundLook(cg, sp, rg, PESGround()); o0.xyz = cg; o2.y = sp; o2.x = rg; }   // suelo humedo / seco
+    { float3 cg = o0.xyz; float sp = o2.y, rg = o2.x; PESGroundLook(cg, sp, rg, pesGndS); o0.xyz = cg; o2.y = sp; o2.x = rg; }   // suelo humedo / seco
     // (27/10 n) tanda 11, x329 "transpiracion": en la foto de Agustin algunas hojas sueltas tienen un brillo humedo puntual (rocio / riego) en la
     // punta, chispas con el sol de frente. Una de cada ~8 hojas del mod (al azar por hoja, v8.z) lleva en la punta mas brillo y menos rugosidad;
     // solo cerca (pesCf) y no en las pintadas
     // (08/11 ac, Agustin: "el rocio deberia ser mas notorio ... seco / normal / humedo deberian cambiar el aspecto, como la lluvia o el invierno")
     // estado del suelo (110 manual, 114 automatico: lluvia) y estacion (114.z: 1 invierno): humedo x1.8 gotas (mas grandes y claras), seco x0.15,
     // invierno x1.4 (rocio / escarcha de la manana), lluvia = humedo. Vale para la transpiracion (x329) y el rocio fino (x334)
-    float2 pesGnd2 = PESGround();
+    float2 pesGnd2 = pesGndS;
     float dewK = (1.0 + 0.8 * pesGnd2.x) * (1.0 - 0.85 * pesGnd2.y) * (abs(IniParams.Load(int2(114,0)).z - 1.0) < 0.5 ? 1.4 : 1.0);
     { float4 P415 = IniParams.Load(int2(415,0));   // (08/11 ac) amanecer (reloj del sol de la DLL: sol subiendo y antes de las 10): rocio fuerte, x1.6
       if (P415.z > 0.5 && P415.x >= 0.0 && P415.x < 10.0) dewK *= 1.6; }
@@ -668,7 +672,7 @@ void main(
   // entre pixeles) no cambia. Con la camara en movimiento (o3.xy = px por cuadro, lo mismo que lee el TAA) el filtro sube hasta el doble:
   // el TAA ya no promedia
   { float3 dNx = ddx(r0.xyz), dNy = ddy(r0.xyz);
-    float kSt = PESStableK();
+    float kSt = pesStK;
     if (pesV3 && kSt > 0.001) {
       // (13/11 tanda 2) x436: el movimiento de la CAMARA (fila 498 de la DLL, px por cuadro a 1080 lineas). o3.xy aca es solo el viento y la
       // pelota (no hay jugadores en este shader): de cerca el viento mueve las puntas 2-5 px y parecia un paneo. Sin la fila: como antes
@@ -796,7 +800,7 @@ void main(
       gR = PESBaseRT0.Load(int3(int2(clamp((v7.zw * float2(0.5, -0.5) + 0.5) * rb, 0.0, rb - 1.0)), 0)).xyz;
     }
     float3 fc = saturate(v1.zzz * v3.xyz);
-    { float3 cg = fc; PESGrassColorGrade(cg); fc = saturate(cg); }
+    { float3 cg = fc; PESGrassColorGradeApply(pesCG, cg); fc = saturate(cg); }
     // distancia de tono (sin el brillo: sol / sombra no cuentan) + algo de brillo (botin blanco vs pasto)
     float3 fn = fc / max(dot(fc, float3(1,1,1)), 0.03), rn = gR / max(dot(gR, float3(1,1,1)), 0.03), pn = gP / max(dot(gP, float3(1,1,1)), 0.03);
     float lf = dot(fc, float3(0.333,0.333,0.333)), dR = dot(rn - fn, rn - fn) + 0.05 * abs(dot(gR, float3(0.333,0.333,0.333)) - lf), dP = dot(pn - fn, pn - fn) + 0.05 * abs(dot(gP, float3(0.333,0.333,0.333)) - lf);
@@ -806,8 +810,8 @@ void main(
   if (pesFB && v5.w < 0.5 && !pesFar && P330.y > 0.001) {
     float3 gnd = pesGnd;
     float3 flatC = saturate(v1.zzz * v3.xyz * pesNatG);
-    if (pesNat) { PESNatX29(flatC); float3 cg = flatC / max(pesNatG, 1e-3); PESGrassColorGrade(cg); flatC = saturate(cg * pesNatG); }   // (12/11 20:50) como la hoja: color antes de la ganancia; (13/11 tanda 2) y x29 como la hoja
-    else { float3 cg = flatC; PESGrassColorGrade(cg); flatC = saturate(cg); }
+    if (pesNat) { PESNatX29(flatC); float3 cg = flatC / max(pesNatG, 1e-3); PESGrassColorGradeApply(pesCG, cg); flatC = saturate(cg * pesNatG); }   // (12/11 20:50) como la hoja: color antes de la ganancia; (13/11 tanda 2) y x29 como la hoja
+    else { float3 cg = flatC; PESGrassColorGradeApply(pesCG, cg); flatC = saturate(cg); }
     float3 rel = clamp(o0.xyz / max(flatC, 0.02), 0.0, 1.6);
     o0.xyz = lerp(o0.xyz, saturate(gnd * rel), saturate(P330.y));
   }
@@ -830,7 +834,7 @@ void main(
   // la espalda queda mas clara o mas oscura (en la foto, de cerca, hay hojas encendidas y hojas en sombra una al lado de la otra; la luz del
   // juego las ilumina todas igual porque su normal es la de la cancha). Mas con el sol alto y de dia (114.w); las pintadas casi no
   if (pesV3 && nearF > 0.001 && kS > 0.001) {
-    float3 S = PESSunSky(); float sunAz = atan2(S.z, S.x);   // (04/11) con el sol del cielo: el lado al sol de cada mata no gira con la camara
+    float3 S = pesSky; float sunAz = atan2(S.z, S.x);   // (04/11) con el sol del cielo: el lado al sol de cada mata no gira con la camara
     float yaw = v8.z * 6.2832;
     float face = 0.5 + 0.5 * cos(yaw - sunAz);   // (04/11) yaw = hacia donde se abre la hoja desde el centro de su mata (VS): un lado de la mata al sol, el otro en sombra. 0.78-1.10 -> 0.82-1.16 (promedio 0.94 -> 0.99: de cerca se oscurecia)
     float sunny = lerp(0.3, 1.0, pesDayK * pesSunV);   // (02/11 paso 5) de noche casi no hay 'lado al sol'; (12/11 23:45) w447: en la sombra tampoco
