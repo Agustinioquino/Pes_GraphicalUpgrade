@@ -71,6 +71,7 @@ static void* s_rGiven[8] = {}; static int s_rN = 0;                       // ven
 static void* s_latchWin = nullptr; static int s_latchG = -1, s_latchR = -1, s_latchDir = 0; static double s_latchT = 0;   // clic que tuvo que elegir la fila: acepta en el paso siguiente
 // compartido con el hilo de Present / la ventana
 static std::atomic<int> s_wheel{0};
+static bool s_overB = false; static std::atomic<bool> s_over{false};   // (14/11 d) el mouse esta justo sobre una fila (se puede hacer clic): mano
 static std::atomic<int> s_curX{0}, s_curY{0}; static std::atomic<double> s_moveT{0}, s_liveT{0};
 static std::atomic<int> s_nSel{0}, s_nClick{0}, s_nBack{0}, s_nWheel{0}, s_nStep{0}, s_nNear{0}, s_nOpt{0};
 
@@ -194,6 +195,7 @@ static void Sample(double now, bool fresh) {
     s_m.cw = (float)(rc.right - rc.left); s_m.ch = (float)(rc.bottom - rc.top);
     s_m.moved = (p.x != s_last.x || p.y != s_last.y) && !fresh && s_last.x != -32000;
     s_last = p; s_m.p = p; s_m.lEdge = lEdge; s_m.rEdge = rEdge;
+    if (s_m.moved) s_overB = false;
     s_m.ok = s_m.cw >= 160.0f && s_m.ch >= 90.0f && p.x >= 0 && p.y >= 0 && (float)p.x < s_m.cw && (float)p.y < s_m.ch;
     if (rEdge) s_rN = 0;
     s_curX.store(p.x); s_curY.store(p.y);
@@ -245,6 +247,8 @@ static void Step(void* win) {
     Hit hit; const bool on = (s_m.moved || s_m.lEdge) && HitTest(I, mx, my, hit);
     // (v3) la fila actual del juego (Impl+0xd8) cuenta el desplazamiento de la lista: se compara con ese numero, no con el de la fila dibujada
     const int hitAbs = on ? AbsRow(win, I, hit.group, hit.row) : -1;
+    if (on && hit.dist <= 0.0f) s_overB = true;
+    if (s_m.moved) s_over.store(s_overB);
     bool chose = false;
     if (on && !((int)U32(I + 0xa0) == hit.group && (int)U32(I + 0xd8) == hitAbs)) {
         SelectLikeGame(win, hit.group, hitAbs); chose = true;
@@ -335,6 +339,8 @@ static void Install() {
 }
 
 void MenuMouseWheel(int delta) { if (s_ok && g_cfg.menuMouse != 0) s_wheel.fetch_add(delta, std::memory_order_relaxed); }
+
+bool MenuMouseOverRow() { return s_over.load(); }   // (14/11 d) para la mano del cursor sobre los menus del juego
 
 // para el cursor: posicion en pixeles de la ventana si el mouse se uso hace poco dentro de un menu del juego
 bool MenuMouseCursor(float* x, float* y) {

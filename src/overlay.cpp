@@ -2000,9 +2000,9 @@ static void DrawSettingsPage() {
     if (ImGui::Checkbox(TRS("Usar el mando en el menu"), &g_cfg.menuPad)) SaveOption("menu_mando", g_cfg.menuPad ? "1" : "0");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con el menu abierto: cruceta o stick para moverse, cruz para elegir, circulo para volver, triangulo para escribir un valor, OPTIONS abre el teclado para buscar."));
     {   // (14/11) cursor del menu
-        const char* cn[4] = { TRS("Sin cursor"), TRS("Dardo (verde sobre lo que se toca)"), TRS("Cursor de Windows"), TRS("Flecha y mano que brilla") };
-        int cc = std::clamp(g_cfg.menuCursor, 0, 3); ImGui::SetNextItemWidth(320.0f * UIK());
-        if (ImGui::Combo(TRS("Cursor del menu"), &cc, cn, 4)) { if (g_cfg.menuCursor) s_curOn = g_cfg.menuCursor; g_cfg.menuCursor = cc; char b[8]; snprintf(b, sizeof(b), "%d", cc); SaveOption("menu_cursor", b); }
+        const char* cn[3] = { TRS("Sin cursor"), TRS("Dardo (mano sobre lo que se puede tocar)"), TRS("Cursor de Windows") };
+        int cc = std::clamp(g_cfg.menuCursor, 0, 2); ImGui::SetNextItemWidth(320.0f * UIK());
+        if (ImGui::Combo(TRS("Cursor del menu"), &cc, cn, 3)) { if (g_cfg.menuCursor) s_curOn = g_cfg.menuCursor; g_cfg.menuCursor = cc; char b[8]; snprintf(b, sizeof(b), "%d", cc); SaveOption("menu_cursor", b); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Tambien con el boton Cursor de arriba o F1. Es el mismo con el menu abierto o cerrado. Con un mando conectado se esconde solo si no moves el mouse."));
     }
     { static const char* kH[3] = { "Escondido", "Se achica solo (3 s sin tocar nada)", "Siempre completo" };   // (14/11) HUD de la camara libre / modo foto
@@ -2712,6 +2712,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         s_curKeyWas = d;
     }
     const bool curToast = Now() - s_curToastT < 1.8;
+    float mouseHintA = 0.0f;
     const bool fis = MusclePhysiqueActive();
     { static bool s_fisWas = false; if (fis && !s_fisWas) s_fullMenu = false; s_fisWas = fis; }
     // (24/10 b) el aviso de abajo ya no hace falta (la musculatura tiene sus paginas y L1 / R1 en el menu del juego) y tapaba
@@ -2732,7 +2733,12 @@ void OverlayPresent(IDXGISwapChain* sc) {
     float mmx = 0, mmy = 0; const bool mmCur = !g_menuOpen && MenuMouseCursor(&mmx, &mmy);   // (11/11) flecha del mouse sobre los menus del juego
     const bool keyHud = KeyHudPoll();   // (11/11) cuadrito con la ultima tecla apretada
     const bool gizmo = MotorGizmoPoll();   // (11/11) gizmo de camara del Motor (motorgizmo.cpp)
-    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo && !curToast) {
+    {   // (14/11 d) ayuda de los botones del mouse: aparece al usar el mouse en los menus del juego y se va sola (con el cursor apagado, no)
+        static float s_mh = 0.0f; static double s_mhT = 0.0; const double tn = Now(); const float dt = (float)std::clamp(tn - s_mhT, 0.0, 0.1); s_mhT = tn;
+        const bool want = mmCur && g_cfg.mouseHint && g_cfg.menuCursor != 0;
+        s_mh = std::clamp(s_mh + (want ? dt / 0.20f : -dt / 0.40f), 0.0f, 1.0f); mouseHintA = s_mh * s_mh * (3.0f - 2.0f * s_mh);
+    }
+    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo && !curToast && mouseHintA <= 0.0f) {
         g_blockGamePad = false;   // (14/11) sin menu ni camara libre no se dibuja nada (ni se lee el mando): el juego vuelve a ver el mando
         return;
     }
@@ -2808,7 +2814,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         s_optWas = opt;
     }
     if (menuShown && MvVkVisible()) MvVirtualKeyboard(s_search, (int)sizeof(s_search), s_pad, UIK(), Ease(s_menuVis), g_cfg.menuVisual, &GlassBackdrop);   // (14/11 b) mismo vidrio y colores del menu
-    if (g_menuOpen && (g_cfg.menuCursor == 1 || g_cfg.menuCursor == 3)) {   // (14/11) cursor nuevo: flecha con sombra, verde sobre lo que se toca, onda al clic, barra I en texto
+    if (g_menuOpen && g_cfg.menuCursor == 1) {   // (14/11) cursor nuevo: flecha con sombra, verde sobre lo que se toca, onda al clic, barra I en texto
         ImGuiIO& mio = ImGui::GetIO();
         static float s_curA = 1.0f; static double s_mMoveT = 0.0;   // con el mando: si el mouse no se mueve en 2.5 s el cursor se va
         if (mio.MouseDelta.x != 0.0f || mio.MouseDelta.y != 0.0f || ImGui::IsAnyMouseDown()) s_mMoveT = Now();
@@ -2818,7 +2824,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
             const ImGuiMouseCursor mc = ImGui::GetMouseCursor();
             const int kind = mc == ImGuiMouseCursor_TextInput ? 2 : (ImGui::IsAnyItemHovered() || mc == ImGuiMouseCursor_Hand) ? 1 : 0;
             if (mc == ImGuiMouseCursor_Arrow || mc == ImGuiMouseCursor_Hand || mc == ImGuiMouseCursor_TextInput)
-                MvCursorDraw(ImGui::GetForegroundDrawList(), mio.MousePos, kind, ImGui::IsMouseDown(0), UIK(), s_curA * Ease(s_menuVis), g_cfg.menuVisual, g_cfg.menuCursor == 3 ? 1 : 0);
+                MvCursorDraw(ImGui::GetForegroundDrawList(), mio.MousePos, kind, ImGui::IsMouseDown(0), UIK(), s_curA * Ease(s_menuVis), g_cfg.menuVisual);
             else mio.MouseDrawCursor = true;   // flechas de agrandar / mover ventana: las de ImGui
         }
     }
@@ -2862,9 +2868,9 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (lightIcons) DrawEditorLightIcons();
     if (sunCompass && !g_menuOpen) DrawSunCompass();
     if (g_cfg.live[426][0] > 0.5f) DrawSkeletonView();   // (09/11 f) vista del esqueleto (Diagnostico)
-    if (mmCur && (g_cfg.menuCursor == 1 || g_cfg.menuCursor == 3)) {   // (14/11 c, Agustin: "que se mantenga igual con el menu abierto o cerrado") el mismo cursor del menu
-        const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);
-        MvCursorDraw(ImGui::GetForegroundDrawList(), ImVec2(mmx, mmy), 0, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, k, 1.0f, g_cfg.menuVisual, g_cfg.menuCursor == 3 ? 1 : 0);
+    if (mmCur && g_cfg.menuCursor == 1) {   // (14/11 c / d, Agustin: "que se mantenga igual con el menu abierto o cerrado", "que muestre donde puede clickear")
+        const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);   // el mismo dardo del menu; mano justo sobre una fila del juego
+        MvCursorDraw(ImGui::GetForegroundDrawList(), ImVec2(mmx, mmy), MenuMouseOverRow() ? 1 : 0, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, k, 1.0f, g_cfg.menuVisual);
     }
     else if (mmCur && g_cfg.menuCursor != 0) {   // (11/11) el juego esconde el cursor de Windows: una flecha chica donde esta el mouse (los menus son los del juego)
         ImDrawList* dl = ImGui::GetForegroundDrawList(); const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);
@@ -2872,13 +2878,18 @@ void OverlayPresent(IDXGISwapChain* sc) {
         dl->AddTriangleFilled(a, b, c, IM_COL32(255, 255, 255, 255)); dl->AddTriangleFilled(a, c, d, IM_COL32(255, 255, 255, 255));
         const ImVec2 pts[4] = { a, b, c, d }; dl->AddPolyline(pts, 4, IM_COL32(0, 0, 0, 255), ImDrawFlags_Closed, 1.4f * k);
     }
+    float hintH = 0.0f;
+    if (mouseHintA > 0.0f) {   // (14/11 d) "clic izquierdo seleccionar / avanzar, clic derecho volver" en el idioma del menu
+        const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
+        hintH = MvMouseHint(ImGui::GetForegroundDrawList(), ImVec2(ds.x - 18.0f * k, ds.y - 18.0f * k), k, mouseHintA, TRS("Seleccionar / avanzar"), TRS("Volver")) + 6.0f * k;
+    }
     if (curToast) {   // (14/11 c) "Cursor apagado / prendido (F1)" chico, abajo a la derecha, en el idioma del menu; se va solo en 1.8 s
         const float t = (float)(Now() - s_curToastT), a = std::min(1.0f, std::min(t / 0.12f, (1.8f - t) / 0.35f));
         char kb[16]; const char* kn = KeyHudName(g_cfg.cursorKey, kb, sizeof(kb));
         const std::string msg = std::string(TRS(g_cfg.menuCursor ? "Cursor prendido" : "Cursor apagado")) + "  (" + kn + ")";
         ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
         const ImVec2 ts = ImGui::CalcTextSize(msg.c_str()), pad(10.0f * k, 5.0f * k);
-        const ImVec2 b(ds.x - 18.0f * k, ds.y - 18.0f * k), a0(b.x - ts.x - pad.x * 2, b.y - ts.y - pad.y * 2);
+        const ImVec2 b(ds.x - 18.0f * k, ds.y - 18.0f * k - hintH), a0(b.x - ts.x - pad.x * 2, b.y - ts.y - pad.y * 2);
         dl->AddRectFilled(a0, b, IM_COL32(12, 16, 20, (int)(170 * a)), 6.0f * k);
         dl->AddRectFilled(ImVec2(a0.x, a0.y + 4.0f * k), ImVec2(a0.x + 3.0f * k, b.y - 4.0f * k), ImGui::GetColorU32(ImGuiCol_CheckMark, a), 1.5f * k);
         dl->AddText(ImVec2(a0.x + pad.x, a0.y + pad.y), IM_COL32(235, 240, 245, (int)(255 * a)), msg.c_str());
