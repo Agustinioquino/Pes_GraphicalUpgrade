@@ -88,15 +88,15 @@ void __fastcall hk_Point(void* pt, void* acc, float dt, uintptr_t a4) {
 
 void __fastcall hk_Node(void* nodeP) {
     const uintptr_t node = (uintptr_t)nodeP;
-    if (s_w.on > 0.5f && *(const int*)(node + 0x80) == 7) {
+    if (*(const int*)(node + 0x80) == 7) {
         const uintptr_t S = *(const uintptr_t*)(node + 0x190);
         if (S && *(const uintptr_t*)(node + 0x198)) {
+            s_nodes.fetch_add(1, std::memory_order_relaxed);   // (14/11) se cuenta siempre: el log dice si el gancho corre aunque no haya viento
             const uintptr_t L = *(const uintptr_t*)(S + 0x28);
             // dormida (simulador inactivo o puntos quietos): el mismo despertar que usa el juego cuando se mueve el arco
-            if (L && (*(const char*)(S + 0x31) == 0 || *(const char*)(L + 0x31) != 0)) {
+            if (s_w.on > 0.5f && L && (*(const char*)(S + 0x31) == 0 || *(const char*)(L + 0x31) != 0)) {
                 *(char*)(S + 0xf0) = 1; *(char*)(S + 0x31) = 1; s_wakes.fetch_add(1, std::memory_order_relaxed);
             }
-            s_nodes.fetch_add(1, std::memory_order_relaxed);
         }
     }
     o_node(nodeP);

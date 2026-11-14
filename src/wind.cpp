@@ -179,10 +179,13 @@ void WindFrame(float (*p)[4], double tReal) {
     // (vestuario, tunel, menus, estudio), el viento baja en ~1.5 s a lo que diga y500 (0.05 = casi nada) y vuelve en ~1 s al salir.
     // x500 = 1: siempre afuera (como antes).
     static float expo = 1.0f; static bool wasOut = true;
-    { const bool out = c.live[500][0] > 0.5f || p[159][3] > 0.5f || PresentNo() - g_grassSeenFrame.load(std::memory_order_relaxed) < 90;   // (14/11) 90 cuadros: un primer plano de cinematica no cuenta como bajo techo
+    // (14/11, su partido en el estadio 9: "afuera 0.00" TODO el partido: ni el domo del cielo w159 ni el PS de las hojas 18afff se
+    // vieron) tambien cuenta como afuera la cancha del juego dibujada hace menos de 15 s (w93, la misma marca "en partido" que usan
+    // la ropa y el sudor: los primeros planos sin cancha siguen contando); el vestuario y el tunel la pierden a los 15 s
+    { const bool out = c.live[500][0] > 0.5f || p[159][3] > 0.5f || PresentNo() - g_grassSeenFrame.load(std::memory_order_relaxed) < 90 || p[93][3] > 0.5f;   // (14/11) 90 cuadros: un primer plano de cinematica no cuenta como bajo techo
       const float k = (float)(std::min)(1.0, dR / (out ? 1.0 : 1.5)); expo += ((out ? 1.0f : 0.0f) - expo) * k;
-      if (out != wasOut) { wasOut = out; Log("viento unico: %s (cielo %s, pasto hace %d cuadros)", out ? "afuera" : "bajo techo: el viento se calma",
-          p[159][3] > 0.5f ? "si" : "no", PresentNo() - g_grassSeenFrame.load()); } }
+      if (out != wasOut) { wasOut = out; Log("viento unico: %s (cielo %s, hojas hace %d cuadros, cancha %s)", out ? "afuera" : "bajo techo: el viento se calma",
+          p[159][3] > 0.5f ? "si" : "no", PresentNo() - g_grassSeenFrame.load(), p[93][3] > 0.5f ? "si" : "no"); } }
     const float roofK = std::clamp(c.live[500][1], 0.0f, 1.0f) + (1.0f - std::clamp(c.live[500][1], 0.0f, 1.0f)) * expo;
     U *= roofK;
     // (14/11, Agustin: "opciones para experimentar o de diagnostico, viento leve por un lado, por abajo o tormenta maxima")
