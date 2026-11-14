@@ -116,6 +116,19 @@ static uint64_t IncludesHash() {
     FindClose(f);
     return h;
 }
+// (14/11) los #include "..." que no son .hlsli (la variante de las hojas 3D incluye 18afff...-ps_replace.txt): su contenido entra en la llave
+// de la cache, asi cambiar el archivo incluido recompila tambien la variante (IncludesHash solo mira los .hlsli)
+static uint64_t DirectIncludesHash(const std::string& src) {
+    uint64_t h = 0; size_t p = 0;
+    while ((p = src.find("#include \"", p)) != std::string::npos) {
+        p += 10; size_t e = src.find('"', p); if (e == std::string::npos) break;
+        std::string f = src.substr(p, e - p); p = e + 1;
+        if (f.size() >= 6 && f.compare(f.size() - 6, 6, ".hlsli") == 0) continue;
+        std::wstring w; for (char c : f) w.push_back((wchar_t)(unsigned char)c);
+        std::string inc; if (ReadFileA(g_cfg.baseDir + L"shaders\\" + w, inc)) h ^= Fnv64(inc.data(), inc.size()) * 0xC2B2AE3D27D4EB4FULL;
+    }
+    return h;
+}
 
 static ID3DBlob* CompileFile(uint64_t hash, const char* type, const char* profile) {
     if (!s_compile) return nullptr;
@@ -173,7 +186,7 @@ ID3DBlob* CompileNamedShader(const wchar_t* file, const char* profile) {
     std::string src;
     if (!ReadFileA(g_cfg.baseDir + L"shaders\\" + file, src)) { Log("shader %ls: no encontrado", file); return nullptr; }
     uint64_t srcHash = Fnv64(src.data(), src.size()) ^ 0x50455346414345ULL;
-    if (src.find("#include") != std::string::npos) srcHash ^= IncludesHash();
+    if (src.find("#include") != std::string::npos) srcHash ^= IncludesHash() ^ DirectIncludesHash(src);
     uint64_t nameHash = 0; for (const wchar_t* p = file; *p; p++) nameHash = nameHash * 31 + *p;
     std::wstring cpath = CachePath(nameHash, profile, srcHash);
     {

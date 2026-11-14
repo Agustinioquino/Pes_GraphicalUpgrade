@@ -34,6 +34,13 @@ Texture2D<float4> PESSunVisPrev : register(t48);    // PES21 (12/11 23:45): w447
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_grass.hlsli"
+// (14/11, paso 2 del plan de optimizacion) PES_BLADE3D = 1: VARIANTE DE LAS HOJAS 3D (shaders\pes_grass_blade3d_ps.hlsl incluye este archivo).
+// La DLL la pone solo en los dibujos de las hojas 3D (ranuras 18 / 19, cb5[13].y = 1), donde todas las hojas son 3D (v8.w > 16.5) y el
+// pasto v3 esta prendido (x104: sin el, la DLL no las dibuja): el compilador saca el atlas, los recortes que vuelan y la normal por tarjeta,
+// que en esas hojas no corren. Misma cuenta para cada pixel de esas hojas; este archivo sin la definicion queda igual que antes
+#ifndef PES_BLADE3D
+#define PES_BLADE3D 0
+#endif
 
 
 float bh21(float2 p) { p = frac(p * float2(123.34, 456.21)); p += dot(p, p + 45.32); return frac(p.x * p.y); }
@@ -83,10 +90,10 @@ void main(
   // === PES21 pasto v3: atlas propio
   float4 Q4 = IniParams.Load(int2(104,0));
   // (11/11) v8.w + 16 = HOJAS 3D de primerisimo plano (VS 498b30, cb5[13].y): la forma es geometria; sin atlas ni recorte por alfa
-  bool pesBladeM = v8.w > 16.5;
+  bool pesBladeM = PES_BLADE3D ? true : v8.w > 16.5;
   bool pesNarM = v8.w > 40.5;   // (12/11) + 32 = hoja 3D ANGOSTA (escalon de primerisimo plano, x432): su propia textura
   float pesW8 = v8.w - (pesNarM ? 48.0 : (pesBladeM ? 16.0 : 0.0));
-  bool pesV3 = Q4.x > 0.5 && pesW8 > 0.5;   // v8.w = 1 + banda del atlas (0 = VS sin v3)
+  bool pesV3 = PES_BLADE3D ? true : (Q4.x > 0.5 && pesW8 > 0.5);   // v8.w = 1 + banda del atlas (0 = VS sin v3)
   // (26/10 f) pasto tanda 6: v8.w + 8 = la DLL dibuja estas hojas del mod mezclando el color con el suelo ya dibujado (alfa de o0)
   bool pesFB = pesV3 && pesW8 > 8.5;
   // lejos -> cerca de las hojas del mod (px/m del vertice, y291 / z291): lejos la hoja toma el color, las lineas, el desgaste y la luz
@@ -112,7 +119,7 @@ void main(
   float4 P412n = IniParams.Load(int2(412,0)), P409n = IniParams.Load(int2(409,0));
   // (11/11 g) los recortes que vuelan (pes_clip_vs: o8.y = 0 y raiz 9 = sin raiz) usan el atlas de particulas (t8 / t9 = pes_debris.dds):
   // con el natural tomaban el atlas del natural (t11 / t12) y los terrones y el polvo salian como hojas
-  bool pesClipP = v8.y < 0.05 && v7.z > 8.5;
+  bool pesClipP = PES_BLADE3D ? false : (v8.y < 0.05 && v7.z > 8.5);   // (14/11) las hojas 3D no son recortes
   bool pesNat = pesV3 && !pesArt && P412n.z < 0.5 && !pesClipP;
   // opciones propias del natural (menu "Pasto natural"): y412 detalle de la hoja, w412 parte de hojas secas / amarillentas, z409 brillo de
   // la hoja (cera), w409 translucidez de la lamina. 0 en y412 / z409 / w409 = 1 (ini sin la linea)
@@ -230,12 +237,15 @@ void main(
       float fu = max(pesFwU, 1e-5);
       float vK = saturate(((1.0 / 9.0) / fu - 2.0) * 0.5);
       float mid = exp(-au * au / 0.0049);
-      float vein = 0.5 + 0.5 * cos(u * 56.5487);
-      float fib = PESGnoise(float2(u * 23.0 + pesHvR * 7.0, relH * 140.0)) - 0.5;
-      float blo = PESGnoise(float2(relH * 5.0 + pesHvR * 13.0, pesHvR * 3.0)) - 0.5;
-      float L = 0.5 + 0.07 * mid - 0.03 * vein * vK * (1.0 - mid) - 0.05 * smoothstep(0.36, 0.5, au) + 0.035 * fib * vK + 0.05 * blo;
-      float thk = lerp(0.28, 0.78, mid) + 0.12 * vein * (1.0 - mid) * vK, nrmK = 0.6;
-      if (pesNarM) {
+      // (14/11, paso 2) la hoja angosta pisaba L y thk enteros: el ruido, las venas y el grosor de la hoja comun se calculan solo en la comun
+      float L, thk, nrmK;
+      if (!pesNarM) {
+        float vein = 0.5 + 0.5 * cos(u * 56.5487);
+        float fib = PESGnoise(float2(u * 23.0 + pesHvR * 7.0, relH * 140.0)) - 0.5;
+        float blo = PESGnoise(float2(relH * 5.0 + pesHvR * 13.0, pesHvR * 3.0)) - 0.5;
+        L = 0.5 + 0.07 * mid - 0.03 * vein * vK * (1.0 - mid) - 0.05 * smoothstep(0.36, 0.5, au) + 0.035 * fib * vK + 0.05 * blo;
+        thk = lerp(0.28, 0.78, mid) + 0.12 * vein * (1.0 - mid) * vK; nrmK = 0.6;
+      } else {
         // (12/11, Agustin: "un modelo nuevo menos anchos y otras texturas para esas hojas angostas") textura de la hoja ANGOSTA (va plegada
         // sobre el nervio): la quilla del nervio ancha y marcada en el centro, 3 venas finas por lado, fibra mas larga y apretada, los dos
         // filos apenas mas claros (el borde de la lamina plegada toma luz), la vaina de abajo mas palida, y manchas mas chicas a lo largo
@@ -262,7 +272,8 @@ void main(
     // de lejos el filtrado adelgaza el alfa: se compensa un poco con el nivel de mip
     float2 dd = max(abs(dUx), abs(dUy)) * (pesNat ? float2(4096.0, 2048.0) : float2(2048.0, 512.0));   // (11/11) natural: tamano real del atlas (igual en pes_grass_depth_ps)
     float lod = log2(max(max(dd.x, dd.y), 1.0));
-    r0.w = saturate(r0.w * (1.0 + 0.12 * lod));
+    // (14/11, paso 2) hojas 3D: alfa 1 y lod >= 0, el resultado ya era 1 (sin recorte)
+    if (!pesBladeM) r0.w = saturate(r0.w * (1.0 + 0.12 * lod));
     // (11/11) numero de la hoja sin filtrar (el filtrado mezclaria el numero de dos hojas vecinas en el borde): texel del mip que corresponde
     if (pesNat && !pesFar && !pesBladeM) { uint m = (uint)clamp(lod, 0.0, 3.0); uint2 sz = uint2(4096u >> m, 2048u >> m);
       pesBid = PESNatAtlas.Load(int3(min((uint2)(saturate(uvA) * (float2)sz), sz - 1u), m)).z; }

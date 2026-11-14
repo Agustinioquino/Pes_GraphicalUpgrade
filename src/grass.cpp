@@ -290,6 +290,8 @@ static ID3D11ComputeShader* s_cs = nullptr; static bool s_csTried = false;
 // (2/11) w325 prepasada de profundidad: PS solo-profundidad (shaders\pes_grass_depth_ps.hlsl, mismo recorte por alfa que 18afff) y
 // variante del estado de profundidad con LESS_EQUAL para la segunda pasada (la hoja ya escrita pasa con igual profundidad)
 static ID3D11PixelShader* s_depthPS = nullptr; static bool s_depthTried = false;
+// (14/11, paso 2 del plan) variante del PS de las hojas (18afff con PES_BLADE3D = 1) para la pasada de color de las hojas 3D (ranuras 18 / 19)
+static ID3D11PixelShader* s_blade3dPS = nullptr; static bool s_blade3dTried = false;
 struct PreDss { ID3D11DepthStencilState *src = nullptr, *out = nullptr; }; static PreDss s_preD[4]; static int s_preNext = 0; static std::mutex s_preMx;
 static ID3D11DepthStencilState* PrepassDSS2(ID3D11DepthStencilState* cur) {   // devuelve con referencia (o nullptr = usar el mismo)
     if (!g_dev.dev) return nullptr;
@@ -419,6 +421,14 @@ static bool EnsureGPU() {
         }
         Log("pasto v3: %s", s_depthPS ? "PS de la prepasada de profundidad listo (w325)" : "sin PS de prepasada (shaders\\pes_grass_depth_ps.hlsl no compilo: ver Errores); w325 sin efecto");
     }
+    if (!s_blade3dTried) {
+        s_blade3dTried = true;
+        if (ID3DBlob* b = CompileNamedShader(L"pes_grass_blade3d_ps.hlsl", "ps_5_0")) {
+            if (FAILED(g_dev.dev->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_blade3dPS))) s_blade3dPS = nullptr;
+            b->Release();
+        }
+        Log("pasto: %s", s_blade3dPS ? "variante de las hojas 3D lista (paso 2: PS 18afff sin el atlas de tarjetas en las hojas 3D)" : "sin variante de las hojas 3D (shaders\\pes_grass_blade3d_ps.hlsl no esta o no compilo): las hojas 3D siguen con 18afff");
+    }
     if (!s_bladeTried) {
         // (11/11) malla de las hojas 3D: solo el orden de los triangulos (4 filas x borde / nervio / borde por hoja); la posicion y la uv las
         // arma el VS 498b30 con el numero de vertice (cb5[13].y = 1). Posiciones en 0: un VS sin hojas 3D no dibuja nada con esta malla
@@ -508,6 +518,7 @@ static DXGI_FORMAT s_r0Fmt = DXGI_FORMAT_UNKNOWN; static UINT s_r0Mip = 0; stati
 static ID3D11Texture2D* s_r4Tex = nullptr; static ID3D11ShaderResourceView* s_r4Srv = nullptr; static D3D11_TEXTURE2D_DESC s_r4Desc = {};
 static DXGI_FORMAT s_r4Fmt = DXGI_FORMAT_UNKNOWN; static UINT s_r4Mip = 0; static bool s_r4Failed = false;
 static std::atomic<int> s_r4Copies{0}, s_r4Binds{0};
+static std::atomic<int> s_b3Draws{0};   // (14/11, paso 2) veces que las hojas 3D se dibujaron con la variante
 // (12/11 23:45) w447 SOMBRA REAL EN LAS PUNTAS: copia del t14 de la composicion (619b86cb) = RT2 de la pasada del sol, cuyo .w es la visibilidad
 // limpia del sol (e9c13 / b8a2 / 7dbbc con w447: sin pisos ni x440). Una por cuadro, despues de la composicion; las hojas (18afff) y la base de
 // la cancha (5e92 / c956) del cuadro siguiente la leen en t48 (PESSunVisGate, pes_grass.hlsli) y en la sombra apagan lo que es solo del sol
@@ -946,7 +957,7 @@ void GrassPresent() {
             s_ballStale1.exchange(0), s_ballStaleN.exchange(0), s_capEarly.exchange(0));
         { const int cp = s_r4Copies.exchange(0), bd = s_r4Binds.exchange(0);   // (11/11 j)
           Log("pasto luz del estadio en las hojas (y290 = %.0f): copias de RT4 %d, dibujos con la copia %d%s", g_cfg.live[290][1], cp, bd, s_r4Failed ? " | NO SE PUDO CREAR LA COPIA" : ""); }
-        if (s_bladeLast.load()) Log("pasto hojas 3D (z410): celdas %d, hojas por celda %d en promedio (%d hojas, %d trozos de %u), tope por celda x%.2f, umbral %.0f px/m", s_bladeCells.load(), s_bladePer.load(), s_bladeSum.load(), s_bladeChunks.load(), kBladeChunk, s_bladeScale.load(), s_bladeThrLast);
+        if (s_bladeLast.load()) Log("pasto hojas 3D (z410): celdas %d, hojas por celda %d en promedio (%d hojas, %d trozos de %u), tope por celda x%.2f, umbral %.0f px/m, con la variante %d veces", s_bladeCells.load(), s_bladePer.load(), s_bladeSum.load(), s_bladeChunks.load(), kBladeChunk, s_bladeScale.load(), s_bladeThrLast, s_b3Draws.load());
         g_grassDbg.calls = 0; g_grassDbg.emits = 0; g_grassDbg.sparseLast = g_grassDbg.sparse; g_grassDbg.sparse = 0; }
 }
 
@@ -1439,6 +1450,10 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             c->VSSetConstantBuffers(5, 1, &s_cb);
             c->DrawIndexedInstancedIndirect(s_args, (UINT)sl * 20);
             if (sl == kBins - 1 && bladeOn) {   // (11/11) hojas 3D (ranura 18) despues del nivel 0, con sus mismos estados; en la prepasada tambien
+                // (14/11, paso 2) en la pasada de color las hojas 3D usan la variante de 18afff (misma cuenta, sin lo que en ellas no corre)
+                ShaderBind b3Saved = {}; const bool b3 = pass == 1 && s_blade3dPS != nullptr;
+                if (b3) { b3Saved = BindShadersRaw(c, ShaderBind{}); ShaderBind v3 = b3Saved; v3.psObj = s_blade3dPS; ShaderBind tmp = BindShadersRaw(c, v3);
+                          if (tmp.vsObj) tmp.vsObj->Release(); if (tmp.psObj) tmp.psObj->Release(); s_b3Draws++; }
                 ID3D11Buffer* bvb[4] = { s_bladePos, svVb[1], svVb[2], s_bladeUv }; UINT bst[4] = { 12, svSt[1], svSt[2], 4 }, bof[4] = { 0, svOf[1], svOf[2], 0 };
                 c->IASetVertexBuffers(0, 4, bvb, bst, bof); c->IASetIndexBuffer(s_bladeIb, DXGI_FORMAT_R32_UINT, 0); boundMesh = -2;
                 cbq[32] = (float)kBladeVpb; cbq[37] = (float)(kBladeSlot * kSlotCap); cbq[52] = 0.5f; cbq[53] = 1.0f; cbq[54] = (float)kBladeChunk;   // cb5[13].y = 1: el VS arma la hoja; .z hojas por trozo (11/11 n)
@@ -1452,6 +1467,8 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
                     c->DrawIndexedInstancedIndirect(s_args, (UINT)kBladeSlotN * 20);
                     cbq[56] = 0.0f;
                 }
+                if (b3) { ShaderBind tmp = BindShadersRaw(c, b3Saved); if (tmp.vsObj) tmp.vsObj->Release(); if (tmp.psObj) tmp.psObj->Release();
+                          if (b3Saved.vsObj) b3Saved.vsObj->Release(); if (b3Saved.psObj) b3Saved.psObj->Release(); }
             }
             if (pass == 1 && tm && sl % kBins == kBins - 1) c->End(tm->ts[2 + i]);   // fin del nivel i (la prepasada cuenta dentro del nivel)
         }
