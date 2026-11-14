@@ -393,7 +393,11 @@ static ID3D11PixelShader* EditorEdgePS(ID3D11DeviceContext* c, const D3D11_TEXTU
 
 ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps, ID3D11PixelShader** edgePS) {
     if (edgePS) *edgePS = nullptr;
-    const int mode = (int)(g_cfg.live[424][0] + 0.5f);
+    int mode = (int)(g_cfg.live[424][0] + 0.5f);
+    // (11/11, Agustin 23:33: el Motor "sin el fondo del modo editar") con el estudio del Motor abierto el fondo va siempre negro,
+    // sin cambiar lo que tenga guardado en x424 para el Editar ([PES21FX] motor_fondo = 0 lo deja como en el Editar)
+    const bool motorBg = g_cfg.motorBg != 0 && MotorPageActive();
+    if (motorBg) mode = 1;
     if (ps != kUiPS || mode <= 0 || !g_dev.dev) return nullptr;
     s_bgNUi.fetch_add(1, std::memory_order_relaxed); EditorBgDiagTick(mode);
     // (08/11 kd63zh) en la PC de Agustin la composicion f807 no pasa NUNCA por BeforeDraw en el editor (log 04e625e: 0 composiciones

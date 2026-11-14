@@ -10,6 +10,7 @@
 #include <set>
 
 namespace fx {
+std::atomic<int> g_matchIniGen{0};   // (12/11) match.ini reescrito por Sider = partido nuevo (desgaste real: no se borra en el entretiempo)
 
 static std::string PTrim(const std::string& s) {
     size_t a = s.find_first_not_of(" \t\r\n"), b = s.find_last_not_of(" \t\r\n");
@@ -172,6 +173,7 @@ void PollMatch() {
     if (GetFileAttributesExW(MatchPath().c_str(), GetFileExInfoStandard, &fa))
         w = ((ULONGLONG)fa.ftLastWriteTime.dwHighDateTime << 32) | fa.ftLastWriteTime.dwLowDateTime;
     if (w == lastWrite && !first) return;
+    if (!first && w != 0) g_matchIniGen++;
     first = false; lastWrite = w;
     MatchInfo m; ReadMatch(m);
     std::lock_guard<std::mutex> lk(g_cfgMutex);

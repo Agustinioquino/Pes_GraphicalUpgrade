@@ -51,6 +51,7 @@ Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #define PES_PRINT_BADGE
 #include "pes_prints.hlsli"   // (08/11) normal map propio de los estampados
+#include "pes_sweat2.hlsli"   // (13/11) SUDOR 2 (x457): camiseta transpirada por jugador + lluvia
 
 
 void main(
@@ -168,6 +169,19 @@ void main(
   // en pecho, espalda y axilas. Zonas en UV del kit (plantilla Konami). x27 fuerza, y27 minutos hasta el maximo,
   // z27 = 1 muestra las zonas en rojo / 2 muestra las UV (u rojo, v verde) para calibrar, w27 on/off
   { float4 SW = IniParams.Load(int2(27,0));
+    if (PesSwOn()) {   // (13/11) SUDOR 2: la mancha crece con el sudor de ESTE jugador (w458); la lluvia moja toda la tela (y458)
+      float4 swP = PesSwPlayer(v0, v3.xyz);
+      float4 swUp = IniParams.Load(int2(435, 0));
+      float upK = swUp.w > 0.5 ? dot(normalize(v6.xyz), swUp.xyz) : 0.3;
+      float swZ; float wetK = PesSwShirt(swP, v2.xy, upK, swZ);
+      float swDbg = IniParams.Load(int2(459, 0)).z;
+      if (swDbg > 1.5) o0.xyz = lerp(o0.xyz, float3(1, 0, 0), swZ * 0.8);
+      else if (swDbg > 0.5) o0.xyz = lerp(o0.xyz, float3(swP.y, 0.5 * swP.w, swP.x), 0.85);
+      else {   // tela mojada: mas oscura y con el color mas intenso (no gris)
+        float swL = dot(o0.xyz, float3(0.3, 0.59, 0.11));
+        o0.xyz = max(0.0, lerp(swL.xxx, o0.xyz, 1.0 + 0.18 * wetK)) * (1.0 - 0.36 * wetK);
+      }
+    } else
     if (SW.w > 0.5) {
       float2 uvK = v2.xy;
       float tMin = IniParams.Load(int2(10,0)).x;

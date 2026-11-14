@@ -88,6 +88,7 @@ void main(triangle LashV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
   float3 P0 = UnprojV(v[0].pos), P1 = UnprojV(v[1].pos), P2 = UnprojV(v[2].pos);
   float zc = (P0.z + P1.z + P2.z) / 3.0;
   if (zc < 0.03) return;
+  if (zc > max(P75.y, 0.5) && P75.z < 2.5) return;   // (12/11) tampoco mas lejos que y75 metros reales (como las cejas)
   float vpH = m_viewportSize.y > 16.0 ? m_viewportSize.y : 1080.0;
   float ppm = abs(m_projection[1].y) * vpH * 0.5 / zc;
   if (ppm < 1.73 * 540.0 / max(P75.y, 0.5) * 1.5 && P75.z < 2.5) return;   // las pestanas son mas chicas: la mitad de la distancia

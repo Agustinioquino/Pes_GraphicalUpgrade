@@ -598,11 +598,19 @@ static float AnimT() {
         const double game = (double)g_cfg.live[157][0];
         double dG = lastGame < 0.0 ? 0.0 : game - lastGame, dR = lastReal < 0.0 ? 0.0 : real - lastReal;
         lastGame = game; lastReal = real;
+        if (dG < -50000.0) dG += 100000.0;   // vuelta del reloj (100000 s)
         double adv = (dG > 1e-5 && dG < 0.5) ? dG : std::clamp(dR, 0.0, 1.0 / 15.0);
+        // (11/11, Agustin: "no seguian el gameclock, por eso al pausar la repeticion todo vibra") EN PARTIDO (cancha a la vista hace
+        // < 15 s, 93.w) y con el reloj del juego ya reconocido (157.w) manda SOLO ese reloj: pausa = paso 0 (los gestos quedan
+        // quietos con la cara), camara lenta = despacio. Antes, con el reloj quieto, se pasaba al real y hablar / vida / respiracion /
+        // parpadeo seguian moviendo los huesos sobre una cara congelada. Editor y menus (sin cancha): como antes, reloj real
+        if (g_cfg.live[157][3] >= 0.5f && g_cfg.live[93][3] >= 0.5f) adv = std::clamp(dG, 0.0, 0.1);
         animT += adv; if (animT > 100000.0) animT -= 100000.0;
     }
     return (float)animT;
 }
+// (12/11) reloj REAL para lo que responde al usuario (transicion de los sliders, fundido al cambiar de clip): no se para con la pausa
+static float UiT() { static const double t0 = Now(); return (float)fmod(Now() - t0, 100000.0); }
 
 // (08/11, Agustin: "para el hablar agrega mas opciones de por ejemplo pronunciar palabras, interpola mejor las animaciones") HABLAR POR
 // PALABRAS (w396 = 1). Cada frase se pasa a fonemas y cada fonema a un VISEMA (forma de la boca): A (abierta), E (media, ancha),
@@ -1216,7 +1224,11 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
 // cara (entre los ojos y la boca, un poco adelante) y los ejes frente / arriba de la cabeza -> mundo con la matriz del nodo.
 namespace {
 struct HeadPub { const void* node = nullptr; float c[3] = {}, fw[3] = {}, up[3] = {}; double t = 0; };
-std::mutex s_hpMx; HeadPub s_hp[8];
+// (14/11 k, Agustin: "seguir rostro esta rota, no elije un solo sujeto y va cambiando") antes 8 lugares para 22+ personajes: el de la
+// cara seguida se pisaba con otro y la camara elegia otra cara. Ahora 32 lugares, el seguido nunca se pisa, y si deja de llegar un
+// rato (fuera del cuadro, LOD, pausa) se espera 3 s antes de elegir otra
+constexpr int kHpN = 32;
+std::mutex s_hpMx; HeadPub s_hp[kHpN]; const void* s_hpKeep = nullptr;
 std::atomic<int> s_hpOk{0}, s_hpFail{0};
 }
 static bool Norm3(float* v) { const float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (!(l > 1e-4f)) return false; v[0] /= l; v[1] /= l; v[2] /= l; return true; }
@@ -1241,7 +1253,7 @@ static void PublishHead(const Skel& S) {
     h.t = Now();
     std::lock_guard<std::mutex> lk(s_hpMx);
     int at = 0; double oldest = 1e300;
-    for (int i = 0; i < 8; i++) { if (s_hp[i].node == S.node) { at = i; break; } if (s_hp[i].t < oldest) { oldest = s_hp[i].t; at = i; } }
+    for (int i = 0; i < kHpN; i++) { if (s_hp[i].node == S.node) { at = i; break; } if (s_hp[i].node != s_hpKeep && s_hp[i].t < oldest) { oldest = s_hp[i].t; at = i; } }
     s_hp[at] = h;
     if (s_hpOk.fetch_add(1, std::memory_order_relaxed) == 0)
         Log("camara libre: cara en el mundo desde el esqueleto (%.2f, %.2f, %.2f), frente (%.2f, %.2f, %.2f), arriba (%.2f, %.2f, %.2f); sk_head en el modelo (%.3f, %.3f, %.3f)",
@@ -1257,17 +1269,17 @@ static void PublishHead(const Skel& S) {
 // la cara a seguir: la del personaje fijado (*lock) si sigue al dia; si no, la que esta mas al centro de la vista de la camara
 bool ExprFaceAny() {   // (08/11 e) hay alguna cara con dato fresco (< 0.5 s): la usa la camara libre para saber si la recarga termino
     std::lock_guard<std::mutex> lk(s_hpMx); const double now = Now();
-    for (int i = 0; i < 8; i++) if (s_hp[i].node && now - s_hp[i].t < 0.5) return true;
+    for (int i = 0; i < kHpN; i++) if (s_hp[i].node && now - s_hp[i].t < 0.5) return true;
     return false;
 }
 bool ExprFaceFrame(const float* camPos, const float* camFwd, const void** lock, float c[3], float fw[3], float up[3], double* age) {
     std::lock_guard<std::mutex> lk(s_hpMx);
     const double now = Now();
     int best = -1;
-    if (lock && *lock) for (int i = 0; i < 8; i++) if (s_hp[i].node == *lock && now - s_hp[i].t < 0.5) { best = i; break; }
+    if (lock && *lock) for (int i = 0; i < kHpN; i++) if (s_hp[i].node == *lock && now - s_hp[i].t < 3.0) { best = i; break; }   // el fijado sigue aunque no llegue un rato
     if (best < 0) {
         float bs = -1e9f;
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < kHpN; i++) {
             if (!s_hp[i].node || now - s_hp[i].t >= 0.5) continue;
             float d[3] = { s_hp[i].c[0] - camPos[0], s_hp[i].c[1] - camPos[1], s_hp[i].c[2] - camPos[2] };
             const float l = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
@@ -1277,8 +1289,39 @@ bool ExprFaceFrame(const float* camPos, const float* camFwd, const void** lock, 
         if (best < 0) return false;
         if (lock) *lock = s_hp[best].node;
     }
+    s_hpKeep = s_hp[best].node;
     memcpy(c, s_hp[best].c, 12); memcpy(fw, s_hp[best].fw, 12); memcpy(up, s_hp[best].up, 12);
     if (age) *age = now - s_hp[best].t;
+    return true;
+}
+
+// (14/11 g, Agustin: "la opcion de seguir rostro permitirme cambiar de sujeto") cambia la cara seguida por la siguiente hacia la derecha
+// (dir > 0) o la izquierda (dir < 0) en la pantalla, dando la vuelta; true si hay otra cara a la vista
+bool ExprFaceCycle(const float* camPos, const float* camFwd, const void** lock, int dir) {
+    if (!lock || dir == 0) return false;
+    std::lock_guard<std::mutex> lk(s_hpMx);
+    const double now = Now();
+    const float r[3] = { -camFwd[2], 0.0f, camFwd[0] };
+    float ang[kHpN]; int cur = -1, n = 0;
+    for (int i = 0; i < kHpN; i++) {
+        ang[i] = 1e9f;
+        if (!s_hp[i].node || now - s_hp[i].t >= 0.5) continue;
+        const float d[3] = { s_hp[i].c[0] - camPos[0], s_hp[i].c[1] - camPos[1], s_hp[i].c[2] - camPos[2] };
+        ang[i] = atan2f(d[0] * r[0] + d[2] * r[2], d[0] * camFwd[0] + d[1] * camFwd[1] + d[2] * camFwd[2]); n++;
+        if (s_hp[i].node == *lock) cur = i;
+    }
+    if (n < 2 && cur >= 0) return false;
+    const float a0 = cur >= 0 ? ang[cur] : 0.0f;
+    int best = -1, wrap = -1;
+    for (int i = 0; i < kHpN; i++) {
+        if (ang[i] > 1e8f || i == cur) continue;
+        const float a = ang[i];
+        if (dir > 0) { if (a > a0 + 1e-4f && (best < 0 || a < ang[best])) best = i; if (wrap < 0 || a < ang[wrap]) wrap = i; }
+        else { if (a < a0 - 1e-4f && (best < 0 || a > ang[best])) best = i; if (wrap < 0 || a > ang[wrap]) wrap = i; }
+    }
+    if (best < 0) best = wrap;
+    if (best < 0) return false;
+    *lock = s_hp[best].node; s_hpKeep = *lock;
     return true;
 }
 
@@ -1371,7 +1414,14 @@ static void FrameBody(const void* skel) {
         const float lim = g_cfg.live[391][2];
         if (lim > 0.5f && S->node && S->bHead) {
             Xf bh; float w[3], cp[3], ct[3];
-            if (ReadXf(S->bHead, bh) && CharNodeToWorld(const_cast<void*>(S->node), bh.t, w, true) && EngineCamera(cp, ct, nullptr)) {
+            // (12/11, Agustin: "los controles de expresiones del menu insert no funcionan"; log 12:49..12:58: en el editor despues de un partido
+            // los 600 pasos de cada resumen "lejos de la camara sin escribir", 0 giros) EngineCamera devuelve la ULTIMA camara que aplico el
+            // CameraSystem y el visor del editor no pasa por ahi: quedaba la del partido (0, 21, 70), el jugador del editor a 73 m > z391 y
+            // el mod no escribia ningun hueso (ni publicaba la cabeza para 'seguir la cara') hasta reiniciar el juego. Ahora la camara
+            // cuenta solo si es de los ultimos 60 cuadros; vieja de mas de 5 s (editor, menus) = sin limite
+            int cf = -1000000; const bool camOk = EngineCamera(cp, ct, &cf); const int camAge = camOk ? PresentNo() - cf : 1000000;
+            if (camAge > 300) S->farOff = false;
+            if (camAge <= 60 && ReadXf(S->bHead, bh) && CharNodeToWorld(const_cast<void*>(S->node), bh.t, w, true)) {
                 const float dx = w[0] - cp[0], dy = w[1] - cp[1], dz = w[2] - cp[2], dist = sqrtf(dx * dx + dy * dy + dz * dz);
                 const float on = S->farOff ? lim * 0.9f : lim * 1.1f;   // histeresis +-10 %: no se prende y apaga en el borde
                 S->farOff = dist > on;
@@ -1388,7 +1438,11 @@ static void FrameBody(const void* skel) {
     // (08/11) w395 TRANSICION: los sliders de gestos no saltan: van al valor nuevo con una constante de 0.25 s x w395 (0 = como antes)
     {
         const float tr = std::clamp(g_cfg.live[395][3], 0.0f, 3.0f);
-        const float dt = S->slT < 0.0f || tNow < S->slT ? 1.0f : (std::min)(tNow - S->slT, 0.5f); S->slT = tNow;
+        // (12/11) la transicion de los SLIDERS va con el reloj REAL: desde 7b8e538 en partido el reloj de las animaciones se para con la
+        // pausa (y en la repeticion pausada) y con dt = 0 el slider movido en el menu no llegaba nunca a la cara. Mover un slider es una
+        // accion del usuario, no una animacion: responde siempre; hablar / vida / respiracion / parpadeo siguen con el reloj del juego
+        const float tUi = UiT();
+        const float dt = S->slT < 0.0f || tUi < S->slT ? 1.0f : (std::min)(tUi - S->slT, 0.5f); S->slT = tUi;
         if (!S->slHave || tr < 0.001f) { for (int i = 0; i < 16; i++) { S->sl[i] = slR[i]; S->slV[i] = 0.0f; } for (int g = 0; g < 2; g++) for (int i = 0; i < 8; i++) { S->slG[g][i] = slR[i]; S->slGV[g][i] = 0.0f; } }
         else {
             for (int i = 0; i < 16; i++) Damp(S->sl[i], S->slV[i], slR[i], 0.25f * tr, dt);   // resorte critico: arranca y frena suave
@@ -1531,7 +1585,8 @@ static void FrameBody(const void* skel) {
     // propios esperan). Pose nueva = clip x peso y383, o reposo si no hay clip
     {
         const float tau = std::clamp(g_cfg.live[397][1], 0.0f, 2.0f);
-        const float gt2 = AnimT(); const float dtb = S->gBT < 0.0f || gt2 < S->gBT ? 1.0f / 60.0f : std::clamp(gt2 - S->gBT, 1e-4f, 0.25f); S->gBT = gt2;
+        const float gt2 = UiT();   // (12/11) el fundido al elegir / cambiar de clip tambien con el reloj real (en pausa el clip elegido no aparecia)
+        const float dtb = S->gBT < 0.0f || gt2 < S->gBT ? 1.0f / 60.0f : std::clamp(gt2 - S->gBT, 1e-4f, 0.25f); S->gBT = gt2;
         GaniPose T = {};   // pose nueva
         for (int b = 0; b < 31; b++) { T.q[b][3] = 1.0f; if (ganiOn && GP.has[b]) { QScale(GP.q[b], gW, T.q[b]); for (int c = 0; c < 3; c++) T.p[b][c] = GP.p[b][c] * gW; T.has[b] = true; } }
         T.frames = ganiOn ? GP.frames : 1;
@@ -1553,7 +1608,7 @@ static void FrameBody(const void* skel) {
         }
         S->gLastClip = gc; S->gLastOn = ganiOn; S->gLastF = gF;
         S->gPrev = S->gB; S->gPrevDt = dtb;
-        bool any = false; const float ti = S->gIT0 < 0.0f ? 1e9f : gt2 - S->gIT0;
+        bool any = false; const float ti = S->gIT0 < 0.0f || gt2 < S->gIT0 ? 1e9f : gt2 - S->gIT0;
         for (int b = 0; b < 31; b++) {
             float off[3], rof[3]; bool rest = false;
             for (int c = 0; c < 3; c++) { off[c] = InertEval(S->gI[b][c], ti); rof[c] = InertEval(S->gI[b][3 + c], ti); if (fabsf(off[c]) > 1e-6f || fabsf(rof[c]) > 1e-5f) rest = true; }

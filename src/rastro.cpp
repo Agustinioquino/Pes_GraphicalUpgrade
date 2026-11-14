@@ -22,7 +22,9 @@
 // [PES21FX] rastro = 1 lo prende (0 por defecto), rastro_max_mb = tope de los archivos (defecto 2000: ~0.2 MB por segundo de juego), rastro_fotos = fotos por segundo de juego (1..54, defecto 2). Exe 1.07.02 (62787C6A) solo.
 #include "core.h"
 #include "MinHook.h"
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -31,6 +33,12 @@
 #include <tlhelp32.h>
 
 namespace fx {
+
+std::atomic<int> g_simTick{-1};   // (12/11) tick del partido para el desgaste real (pitchwear.cpp), lo escribe hk_rel al final de cada tick
+std::atomic<unsigned long long> g_replayMs{0};   // (12/11 16:45) visor de repeticiones reproduciendo (ver hk_rpl)
+std::atomic<int> g_replayHook{0}, g_replayCalls{0}, g_replayPlay{0};
+std::atomic<unsigned long long> g_replayMoveMs{0};   // (14/11 g) ultima llamada del visor con el cursor avanzando, sin depender de y448 (camara libre / lenta en la repeticion)
+std::atomic<int> g_replayCallsV2{0}, g_replayPlayV2{0}, g_replayMoveV2{0};   // (13/11 tanda 2) y448: llamadas / estado 5 / con el cursor avanzando (log "repeticiones v2" de pitchwear.cpp)
 
 std::string ModOff(void* p);
 
@@ -43,6 +51,121 @@ const unsigned char kRelSig[10] = { 0x80,0xb9,0xb0,0x04,0x00,0x00,0x00,0x4c,0x8b
 const uintptr_t kTickEndLo = 0x1404279c0ull, kTickEndHi = 0x140427a80ull;   // final del tick (EndListener)
 const uintptr_t kRegGlobal = 0x143702208ull;         // puntero al registro del partido (0 fuera del partido)
 const uintptr_t kRdLo = 0x142538000ull, kRdHi = 0x143a00000ull;            // cadenas del exe (.idata/.rdata del volcado)
+// (12/11 16:45, Agustin: "en la repeticion?, tenemos el slowmoprobe en lua modulos") REPETICION: FUN_14217c0b0 = control de la repeticion con
+// el mando (avance / retroceso / palanca, velocidad en +0x1c). La llama FUN_14217ea90 (actualizacion del objeto de repeticion, al lado de
+// match::ReplayObjectListener) en cada cuadro del visor, antes de FUN_14217bf20 (que solo avanza con el estado [0] == 5 = reproduciendo).
+// Devuelve dos floats en RAX (CONCAT44). SlowMoServer.lua le parchea los mulss de +0x83 / +0xa4 / +0xd2, no el prologo (bytes del exe
+// 1.07.02 leidos de su disco: mov [rsp+8],rbx / mov [rsp+18],rsi / push rdi / sub rsp,40 / mov rdi,rcx)
+const uintptr_t kReplayCtl = 0x14217c0b0ull;
+const unsigned char kReplaySig[18] = { 0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x18,0x57,0x48,0x83,0xec,0x40,0x48,0x8b,0xf9 };
+using RplFn = uint64_t(*)(void*, unsigned, unsigned char);
+RplFn o_rpl = nullptr;
+// (13/11 tanda 2) y448 REPETICIONES v2: en su log todas las llamadas del partido en vivo venian con el estado 5 (~54 por segundo, el tick
+// del partido), asi que "reproduciendo" no distinguia nada. Con y448 solo cuenta si el cursor (+0x14) cambio desde la llamada anterior
+// del mismo objeto o el paso (+0x18) no es cero [offsets del decompilado: a confirmar con el log "repeticiones v2"]. y448 0 = como antes
+struct RplCur { const void* obj; unsigned cur; };
+RplCur s_rplCur[4] = {}; int s_rplCurNext = 0;
+bool RplCursorMoved(const void* obj, unsigned cur) {
+    for (int i = 0; i < 4; i++) if (s_rplCur[i].obj == obj) { const bool m = s_rplCur[i].cur != cur; s_rplCur[i].cur = cur; return m; }
+    s_rplCur[s_rplCurNext].obj = obj; s_rplCur[s_rplCurNext].cur = cur; s_rplCurNext = (s_rplCurNext + 1) & 3; return false;   // primera vez: sin dato
+}
+// (14/11 g, Agustin: "las opciones de avanzar o pausar no funcionan ... deberia acceder a las opciones reales de pausa, avanzar")
+// MODO FOTO EN LA REPETICION: el reloj del partido no mueve el visor, asi que la pausa / avance / pasos del modo foto se aplican a la
+// LINEA DE TIEMPO del visor con el salto del propio juego FUN_14217e800(linea, cuadro) (leido por el hilo de la repeticion 9vcq5h:
+// recorta a [primero, ultimo], escribe +0x238 y +0x14 y pone el paso en 0). Despues del control del visor: una posicion propia que avanza
+// lo que diga el modo foto por llamada (0 en pausa, 1 = normal) y, si el juego la corrio, se vuelve a ella.
+bool SigAt(uintptr_t a, const unsigned char* s, size_t n);   // mas abajo (mismo espacio de nombres)
+bool Rd(const void* p, void* out, size_t n);
+const uintptr_t kRplSeek = 0x14217e800ull;
+const unsigned char kRplSeekSig[10] = { 0x0f,0xb7,0x81,0x3c,0x02,0x00,0x00,0x4c,0x8b,0xc9 };
+using RplSeekFn = void(*)(void*, unsigned short);
+int s_seekOk = -1; const void* s_pfLine = nullptr; double s_pf = 0.0; int s_pfLogs = 0;
+// constante de la velocidad lenta del visor: la que lee el mulss del exe (0.5 / -0.5 originales, o la de SlowMoServer.lua si la cambio)
+float RplSpeedConst(uintptr_t mulss, float def) {
+    static const unsigned char kMulss[4] = { 0xf3, 0x0f, 0x59, 0x35 };
+    if (!SigAt(mulss, kMulss, 4)) return def;
+    int disp = 0; if (!Rd((const void*)(mulss + 4), &disp, 4)) return def;
+    const uintptr_t a = mulss + 8 + (intptr_t)disp;
+    float v = 0.0f; if (!Rd((const void*)a, &v, 4)) return def;
+    return (v == v && fabsf(v) >= 0.005f && fabsf(v) <= 4.0f) ? v : def;
+}
+void PhotoReplayCtl(void* line) {
+    // (14/11 k, Agustin: "un switcher para que la repeticion funcione normal cuando no esta activa la camara libre y que al activar la
+    // camara libre estos ganchos se trasladen y en reversa") con la camara libre volando (x344 != 2, mando no devuelto) la linea la maneja
+    // SIEMPRE esta funcion (tambien la reproduccion normal); al prenderla con el visor en pausa arranca en pausa; apagada, el visor del
+    // juego queda como siempre (el mando vuelve al juego, overlay.cpp g_blockGamePad)
+    static const void* s_prevLine = nullptr; static float s_prevPos = -1.0f;
+    float posNow = -1.0f; __try { posNow = *(const float*)((const char*)line + 0x14); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    const bool wasStill = line == s_prevLine && posNow == s_prevPos; s_prevLine = line; s_prevPos = posNow;
+    const FreeCamPadInfo pi0 = FreeCamPadState();
+    if (!line || !FreeCamActive() || lroundf(g_cfg.live[344][0]) == 2 || pi0.given) { s_pfLine = nullptr; return; }
+    const float ph = FreeCamPhotoScale(); const int dpad = FreeCamReplayDpad();
+    if (s_seekOk < 0) { s_seekOk = SigAt(kRplSeek, kRplSeekSig, sizeof kRplSeekSig) ? 1 : 0; Log("modo foto en la repeticion: salto del visor %s", s_seekOk ? "listo (0x14217e800)" : "NO (firma distinta)"); }
+    if (!s_seekOk) return;
+    __try {
+        if (*(const int*)line != 5) { s_pfLine = nullptr; return; }
+        const float pos = *(const float*)((const char*)line + 0x14);
+        if (!(pos >= 0.0f && pos < 65536.0f)) return;
+        if (s_pfLine != line) { s_pfLine = line; s_pf = pos; if (wasStill) { FreeCamPhotoPause(true); Log("camara libre en la repeticion: el visor estaba en pausa, sigue en pausa"); } }
+        float spd = *(const float*)((const char*)line + 0x1c); if (!(spd > 0.0f && spd < 10.0f)) spd = 1.0f;   // velocidad del visor (1 = normal)
+        const FreeCamPadInfo pi = FreeCamPadState();
+        // como el visor del juego: cruceta derecha / izquierda mantenida = lento adelante / atras (0x14217C133 / 0x14217C154, lo que
+        // ponga SlowMoServer); cruz = pausa; cuadrado (u O) en pausa = avanzar lento; si no, los pasos del modo foto (L1 + cruceta)
+        double rate;
+        if (dpad > 0 || (pi.paused && pi.advancing)) rate = spd * RplSpeedConst(0x14217C133ull, 0.5f);
+        else if (dpad < 0) rate = spd * RplSpeedConst(0x14217C154ull, -0.5f);
+        else if (pi.paused) rate = 0.0;
+        else if (ph > 0.0f && fabsf(ph - 1.0f) > 1e-3f) rate = (double)std::clamp(ph, 0.0f, 4.0f);   // pasos del reloj del modo foto (L1 + cruceta)
+        else rate = spd * (g_cfg.replaySlow ? RplSpeedConst(0x14217C133ull, 0.5f) : 1.0f);   // reproduccion normal (lenta con repeticion_lenta)
+        s_pf = std::max(0.0, s_pf + rate);
+        const int want = (int)s_pf;
+        if (want != (int)pos) {
+            ((RplSeekFn)kRplSeek)(line, (unsigned short)want);
+            const float now = *(const float*)((const char*)line + 0x14);
+            if ((int)now != want) s_pf = now;   // el juego lo recorto (principio / final de lo grabado)
+            if (s_pfLogs < 6) { s_pfLogs++; Log("modo foto en la repeticion: cuadro %d (x%.2f%s)", want, rate, pi.paused ? ", pausa" : ""); }
+        }
+        g_replayMoveMs.store(GetTickCount64(), std::memory_order_relaxed);   // la camara libre sigue viendo la repeticion aunque este quieta
+    } __except (EXCEPTION_EXECUTE_HANDLER) { s_pfLine = nullptr; }
+}
+uint64_t hk_rpl(void* obj, unsigned pad, unsigned char p3) {
+    RepeticionRplHook(obj);   // (14/11 9vcq5h) salto con el mouse y cortes (repeticion.cpp), antes del control del visor
+    g_replayCalls.fetch_add(1, std::memory_order_relaxed); g_replayCallsV2.fetch_add(1, std::memory_order_relaxed);
+    const bool v2 = GrassLive(448, 1) > 0.5f;
+    __try { if (obj && *(const int*)obj == 5) {
+        if (!v2) { g_replayMs.store(GetTickCount64(), std::memory_order_relaxed); g_replayPlay.fetch_add(1, std::memory_order_relaxed); }   // y448 0: como antes
+        const unsigned cur = *(const unsigned*)((const char*)obj + 0x14), stp = *(const unsigned*)((const char*)obj + 0x18);
+        const bool mv = RplCursorMoved(obj, cur) || (stp & 0x7fffffffu) != 0u;
+        g_replayPlayV2.fetch_add(1, std::memory_order_relaxed); if (mv) { g_replayMoveV2.fetch_add(1, std::memory_order_relaxed); g_replayMoveMs.store(GetTickCount64(), std::memory_order_relaxed); }
+        if (v2 && mv) { g_replayMs.store(GetTickCount64(), std::memory_order_relaxed); g_replayPlay.fetch_add(1, std::memory_order_relaxed); } } } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    // (14/11 g, Agustin: "que el slow mo del lua tambien permita que la reproduccion normal ... vaya en camara lenta") REPETICION NORMAL
+    // EN CAMARA LENTA ([PES21FX] repeticion_lenta): mientras la linea avanza a velocidad normal (sin flechas ni pausa del visor), su
+    // velocidad (+0x1C) se multiplica por la de la flecha derecha (0.5 del exe o la de SlowMoServer) solo durante la llamada. Si el paso
+    // del cuadro no es el normal (flechas, stick, pausa, salto) no se toca: se vuelve a escalar en cuanto la reproduccion vuelve a la normal.
+    static const void* s_nlLine = nullptr; static bool s_nlScale = false;
+    float spd0 = 0.0f, pos0 = 0.0f, mul = 1.0f; bool scaled = false, st5 = false;
+    // (14/11 k, Agustin: "que la opcion de camara lenta afecte a la repeticion normal bien, pero que no se choquen") sin camara libre la
+    // lenta la hace esto (repeticion_lenta); con la camara libre volando la linea es de PhotoReplayCtl (s_pfLine) y esto no toca nada
+    const bool nlOn = g_cfg.replaySlow != 0 && obj && s_pfLine == nullptr;
+    if (nlOn) { __try {
+        st5 = *(const int*)obj == 5;
+        if (st5) {
+            if (s_nlLine != obj) { s_nlLine = obj; s_nlScale = false; }
+            pos0 = *(const float*)((const char*)obj + 0x14); spd0 = *(const float*)((const char*)obj + 0x1c);
+            mul = RplSpeedConst(0x14217C133ull, 0.5f);
+            if (s_nlScale && spd0 > 0.0f && spd0 < 10.0f && mul > 0.0f && mul < 1.0f) { *(float*)((char*)obj + 0x1c) = spd0 * mul; scaled = true; }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { st5 = false; } }
+    const uint64_t r = o_rpl(obj, pad, p3);
+    if (nlOn && st5) { __try {
+        if (scaled && *(const float*)((const char*)obj + 0x1c) == spd0 * mul) *(float*)((char*)obj + 0x1c) = spd0;
+        const float d = *(const float*)((const char*)obj + 0x14) - pos0, expect = scaled ? spd0 * mul : spd0;
+        s_nlScale = spd0 > 0.0f && fabsf(d - expect) < 0.02f + 0.05f * expect;   // reproduccion normal: en la siguiente llamada, lenta
+    } __except (EXCEPTION_EXECUTE_HANDLER) { s_nlScale = false; } }
+    else s_nlScale = false;
+    PhotoReplayCtl(obj);   // (14/11 g) pausa / avance / pasos del modo foto sobre la linea del visor
+    return r;
+}
 
 using LogFn = void(*)(void*, const char*, ...);
 using RelFn = void(*)(void*);
@@ -213,7 +336,9 @@ void hk_rel(void* view) {
     const uintptr_t ra = (uintptr_t)_ReturnAddress();
     if (ra > kTickEndLo && ra < kTickEndHi) {
         if (s_on.load(std::memory_order_relaxed)) { __try { Snapshot(); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
-        if (s_ev.load(std::memory_order_relaxed)) { __try { EventTick(); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
+        if (s_ev.load(std::memory_order_relaxed) && g_cfg.live[394][0] > 0.0f) { __try { EventTick(); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
+        // (12/11) desgaste real (fila 431): el tick del partido avanza solo con el partido corriendo (no en pausa ni en las repeticiones)
+        __try { const uintptr_t reg = RdPtr(kRegGlobal); const uintptr_t mi = reg ? RdPtr(reg + 0x270) : 0; int tk = -1; if (mi) Rd((const void*)(mi + 0x1198), &tk, 4); g_simTick.store(tk, std::memory_order_relaxed); } __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
     o_rel(view);
 }
@@ -383,17 +508,37 @@ void RastroPresent() {
         !g_cfg.rastroFalta ? "apagado" : mcOk ? "enganchado" : "NO (firma distinta)", name, (unsigned long long)(s_cap >> 20));
 }
 
+// (14/11 g, Agustin: "la camara libre no esta linkeada a la repeticion, las opciones no funcionan") la camara libre solo en la
+// repeticion (x344 = 3) y la lenta solo en la repeticion (z343 = 2) necesitan el gancho del visor de repeticiones, que antes solo se
+// ponia con el desgaste real (x431). Se pone apenas se elige uno de esos modos (una vez, misma firma y mismo gancho).
+void RastroReplayHookEnsure() {
+    static bool tried = false;
+    if (tried || g_replayHook.load() || !(g_cfg.live[344][0] > 0.5f || g_cfg.live[343][2] > 1.5f)) return;   // cualquier camara libre: el modo foto tambien maneja el visor
+    tried = true;
+    HMODULE mod = GetModuleHandleW(nullptr);
+    auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
+    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("camara en la repeticion: exe distinto, sin gancho del visor"); return; }
+    const bool sig = SigAt(kReplayCtl, kReplaySig, sizeof kReplaySig);
+    if (sig && MH_CreateHook((void*)kReplayCtl, (void*)&hk_rpl, (void**)&o_rpl) == MH_OK && MH_EnableHook((void*)kReplayCtl) == MH_OK) g_replayHook = 1;
+    Log("camara libre / lenta en la repeticion: visor de repeticiones %s", g_replayHook.load() ? "enganchado (0x14217c0b0)" : sig ? "NO (MinHook)" : "NO (firma distinta)");
+}
+
 // (08/11) solo el gancho del final del tick, para los eventos del partido que usan los gestos del publico (fila 394), aunque
 // el rastro este apagado. Solo lectura de MatchInfo. Se llama en cada Present despues de RastroPresent.
 void RastroEventosPresent() {
     static bool tried = false;
-    if (tried || g_cfg.live[394][0] <= 0.0f) return;
+    if (tried || (g_cfg.live[394][0] <= 0.0f && g_cfg.live[431][0] <= 0.5f && !RepeticionWantsHook())) return;   // (12/11) tambien para el desgaste real (reloj del partido)
     tried = true;
     HMODULE mod = GetModuleHandleW(nullptr);
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
     if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("publico: exe distinto (sello %08X): sin eventos del partido", (unsigned)nt->FileHeader.TimeDateStamp); return; }
     if (!s_relHooked.load() && SigAt(kRegRelease, kRelSig, sizeof kRelSig) && MH_CreateHook((void*)kRegRelease, (void*)&hk_rel, (void**)&o_rel) == MH_OK && MH_EnableHook((void*)kRegRelease) == MH_OK) s_relHooked = true;
     s_ev = s_relHooked.load();
+    if ((g_cfg.live[431][0] > 0.5f || RepeticionWantsHook()) && !g_replayHook.load()) {   // (14/11 9vcq5h) tambien para la barra de la repeticion   // (12/11 16:45) visor de repeticiones para el desgaste real
+        const bool sig = SigAt(kReplayCtl, kReplaySig, sizeof kReplaySig);
+        if (sig && MH_CreateHook((void*)kReplayCtl, (void*)&hk_rpl, (void**)&o_rpl) == MH_OK && MH_EnableHook((void*)kReplayCtl) == MH_OK) g_replayHook = 1;
+        Log("desgaste real: visor de repeticiones %s", g_replayHook.load() ? "enganchado (0x14217c0b0)" : sig ? "NO (MinHook)" : "NO (firma distinta)");
+    }
     Log("publico: eventos del partido (gol, falta, offside, corner) %s", s_ev.load() ? "enganchados al final del tick" : "NO (firma distinta)");
 }
 

@@ -143,12 +143,14 @@ static uintptr_t __fastcall hk_apply15(void* b, uintptr_t a, uintptr_t c, uintpt
 static uintptr_t __fastcall hk_sun(void* self, uintptr_t a, uintptr_t c, uintptr_t d) {
     s_sunCalls++;
     DllSunFrame();
+    SolLibreSun();   // (12/11 hefeaf) sol libre con sombras: la direccion del sol del motor antes de bajarla al cbuffer
     return o_sun(self, a, c, d);
 }
 static uintptr_t __fastcall hk_shadow(void* self, uintptr_t a, uintptr_t c, uintptr_t d) {
     uintptr_t r = o_shadow(self, a, c, d);
     s_shadowCalls++;
     __try { s_shadowLight = *(void* volatile*)((char*)self + 0x60); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    SolLibreShadow(self);   // (12/11 hefeaf) sol libre con sombras: la luz de la sombra ya elegida, antes de armar la camara de sombras
     return r;
 }
 

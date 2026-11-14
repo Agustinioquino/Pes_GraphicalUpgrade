@@ -116,7 +116,11 @@ float3 PesSkSpec(float3 specGame, float3 n, float3 V, float3 L, float roughG, fl
   float dd = nh * nh * (a4 - 1) + 1;
   float D = a4 / (3.14159 * dd * dd);
   float F = 0.028 + 0.972 * pow(1 - saturate(dot(V, H)), 5);
-  r1 += D * F * nl * 0.25 * P5.y * lightC * shadow * PESSkinSharpOcc(specInt, P5.w);
+  // (12/11) piel v2 (w124): visibilidad de Smith correlacionada (Heitz 2014, la de UE5) en vez del 0.25 fijo. De frente da lo mismo
+  // (nl = nv = 1 -> 0.25); con la luz o la camara rasantes el lobulo fino crece como en la piel real (borde de la cara, sol bajo)
+  // en lugar de apagarse con N.L. Tope 1.0 para que un pixel casi de canto no explote
+  float vis = PESSkinVis(nl, saturate(dot(n, V)), a4);   // (12/11) Smith con piel v2, 0.25 sin ella (pes_common)
+  r1 += D * F * nl * vis * P5.y * lightC * shadow * PESSkinSharpOcc(specInt, P5.w);
   return r1;
 }
 #ifdef PES_SK_FACESHADOW   // el archivo declara pesMouthMask (t43) y g_DepthTexture antes de incluir
@@ -142,6 +146,23 @@ bool PesSkMouthPx(float2 pos) {
   float mmZ = pesMouthMask.Load(int3(mmP, 0)), mmD = g_DepthTexture.Load(int3(mmP, 0)).x;
   return mmZ > 0.0 && abs(mmZ - mmD) <= 1e-6 + 2e-4 * abs(mmD);
 }
+// (12/11) PLANO DEL RECEPTOR para los trazados cortos de abajo (Agustin: "vibran los dientes", "manchas raras en la piel, a
+// ciertas distancias peor"). El trazado comparaba cada paso solo contra la profundidad del pixel de partida: en las superficies que
+// se ven de costado (paladar, lengua, muelas, mejilla de perfil a media distancia) la propia superficie, unos pixeles mas alla, ya
+// queda "delante" del rayo y se tapaba a si misma (acne). Ese grano cambia con el corrimiento del TAA en cada cuadro: dientes que
+// vibran y manchas que aparecen segun la distancia. Ahora un oclusor tiene que estar ademas delante del PLANO de la superficie del
+// pixel (pendiente medida en la profundidad con la diferencia mas chica de cada lado, asi un borde no la arruina). Lo que tapa de
+// verdad (labio, nariz, menton, diente de adelante) esta centimetros delante del plano y sigue sombreando.
+// Devuelve dz/dsC (metros por unidad de pantalla -1..1) en x e y. Sin derivadas: se puede llamar dentro de los if
+float PesSkLinZ(float2 uv) { return g_psScene.m_projectionParam.z / (g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uv, 0).x - g_psScene.m_projectionParam.w); }
+float2 PesSkZSlope(float4 AB, float2 sC, float zC) {
+  float2 st = 2.0 / max(g_psScene.m_viewportSize.xy, 1.0);   // un pixel en coordenadas de pantalla
+  float2 uv0 = AB.xy * sC + AB.zw, du = float2(AB.x * st.x, 0.0), dv = float2(0.0, AB.y * st.y);
+  float gxp = PesSkLinZ(uv0 + du) - zC, gxm = zC - PesSkLinZ(uv0 - du);
+  float gyp = PesSkLinZ(uv0 + dv) - zC, gym = zC - PesSkLinZ(uv0 - dv);
+  float2 g = float2(abs(gxp) < abs(gxm) ? gxp : gxm, abs(gyp) < abs(gym) ? gyp : gym);
+  return clamp(g, -0.05, 0.05) / st;   // tope 5 cm por pixel (cielo / fondo del editor)
+}
 // (10/11 e) SOMBRA DE CADA LUZ DENTRO DE LA BOCA. Agustin: "el problema es las sombras del interior de la boca, la oclusion, que
 // brilla mucho la parte de adentro, asi como la lengua y los dientes". Los focos (26 a 76 en el editor) y el sol sin shadow map
 // iluminaban el interior de la boca, la lengua y los dientes como si no hubiera labios: luz directa y brillo enteros en el fondo.
@@ -165,6 +186,7 @@ float PesSkMouthShadow(float4 AB, float4 clipP, float2 pos, float zC, float3 L) 
   float2 px = (sC * 0.5 + 0.5) * g_psScene.m_viewportSize.xy;
   float ign = frac(52.9829189 * frac(dot(px, float2(0.06711056, 0.00583715))));
   float3 Q = Pv + Lc * (0.0015 + 0.0006 * zA);
+  float2 gS = 0.0; bool gSok = false;   // (12/11) plano del receptor: se lee recien con el primer candidato a sombra (casi nunca)
   float occ = 0.0;
   [loop] for (int mi = 0; mi < 8; mi++) {
     float t = (mi + ign) / 8.0 * 0.045;                    // 4.5 cm: de la garganta a los labios
@@ -175,7 +197,11 @@ float PesSkMouthShadow(float4 AB, float4 clipP, float2 pos, float zC, float3 L) 
     if (any(uv < 0.0) || any(uv > 1.0)) break;
     float zS = g_psScene.m_projectionParam.z / (g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uv, 0).x - g_psScene.m_projectionParam.w);
     float dz = (R.z - zS) * zSgn;
-    if (dz > 0.0012 + 0.0004 * RzA && dz < 0.03 + 0.5 * t && (zC - zS) * zSgn > 0.002) { occ = saturate(dz / 0.004); break; }
+    if (dz > 0.0012 + 0.0004 * RzA && dz < 0.03 + 0.5 * t && (zC - zS) * zSgn > 0.002) {
+      if (!gSok) { gS = PesSkZSlope(AB, sC, zC); gSok = true; }
+      float zP = zC + dot(gS, R.xy / (R.z * g_psScene.m_projectionParam.xy) + g_psScene.m_cameraCenterOffset.xy - sC);
+      if ((zP - zS) * zSgn > 0.0015 + 0.0005 * RzA + 0.1 * t) { occ = saturate(dz / 0.004); break; }
+    }
   }
   return 1.0 - 0.85 * K * occ * saturate((8.0 - zA) / 3.0);
 }
@@ -189,7 +215,78 @@ float3 PesSkTransAll(float3 n, float3 V, float3 L, float nl, float trans, float 
   if (P64.x > 0.5 && P64.z > 0.0 && !PesSkMouthPx(pos)) t = max(t, PesSkTransThick(PesSkThickCurv(trans, curvT), n, L, nl, trans));
   return t;
 }
+// (13/11, micro sombras v4, Agustin: "tiene que ser reactivo") MICRO SOMBRA DE CADA FOCO SOBRE LA PIEL: la misma sombra de relieve
+// con direccion de pes_microsh.hlsli (619b / f807, el sol), pero hacia ESTE foco: los focos del estadio de noche y las luces del
+// editor tambien dejan su sombra chica del lado contrario en poros y arrugas, y cada foco la suya. Version liviana (hay hasta 76
+// focos por cuadro): 5 pasos, la forma lisa sale del promedio de las normales del propio camino, sin ruido (estable sin TAA).
+// Fila 88 (x fuerza, y on, w largo, z suavidad). Nada en la boca (regla). Necesita g_NormalTexture (t0) declarada antes
+float3 PesSkDecN(float2 uv) {
+  float4 nb = g_NormalTexture.SampleLevel(g_samplerPoint_Wrap_s, uv, 0);
+  uint3 q = (uint3)(float3(1023, 1023, 3) * nb.xyw);
+  float2 e = float2((q.x << 1) | (q.z >> 1), (q.y << 1) | (q.z & 1)) * 0.00097703957 - 1;
+  float3 n = float3(e.xy, 1 - abs(e.x) - abs(e.y));
+  if (n.z < 0) n.xy = (1 - abs(e.yx)) * (e.xy >= 0 ? 1 : -1);
+  n = normalize(n); n.z = -n.z;
+  return n;
+}
+float PesSkMicroShadow(float4 AB, float4 clipP, float2 pos, float zC, float3 L, float nl, float3 lightC) {
+  float4 MS = IniParams.Load(int2(88,0));
+  float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
+  if (MS.y < 0.5 || MS.x <= 0.0 || nl < 0.03 || zA < 0.1 || zA > 6.0 || dot(lightC, 0.3333.xxx) * nl < 0.01) return 1.0;
+  if (PesSkMouthPx(pos)) return 1.0;
+  float pxm = g_psScene.m_viewportSize.x / max(2.0 * abs(g_psScene.m_projectionParam.x) * zA, 1e-5);   // pixeles por metro
+  float rBase = 0.006 * (MS.w > 0.001 ? clamp(MS.w, 0.25, 4.0) : 1.0);
+  float R = max(rBase, 5.0 / pxm);
+  float farK = saturate((3.0 * rBase - R) / (1.5 * rBase) + 1.0);
+  if (farK < 0.01) return 1.0;
+  float2 sC = clipP.xy / clipP.w;
+  float3 P0 = float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zC, zC);
+  float3 Lc = normalize(L);
+  float3 n0 = PesSkDecN(AB.xy * sC + AB.zw);
+  // direccion hacia la luz apoyada en la superficie (primera pasada con la normal del pixel; la forma lisa se afina abajo)
+  float3 e0 = Lc - n0 * dot(n0, Lc);
+  if (dot(e0, e0) < 0.004) return 1.0;
+  e0 = normalize(e0);
+  float3 nS[5]; float3 nSum = n0; int cnt = 0;
+  [unroll] for (int i = 0; i < 5; i++) {
+    float t = R * (i + 0.65) * 0.2;
+    float3 Q = P0 + e0 * t;
+    float2 uv = AB.xy * (Q.xy / (Q.z * g_psScene.m_projectionParam.xy) + g_psScene.m_cameraCenterOffset.xy) + AB.zw;
+    bool ok = Q.z * zSgn > 0.06 && !any(uv < 0.0) && !any(uv > 1.0) && cnt == i;
+    if (ok) { float zS = PesSkLinZ(uv); ok = abs(zS - Q.z) < 0.6 * R + 0.002; }   // borde de la cara u otra superficie: hasta ahi
+    nS[i] = n0;
+    if (ok) { nS[i] = PesSkDecN(uv); nSum += nS[i]; cnt++; }
+  }
+  if (cnt < 2) return 1.0;
+  float3 Ns = normalize(nSum);
+  float nsl = dot(Ns, Lc);
+  if (nsl <= 0.02) return 1.0;
+  float3 Lp = Lc - Ns * nsl; float lpl = length(Lp);
+  if (lpl < 0.06) return 1.0;
+  float3 e = Lp / lpl; float tanE = nsl / lpl;
+  float sPrev = clamp(-dot(n0, e) / max(dot(n0, Ns), 0.25), -3.0, 3.0), h = 0.0, tPrev = 0.0, worst = -1.0;
+  [unroll] for (int j = 0; j < 5; j++) {
+    if (j < cnt) {
+      float t = R * (j + 0.65) * 0.2;
+      float sl = clamp(-dot(nS[j], e) / max(dot(nS[j], Ns), 0.25), -3.0, 3.0);
+      h += 0.5 * (sl + sPrev) * (t - tPrev);
+      worst = max(worst, h / t - tanE);
+      sPrev = sl; tPrev = t;
+    }
+  }
+  float soft = MS.z > 0.001 ? clamp(MS.z, 0.25, 3.0) : 1.0;
+  float vis = 1.0 - smoothstep(0.0, 0.30 * soft, worst);
+  return lerp(1.0, lerp(0.5, 1.0, vis), saturate(MS.x) * farK * smoothstep(0.03, 0.2, nl));
+}
+float PesSkFaceShadow0(float4 AB, float4 clipP, float2 pos, float zC, float3 L, float nl, float3 lightC);
 float PesSkFaceShadow(float4 AB, float4 clipP, float2 pos, float zC, float3 L, float nl, float3 lightC) {
+#ifdef PES_SK_NO_MICRO   // pasadas del sol (7dbbc / d0e9): la micro sombra del sol ya la pone la composicion (619b / f807), no dos veces
+  return PesSkFaceShadow0(AB, clipP, pos, zC, L, nl, lightC);
+#else
+  return PesSkFaceShadow0(AB, clipP, pos, zC, L, nl, lightC) * PesSkMicroShadow(AB, clipP, pos, zC, L, nl, lightC);
+#endif
+}
+float PesSkFaceShadow0(float4 AB, float4 clipP, float2 pos, float zC, float3 L, float nl, float3 lightC) {
   float4 CS = IniParams.Load(int2(52,0));
   float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
   // solo donde hay luz que quitar (con 26 a 48 focos por cuadro en el editor, los que casi no aportan no trazan)
@@ -204,6 +301,7 @@ float PesSkFaceShadow(float4 AB, float4 clipP, float2 pos, float zC, float3 L, f
   float ign = frac(52.9829189 * frac(dot(px, float2(0.06711056, 0.00583715))));
   float bias = (0.004 + 0.0012 * zA) * (0.6 + 0.4 / max(nl, 0.12));
   float3 Q = Pv + Lc * bias;
+  float2 gS = 0.0; bool gSok = false;   // (12/11) plano del receptor, solo con el primer candidato (con 76 focos importa)
   float occ = 0.0;
   [loop] for (int ci = 0; ci < 6; ci++) {
     float f = (ci + ign) / 6.0;
@@ -217,8 +315,9 @@ float PesSkFaceShadow(float4 AB, float4 clipP, float2 pos, float zC, float3 L, f
     float dz = (R.z - zS) * zSgn;
     float thick = 0.035 + 0.25 * t + 0.0015 * RzA;
     if (dz > 0.002 + 0.0006 * RzA && dz < thick && (zC - zS) * zSgn > 0.008 + 0.0015 * zA) {
-      occ = (1.0 - soft * f) * saturate(dz / (0.35 * thick));
-      break;
+      if (!gSok) { gS = PesSkZSlope(AB, sC, zC); gSok = true; }
+      float zP = zC + dot(gS, R.xy / (R.z * g_psScene.m_projectionParam.xy) + g_psScene.m_cameraCenterOffset.xy - sC);
+      if ((zP - zS) * zSgn > 0.003 + 0.0008 * RzA + 0.1 * t) { occ = (1.0 - soft * f) * saturate(dz / (0.35 * thick)); break; }
     }
   }
   // junto al terminador la sombra la da la propia forma (y la difunde la SSSS): el trazado entra de a poco, sin escalones

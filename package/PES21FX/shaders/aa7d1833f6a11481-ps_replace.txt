@@ -91,6 +91,8 @@ Texture2D<float4> StereoParams : register(t125);
 #include "pes_variants.hlsli"   // (26/10) variantes robusto / atletico (valor del jugador)
 #include "pes_nailfix.hlsli"   // (26/10, v12.6) unas de los jugadores con textura de brazo propia (x304)
 #include "pes_limb_relief.hlsli"   // (08/11) relieve 3D de manos y piernas
+#include "pes_skin2.hlsli"   // (12/11) PIEL v2 (w124): misma sangre, cavidades y rugosidad que la cara
+#include "pes_sweat2.hlsli"  // (13/11) SUDOR 2 (x457): sudor por jugador + lluvia aparte
 #ifdef PES_HL_ACC
 RWByteAddressBuffer gHlAcc : register(u5);   // por marca y lado: suma x, suma y, pixeles (4 x 16 bytes)
 #endif
@@ -126,6 +128,13 @@ void main(
   float4 P35b = IniParams.Load(int2(35,0));
   float4 P43b = IniParams.Load(int2(43,0));
   bool bodyOn = (P0b.w > 0.5) && (P43b.w > 0.5);
+  bool sk2 = (P0b.w > 0.5) && PesSk2On();   // (12/11) piel v2
+  // (13/11) SUDOR 2: sudor, calor y lluvia de ESTE jugador (tabla de la DLL, pes_sweat2.hlsli)
+  bool sw2 = (P0b.w > 0.5) && PesSwOn();
+  float4 sw2P = float4(0, 0, 0, 0);
+  if (sw2) sw2P = PesSwPlayer(v0, v3.xyz);
+  float sw2Fp = max(length(ddx(v2.xy)), length(ddy(v2.xy)));
+  float sw2Up = 0.3; { float4 swUp = IniParams.Load(int2(435, 0)); if (swUp.w > 0.5) sw2Up = dot(normalize(v6.xyz), swUp.xyz); }
   float bBD = (bodyOn && P32b.w > 0.5) ? P32b.x : 0.0;
   float bBN = (bodyOn && P32b.w > 0.5) ? P32b.y : 0.0;
   // cabeza de una cara generica: la DLL enlazo el mapa de SSS de la cara (1024x1024) en t22
@@ -452,6 +461,7 @@ void main(
   r0.w = rsqrt(r0.w);
   r1.xyz = v3.xyz * r0.www;
   r0.w = dot(r0.xyz, r1.xyz);
+  float bNoV = saturate(r0.w);   // (12/11) piel v2: N.V para la oclusion especular de las cavidades
   r0.w = saturate(1 + -r0.w);
   r0.w = log2(r0.w);
   r0.w = g_psMaterial.m_materials[1].x * r0.w;
@@ -566,7 +576,8 @@ void main(
     float bSat = P0b.y > 0 ? P0b.y : 1.0;
     float bLum = dot(hpBA0, float3(0.2126, 0.7152, 0.0722));
     hpBA = max(0, lerp(bLum.xxx, hpBA0, bSat));
-    hpBA = saturate(hpBA * lerp(float3(1,1,1), float3(1.04, 0.98, 0.96), saturate(hpBT0 * IniParams.Load(int2(2,0)).x)));
+    hpBA = sk2 ? saturate(PesSk2Blood(hpBA, 0.30 * saturate(hpBT0 * IniParams.Load(int2(2,0)).x)))   // (12/11) v2: como la cara
+               : saturate(hpBA * lerp(float3(1,1,1), float3(1.04, 0.98, 0.96), saturate(hpBT0 * IniParams.Load(int2(2,0)).x)));
     hpBT = saturate(hpBT0 * (P0b.x > 0 ? P0b.x : 1.0));
   }
   if (hpK > 0.001) {
@@ -585,11 +596,14 @@ void main(
     float aSat = P0b.y > 0 ? P0b.y : 1.0;
     float lum = dot(r2.yzw, float3(0.2126, 0.7152, 0.0722));
     r2.yzw = max(0, lerp(lum.xxx, r2.yzw, aSat));
-    r2.yzw *= lerp(float3(1,1,1), float3(1.04, 0.98, 0.96), saturate(hpThin * P2h.x));
-    r2.yzw *= lerp(float3(1,1,1), float3(1.0, 0.95, 0.94), saturate(hpBlood));   // 21/10: mas sutil
+    if (!sk2) {
+      r2.yzw *= lerp(float3(1,1,1), float3(1.04, 0.98, 0.96), saturate(hpThin * P2h.x));
+      r2.yzw *= lerp(float3(1,1,1), float3(1.0, 0.95, 0.94), saturate(hpBlood));   // 21/10: mas sutil
+    }
     r2.yzw = saturate(r2.yzw);
     float4 P9h = IniParams.Load(int2(9,0));
     float swP = saturate((IniParams.Load(int2(10,0)).x - P9h.x) / max(P9h.y - P9h.x, 0.1));
+    if (sw2) swP = saturate(sw2P.y * 1.2 - 0.14);   // (13/11) el rubor sigue al calor del jugador
     float4 P12h = IniParams.Load(int2(12,0));
     float flushF = swP * P12h.x;
     if (P12h.y > 0.001) {   // (25/10) sangre por zona (y12), igual que la cara: mejillas, nariz y orejas; menos con mas melanina
@@ -600,8 +614,13 @@ void main(
       float melA = saturate(log2(0.47 / max(lA, 1e-3)) / 2.85);
       flushF *= lerp(1.0, 1.6 * zoneB * (1.0 - 0.7 * melA), saturate(P12h.y));
     }
-    r2.yzw *= float3(1.0 + flushF, 1.0 - flushF * 0.35, 1.0 - flushF * 0.45);
+    if (sk2) r2.yzw = PesSk2Blood(r2.yzw, 0.30 * saturate(hpThin * P2h.x) + 0.45 * saturate(hpBlood) + flushF);   // (12/11) v2: absorcion, como la cara
+    else r2.yzw *= float3(1.0 + flushF, 1.0 - flushF * 0.35, 1.0 - flushF * 0.45);
     float4 P72h = IniParams.Load(int2(72,0)), P73h = IniParams.Load(int2(73,0));
+    if (sw2) {   // (13/11) SUDOR 2: pelicula por zonas del jugador + lluvia (sin gotas en esta pieza)
+      float zr = P72h.w > 0.5 ? saturate(pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy).r * 1.25) : 0.6;
+      hpFilm = PesSwSkin(sw2P, v2.xy, zr, sw2Up, sw2Fp, 1.0, 0.0, false).film;
+    } else
     if (P72h.w > 0.5) {   // pelicula de sudor por zonas (mismo mapa que la cara)
       float4 FZ = pesZones.Sample(g_samplerLinear_Clamp_s, v2.xy);
       float zoneSw = lerp(1.0, saturate(FZ.r * 1.25), saturate(P72h.y));
@@ -641,7 +660,8 @@ void main(
   }
   r3.xyz = stVeil + -r2.yzw;
   o0.xyz = r0.www * r3.xyz + r2.yzw;
-  o0.xyz *= bCav;
+  if (sk2) o0.xyz *= lerp(float3(1.0, 1.0, 1.0), float3(0.84, 0.79, 0.78), 1.0 - bCav);   // (12/11) v2: poco y calido en el color (el brillo, abajo)
+  else o0.xyz *= bCav;
   {   // (24/10) resaltado del musculo elegido en el menu Fisico (como el brillo que late en los menus de la cara): el VS
       // 1c02a92a deja el peso del vertice en v3.w (+2; otros VS no lo escriben) y la DLL manda el pulso en x174.
       // (24/10 b) y como en la cara, un aro y un punto blanco brillante sobre el musculo: posicion de reposo en v4.w..v6.w,
@@ -706,15 +726,20 @@ void main(
   r0.x = (uint)r0.x;
   o1.z = 0.000977517106 * r0.x;
   r0.x = min(0.56078434, r1.y);
-  o2.y = saturate(r1.x * bSpec * lerp(1.0, bCav, 0.8));
+  o2.y = saturate(r1.x * bSpec * (sk2 ? 1.0 : lerp(1.0, bCav, 0.8)));
   r0.x = max(r0.x, r2.x);
   if (hpK > 0.001) {   // (20/10) brillo como la cara: pelicula de sudor, poros (Toksvig) y zona T
     float hpR0 = r0.x, hpS0 = o2.y;
     float gS = IniParams.Load(int2(2,0)).y; gS = gS > 0 ? gS : 1.0;
     r0.x = saturate(r0.x * gS);
     r0.x = lerp(r0.x, r0.x * 0.45, hpFilm);
-    r0.x = saturate(r0.x + hpMicroVar * 0.30 + hpPoreA * 0.20);
-    r0.x = saturate(r0.x * lerp(1.06, 0.86, hpTZone * saturate(P94h.x)));
+    if (sk2) {   // (12/11) v2: Toksvig en alfa^2 + hueco del poro solo de cerca + piso de la piel (0.42, 0.33 zona T), como la cara
+      float al = r0.x * r0.x; al = sqrt(saturate(al * al + 0.10 * hpMicroVar)); r0.x = saturate(sqrt(al) + 0.12 * hpPoreC);
+      r0.x = lerp(r0.x, max(r0.x, lerp(0.42, 0.33, saturate(hpTZone * saturate(P94h.x)))), 1.0 - saturate(hpFilm * 1.5));
+    } else {
+      r0.x = saturate(r0.x + hpMicroVar * 0.30 + hpPoreA * 0.20);
+      r0.x = saturate(r0.x * lerp(1.06, 0.86, hpTZone * saturate(P94h.x)));
+    }
     o2.y = lerp(o2.y, max(o2.y, 0.5), hpFilm * 0.8);
     o2.y *= (1.0 - 0.45 * hpPoreC) * lerp(0.95, 1.12, hpTZone * saturate(P94h.x));   // (31/10) brillo del poro solo en primer plano
     r0.x = lerp(hpR0, r0.x, hpK); o2.y = lerp(hpS0, o2.y, hpK);
@@ -722,13 +747,19 @@ void main(
   // (25/10) lluvia en la piel (z12): con lluvia en el partido (114.x = 1) brazos, piernas, cuello y cabeza de las genericas
   // quedan mojados: menos rugosidad y mas brillo, como la pelicula de sudor de la cara
   { float rv = IniParams.Load(int2(114,0)).x;
-    float rK = (rv > 0.5 && rv < 1.5 && (bodyOn || headPiece)) ? saturate(IniParams.Load(int2(12,0)).z) * 0.85 : 0.0;
+    float rK = (!sw2 && rv > 0.5 && rv < 1.5 && (bodyOn || headPiece)) ? saturate(IniParams.Load(int2(12,0)).z) * 0.85 : 0.0;
+    if (sw2 && (bodyOn || headPiece)) {   // (13/11) SUDOR 2 en brazos, piernas y cuello: suda mas tarde que la frente; la lluvia moja parejo
+      rK = PesSwSkin(sw2P, v2.xy, 0.45, sw2Up, sw2Fp, 1.0, 0.0, false).film * (1.0 - hpK);
+      float swDbg = IniParams.Load(int2(459, 0)).z;
+      if (swDbg > 0.5) o0.xyz = lerp(o0.xyz, float3(sw2P.y, 0.5 * sw2P.w, sw2P.x), 0.85);
+    }
     r0.x = lerp(r0.x, r0.x * 0.45, rK);
     o2.y = lerp(o2.y, max(o2.y, 0.5), rK * 0.8); }
   if (lrTense > 0.001) {   // (08/11) musculo tenso (brazos / piernas): la piel queda tirante: menos rugosa y algo mas de brillo
     r0.x *= lerp(1.0, 0.84, lrTense);
     o2.y = saturate(o2.y * lerp(1.0, 1.15, lrTense));
   }
+  if (sk2) o2.y *= PesSk2SpecOcc(bNoV, bCav, r0.x);   // (12/11) v2: oclusion especular de las cavidades (codo, rodilla, nudillos, orejas)
   { float aaA = r0.x * r0.x; aaA = aaA * aaA; r0.x = sqrt(sqrt(saturate(aaA + aaVb))); }   // AA especular (02/11)
   r0.y = r0.x * 0.0361702144 + 0.0904255286;
   r0.y = r0.y * r0.x + 0.180851057;
