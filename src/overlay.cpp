@@ -2743,12 +2743,13 @@ void OverlayPresent(IDXGISwapChain* sc) {
     float mmx = 0, mmy = 0; const bool mmCur = !g_menuOpen && MenuMouseCursor(&mmx, &mmy);   // (11/11) flecha del mouse sobre los menus del juego
     const bool keyHud = KeyHudPoll();   // (11/11) cuadrito con la ultima tecla apretada
     const bool gizmo = MotorGizmoPoll();   // (11/11) gizmo de camara del Motor (motorgizmo.cpp)
+    const bool repe = RepeticionPresent(sc);   // (14/11 9vcq5h) barra de la repeticion con el mouse / desenfoque en los cortes
     {   // (14/11 d) ayuda de los botones del mouse: aparece al usar el mouse en los menus del juego y se va sola (con el cursor apagado, no)
         static float s_mh = 0.0f; static double s_mhT = 0.0; const double tn = Now(); const float dt = (float)std::clamp(tn - s_mhT, 0.0, 0.1); s_mhT = tn;
         const bool want = mmCur && g_cfg.mouseHint && g_cfg.menuCursor != 0;
         s_mh = std::clamp(s_mh + (want ? dt / 0.20f : -dt / 0.40f), 0.0f, 1.0f); mouseHintA = s_mh * s_mh * (3.0f - 2.0f * s_mh);
     }
-    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo && !curToast && mouseHintA <= 0.0f) {
+    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo && !curToast && mouseHintA <= 0.0f && !repe) {
         g_blockGamePad = false;   // (14/11) sin menu ni camara libre no se dibuja nada (ni se lee el mando): el juego vuelve a ver el mando
         return;
     }
@@ -2905,6 +2906,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         dl->AddText(ImVec2(a0.x + pad.x, a0.y + pad.y), IM_COL32(235, 240, 245, (int)(255 * a)), msg.c_str());
     }
     if (gizmo) MotorGizmoDraw();
+    if (repe) RepeticionDraw();
     if (keyHud) KeyHudDraw();
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)

@@ -144,6 +144,9 @@ static bool LoadConfigLocked() {
             else if (kl == "camara_mando") c.camPad = std::clamp(atoi(v.c_str()), 0, 1);           // (14/11) el mando mueve la camara libre (modo foto)
             else if (kl == "menu_cursor") { const int cv = std::clamp(atoi(v.c_str()), 0, 3); c.menuCursor = cv == 3 ? 1 : cv; }   // 0 no, 1 dardo + mano, 2 Windows           // (14/11) cursor del menu
             else if (kl == "menu_mando_abrir") c.menuPadOpen = atoi(v.c_str()) != 0;             // (14/11) L3 + R3 abre / cierra el menu
+            else if (kl == "repeticion_barra") c.replayBar = atoi(v.c_str()) != 0 ? 1 : 0;      // (14/11 9vcq5h) barra propia de la repeticion
+            else if (kl == "repeticion_corte") c.replayCut = atoi(v.c_str()) != 0 ? 1 : 0;      // (14/11 9vcq5h) desenfoque en los cortes
+            else if (kl == "repeticion_corte_ms") c.replayCutMs = std::clamp(atoi(v.c_str()), 100, 1000);
             else if (kl == "mouse_menus") c.menuMouse = atoi(v.c_str()) != 0 ? 1 : 0;   // (11/11) mouse en los menus nativos del juego
             else if (kl == "mouse_menus_retraso") c.menuMouseDelay = std::clamp(atoi(v.c_str()), 0, 4);
             else if (kl == "mouse_menus_cerca") c.menuMouseNear = atoi(v.c_str()) != 0 ? 1 : 0;

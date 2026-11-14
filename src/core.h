@@ -172,6 +172,9 @@ struct Config {
     float uiScale = 1.0f;                      // 19/10: tamano del menu ([PES21FX] ui_scale)
     bool compact = false;                      // 19/10: grupos contraidos por defecto ([PES21FX] compacto)
     int menuHelp = 1; bool menuAdvanced = false, menuCols = true; int menuSize = 0; float menuAlpha = 0.85f; bool menuGlass = true, menuFont = true; int menuAutoSave = 0; bool menuVisual = true, menuPad = true, menuPadDraw = true; int menuPadStyle = 0; unsigned menuPadColor = 0;   /* (14/11 d) menu_mando_estilo 0 automatico (segun los iconos del juego) 1 PS5 2 PS4 3 Xbox; menu_mando_color RRGGBB (vacio = el de cada mando) */   /* (14/11) [PES21FX] menu_vistas (tarjetas con dibujos que se tocan + animaciones), menu_mando (leer el mando en el menu), menu_mando_dibujo (dibujo del mando al abrir el menu) */   // (08/11) menu_autoguardar 0 no, 1 al soltar (1 s), 2 cada 10 s; [PES21FX] menu_ayuda / menu_avanzado / menu_columnas / menu_tamano / menu_opacidad / menu_vidrio / menu_letra (overlay.cpp)
+    int replayBar = 1;                         // (14/11 9vcq5h) barra propia de la repeticion con el mouse (repeticion.cpp) ([PES21FX] repeticion_barra)
+    int replayCut = 1;                         // (14/11 9vcq5h) desenfoque de movimiento corto en los cortes de la repeticion ([PES21FX] repeticion_corte)
+    int replayCutMs = 300;                     // (14/11 9vcq5h) cuanto dura ese desenfoque ([PES21FX] repeticion_corte_ms, 100..1000)
     int menuMouse = 1;                         // (11/11) mouse en los menus nativos del juego (menumouse.cpp): 0 apagado, 1 prendido ([PES21FX] mouse_menus)
     int menuMouseDelay = 2;                    // (11/11 v2) cuadros de retraso de la flecha, para que vaya junto con la fila marcada ([PES21FX] mouse_menus_retraso, 0..4)
     int menuMouseNear = 1;                     // (11/11 v2) en los huecos entre filas de un grupo vale la mas cercana ([PES21FX] mouse_menus_cerca)
@@ -476,6 +479,7 @@ void RelWatchPresent();
 void FreeCamWheel(int delta);
 bool FreeCamWantsHead();   // (1/11) camara libre prendida con "seguir la cara": hace falta la cabeza (expr.cpp)   // (1/11) rueda del mouse (WM_MOUSEWHEEL / raw input) -> zoom   // (1/11) gancho a la camara del visor del editor (primer Present) + log
 bool FreeCamActive();
+bool RepeticionWantsHook(); void RepeticionRplHook(void* line); bool RepeticionPresent(IDXGISwapChain* sc); void RepeticionDraw();   // (14/11 9vcq5h) repeticion.cpp
 bool ReplayNow();                                 // (14/11) pitchwear.cpp: repeticion en curso (detector v2, y448)
 bool FreeCamBlocksKeys();                         // x344 = 1: el juego no ve el teclado mientras la camara libre esta prendida
 // (14/11) mando en la camara libre y modo foto (freecam.cpp): overlay.cpp le pasa el mando de cada cuadro
