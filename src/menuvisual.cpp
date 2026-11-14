@@ -338,13 +338,6 @@ bool MvSunWidget(MvSunIn& in) {
         for (int i = 0; i < 24; i++) { const float a = i * kPI / 12; const float l = i % 6 == 0 ? 6.0f : 3.0f; dl->AddLine(ImVec2(c.x + sinf(a) * (R - l * k), c.y + cosf(a) * (R - l * k)), ImVec2(c.x + sinf(a) * (R + l * k), c.y + cosf(a) * (R + l * k)), Col(1, 1, 1, 0.35f), 1.0f); }
         const float pw = R * 1.05f, ph = pw * 68.0f / 105.0f;
         DrawPitchTop(dl, ImVec2(c.x - pw * 0.5f, c.y - ph * 0.5f), ImVec2(c.x + pw * 0.5f, c.y + ph * 0.5f), 1.0f);
-        // sombra del jugador (hacia el lado contrario al sol, larga con el sol bajo)
-        if (wantEl > 0.5f) {
-            const float len = std::min(R * 0.75f, (R * 0.10f) / tanf(std::max(wantEl, 4.0f) * kDeg));
-            const float sx = -sinf(shAz * kDeg), sy = -cosf(shAz * kDeg); const ImVec2 e(c.x + sx * len, c.y + sy * len); const float wd = 3.4f * k;
-            dl->AddQuadFilled(ImVec2(c.x - sy * wd, c.y + sx * wd), ImVec2(c.x + sy * wd, c.y - sx * wd), ImVec2(e.x + sy * wd * 0.5f, e.y - sx * wd * 0.5f), ImVec2(e.x - sy * wd * 0.5f, e.y + sx * wd * 0.5f), Col(0, 0, 0, 0.55f));
-        }
-        dl->AddCircleFilled(c, 4.0f * k, Col(0.95f, 0.30f, 0.30f, 1), 12); dl->AddCircle(c, 4.0f * k, IM_COL32_WHITE, 12, 1.2f);
         // la camara de TV (abajo, del lado -Z) para orientarse
         dl->AddText(ImVec2(c.x - ImGui::CalcTextSize(TRS("TV")).x * 0.5f, c.y - R - 7.0f * k - ImGui::GetFontSize()), Col(1, 1, 1, 0.55f), TRS("TV"));
         if (on && in.realOk) { const ImVec2 rp(c.x + sinf(in.realAz * kDeg) * R, c.y + cosf(in.realAz * kDeg) * R); dl->AddCircle(rp, 6.0f * k, Col(1, 1, 1, 0.8f), 16, 1.5f * k); }
@@ -375,35 +368,6 @@ bool MvSunWidget(MvSunIn& in) {
         for (int e = 0; e <= 90; e += 15) { const float a = -e * kDeg, l = e % 45 == 0 ? 6.0f : 3.5f;
             dl->AddLine(ImVec2(base.x + cosf(a) * (AR - l * k), base.y + sinf(a) * (AR - l * k)), ImVec2(base.x + cosf(a) * (AR + l * k), base.y + sinf(a) * (AR + l * k)), Col(1, 1, 1, 0.5f), 1.0f);
             if (e % 45 == 0) { char lb[8]; snprintf(lb, sizeof lb, "%d", e); dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.72f, ImVec2(base.x + cosf(a) * (AR - 18.0f * k) - 4.0f * k, base.y + sinf(a) * (AR - 18.0f * k) - 6.0f * k), Col(1, 1, 1, 0.55f), lb); } }
-        // jugador de costado (cabeza, pelo, camiseta, short, medias, botines) con el lado del sol iluminado y su sombra en el pasto
-        const ImVec2 pl(a0.x + AW * 0.62f, base.y + 20.0f * k);   // parado un poco adelante en el pasto
-        const float hgt = 40.0f * k, sx = shEl > 0.5f ? 1.0f : 0.0f;
-        if (shEl > 0.5f) {   // sombra: larga con el sol bajo, hacia el lado contrario al sol (izquierda), en perspectiva sobre el pasto
-            const float len = std::min(AW * 0.62f, hgt / tanf(std::max(shEl, 3.0f) * kDeg));
-            const float sa = Sat(0.25f + 0.5f * light);
-            ImVec2 q[4] = { ImVec2(pl.x - 5.0f * k, pl.y - 1.0f * k), ImVec2(pl.x + 5.0f * k, pl.y + 1.0f * k), ImVec2(pl.x - len + 4.0f * k, pl.y + 9.0f * k), ImVec2(pl.x - len - 7.0f * k, pl.y + 5.0f * k) };
-            dl->AddQuadFilled(q[0], q[1], q[2], q[3], Col(0, 0, 0, 0.62f * sa));
-            dl->AddCircleFilled(ImVec2(pl.x - len - 2.0f * k, pl.y + 7.0f * k), 4.5f * k, Col(0, 0, 0, 0.42f * sa), 12);
-        }
-        const ImVec4 skin(0.80f, 0.62f, 0.48f, 1), shirt(0.85f, 0.15f, 0.18f, 1), shorts(0.95f, 0.95f, 0.97f, 1), sock(0.85f, 0.15f, 0.18f, 1);
-        auto lit = [&](ImVec4 c, float side) { return ImGui::GetColorU32(Lerp4(Lerp4(c, ImVec4(0, 0, 0, 1), 0.55f - 0.45f * light), Lerp4(c, sc, 0.25f), side * sx * light * 0.6f)); };
-        const float u = hgt / 34.0f;
-        // piernas y botines
-        dl->AddRectFilled(ImVec2(pl.x - 3.5f * u, pl.y - 13.0f * u), ImVec2(pl.x - 0.5f * u, pl.y - 2.0f * u), lit(sock, 0.0f));
-        dl->AddRectFilled(ImVec2(pl.x + 0.5f * u, pl.y - 13.0f * u), ImVec2(pl.x + 3.5f * u, pl.y - 2.0f * u), lit(sock, 1.0f));
-        dl->AddRectFilled(ImVec2(pl.x - 4.5f * u, pl.y - 2.0f * u), ImVec2(pl.x + 0.0f * u, pl.y), Col(0.08f, 0.08f, 0.10f, 1), 1.0f);
-        dl->AddRectFilled(ImVec2(pl.x + 0.5f * u, pl.y - 2.0f * u), ImVec2(pl.x + 5.0f * u, pl.y), Col(0.08f, 0.08f, 0.10f, 1), 1.0f);
-        dl->AddRectFilled(ImVec2(pl.x - 4.0f * u, pl.y - 18.0f * u), ImVec2(pl.x + 4.0f * u, pl.y - 12.0f * u), lit(shorts, 0.5f), 1.5f * u);   // short
-        dl->AddRectFilled(ImVec2(pl.x - 4.5f * u, pl.y - 28.0f * u), ImVec2(pl.x + 4.5f * u, pl.y - 17.5f * u), lit(shirt, 0.0f), 2.0f * u);   // camiseta
-        dl->AddRectFilled(ImVec2(pl.x + 0.5f * u, pl.y - 28.0f * u), ImVec2(pl.x + 4.5f * u, pl.y - 17.5f * u), lit(shirt, 1.0f), 2.0f * u);
-        dl->AddLine(ImVec2(pl.x - 4.5f * u, pl.y - 26.5f * u), ImVec2(pl.x - 6.0f * u, pl.y - 19.0f * u), lit(skin, 0.0f), 2.2f * u);   // brazos
-        dl->AddLine(ImVec2(pl.x + 4.5f * u, pl.y - 26.5f * u), ImVec2(pl.x + 6.0f * u, pl.y - 19.0f * u), lit(skin, 1.0f), 2.2f * u);
-        dl->AddCircleFilled(ImVec2(pl.x, pl.y - 31.5f * u), 3.6f * u, lit(skin, 0.5f), 14);   // cabeza
-        dl->PathArcTo(ImVec2(pl.x, pl.y - 31.5f * u), 3.8f * u, kPI * 1.05f, kPI * 1.95f, 10); dl->PathFillConvex(Col(0.12f, 0.08f, 0.05f, 1));   // pelo
-        if (sx > 0.0f && light > 0.05f) dl->AddLine(ImVec2(pl.x + 4.6f * u, pl.y - 27.5f * u), ImVec2(pl.x + 4.6f * u, pl.y - 18.0f * u), ColA(sc, 0.8f * light), 1.0f);   // borde con luz
-        // pelota al lado
-        dl->AddCircleFilled(ImVec2(pl.x + 10.0f * u, pl.y - 2.2f * u), 2.3f * u, Col(0.95f, 0.95f, 0.95f, 1), 12);
-        if (shEl > 0.5f) dl->AddEllipseFilled(ImVec2(pl.x + 10.0f * u - std::min(10.0f * u, 2.5f * u / tanf(std::max(shEl, 5.0f) * kDeg)), pl.y + 0.6f * u), ImVec2(3.0f * u, 0.9f * u), Col(0, 0, 0, 0.35f * light), 0.0f, 10);
         dl->PopClipRect();
         const ImVec2 sp(base.x + cosf(shEl * kDeg) * AR, base.y - sinf(shEl * kDeg) * AR);
         SunGlyph(dl, sp, (8.0f + (hovA || actA ? 1.5f : 0.0f)) * k, on ? sc : ImVec4(sc.x, sc.y, sc.z, 0.6f), in.anim ? (float)fmod(t, 3600.0) * 0.5f : 0.0f, on ? 0.8f : 0.25f);
@@ -917,7 +881,8 @@ static const float kTP_ps4[][2] = { { 0.000f, 0.183f }, { 0.323f, 0.183f }, { 0.
 static const float kG_ps4[][2] = { { 0.987f, 0.843f }, { 0.962f, 0.921f }, { 0.906f, 0.969f }, { 0.850f, 0.991f }, { 0.781f, 0.996f }, { 0.712f, 0.983f }, { 0.680f, 0.969f }, { 0.618f, 0.921f }, { 0.618f, 0.904f }, { 0.781f, 0.908f }, { 0.837f, 0.900f }, { 0.918f, 0.873f }, { 0.962f, 0.843f } };
 
 static const float kAspect[3] = { 1.326f, 1.393f, 1.247f };   // ancho / alto de cada foto
-ImVec2 MvPadSize(float k) { const float w = 240.0f * k; return ImVec2(w, w / kAspect[s_style]); }
+static const float kTopRoom[3] = { 0.0f, 0.0f, 0.06f };   // Xbox: lugar arriba para los gatillos subidos
+ImVec2 MvPadSize(float k) { const float w = 240.0f * k; return ImVec2(w, w / kAspect[s_style] * (1.0f + kTopRoom[s_style])); }
 // medio contorno (de arriba al centro de abajo, u >= 0) espejado: contorno cerrado
 static void MirrorShape(const float (*half)[2], int n, ImVec2 o, float hw, float H, ImVector<ImVec2>& pts) {
     pts.resize(0);
@@ -975,8 +940,8 @@ void MvPadDraw(ImDrawList* dl, ImVec2 o, float k, const MvPad& p, float alpha, b
     const int sty = s_style;
     const bool xb = sty == kPadStyleXbox, ps5 = sty == kPadStylePS5;
     const ImVec2 S = MvPadSize(k); const float A = alpha;
-    const ImVec2 c0(o.x + S.x * 0.5f, o.y);   // centro de arriba
-    const float hw = S.x * 0.5f, H = S.y;
+    const float hw = S.x * 0.5f, H = S.y / (1.0f + kTopRoom[sty]);
+    const ImVec2 c0(o.x + S.x * 0.5f, o.y + S.y - H);   // centro de arriba del cuerpo (el Xbox deja lugar para los gatillos)
     auto P = [&](float u, float v) { return ImVec2(c0.x + u * hw, c0.y + v * H); };
     auto mix = [](ImVec4 a, ImVec4 b, float t) { return Lerp4(a, b, t); };
     const ImVec4 W1(1, 1, 1, 1), K1(0, 0, 0, 1);
@@ -992,7 +957,10 @@ void MvPadDraw(ImDrawList* dl, ImVec2 o, float k, const MvPad& p, float alpha, b
     for (int s = 0; s < 2; s++) {
         const float sg = s ? 1.0f : -1.0f, fill = s ? p.r2 : p.l2, lb = lit(s ? kPadR1 : kPadL1);
         const float ty = std::max(0.0f, fill) * 0.02f;   // el gatillo apretado baja un poco
-        if (xb) SideShape(kT_xb, IM_ARRAYSIZE(kT_xb), sg, ImVec2(c0.x, c0.y + ty * H), hw, H, pts);
+        if (xb) {   // (14/11 g) gatillos subidos (la punta sube, la base sigue pegada detras de LB / RB): no se pisan
+            SideShape(kT_xb, IM_ARRAYSIZE(kT_xb), sg, ImVec2(c0.x, c0.y + ty * H), hw, H, pts);
+            for (int i = 0; i < pts.Size; i++) if (kT_xb[i][1] < 0.09f) pts[i].y -= 0.07f * H;
+        }
         else if (ps5) SideShape(kT_ps5, IM_ARRAYSIZE(kT_ps5), sg, ImVec2(c0.x, c0.y + ty * H), hw, H, pts);
         else SideShape(kT_ps4, IM_ARRAYSIZE(kT_ps4), sg, ImVec2(c0.x, c0.y + ty * H), hw, H, pts);
         const ImVec4 tc = ps5 ? grey : mix(body, K1, 0.12f);
@@ -1001,8 +969,25 @@ void MvPadDraw(ImDrawList* dl, ImVec2 o, float k, const MvPad& p, float alpha, b
     }
     // --- cuerpo
     if (xb) MirrorShape(kB_xb, IM_ARRAYSIZE(kB_xb), c0, hw, H, pts); else if (ps5) MirrorShape(kB_ps5, IM_ARRAYSIZE(kB_ps5), c0, hw, H, pts); else MirrorShape(kB_ps4, IM_ARRAYSIZE(kB_ps4), c0, hw, H, pts);
-    dl->AddEllipseFilled(P(0, 0.995f), ImVec2(hw * 0.95f, H * 0.035f), Col(0, 0, 0, 0.20f * A), 0.0f, 32);   // sombra en el piso
+    dl->AddEllipseFilled(P(0, 1.02f), ImVec2(hw * 0.95f, H * 0.045f), Col(0, 0, 0, 0.28f * A), 0.0f, 32);   // sombra en el piso
+    // (14/11 g) "un toque mas 3d": el canto del mando (el mismo contorno corrido para abajo, mas oscuro) da el grosor
+    {
+        ImVector<ImVec2> ex; ex.resize(pts.Size);
+        for (int i = 0; i < pts.Size; i++) ex[i] = ImVec2(pts[i].x, pts[i].y + 5.0f * k);
+        FillShade(dl, ex, mix(body, K1, light ? 0.30f : 0.45f), mix(body, K1, light ? 0.45f : 0.65f), P(0, 0.4f).y, P(0, 1.0f).y, 0.95f * A, 0, 0);
+        for (int i = 0; i < pts.Size; i++) ex[i] = ImVec2(pts[i].x, pts[i].y + 2.5f * k);
+        FillShade(dl, ex, mix(body, K1, light ? 0.18f : 0.30f), mix(body, K1, light ? 0.30f : 0.48f), P(0, 0.4f).y, P(0, 1.0f).y, 0.95f * A, 0, 0);
+    }
     FillShade(dl, pts, hi, lo, P(0, 0.12f).y, P(0, 1.0f).y, 0.95f * A, edge, 1.1f);
+    {   // brillo del borde de arriba (la luz pega de arriba) y un reflejo largo y suave arriba a la izquierda
+        const float thr = P(0, 0.34f).y; ImVector<ImVec2> rim;
+        int iL = pts.Size - 1; while (iL > 0 && pts[iL].y < thr) iL--;
+        for (int i = iL + 1; i < pts.Size; i++) rim.push_back(ImVec2(pts[i].x, pts[i].y + 1.6f * k));
+        for (int i = 0; i < pts.Size && pts[i].y < thr; i++) rim.push_back(ImVec2(pts[i].x, pts[i].y + 1.6f * k));
+        if (rim.Size > 1) dl->AddPolyline(rim.Data, rim.Size, ColA(W1, (light ? 0.55f : 0.30f) * A), 0, 1.4f * k);
+        dl->AddEllipseFilled(P(-0.42f, 0.26f), ImVec2(hw * 0.30f, H * 0.040f), ColA(W1, (light ? 0.14f : 0.10f) * A), -0.12f, 28);
+        dl->AddEllipseFilled(P(-0.42f, 0.26f), ImVec2(hw * 0.18f, H * 0.022f), ColA(W1, (light ? 0.12f : 0.08f) * A), -0.12f, 24);
+    }
     // --- L1 / R1 (LB / RB): la pieza de abajo del gatillo, medida en las fotos; se ve entera (antes era solo una raya) y se ilumina
     for (int s = 0; s < 2; s++) {
         const float sg = s ? 1.0f : -1.0f, lb = lit(s ? kPadR1 : kPadL1), dn = lb * 0.006f;
@@ -1089,6 +1074,7 @@ void MvPadDraw(ImDrawList* dl, ImVec2 o, float k, const MvPad& p, float alpha, b
                 // de afuera (a = 1) redondeado hacia adentro, con los lados que se cierran en una punta corta
                 ImVec2 kp[9] = { Q(-1.0f, 0.0f), Q(-0.55f, 0.85f), Q(0.55f, 1.0f), Q(0.85f, 0.95f), Q(1.0f, 0.6f), Q(1.0f, -0.6f), Q(0.85f, -0.95f), Q(0.55f, -1.0f), Q(-0.55f, -0.85f) };
                 const ImVec4 kc = ps5 ? ImVec4(0.93f, 0.93f, 0.95f, 1) : mix(body, W1, 0.06f);
+                { ImVec2 kd[9]; for (int j = 0; j < 9; j++) kd[j] = ImVec2(kp[j].x, kp[j].y + 1.8f * k * (1.0f - lv)); dl->AddConvexPolyFilled(kd, 9, ColA(mix(kc, K1, 0.35f), 0.9f * A)); }
                 dl->AddConvexPolyFilled(kp, 9, ColA(mix(kc, accent, 0.8f * lv), 0.97f * A));
                 dl->AddPolyline(kp, 9, ps5 ? Col(0.62f, 0.63f, 0.67f, 0.95f * A) : ColA(deep, 0.6f * A), ImDrawFlags_Closed, 1.8f * k);
                 if (ps5) dl->AddTriangleFilled(Q(0.55f, 0.0f), Q(0.15f, 0.28f), Q(0.15f, -0.28f), Col(0.66f, 0.67f, 0.71f, 0.9f * A));   // flechita
@@ -1105,8 +1091,11 @@ void MvPadDraw(ImDrawList* dl, ImVec2 o, float k, const MvPad& p, float alpha, b
             const float lv = lit(e.b); const ImVec2 bc(c.x + e.dx * d, c.y + e.dy * d); const ImVec4 cc = FaceCol(e.b);
             if (lv > 0.01f) for (int i = 3; i >= 1; i--) dl->AddCircleFilled(bc, r * (1.0f + 0.3f * i * lv), ColA(cc, 0.13f * lv * A), 20);
             const ImVec4 face = ps5 ? ImVec4(0.94f, 0.94f, 0.96f, 1) : mix(body, W1, 0.05f);
-            dl->AddCircleFilled(bc, r, ColA(mix(face, cc, 0.45f * lv), 0.97f * A), 24);
+            dl->AddCircleFilled(ImVec2(bc.x, bc.y + 1.8f * k * (1.0f - lv)), r, ColA(mix(face, K1, 0.35f), 0.9f * A), 24);   // canto del boton (baja al apretar)
+            { const int v0 = dl->VtxBuffer.Size; dl->AddCircleFilled(bc, r, ColA(mix(face, cc, 0.45f * lv), 0.97f * A), 24);
+              ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, ImVec2(bc.x, bc.y - r), ImVec2(bc.x, bc.y + r), ColA(mix(mix(face, W1, 0.10f), cc, 0.45f * lv), 1) | IM_COL32_A_MASK, ColA(mix(mix(face, K1, 0.10f), cc, 0.45f * lv), 1) | IM_COL32_A_MASK); }
             dl->AddCircle(bc, r, ps5 ? Col(0.70f, 0.71f, 0.75f, 0.95f * A) : ColA(deep, 0.55f * A), 24, 1.6f * k);
+            dl->PathArcTo(bc, r * 0.80f, kPI * 1.12f, kPI * 1.62f, 10); dl->PathStroke(ColA(W1, 0.55f * A), 0, 1.2f * k);   // brillo
             const ImVec4 gc = ps5 ? ImVec4(0.66f, 0.67f, 0.71f, 1) : deep;
             if (xb) XboxLetter(dl, bc, r * 0.55f, e.b, ColA(mix(gc, mix(cc, K1, 0.2f), 0.2f + 0.8f * lv), A));
             else GlyphShape(dl, bc, r * 0.46f, e.b, ColA(mix(gc, mix(cc, K1, 0.3f), lv), A), std::max(1.1f, r * 0.15f));
@@ -1129,6 +1118,8 @@ void MvPadDraw(ImDrawList* dl, ImVec2 o, float k, const MvPad& p, float alpha, b
         dl->AddCircleFilled(kc, kr, ColA(mix(cap, accent, 0.35f * lv), 0.98f * A), 24);
         ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, ImVec2(kc.x, kc.y - kr), ImVec2(kc.x, kc.y + kr), ColA(mix(mix(cap, W1, 0.12f), accent, 0.35f * lv), 1) | IM_COL32_A_MASK, ColA(mix(mix(cap, K1, 0.10f), accent, 0.35f * lv), 1) | IM_COL32_A_MASK);
         dl->AddCircle(kc, kr * 0.62f, ColA(mix(cap, K1, 0.15f), 0.6f * A), 20, 1.2f * k);
+        dl->PathArcTo(c, R * 0.96f, kPI * 1.05f, kPI * 1.95f, 16); dl->PathStroke(ColA(K1, 0.30f * A), 0, 2.2f * k);   // el hueco: sombra arriba
+        dl->PathArcTo(kc, kr * 0.88f, kPI * 1.10f, kPI * 1.60f, 12); dl->PathStroke(ColA(W1, 0.40f * A), 0, 1.4f * k);   // brillo de la perilla
     }
     // --- boton central: PS (PS5 en el frente gris, PS4 negro redondo) o el boton Xbox que brilla
     {
