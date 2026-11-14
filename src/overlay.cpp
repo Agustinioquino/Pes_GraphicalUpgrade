@@ -2741,7 +2741,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
                    if (!s_shDone && tn - s_shT > 0.6) { s_shDone = true;
                        std::lock_guard<std::mutex> lk(g_cfgMutex);
                        if (g_cfg.live[344][0] > 2.5f || FreeCamActive()) { g_cfg.live[344][0] = s_shPrev > 2.5f ? 0.0f : s_shPrev; s_toastMsg = TRS("Camara libre apagada"); }
-                       else { s_shPrev = g_cfg.live[344][0]; g_cfg.live[344][0] = 3.0f; FreeCamPadTake(); s_toastMsg = TRS(ReplayNow() ? "Camara libre en la repeticion" : "Camara libre: se prende en la repeticion"); }
+                       else { s_shPrev = g_cfg.live[344][0]; g_cfg.live[344][0] = 1.0f; FreeCamPadTake(); s_toastMsg = TRS(ReplayNow() ? "Camara libre en la repeticion" : "Camara libre prendida"); }   // (14/11 k, Agustin: "al no estar activa el modo repeticion funcione normal con sus botones") x344 = 1: en la repeticion los controles del visor, fuera de ella los de siempre
                        s_curToastT = tn; Log("camara libre: SHARE mantenido, x344 = %.0f", g_cfg.live[344][0]); } }
         } else { s_shT = -1.0; s_shDone = false; }
     }
@@ -2940,7 +2940,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         dl->AddText(ImVec2(a0.x + pad.x, a0.y + pad.y), IM_COL32(235, 240, 245, (int)(255 * a)), msg.c_str());
     }
     if (gizmo) MotorGizmoDraw();
-    if (repe) RepeticionDraw();
+    if (repe && !camFree) RepeticionDraw();   // (14/11 k, Agustin: "que no se muestre el menu raro del tiempo de abajo") con la camara libre no se dibuja la barra de la repeticion
     if (keyHud) KeyHudDraw();
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
