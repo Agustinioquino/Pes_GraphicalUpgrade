@@ -62,28 +62,6 @@ struct MvWindIn {
 bool MvWindWidget(MvWindIn& in);
 
 // --- tarjetas de la camara (14/11, Agustin: "mas diseno para las opciones de camara libre") ---
-struct MvCamIn {
-    float* mode = nullptr;      // x344 0 apagada, 1 prendida, 2 sin bloquear el teclado, 3 solo en las repeticiones
-    float* speed = nullptr;     // y344 m/s
-    float* zoom = nullptr;      // z344 (x el campo de vision del juego)
-    float* sens = nullptr;      // w344 mouse
-    float* follow = nullptr;    // x346 0 no, 1 fija al rostro, 2 orbitar
-    float* smooth = nullptr;    // y346
-    bool active = false, replay = false;   // la camara libre esta volando ahora / hay repeticion
-    bool keys[8] = {};          // W A S D Q E Shift Ctrl apretadas (para iluminar el dibujo)
-    bool rmb = false;           // boton derecho del mouse
-    bool anim = true; float k = 1.0f; double now = 0.0;
-};
-bool MvCamWidget(MvCamIn& in);
-struct MvSlowIn {
-    float* on = nullptr;        // y343
-    float* speed = nullptr;     // x343
-    float* where = nullptr;     // z343 0 editor, 1 partido y repeticiones, 2 solo repeticiones
-    float editorSteps = 0;      // w343 (pasos frenados del visor por segundo)
-    bool replay = false;
-    bool anim = true; float k = 1.0f; double now = 0.0;
-};
-bool MvSlowWidget(MvSlowIn& in);
 
 // --- mando ---
 enum MvPadBtn {
@@ -109,6 +87,35 @@ void MvPadDraw(ImDrawList* dl, ImVec2 where, float k, const MvPad& p, float alph
 ImVec2 MvPadSize(float k);
 // fila de ayuda: "X Elegir  O Volver  ..." con los simbolos; devuelve el alto usado
 void MvPadHints(float k, float alpha);
+struct MvCamIn {
+    float* mode = nullptr;      // x344 0 apagada, 1 prendida, 2 sin bloquear el teclado, 3 solo en las repeticiones
+    float* speed = nullptr;     // y344 m/s
+    float* zoom = nullptr;      // z344 (x el campo de vision del juego)
+    float* sens = nullptr;      // w344 mouse
+    float* follow = nullptr;    // x346 0 no, 1 fija al rostro, 2 orbitar
+    float* smooth = nullptr;    // y346
+    bool active = false, replay = false;   // la camara libre esta volando ahora / hay repeticion
+    bool keys[8] = {};          // W A S D Q E Shift Ctrl apretadas (para iluminar el dibujo)
+    bool rmb = false;           // boton derecho del mouse
+    MvPad pad;                  // (14/11) el mando de este cuadro: los iconos se iluminan con lo que se aprieta
+    int* padOn = nullptr;       // camara_mando (0 / 1)
+    bool padFly = false;        // vuela con el mando ahora
+    bool padGiven = false;      // OPTIONS: el mando se le devolvio al juego
+    bool anim = true; float k = 1.0f; double now = 0.0;
+};
+bool MvCamWidget(MvCamIn& in);
+struct MvSlowIn {
+    float* on = nullptr;        // y343
+    float* speed = nullptr;     // x343
+    float* where = nullptr;     // z343 0 editor, 1 partido y repeticiones, 2 solo repeticiones
+    float editorSteps = 0;      // w343 (pasos frenados del visor por segundo)
+    bool replay = false;
+    MvPad pad; bool padFly = false;                        // (14/11) modo foto con el mando
+    const float* steps = nullptr; int nSteps = 0;          // pasos del modo foto
+    int photoStep = -1; bool photoPaused = false, photoAdv = false; float photoScale = -1.0f;
+    bool anim = true; float k = 1.0f; double now = 0.0;
+};
+bool MvSlowWidget(MvSlowIn& in);
 // (14/11) teclado en pantalla para escribir con el mando (buscador del menu). Cruceta / stick mueven, cruz escribe, cuadrado borra,
 // triangulo = espacio, L1 borra todo, circulo u OPTIONS cierran. Tambien con el mouse.
 // (14/11) cursor propio del menu: flecha con sombra y filo de luz; sobre algo que se toca se pinta con el verde del menu y crece un poco,

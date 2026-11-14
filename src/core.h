@@ -179,7 +179,8 @@ struct Config {
     int keyHud = 4;                            // (11/11) cuadrito con la ultima tecla apretada: 0 apagado, 1..4 esquina ([PES21FX] ultima_tecla)
     int motorHelpBar = 0; int motorBg = 1, motorCam = 1, motorGizmo = 1, motorKeys = 1; float motorPanelX = 0, motorPanelY = 0; int motorPage = 1;                         // (11/11) motorpage.cpp: el estudio del Motor con filas nativas del juego ([PES21FX] motor_pagina)
     int motorDress = 1;                        // (11/11) motorpage.cpp: vestir al jugador del estudio por la via nativa ([PES21FX] motor_vestir)
-    int blockPad = 1; bool menuPadOpen = true; int menuCursor = 1;   // menu_cursor: 0 sin cursor, 1 cursor nuevo, 2 el clasico de ImGui   // (14/11) [PES21FX] bloquear_mando 0 nunca / 1 con el menu abierto; menu_mando_abrir: L3 + R3 abre y cierra el menu
+    int blockPad = 1; bool menuPadOpen = true; int menuCursor = 1; int camPad = 1;   // camara_mando: el mando mueve la camara libre (modo foto)
+      // menu_cursor: 0 sin cursor, 1 cursor nuevo, 2 el clasico de ImGui   // (14/11) [PES21FX] bloquear_mando 0 nunca / 1 con el menu abierto; menu_mando_abrir: L3 + R3 abre y cierra el menu
     int blockKeys = 1;                         // (31/10) teclas del juego con el menu: 0 nunca se bloquean, 1 al escribir en un campo, 2 con el menu abierto ([PES21FX] bloquear_teclado)
     int lang = 0;                              // (27/10) idioma del menu: 0 espanol, 1 ingles ([PES21FX] language = es / en)
     bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150; bool autoCapAB = false; bool exeDump = true; bool motorPatch = true; bool motorSunFix = true; int motorShadowFix = 1; int motorShadowRes = 0; float motorCascadeScale = 0.0f;   // [Motor]: parches en memoria (exepatch.cpp)   // exe_dump: volcado del exe desempaquetado (una vez por version)   // auto_captura_ab: pares A (todo) / B (un grupo del menu apagado 3 cuadros)
@@ -472,9 +473,19 @@ bool FreeCamWantsHead();   // (1/11) camara libre prendida con "seguir la cara":
 bool FreeCamActive();
 bool ReplayNow();                                 // (14/11) pitchwear.cpp: repeticion en curso (detector v2, y448)
 bool FreeCamBlocksKeys();                         // x344 = 1: el juego no ve el teclado mientras la camara libre esta prendida
+// (14/11) mando en la camara libre y modo foto (freecam.cpp): overlay.cpp le pasa el mando de cada cuadro
+struct MvPad;
+void FreeCamPadFeed(const MvPad& p);
+bool FreeCamPadWanted();                          // camara libre prendida, camara_mando = 1, fuera del Motor y no en el modo 2
+float FreeCamPhotoScale();                        // reloj del juego pedido por el modo foto (-1 = nada: queda el del menu)
+const float* FreeCamPhotoSteps(int* n);           // pasos de velocidad del modo foto (0.02 .. 4)
+struct FreeCamPadInfo { bool wanted = false, flying = false, paused = false, advancing = false, given = false; int step = -1; float scale = -1.0f; };
+FreeCamPadInfo FreeCamPadState();
+void FreeCamPadTake();                            // la tarjeta prendio el mando: si se lo habia devuelto al juego, lo vuelve a tomar
 // (31/10) camara lenta (tiempo.cpp): gancho al reloj de juego del motor (0x14035dcb0), 343 (ini: x velocidad, y prendida; DLL: z, w)
 void TiempoPresent();
 bool TiempoHooked();
+bool TiempoMatchToo();   // (14/11) la camara lenta tambien frena el partido ahora (z343 = 1, o 2 y hay repeticion)
 float TiempoFactor();   // (1/11) velocidad pedida por el menu (1 = apagada) para el aviso en pantalla
 // (09/11) sol real del motor en el editor: soleditor.cpp (hilo de descompilacion) encuentra / escribe la DirectionalLight
 // zfx_SolEditor del EditFace; solluz.cpp decide el sol (w378 sol de partido, w392 ciclo de dia y noche) y escribe z393

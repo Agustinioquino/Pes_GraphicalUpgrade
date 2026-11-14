@@ -1125,12 +1125,17 @@ static void DrawGroup(MenuGroup& g, int gid) {
         for (int i = 0; i < 8; i++) ci.keys[i] = front && (GetAsyncKeyState(kVk[i]) & 0x8000) != 0;
         ci.rmb = front && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
         ci.anim = Anim(); ci.k = UIK(); ci.now = Now();
+        ci.pad = s_pad; ci.padOn = &g_cfg.camPad; ci.padFly = FreeCamPadWanted() && s_pad.connected; ci.padGiven = FreeCamPadState().given;   // (14/11) iconos del mando con su funcion
+        const int padWas = g_cfg.camPad;
         if (MvCamWidget(ci)) PushRecent(g.title);
+        if (g_cfg.camPad != padWas) { SaveOption("camara_mando", g_cfg.camPad ? "1" : "0"); if (g_cfg.camPad) FreeCamPadTake(); }
     }
     if (Anim() && g.id == "CamaraLenta") {
         ImGui::Spacing();
         auto& L = g_cfg.live; MvSlowIn si2; si2.on = &L[343][1]; si2.speed = &L[343][0]; si2.where = &L[343][2]; si2.editorSteps = L[343][3];
         si2.replay = ReplayNow(); si2.anim = Anim(); si2.k = UIK(); si2.now = Now();
+        { const FreeCamPadInfo pi = FreeCamPadState(); si2.pad = s_pad; si2.padFly = pi.wanted && s_pad.connected; si2.photoStep = pi.step; si2.photoPaused = pi.paused;   // (14/11) modo foto
+          si2.photoAdv = pi.advancing; si2.photoScale = pi.scale; si2.steps = FreeCamPhotoSteps(&si2.nSteps); }
         if (MvSlowWidget(si2)) PushRecent(g.title);
     }
     bool anyExt = false; for (auto& sl : g.sliders) anyExt |= !sl.ext.empty();
@@ -2748,7 +2753,9 @@ void OverlayPresent(IDXGISwapChain* sc) {
         // (14/11) tambien con el menu cerrado si L3 + R3 lo abre, o mientras se espera que suelten los botones al cerrarlo
         static bool s_padHold = false; static double s_holdT = 0.0; static bool s_openWas = false, s_comboWas = false;
         const bool comboOn = g_cfg.menuPad && g_cfg.menuPadOpen;
-        if ((menuShown && (g_cfg.menuPad || g_cfg.menuPadDraw)) || comboOn || s_padHold) MvPadPoll(s_pad); else s_pad = MvPad();
+        const bool camPad = FreeCamPadWanted();   // (14/11) modo foto: el mando mueve la camara libre
+        if ((menuShown && (g_cfg.menuPad || g_cfg.menuPadDraw)) || comboOn || s_padHold || camPad) MvPadPoll(s_pad); else s_pad = MvPad();
+        if (camPad) FreeCamPadFeed(s_pad);
         {   // (14/11, Agustin: "al abrir el menu con l3+r3 por ejemplo") L3 + R3 juntos abren y cierran el menu
             const bool combo = s_pad.b[kPadL3] && s_pad.b[kPadR3];
             if (comboOn && combo && !s_comboWas && !MotorPageActive()) { g_menuOpen = !g_menuOpen; Log("menu: %s con L3 + R3", g_menuOpen.load() ? "abierto" : "cerrado"); }
@@ -2756,12 +2763,14 @@ void OverlayPresent(IDXGISwapChain* sc) {
         }
         {   // (14/11) el juego no ve el mando con el menu abierto; al cerrar sigue bloqueado hasta soltar todo (o 1.5 s)
             const bool open = g_menuOpen.load();
-            if (s_openWas && !open) { s_padHold = true; s_holdT = Now(); }
-            s_openWas = open;
+            const bool fly = camPad && !open && s_pad.connected;   // (14/11) la camara libre vuela con el mando: el juego no lo ve
+            static bool s_flyWas = false;
+            if ((s_openWas && !open) || (s_flyWas && !fly && !open)) { s_padHold = true; s_holdT = Now(); }
+            s_openWas = open; s_flyWas = fly;
             if (s_padHold) { bool any = fabsf(s_pad.lx) + fabsf(s_pad.ly) + fabsf(s_pad.rx) + fabsf(s_pad.ry) > 0.3f || s_pad.l2 > 0.2f || s_pad.r2 > 0.2f;
                 for (int i = 0; i < kPadCount; i++) any |= s_pad.b[i];
                 if (!any || Now() - s_holdT > 1.5 || open) s_padHold = false; }
-            g_blockGamePad = g_cfg.blockPad != 0 && (open || s_padHold);
+            g_blockGamePad = fly || (g_cfg.blockPad != 0 && (open || s_padHold));
             if (!open) MvVkClose();
         }
         if (g_menuOpen && g_cfg.menuPad && !MvVkIsOpen()) { io2.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad; MvPadFeedImGui(s_pad); }

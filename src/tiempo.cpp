@@ -69,7 +69,8 @@ static bool MatchToo() { const float z = g_cfg.live[343][2]; return z > 1.5f ? R
 static void hk_Step(void* holder, float delta, void* r8) {
     float* sc = (float*)((char*)holder + 0x30);
     const float g = *sc;
-    const float f = MatchToo() ? Factor() : 1.0f;
+    const float ph = FreeCamPhotoScale();   // (14/11) modo foto (mando en la camara libre): manda el reloj mientras vuela
+    const float f = ph > 0.0f ? std::clamp(ph, 0.02f, 4.0f) : MatchToo() ? Factor() : 1.0f;
     if (f != 1.0f) *sc = g * f;
     s_gameScale = g; s_applied = *sc; s_lastDelta = delta; s_calls++;
     o_step(holder, delta, r8);
@@ -80,7 +81,8 @@ static void hk_SetStep(void* ctrl, float step) {
     const uintptr_t ret = (uintptr_t)_ReturnAddress();
     if (ret >= kBoneLo && ret < kBoneHi) {
         s_editorCalls++;
-        const float f = Factor();
+        const float ph = FreeCamPhotoScale();
+        const float f = ph > 0.0f ? std::clamp(ph, 0.02f, 4.0f) : Factor();
         if (f != 1.0f) { step *= f; s_editorScaled++; }
         s_editorStep = step;
     }
@@ -106,6 +108,7 @@ static void Install() {
         g_cfg.live[343][0], g_cfg.live[343][1] > 0.5f ? "prendida" : "apagada", MatchToo() ? "tambien" : "no (solo el editor)");
 }
 
+bool TiempoMatchToo() { return MatchToo(); }
 bool TiempoHooked() { return s_okEditor || s_okMatch; }
 float TiempoFactor() { return Factor(); }
 
