@@ -23,6 +23,16 @@ struct MvSunIn {
     bool realOk = false; float realAz = 0, realEl = 0;   // sol del partido
     bool finalOk = false; float finalAz = 0, finalEl = 0; // donde quedo el sol libre este cuadro (giro, recorrido del dia)
     float tint[3] = { 1, 1, 1 };  // fila 453 (temperatura, color segun la altura, nubes); 1,1,1 = sin tinte
+    // (14/11 c) las demas opciones de la tarjeta, para tocarlas con botones de icono (nullptr = no se muestra)
+    float* intensityP = nullptr;  // w101
+    float* warmP = nullptr;       // x102
+    float* follow = nullptr;      // x450 sombras que siguen al sol
+    float* kelvin = nullptr;      // z450 temperatura (0 = juego)
+    float* spin = nullptr;        // w450 giro automatico grados/s
+    float* copy = nullptr;        // x451 copiar el sol del partido
+    float* heightCol = nullptr;   // x455 color segun la altura
+    float* dayRun = nullptr;      // y455 recorrido del dia
+    float* clouds = nullptr;      // z455 nubes que pasan
     bool anim = true;             // vistas dinamicas con animacion
     float k = 1.0f;               // escala del menu (UIK)
     double now = 0.0;             // reloj en segundos
@@ -51,6 +61,11 @@ struct MvPad {
     float lx = 0, ly = 0, rx = 0, ry = 0;     // -1..1, y hacia abajo positiva
     float l2 = 0, r2 = 0;                     // 0..1
 };
+// estilo del dibujo y de los simbolos: PS5, PS4 o Xbox (como los iconos de botones que muestra el juego)
+enum MvPadStyle { kPadStylePS5 = 0, kPadStylePS4, kPadStyleXbox };
+void MvPadSetStyle(int style, unsigned rgb = 0);   // rgb 0xRRGGBB del cuerpo; 0 = el de cada estilo
+int MvPadGetStyle();
+int MvPadDetectStyle(const wchar_t* gameDir);    // mira livecpk\Dream Patch 21 Graphic Controller (PS5 si no esta)
 bool MvPadPoll(MvPad& p);                     // lee el primer mando (solo Windows; afuera devuelve false)
 void MvPadFeedImGui(const MvPad& p);          // le pasa el mando a ImGui si el backend no lo hizo (joystick de Windows)
 void MvPadGlyph(ImDrawList* dl, ImVec2 c, float r, int btn, float alpha, float lit = 0.0f);   // simbolo del boton (cruz, circulo, ...)

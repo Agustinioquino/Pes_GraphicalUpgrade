@@ -1110,6 +1110,8 @@ static void DrawGroup(MenuGroup& g, int gid) {
           if (w[3] > 0.5f && n > 0.5f) { si.finalOk = true; si.finalAz = atan2f(w[0], w[2]) * 57.29578f; if (si.finalAz < 0) si.finalAz += 360.0f; si.finalEl = asinf(std::clamp(w[1] / n, -1.0f, 1.0f)) * 57.29578f; } }
         if (g_cfg.live[453][3] > 0.5f) for (int k = 0; k < 3; k++) si.tint[k] = g_cfg.live[453][k];
         si.anim = Anim(); si.k = UIK(); si.now = Now(); (void)p;
+        { auto& L = g_cfg.live; si.intensityP = &L[101][3]; si.warmP = &L[102][0]; si.follow = &L[450][0]; si.kelvin = &L[450][2];
+          si.spin = &L[450][3]; si.copy = &L[451][0]; si.heightCol = &L[455][0]; si.dayRun = &L[455][1]; si.clouds = &L[455][2]; }
         ImGui::BeginDisabled(false);
         if (MvSunWidget(si)) PushRecent(g.title);
         ImGui::EndDisabled();
@@ -1952,6 +1954,13 @@ static void DrawSettingsPage() {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con el menu abierto: cruceta o stick para moverse, cruz para elegir, circulo para volver, triangulo para escribir un valor. OJO: el juego tambien ve el mando mientras tanto."));
     if (ImGui::Checkbox(TRS("Dibujo del mando con lo que se aprieta"), &g_cfg.menuPadDraw)) SaveOption("menu_mando_dibujo", g_cfg.menuPadDraw ? "1" : "0");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con el menu abierto y un mando conectado: un mando chico y transparente abajo que marca los botones y los analogicos."));
+    {   // (14/11 d) Agustin: "puede cambiar por uno de xbox dependiendo el display del mod de sider controller"
+        const char* names[4] = { TRS("Automatico (como los iconos del juego)"), "PlayStation 5", "PlayStation 4", "Xbox" };
+        int st = g_cfg.menuPadStyle;
+        ImGui::SetNextItemWidth(320.0f * UIK());
+        if (ImGui::Combo(TRS("Mando y simbolos"), &st, names, 4)) { g_cfg.menuPadStyle = st; char b[8]; snprintf(b, sizeof(b), "%d", st); SaveOption("menu_mando_estilo", b); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Automatico: mira que version de 'Dream Patch 21 Graphic Controller' hay en livecpk (PS5, PS4 o Xbox) y usa ese mando y esos simbolos."));
+    }
     ImGui::TextDisabled(TRS("Menu: %.2f ms de CPU por cuadro (promedio)"), MenuCpuMs());
     if (ImGui::Checkbox(TRS("Letra deportiva (Saira, estilo PES 6)"), &g_cfg.menuFont)) { SaveOption("menu_letra", g_cfg.menuFont ? "1" : "0"); s_fontsH = -1.0f; }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Apagado: Segoe UI, la letra de Windows."));
@@ -2695,6 +2704,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
     ImGui_ImplWin32_NewFrame();
     {   // (14/11) el mando: se lee solo con el menu a la vista; ImGui lo usa para moverse (cruceta / stick, cruz, circulo, triangulo)
         ImGuiIO& io2 = ImGui::GetIO();
+        static int s_autoStyle = -1; if (s_autoStyle < 0) s_autoStyle = MvPadDetectStyle(GameDir().c_str());   // una vez: los iconos del juego no cambian en la partida
+        MvPadSetStyle(g_cfg.menuPadStyle == 0 ? s_autoStyle : g_cfg.menuPadStyle - 1, g_cfg.menuPadColor);
         if (menuShown && (g_cfg.menuPad || g_cfg.menuPadDraw)) MvPadPoll(s_pad); else s_pad = MvPad();
         if (g_menuOpen && g_cfg.menuPad) { io2.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad; MvPadFeedImGui(s_pad); }
         else io2.ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;

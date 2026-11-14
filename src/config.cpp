@@ -165,6 +165,8 @@ static bool LoadConfigLocked() {
             else if (kl == "menu_vistas") c.menuVisual = atoi(v.c_str()) != 0;                   // (14/11) tarjetas con dibujos que se tocan y animaciones
             else if (kl == "menu_mando") c.menuPad = atoi(v.c_str()) != 0;                       // (14/11) leer el mando en el menu
             else if (kl == "menu_mando_dibujo") c.menuPadDraw = atoi(v.c_str()) != 0;            // (14/11) dibujo del mando al abrir el menu
+            else if (kl == "menu_mando_estilo") c.menuPadStyle = std::clamp(atoi(v.c_str()), 0, 3);   // (14/11 d) 0 como los iconos del juego, 1 PS5, 2 PS4, 3 Xbox
+            else if (kl == "menu_mando_color") { std::string h = v; if (!h.empty() && h[0] == '#') h = h.substr(1); c.menuPadColor = h.size() == 6 ? (unsigned)strtoul(h.c_str(), nullptr, 16) : 0u; }   // (14/11 d) color del cuerpo RRGGBB
             else if (kl == "menu_vidrio") c.menuGlass = atoi(v.c_str()) != 0;                     // (08/11) fondo de vidrio (juego desenfocado)
             else if (kl == "menu_autoguardar") c.menuAutoSave = std::clamp(atoi(v.c_str()), 0, 2);    // (08/11) guardado automatico de los cambios del menu
             else if (kl == "menu_letra") c.menuFont = atoi(v.c_str()) != 0;                       // (08/11) letra Saira (textures\pes_ui.ttf)
