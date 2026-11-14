@@ -84,6 +84,50 @@ static void SkyColors(float el, ImVec4& top, ImVec4& hor) {
     if (el < 0.0f) { const float t = Smooth(-8.0f, 0.0f, el); top = Lerp4(nT, sT, t); hor = Lerp4(nH, sH, t); }
     else { const float t = Smooth(0.0f, 22.0f, el); top = Lerp4(sT, dT, t); hor = Lerp4(sH, dH, t); }
 }
+// (14/11 f) Agustin: "hacer la vista previa de la altura mas detallada" / "la imagen del corner mas detallada". Fondo de costado
+// comun: cielo, tribuna con sus gradas, techo y gente, torre de luces, carteles y la cancha con franjas de corte en perspectiva.
+// 'light' = cuanto ilumina el sol (0 noche .. 1 mediodia); 'warm' = tinte naranja de la luz baja.
+static void SideStadium(ImDrawList* dl, ImVec2 a, ImVec2 b, float ground, ImVec4 top, ImVec4 hor, float light, ImVec4 sunCol, float k) {
+    const float W = b.x - a.x;
+    dl->AddRectFilledMultiColor(a, ImVec2(b.x, ground), ImGui::GetColorU32(top), ImGui::GetColorU32(top), ImGui::GetColorU32(hor), ImGui::GetColorU32(hor));
+    // tribuna del fondo: tres gradas, techo con su sombra, gente (puntitos de colores)
+    const float st0 = ground - (b.y - a.y) * 0.18f;
+    const ImVec4 stc = Lerp4(ImVec4(0.06f, 0.07f, 0.10f, 1), ImVec4(0.30f, 0.32f, 0.38f, 1), light);
+    for (int i = 0; i < 3; i++) {
+        const float y0 = st0 + i * (ground - st0) * 0.28f, y1 = st0 + (i + 1) * (ground - st0) * 0.28f;
+        dl->AddRectFilled(ImVec2(a.x, y0), ImVec2(b.x, y1), ImGui::GetColorU32(Lerp4(stc, ImVec4(0, 0, 0, 1), 0.15f * i)));
+        dl->AddLine(ImVec2(a.x, y1), ImVec2(b.x, y1), ImGui::GetColorU32(Lerp4(stc, ImVec4(1, 1, 1, 1), 0.15f)), 1.0f);
+        unsigned sd = 977u + i * 131u;
+        for (float x = a.x + 2.0f * k; x < b.x; x += 3.2f * k) {
+            sd = sd * 1664525u + 1013904223u; const float r = (sd >> 8) / 16777216.0f;
+            static const ImVec4 kFan[4] = { ImVec4(0.85f, 0.20f, 0.20f, 1), ImVec4(0.90f, 0.90f, 0.92f, 1), ImVec4(0.20f, 0.35f, 0.80f, 1), ImVec4(0.95f, 0.80f, 0.25f, 1) };
+            dl->AddRectFilled(ImVec2(x, y0 + 1.5f * k + r * 2.0f * k), ImVec2(x + 1.6f * k, y0 + 3.0f * k + r * 2.0f * k), ImGui::GetColorU32(Lerp4(stc, kFan[(sd >> 4) & 3], 0.35f + 0.4f * light)));
+        }
+    }
+    // techo (voladizo) arriba de la tribuna
+    dl->AddQuadFilled(ImVec2(a.x, st0 - 7.0f * k), ImVec2(b.x, st0 - 9.0f * k), ImVec2(b.x, st0 - 4.0f * k), ImVec2(a.x, st0 - 2.0f * k), ImGui::GetColorU32(Lerp4(stc, ImVec4(0.8f, 0.82f, 0.86f, 1), 0.25f)));
+    dl->AddRectFilledMultiColor(ImVec2(a.x, st0 - 2.0f * k), ImVec2(b.x, st0 + 6.0f * k), IM_COL32(0, 0, 0, 110), IM_COL32(0, 0, 0, 110), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
+    // torre de luces (prende de noche)
+    const float tx = a.x + W * 0.86f, ty = st0 - (b.y - a.y) * 0.24f;
+    dl->AddLine(ImVec2(tx, st0 - 7.0f * k), ImVec2(tx, ty), ImGui::GetColorU32(stc), 2.0f * k);
+    dl->AddRectFilled(ImVec2(tx - 7.0f * k, ty - 5.0f * k), ImVec2(tx + 7.0f * k, ty), ImGui::GetColorU32(stc), 1.0f);
+    const float on = 1.0f - light;
+    for (int i = 0; i < 4; i++) { const ImVec2 lp(tx - 5.0f * k + i * 3.3f * k, ty - 2.5f * k);
+        if (on > 0.3f) dl->AddCircleFilled(lp, 4.0f * k, ImGui::GetColorU32(ImVec4(1, 0.97f, 0.85f, 0.15f * on)), 10);
+        dl->AddCircleFilled(lp, 1.1f * k, ImGui::GetColorU32(ImVec4(1, 0.97f, 0.85f, 0.4f + 0.6f * on)), 6); }
+    // carteles de publicidad al borde de la cancha
+    const float ad0 = ground - 6.0f * k;
+    for (int i = 0; i < 6; i++) { const float x0 = a.x + i * W / 6.0f, x1 = x0 + W / 6.0f - 1.0f;
+        static const ImVec4 kAd[3] = { ImVec4(0.10f, 0.35f, 0.75f, 1), ImVec4(0.80f, 0.15f, 0.20f, 1), ImVec4(0.12f, 0.55f, 0.35f, 1) };
+        dl->AddRectFilled(ImVec2(x0, ad0), ImVec2(x1, ground), ImGui::GetColorU32(Lerp4(ImVec4(0.05f, 0.05f, 0.07f, 1), kAd[i % 3], 0.35f + 0.65f * std::max(light, on * 0.8f))));
+        dl->AddLine(ImVec2(x0 + 2.0f * k, ad0 + 3.0f * k), ImVec2(x1 - 3.0f * k, ad0 + 3.0f * k), ImGui::GetColorU32(ImVec4(1, 1, 1, 0.35f + 0.3f * light)), 1.0f); }
+    // cancha: franjas de corte que se abren hacia adelante (perspectiva) con la luz del sol
+    const ImVec4 g0 = Lerp4(ImVec4(0.04f, 0.10f, 0.06f, 1), ImVec4(0.18f, 0.44f, 0.20f, 1), std::max(light, on * 0.55f));
+    const ImVec4 g1 = Lerp4(g0, ImVec4(0.30f, 0.60f, 0.30f, 1), 0.18f);
+    const ImVec4 gl = Lerp4(g0, sunCol, 0.10f * light);
+    float y = ground; float h = 2.0f * k; int i = 0;
+    while (y < b.y) { const float y1 = std::min(b.y, y + h); dl->AddRectFilled(ImVec2(a.x, y), ImVec2(b.x, y1), ImGui::GetColorU32((i & 1) ? g1 : gl)); y = y1; h *= 1.55f; i++; }
+}
 static ImVec4 SunColor(const MvSunIn& in, float el) {
     ImVec4 c(1.0f, 0.96f, 0.86f, 1);
     const float low = 1.0f - Smooth(0.0f, 20.0f, el);   // el sol bajo se ve naranja
@@ -310,35 +354,64 @@ bool MvSunWidget(MvSunIn& in) {
         if (hovD && !actD) ImGui::SetTooltip("%s", TRS("De que lado viene el sol: arrastralo por el anillo (o la rueda del mouse). La raya negra es la sombra del jugador en la cancha. El circulo blanco es el sol del partido. TV = lado de la camara."));
     }
     // --- 2) la altura: vista de costado, el sol sobre un arco ---
-    const float AW = std::clamp(D * 0.72f, 110.0f * k, 150.0f * k);
+    const float AW = std::clamp(D * 0.95f, 130.0f * k, 190.0f * k);
     ImGui::SetCursorScreenPos(ImVec2(p0.x + D + 8.0f * k, p0.y));
     const ImVec2 a0 = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton("##solalt", ImVec2(AW, D));
     const bool hovA = ImGui::IsItemHovered(), actA = ImGui::IsItemActive();
-    const ImVec2 base(a0.x + 12.0f * k, a0.y + D - 30.0f * k); const float AR = std::min(AW - 24.0f * k, D - 46.0f * k);
+    const ImVec2 base(a0.x + 12.0f * k, a0.y + D - 46.0f * k); const float AR = std::min(AW - 24.0f * k, D - 60.0f * k);
     if (actA) { const ImVec2 m = ImGui::GetIO().MousePos; const float el = atan2f(base.y - m.y, m.x - base.x) / kDeg; setEl(el); wantEl = *in.el; }
     if (hovA && ImGui::GetIO().MouseWheel != 0.0f) { ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY); setEl(*in.el + ImGui::GetIO().MouseWheel * (ImGui::GetIO().KeyShift ? 0.5f : 2.0f)); }
     const float shEl = Follow(wid + 2, wantEl, 14.0f, in.anim && !actA);
     {
         SkyColors(shEl, top, hor);
-        dl->AddRectFilledMultiColor(a0, ImVec2(a0.x + AW, base.y), ImGui::GetColorU32(top), ImGui::GetColorU32(top), ImGui::GetColorU32(hor), ImGui::GetColorU32(hor));
-        dl->AddRectFilled(ImVec2(a0.x, base.y), ImVec2(a0.x + AW, a0.y + D), Col(0.15f, 0.38f, 0.19f, 1));
-        dl->AddRect(a0, ImVec2(a0.x + AW, a0.y + D), Col(1, 1, 1, hovA || actA ? 0.45f : 0.18f), 9.0f * k, 0, 1.0f);
-        dl->PathArcTo(base, AR, -kPI * 0.5f, 0.0f, 24); dl->PathStroke(Col(1, 1, 1, 0.30f), 0, 2.0f * k);
-        for (int e = 0; e <= 90; e += 30) { const float a = -e * kDeg; dl->AddLine(ImVec2(base.x + cosf(a) * (AR - 5 * k), base.y + sinf(a) * (AR - 5 * k)), ImVec2(base.x + cosf(a) * (AR + 5 * k), base.y + sinf(a) * (AR + 5 * k)), Col(1, 1, 1, 0.5f), 1.0f); }
-        // jugador de costado y su sombra en el piso (larga con el sol bajo)
-        const float ph = 26.0f * k;
-        // el jugador va en el medio del piso (no en el centro del arco) para que la sombra larga del sol bajo entre en el cuadro
-        const ImVec2 pl(a0.x + AW * 0.62f, base.y);
+        const float light = Smooth(-6.0f, 25.0f, shEl);
         dl->PushClipRect(a0, ImVec2(a0.x + AW, a0.y + D), true);
-        if (shEl > 0.5f) { const float len = std::min(AW * 0.58f, ph / tanf(std::max(shEl, 3.0f) * kDeg)); dl->AddLine(ImVec2(pl.x, pl.y + 1.5f * k), ImVec2(pl.x - len, pl.y + 1.5f * k), Col(0, 0, 0, 0.55f), 4.0f * k); }
-        dl->AddLine(ImVec2(pl.x, pl.y), ImVec2(pl.x, pl.y - ph * 0.62f), Col(0.95f, 0.95f, 0.98f, 1), 4.0f * k);
-        dl->AddCircleFilled(ImVec2(pl.x, pl.y - ph * 0.62f - 5.0f * k), 4.5f * k, Col(0.95f, 0.95f, 0.98f, 1), 12);
+        SideStadium(dl, a0, ImVec2(a0.x + AW, a0.y + D), base.y, top, hor, light, sc, k);
+        // resplandor del sol en el cielo (mas grande y naranja cuando esta bajo)
+        const ImVec2 sp0(base.x + cosf(shEl * kDeg) * AR, base.y - sinf(shEl * kDeg) * AR);
+        if (on && shEl > -3.0f) for (int i = 4; i >= 1; i--) dl->AddCircleFilled(sp0, (10.0f + i * (7.0f + 6.0f * (1.0f - light))) * k, ColA(sc, 0.045f * (on ? 1.0f : 0.4f)), 24);
+        dl->PathArcTo(base, AR, -kPI * 0.5f, 0.0f, 24); dl->PathStroke(Col(1, 1, 1, 0.30f), 0, 2.0f * k);
+        for (int e = 0; e <= 90; e += 15) { const float a = -e * kDeg, l = e % 45 == 0 ? 6.0f : 3.5f;
+            dl->AddLine(ImVec2(base.x + cosf(a) * (AR - l * k), base.y + sinf(a) * (AR - l * k)), ImVec2(base.x + cosf(a) * (AR + l * k), base.y + sinf(a) * (AR + l * k)), Col(1, 1, 1, 0.5f), 1.0f);
+            if (e % 45 == 0) { char lb[8]; snprintf(lb, sizeof lb, "%d", e); dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.72f, ImVec2(base.x + cosf(a) * (AR - 18.0f * k) - 4.0f * k, base.y + sinf(a) * (AR - 18.0f * k) - 6.0f * k), Col(1, 1, 1, 0.55f), lb); } }
+        // jugador de costado (cabeza, pelo, camiseta, short, medias, botines) con el lado del sol iluminado y su sombra en el pasto
+        const ImVec2 pl(a0.x + AW * 0.62f, base.y + 20.0f * k);   // parado un poco adelante en el pasto
+        const float hgt = 40.0f * k, sx = shEl > 0.5f ? 1.0f : 0.0f;
+        if (shEl > 0.5f) {   // sombra: larga con el sol bajo, hacia el lado contrario al sol (izquierda), en perspectiva sobre el pasto
+            const float len = std::min(AW * 0.62f, hgt / tanf(std::max(shEl, 3.0f) * kDeg));
+            const float sa = Sat(0.25f + 0.5f * light);
+            ImVec2 q[4] = { ImVec2(pl.x - 5.0f * k, pl.y - 1.0f * k), ImVec2(pl.x + 5.0f * k, pl.y + 1.0f * k), ImVec2(pl.x - len + 4.0f * k, pl.y + 9.0f * k), ImVec2(pl.x - len - 7.0f * k, pl.y + 5.0f * k) };
+            dl->AddQuadFilled(q[0], q[1], q[2], q[3], Col(0, 0, 0, 0.62f * sa));
+            dl->AddCircleFilled(ImVec2(pl.x - len - 2.0f * k, pl.y + 7.0f * k), 4.5f * k, Col(0, 0, 0, 0.42f * sa), 12);
+        }
+        const ImVec4 skin(0.80f, 0.62f, 0.48f, 1), shirt(0.85f, 0.15f, 0.18f, 1), shorts(0.95f, 0.95f, 0.97f, 1), sock(0.85f, 0.15f, 0.18f, 1);
+        auto lit = [&](ImVec4 c, float side) { return ImGui::GetColorU32(Lerp4(Lerp4(c, ImVec4(0, 0, 0, 1), 0.55f - 0.45f * light), Lerp4(c, sc, 0.25f), side * sx * light * 0.6f)); };
+        const float u = hgt / 34.0f;
+        // piernas y botines
+        dl->AddRectFilled(ImVec2(pl.x - 3.5f * u, pl.y - 13.0f * u), ImVec2(pl.x - 0.5f * u, pl.y - 2.0f * u), lit(sock, 0.0f));
+        dl->AddRectFilled(ImVec2(pl.x + 0.5f * u, pl.y - 13.0f * u), ImVec2(pl.x + 3.5f * u, pl.y - 2.0f * u), lit(sock, 1.0f));
+        dl->AddRectFilled(ImVec2(pl.x - 4.5f * u, pl.y - 2.0f * u), ImVec2(pl.x + 0.0f * u, pl.y), Col(0.08f, 0.08f, 0.10f, 1), 1.0f);
+        dl->AddRectFilled(ImVec2(pl.x + 0.5f * u, pl.y - 2.0f * u), ImVec2(pl.x + 5.0f * u, pl.y), Col(0.08f, 0.08f, 0.10f, 1), 1.0f);
+        dl->AddRectFilled(ImVec2(pl.x - 4.0f * u, pl.y - 18.0f * u), ImVec2(pl.x + 4.0f * u, pl.y - 12.0f * u), lit(shorts, 0.5f), 1.5f * u);   // short
+        dl->AddRectFilled(ImVec2(pl.x - 4.5f * u, pl.y - 28.0f * u), ImVec2(pl.x + 4.5f * u, pl.y - 17.5f * u), lit(shirt, 0.0f), 2.0f * u);   // camiseta
+        dl->AddRectFilled(ImVec2(pl.x + 0.5f * u, pl.y - 28.0f * u), ImVec2(pl.x + 4.5f * u, pl.y - 17.5f * u), lit(shirt, 1.0f), 2.0f * u);
+        dl->AddLine(ImVec2(pl.x - 4.5f * u, pl.y - 26.5f * u), ImVec2(pl.x - 6.0f * u, pl.y - 19.0f * u), lit(skin, 0.0f), 2.2f * u);   // brazos
+        dl->AddLine(ImVec2(pl.x + 4.5f * u, pl.y - 26.5f * u), ImVec2(pl.x + 6.0f * u, pl.y - 19.0f * u), lit(skin, 1.0f), 2.2f * u);
+        dl->AddCircleFilled(ImVec2(pl.x, pl.y - 31.5f * u), 3.6f * u, lit(skin, 0.5f), 14);   // cabeza
+        dl->PathArcTo(ImVec2(pl.x, pl.y - 31.5f * u), 3.8f * u, kPI * 1.05f, kPI * 1.95f, 10); dl->PathFillConvex(Col(0.12f, 0.08f, 0.05f, 1));   // pelo
+        if (sx > 0.0f && light > 0.05f) dl->AddLine(ImVec2(pl.x + 4.6f * u, pl.y - 27.5f * u), ImVec2(pl.x + 4.6f * u, pl.y - 18.0f * u), ColA(sc, 0.8f * light), 1.0f);   // borde con luz
+        // pelota al lado
+        dl->AddCircleFilled(ImVec2(pl.x + 10.0f * u, pl.y - 2.2f * u), 2.3f * u, Col(0.95f, 0.95f, 0.95f, 1), 12);
+        if (shEl > 0.5f) dl->AddEllipseFilled(ImVec2(pl.x + 10.0f * u - std::min(10.0f * u, 2.5f * u / tanf(std::max(shEl, 5.0f) * kDeg)), pl.y + 0.6f * u), ImVec2(3.0f * u, 0.9f * u), Col(0, 0, 0, 0.35f * light), 0.0f, 10);
         dl->PopClipRect();
         const ImVec2 sp(base.x + cosf(shEl * kDeg) * AR, base.y - sinf(shEl * kDeg) * AR);
         SunGlyph(dl, sp, (8.0f + (hovA || actA ? 1.5f : 0.0f)) * k, on ? sc : ImVec4(sc.x, sc.y, sc.z, 0.6f), in.anim ? (float)fmod(t, 3600.0) * 0.5f : 0.0f, on ? 0.8f : 0.25f);
+        dl->AddRect(a0, ImVec2(a0.x + AW, a0.y + D), Col(1, 1, 1, hovA || actA ? 0.45f : 0.18f), 9.0f * k, 0, 1.0f);
         char b[32]; snprintf(b, sizeof b, TRS("Altura %.0f"), wantEl);
-        dl->AddText(ImVec2(a0.x + 7.0f * k, a0.y + D - ImGui::GetFontSize() - 5.0f * k), IM_COL32_WHITE, b);
+        const ImVec2 tp(a0.x + 7.0f * k, a0.y + D - ImGui::GetFontSize() - 5.0f * k), tsz = ImGui::CalcTextSize(b);
+        dl->AddRectFilled(ImVec2(tp.x - 4.0f * k, tp.y - 1.0f * k), ImVec2(tp.x + tsz.x + 4.0f * k, tp.y + tsz.y + 1.0f * k), Col(0, 0, 0, 0.45f), 5.0f * k);
+        dl->AddText(tp, IM_COL32_WHITE, b);
         if (hovA && !actA) ImGui::SetTooltip("%s", TRS("La altura del sol, vista de costado: arrastralo por el arco (o la rueda del mouse). Abajo = atardecer y sombras largas; arriba = mediodia."));
     }
     // --- 3) las demas opciones con botones de icono ---
@@ -527,7 +600,7 @@ bool MvWindWidget(MvWindIn& in) {
         if (hovD && !actD) ImGui::SetTooltip("%s", TRS("Hacia donde sopla: arrastra por el anillo (pasa el Rumbo a Fijo). Clic derecho: el rumbo del partido. Rueda del mouse: Fuerza general. La flecha clarita es el viento de dentro de 2 s."));
     }
     // --- 2) la fuerza: vista de costado con el banderin y el pasto; la barra de la derecha se arrastra ---
-    const float AW = std::clamp(D * 0.72f, 110.0f * k, 150.0f * k);
+    const float AW = std::clamp(D * 0.95f, 130.0f * k, 190.0f * k);
     ImGui::SetCursorScreenPos(ImVec2(p0.x + D + 8.0f * k, p0.y));
     const ImVec2 a0 = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton("##vientofuerza", ImVec2(AW, D));
@@ -536,32 +609,72 @@ bool MvWindWidget(MvWindIn& in) {
     if (actA && in.strength) { const float u = Sat((gy1 - ImGui::GetIO().MousePos.y) / (gy1 - gy0)); *in.strength = roundf(u * 3.0f * 20.0f) / 20.0f; changed = true; }
     if (hovA && in.strength && ImGui::GetIO().MouseWheel != 0.0f) { ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY); *in.strength = std::clamp(*in.strength + ImGui::GetIO().MouseWheel * 0.05f, 0.0f, 3.0f); changed = true; }
     {
-        const float ground = a0.y + D - 26.0f * k;
-        const ImVec4 sk0 = Lerp4(ImVec4(0.30f, 0.52f, 0.80f, 1), ImVec4(0.25f, 0.27f, 0.36f, 1), Sat(shSpd / 12.0f)), sk1 = Lerp4(ImVec4(0.62f, 0.78f, 0.92f, 1), ImVec4(0.40f, 0.42f, 0.50f, 1), Sat(shSpd / 12.0f));
-        dl->AddRectFilledMultiColor(a0, ImVec2(a0.x + AW, ground), ImGui::GetColorU32(sk0), ImGui::GetColorU32(sk0), ImGui::GetColorU32(sk1), ImGui::GetColorU32(sk1));
-        dl->AddRectFilled(ImVec2(a0.x, ground), ImVec2(a0.x + AW, a0.y + D), Col(0.15f, 0.38f, 0.19f, 1));
+        const float ground = a0.y + D - 44.0f * k;
+        const float bend = Sat(shSpd / 12.0f);
+        const ImVec4 sk0 = Lerp4(ImVec4(0.22f, 0.45f, 0.80f, 1), ImVec4(0.24f, 0.26f, 0.34f, 1), bend), sk1 = Lerp4(ImVec4(0.62f, 0.78f, 0.93f, 1), ImVec4(0.42f, 0.44f, 0.52f, 1), bend);
         dl->PushClipRect(a0, ImVec2(a0.x + AW, a0.y + D), true);
+        SideStadium(dl, a0, ImVec2(a0.x + AW, a0.y + D), ground, sk0, sk1, 1.0f - 0.35f * bend, ImVec4(1.0f, 0.96f, 0.86f, 1), k);
         // de costado se ve la parte del viento que va de izquierda a derecha (cos del rumbo); el signo dice para donde se dobla
-        const float side = cosf(shDir * kDeg) >= 0.0f ? 1.0f : -1.0f, bend = Sat(shSpd / 12.0f);
+        const float side = cosf(shDir * kDeg) >= 0.0f ? 1.0f : -1.0f;
         const float tt = in.anim ? (float)fmod(t, 3600.0) : 0.0f;
-        // nubes que pasan mas rapido con mas viento
-        for (int i = 0; i < 2; i++) { const float x = a0.x + fmodf(tt * (6.0f + shSpd * 5.0f) * k * side + i * AW * 0.55f + AW * 4.0f, AW + 40.0f * k) - 20.0f * k, y = a0.y + (14.0f + i * 22.0f) * k;
-            dl->AddCircleFilled(ImVec2(x, y), 7.0f * k, Col(1, 1, 1, 0.35f), 12); dl->AddCircleFilled(ImVec2(x + 8.0f * k, y - 3.0f * k), 9.0f * k, Col(1, 1, 1, 0.35f), 12); dl->AddCircleFilled(ImVec2(x + 17.0f * k, y), 6.0f * k, Col(1, 1, 1, 0.35f), 12); }
-        // pasto que se dobla
-        for (int i = 0; i < 14; i++) { const float x = a0.x + (6.0f + i * 7.5f) * k, w = sinf(tt * (2.0f + shSpd * 0.5f) + i * 0.7f) * 0.25f + 0.75f;
-            dl->AddBezierQuadratic(ImVec2(x, ground + 2.0f * k), ImVec2(x, ground - 6.0f * k), ImVec2(x + side * bend * w * 9.0f * k, ground - (12.0f - 5.0f * bend * w) * k), Col(0.35f, 0.70f, 0.35f, 1), 1.6f * k); }
-        // banderin del corner: palo y la tela que flamea
-        const ImVec2 pole(a0.x + AW * 0.38f, ground), top(pole.x, ground - D * 0.55f);
-        dl->AddLine(pole, top, Col(0.95f, 0.95f, 0.98f, 1), 2.5f * k);
-        const float FL = 30.0f * k, FH = 20.0f * k, droop = (1.0f - Sat(shSpd / 5.0f)) * 0.9f;   // sin viento cuelga
-        ImVec2 up[9], lo[9];
-        for (int i = 0; i <= 8; i++) {
-            const float u = i / 8.0f, wave = sinf(u * 5.0f - tt * (3.0f + shSpd * 1.2f)) * u * FH * 0.12f * (0.4f + bend);
-            const float ang = droop * 1.35f;   // 0 = horizontal, ~1.35 = colgando
-            const float x = side * cosf(ang) * u * FL, y = sinf(ang) * u * FL + wave;
-            up[i] = ImVec2(top.x + x, top.y + 2.0f * k + y); lo[i] = ImVec2(top.x + x - side * sinf(ang) * FH * 0.0f, top.y + 2.0f * k + y + FH * (1.0f - 0.15f * u) * (1.0f - droop * 0.55f));
+        // nubes (con sombra abajo) que pasan mas rapido con mas viento
+        for (int i = 0; i < 3; i++) {
+            const float sp = (5.0f + shSpd * 5.0f) * k * (0.7f + 0.2f * i);
+            const float x = a0.x + fmodf(tt * sp * side + i * AW * 0.41f + AW * 8.0f, AW + 50.0f * k) - 25.0f * k, y = a0.y + (12.0f + i * 15.0f) * k, sc2 = 1.0f - 0.2f * i;
+            const ImU32 cl = Col(1, 1, 1, 0.55f - 0.12f * i), cs = Col(0.70f, 0.74f, 0.82f, 0.45f - 0.10f * i);
+            dl->AddEllipseFilled(ImVec2(x + 9.0f * k * sc2, y + 4.0f * k * sc2), ImVec2(15.0f * k * sc2, 3.5f * k * sc2), cs, 0.0f, 16);
+            dl->AddCircleFilled(ImVec2(x, y), 6.0f * k * sc2, cl, 12); dl->AddCircleFilled(ImVec2(x + 8.0f * k * sc2, y - 3.5f * k * sc2), 8.5f * k * sc2, cl, 14);
+            dl->AddCircleFilled(ImVec2(x + 17.0f * k * sc2, y), 6.5f * k * sc2, cl, 12); dl->AddRectFilled(ImVec2(x, y), ImVec2(x + 17.0f * k * sc2, y + 4.0f * k * sc2), cl);
         }
-        for (int i = 0; i < 8; i++) dl->AddQuadFilled(up[i], up[i + 1], lo[i + 1], lo[i], (i & 1) ? Col(1.0f, 0.86f, 0.25f, 0.95f) : Col(0.95f, 0.75f, 0.15f, 0.95f));
+        // arco del corner en la cal (en perspectiva) y la linea de fondo
+        const ImVec2 cp(a0.x + AW * 0.40f, ground + 18.0f * k);
+        dl->AddLine(ImVec2(a0.x, cp.y + 1.0f * k), ImVec2(a0.x + AW, cp.y - 3.0f * k), Col(0.95f, 0.97f, 0.95f, 0.55f), 1.6f * k);
+        dl->PathEllipticalArcTo(cp, ImVec2(16.0f * k, 5.0f * k), 0.0f, 0.0f, kPI, 16); dl->PathStroke(Col(0.95f, 0.97f, 0.95f, 0.55f), 0, 1.4f * k);
+        // banderin: palo con franjas, tela a cuadros que flamea con luz y sombra segun la ola, y su sombra en el pasto
+        const ImVec2 pole(cp.x, cp.y), top(cp.x, ground - D * 0.40f);
+        const float FL = 40.0f * k, FH = 26.0f * k, droop = (1.0f - Sat(shSpd / 5.0f)) * 0.9f;   // sin viento cuelga
+        const float ang = droop * 1.35f;   // 0 = horizontal, ~1.35 = colgando
+        auto fpt = [&](float u, float v) {   // u a lo largo (0 palo .. 1 punta), v de arriba (0) a abajo (1)
+            const float wave = sinf(u * 5.5f - tt * (3.0f + shSpd * 1.3f)) * u * FH * 0.14f * (0.35f + bend);
+            const float flap = sinf(u * 3.0f - tt * (2.0f + shSpd)) * u * 0.08f * bend;
+            const float x = side * cosf(ang + flap) * u * FL, y = sinf(ang + flap) * u * FL + wave;
+            const float hh = FH * (1.0f - 0.18f * u) * (1.0f - droop * 0.5f);
+            return ImVec2(top.x + x + side * sinf(ang) * v * hh * 0.0f, top.y + 2.0f * k + y + v * hh);
+        };
+        // sombra de la tela (aplastada en el pasto)
+        dl->AddQuadFilled(ImVec2(pole.x, pole.y), ImVec2(pole.x + side * (FL * 0.9f) * cosf(ang), pole.y + 3.0f * k), ImVec2(pole.x + side * FL * 0.7f * cosf(ang), pole.y + 6.0f * k), ImVec2(pole.x - side * 2.0f * k, pole.y + 3.0f * k), Col(0, 0, 0, 0.18f));
+        dl->AddLine(ImVec2(pole.x, pole.y), ImVec2(pole.x - side * 10.0f * k, pole.y + 3.0f * k), Col(0, 0, 0, 0.3f), 2.0f * k);
+        const int NU = 8, NV = 4;
+        for (int i = 0; i < NU; i++) for (int j = 0; j < NV; j++) {
+            const float u0 = (float)i / NU, u1 = (float)(i + 1) / NU, v0 = (float)j / NV, v1 = (float)(j + 1) / NV;
+            const float slope = cosf((u0 + u1) * 2.75f - tt * (3.0f + shSpd * 1.3f));   // la ola: un lado al sol y el otro a la sombra
+            const bool chk = ((i / 2) + (j / 2)) & 1;
+            const ImVec4 base2 = chk ? ImVec4(0.95f, 0.92f, 0.20f, 1) : ImVec4(0.92f, 0.20f, 0.18f, 1);
+            const ImVec4 cc = Lerp4(base2, slope > 0 ? ImVec4(1, 1, 1, 1) : ImVec4(0, 0, 0, 1), fabsf(slope) * 0.22f * (0.4f + bend));
+            dl->AddQuadFilled(fpt(u0, v0), fpt(u1, v0), fpt(u1, v1), fpt(u0, v1), ImGui::GetColorU32(cc));
+        }
+        // palo con franjas y la punta
+        for (int i = 0; i < 6; i++) { const float y0 = top.y + (pole.y - top.y) * i / 6.0f, y1 = top.y + (pole.y - top.y) * (i + 1) / 6.0f;
+            dl->AddLine(ImVec2(pole.x, y0), ImVec2(pole.x, y1), (i & 1) ? Col(0.92f, 0.20f, 0.18f, 1) : Col(0.96f, 0.96f, 0.98f, 1), 2.6f * k); }
+        dl->AddLine(ImVec2(pole.x + 0.8f * k, top.y), ImVec2(pole.x + 0.8f * k, pole.y), Col(0, 0, 0, 0.25f), 0.8f * k);
+        dl->AddCircleFilled(ImVec2(top.x, top.y - 1.5f * k), 2.2f * k, Col(0.96f, 0.96f, 0.98f, 1), 10);
+        // pasto de adelante que se dobla (dos capas) y hojitas que vuelan con las rachas
+        for (int layer = 0; layer < 2; layer++) {
+            const float gy = a0.y + D - (layer ? 2.0f : 10.0f) * k, hgt2 = (layer ? 13.0f : 9.0f) * k;
+            for (int i = 0; i < 26; i++) {
+                const float x = a0.x + (2.0f + i * 7.3f + layer * 3.5f) * k, w = sinf(tt * (2.0f + shSpd * 0.6f) + i * 0.7f + layer) * 0.3f + 0.7f;
+                const ImU32 gc = layer ? Col(0.28f, 0.62f, 0.30f, 1) : Col(0.22f, 0.50f, 0.25f, 1);
+                dl->AddBezierQuadratic(ImVec2(x, gy), ImVec2(x, gy - hgt2 * 0.5f), ImVec2(x + side * bend * w * hgt2 * 0.85f, gy - hgt2 * (1.0f - 0.45f * bend * w)), gc, (layer ? 1.8f : 1.3f) * k);
+            }
+        }
+        const int nLeaf = (int)(bend * 10.0f + in.gust * 4.0f);
+        for (int i = 0; i < nLeaf; i++) {
+            const float ph = fmodf(tt * (0.25f + shSpd * 0.04f) + i * 0.137f, 1.0f);
+            const float x = side > 0 ? a0.x + ph * (AW + 20.0f * k) - 10.0f * k : a0.x + AW - ph * (AW + 20.0f * k) + 10.0f * k;
+            const float y = ground - 10.0f * k + sinf(ph * 9.0f + i) * 8.0f * k - i * 2.0f * k;
+            const float r = tt * 6.0f + i; const ImVec2 dv(cosf(r) * 2.2f * k, sinf(r) * 1.0f * k);
+            dl->AddLine(ImVec2(x - dv.x, y - dv.y), ImVec2(x + dv.x, y + dv.y), (i & 1) ? Col(0.75f, 0.55f, 0.25f, 0.85f) : Col(0.45f, 0.65f, 0.30f, 0.85f), 1.8f * k);
+        }
         dl->PopClipRect();
         // barra de la fuerza
         const float u = in.strength ? Sat(*in.strength / 3.0f) : 0.33f, gy = gy1 - (gy1 - gy0) * u;
@@ -571,7 +684,9 @@ bool MvWindWidget(MvWindIn& in) {
         dl->AddCircleFilled(ImVec2(gx, gy), (6.0f + (hovA || actA ? 1.5f : 0.0f)) * k, Col(0.95f, 0.96f, 0.98f, 1), 16);
         dl->AddRect(a0, ImVec2(a0.x + AW, a0.y + D), Col(1, 1, 1, hovA || actA ? 0.45f : 0.18f), 9.0f * k, 0, 1.0f);
         char b[48]; snprintf(b, sizeof b, "%.1f m/s  x%.2f", shSpd, in.strength ? *in.strength : 1.0f);
-        dl->AddText(ImVec2(a0.x + 7.0f * k, a0.y + D - ImGui::GetFontSize() - 5.0f * k), IM_COL32_WHITE, b);
+        const ImVec2 tp(a0.x + 7.0f * k, a0.y + D - ImGui::GetFontSize() - 5.0f * k), tsz = ImGui::CalcTextSize(b);
+        dl->AddRectFilled(ImVec2(tp.x - 4.0f * k, tp.y - 1.0f * k), ImVec2(tp.x + tsz.x + 4.0f * k, tp.y + tsz.y + 1.0f * k), Col(0, 0, 0, 0.45f), 5.0f * k);
+        dl->AddText(tp, IM_COL32_WHITE, b);
         if (hovA && !actA) ImGui::SetTooltip("%s", TRS("Fuerza general: arrastra la barra de la derecha (o la rueda del mouse). La raya = 1, normal. El banderin y el pasto muestran cuanto sopla ahora."));
     }
     // --- 3) las demas opciones con botones de icono ---
@@ -820,6 +935,32 @@ static void FillShade(ImDrawList* dl, const ImVector<ImVec2>& pts, ImVec4 top, I
     ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, v0, dl->VtxBuffer.Size, ImVec2(0, y0), ImVec2(0, y1), ColA(top, 1.0f) | IM_COL32_A_MASK, ColA(bot, 1.0f) | IM_COL32_A_MASK);
     if (edge) dl->AddPolyline(pts.Data, pts.Size, edge, ImDrawFlags_Closed, edgeW);
 }
+// logo de PlayStation simplificado: la P alta (palo y panza) parada sobre la S acostada, en 'r' de radio
+static void PsLogo(ImDrawList* dl, ImVec2 c, float r, ImU32 col) {
+    const float th = std::max(1.0f, r * 0.20f);
+    const ImVec2 p0(c.x - r * 0.12f, c.y + r * 0.55f), p1(c.x - r * 0.12f, c.y - r * 0.75f);
+    dl->AddLine(p0, p1, col, th * 1.25f);                                                                  // palo de la P
+    dl->AddBezierCubic(p1, ImVec2(c.x + r * 0.55f, c.y - r * 0.70f), ImVec2(c.x + r * 0.60f, c.y - r * 0.05f), ImVec2(c.x + r * 0.08f, c.y - r * 0.08f), col, th);   // panza
+    // la S acostada: dos trazos finos, uno a cada lado del palo (como en el logo)
+    dl->AddBezierQuadratic(ImVec2(c.x - r * 0.25f, c.y + r * 0.30f), ImVec2(c.x - r * 0.85f, c.y + r * 0.42f), ImVec2(c.x - r * 0.50f, c.y + r * 0.62f), col, th * 0.8f);
+    dl->AddBezierQuadratic(ImVec2(c.x + r * 0.05f, c.y + r * 0.62f), ImVec2(c.x + r * 0.80f, c.y + r * 0.45f), ImVec2(c.x + r * 0.70f, c.y + r * 0.22f), col, th * 0.8f);
+}
+// logo de Xbox simplificado: la esfera con la X de dos trazos que se afinan en las puntas y se abren curvos hacia afuera
+static void XboxLogo(ImDrawList* dl, ImVec2 c, float r, ImU32 sphere, ImU32 xcol) {
+    dl->AddCircleFilled(c, r, sphere, 32);
+    for (int s = 0; s < 2; s++) {
+        const ImVec2 d(s ? 0.7071f : -0.7071f, 0.7071f), n(-d.y, d.x);   // direccion del trazo y su normal
+        ImVec2 q[18];
+        for (int i = 0; i < 9; i++) {
+            const float u = i / 8.0f, t = -0.86f + 1.72f * u;                 // a lo largo del diametro
+            const float w = r * (0.04f + 0.12f * (1.0f - t * t));             // grueso en el medio, fino en las puntas
+            const float bow = r * 0.16f * t * t * (t < 0 ? 1.0f : -1.0f);     // las puntas se curvan (como el logo)
+            const ImVec2 m(c.x + d.x * t * r + n.x * bow, c.y + d.y * t * r + n.y * bow);
+            q[i] = ImVec2(m.x + n.x * w, m.y + n.y * w); q[17 - i] = ImVec2(m.x - n.x * w, m.y - n.y * w);
+        }
+        dl->AddConcavePolyFilled(q, 18, xcol);
+    }
+}
 void MvPadDraw(ImDrawList* dl, ImVec2 o, float k, const MvPad& p, float alpha, bool anim, double now) {
     if (alpha <= 0.01f) return;
     ImGuiStorage* st = ImGui::GetStateStorage();
@@ -856,14 +997,26 @@ void MvPadDraw(ImDrawList* dl, ImVec2 o, float k, const MvPad& p, float alpha, b
         else SideShape(kT_ps4, IM_ARRAYSIZE(kT_ps4), sg, ImVec2(c0.x, c0.y + ty * H), hw, H, pts);
         const ImVec4 tc = ps5 ? grey : mix(body, K1, 0.12f);
         FillShade(dl, pts, mix(mix(tc, W1, 0.12f), accent, 0.75f * fill), mix(mix(tc, K1, 0.10f), accent, 0.6f * fill), P(0, 0).y, P(0, 0.13f).y, 0.96f * A, edge, 1.0f);
-        // L1 / R1: la banda oscura de la base (en las fotos se ve como una linea)
-        const float x0 = xb ? 0.29f : 0.50f, x1 = xb ? 0.66f : ps5 ? 0.755f : 0.71f, y = xb ? 0.128f : ps5 ? 0.118f : 0.119f;
-        dl->AddBezierQuadratic(P(sg * x0, y + 0.004f), P(sg * (x0 + x1) * 0.5f, y - 0.010f), P(sg * x1, y + (xb ? 0.03f : 0.008f)), ColA(mix(ps5 ? ImVec4(0.12f, 0.12f, 0.14f, 1) : deep, accent, 0.85f * lb), 0.95f * A), (2.4f + 1.0f * lb) * k);
+        (void)lb;
     }
     // --- cuerpo
     if (xb) MirrorShape(kB_xb, IM_ARRAYSIZE(kB_xb), c0, hw, H, pts); else if (ps5) MirrorShape(kB_ps5, IM_ARRAYSIZE(kB_ps5), c0, hw, H, pts); else MirrorShape(kB_ps4, IM_ARRAYSIZE(kB_ps4), c0, hw, H, pts);
     dl->AddEllipseFilled(P(0, 0.995f), ImVec2(hw * 0.95f, H * 0.035f), Col(0, 0, 0, 0.20f * A), 0.0f, 32);   // sombra en el piso
     FillShade(dl, pts, hi, lo, P(0, 0.12f).y, P(0, 1.0f).y, 0.95f * A, edge, 1.1f);
+    // --- L1 / R1 (LB / RB): la pieza de abajo del gatillo, medida en las fotos; se ve entera (antes era solo una raya) y se ilumina
+    for (int s = 0; s < 2; s++) {
+        const float sg = s ? 1.0f : -1.0f, lb = lit(s ? kPadR1 : kPadL1), dn = lb * 0.006f;
+        static const float kBpPS5[][2] = { { 0.495f, 0.128f }, { 0.560f, 0.112f }, { 0.650f, 0.110f }, { 0.735f, 0.120f }, { 0.775f, 0.150f }, { 0.770f, 0.168f }, { 0.640f, 0.160f }, { 0.500f, 0.165f } };
+        static const float kBpPS4[][2] = { { 0.495f, 0.130f }, { 0.550f, 0.113f }, { 0.640f, 0.110f }, { 0.715f, 0.120f }, { 0.760f, 0.160f }, { 0.745f, 0.178f }, { 0.620f, 0.172f }, { 0.500f, 0.175f } };
+        static const float kBpXb[][2] = { { 0.270f, 0.140f }, { 0.360f, 0.118f }, { 0.480f, 0.105f }, { 0.600f, 0.112f }, { 0.700f, 0.140f }, { 0.735f, 0.172f }, { 0.660f, 0.160f }, { 0.500f, 0.148f }, { 0.300f, 0.158f } };
+        const float (*bp)[2] = xb ? kBpXb : ps5 ? kBpPS5 : kBpPS4; const int nb = xb ? 9 : 8;
+        pts.resize(0); for (int i = 0; i < nb; i++) pts.push_back(P(sg * bp[i][0], bp[i][1] + dn));
+        const ImVec4 bc = ps5 ? ImVec4(0.84f, 0.85f, 0.87f, 1) : mix(body, K1, 0.18f);
+        FillShade(dl, pts, mix(mix(bc, W1, 0.15f), accent, 0.85f * lb), mix(mix(bc, K1, 0.10f), accent, 0.7f * lb), P(0, 0.10f).y, P(0, 0.18f).y, 0.98f * A, 0, 0);
+        dl->AddPolyline(pts.Data, 5, ColA(mix(ps5 ? ImVec4(0.10f, 0.10f, 0.12f, 1) : deep, accent, 0.6f * lb), 0.95f * A), 0, 2.0f * k);   // filo oscuro de arriba
+        dl->AddPolyline(pts.Data, pts.Size, ColA(mix(body, K1, light ? 0.35f : 0.5f), 0.6f * A), ImDrawFlags_Closed, 1.0f);
+        if (lb > 0.01f) dl->AddPolyline(pts.Data, pts.Size, ColA(accent, 0.5f * lb * A), ImDrawFlags_Closed, 3.0f * k);
+    }
     if (ps5) {
         // frente gris (calcado): baja por el borde de adentro de los agarres
         MirrorShape(kF_ps5, IM_ARRAYSIZE(kF_ps5), c0, hw, H, pts);
@@ -915,7 +1068,7 @@ void MvPadDraw(ImDrawList* dl, ImVec2 o, float k, const MvPad& p, float alpha, b
     {
         struct { int b; float dx, dy; } d[4] = { { kPadUp, 0, -1 }, { kPadDown, 0, 1 }, { kPadLeft, -1, 0 }, { kPadRight, 1, 0 } };
         if (xb) {
-            const ImVec2 c = P(-0.27f, 0.52f); const float L = 0.145f * hw, w = 0.032f * hw;
+            const ImVec2 c = P(-0.27f, 0.528f); const float L = 0.160f * hw, w = 0.044f * hw;
             dl->AddCircleFilled(c, L * 1.15f, ColA(mix(body, K1, 0.04f), 0.5f * A), 28);
             dl->AddRectFilled(ImVec2(c.x - w, c.y - L), ImVec2(c.x + w, c.y + L), ColA(lo, 0.95f * A), 2.0f * k);
             dl->AddRectFilled(ImVec2(c.x - L, c.y - w), ImVec2(c.x + L, c.y + w), ColA(lo, 0.95f * A), 2.0f * k);
@@ -925,21 +1078,21 @@ void MvPadDraw(ImDrawList* dl, ImVec2 o, float k, const MvPad& p, float alpha, b
                 const float ex = q.dx ? L * 0.4f : w, ey = q.dy ? L * 0.4f : w;
                 dl->AddRectFilled(ImVec2(m.x - ex, m.y - ey), ImVec2(m.x + ex, m.y + ey), ColA(accent, 0.9f * lv * A), 2.0f * k); }
         } else {
-            // cuatro teclas separadas con la punta hacia el centro (PS5: 'ps5'; PS4 un poco mas grandes)
-            const ImVec2 c = ps5 ? P(-0.65f, 0.36f) : P(-0.64f, 0.375f);
-            const float off = (ps5 ? 0.108f : 0.110f) * hw, hl = (ps5 ? 0.052f : 0.050f) * hw, hwid = (ps5 ? 0.046f : 0.042f) * hw;
+            // cuatro teclas separadas (medidas en las fotos): PS5 0.11 de largo x 0.09 de ancho; PS4 mas anchas (0.13) en un hueco redondo
+            const ImVec2 c = ps5 ? P(-0.655f, 0.375f) : P(-0.64f, 0.395f);
+            const float off = (ps5 ? 0.100f : 0.104f) * hw, hl = (ps5 ? 0.056f : 0.054f) * hw, hwid = (ps5 ? 0.046f : 0.050f) * hw;
+            if (!ps5) { dl->AddCircleFilled(c, off + hl * 1.25f, ColA(mix(body, K1, 0.07f), 0.7f * A), 32); dl->AddCircle(c, off + hl * 1.25f, ColA(deep, 0.3f * A), 32, 1.0f); }
             for (auto& q : d) {
                 const float lv = lit(q.b);
                 const ImVec2 m(c.x + q.dx * off, c.y + q.dy * off), pr(-q.dy, q.dx);
-                // tecla: rectangulo redondeado hacia afuera y punta hacia el centro
-                const ImVec2 tip(m.x - q.dx * hl * 1.25f, m.y - q.dy * hl * 1.25f);
-                ImVec2 k5[5] = { tip, ImVec2(m.x - q.dx * hl * 0.45f + pr.x * hwid, m.y - q.dy * hl * 0.45f + pr.y * hwid), ImVec2(m.x + q.dx * hl + pr.x * hwid, m.y + q.dy * hl + pr.y * hwid),
-                                 ImVec2(m.x + q.dx * hl - pr.x * hwid, m.y + q.dy * hl - pr.y * hwid), ImVec2(m.x - q.dx * hl * 0.45f - pr.x * hwid, m.y - q.dy * hl * 0.45f - pr.y * hwid) };
-                const ImVec4 kc = ps5 ? ImVec4(0.93f, 0.93f, 0.95f, 1) : mix(body, W1, 0.08f);
-                dl->AddConvexPolyFilled(k5, 5, ColA(mix(kc, accent, 0.8f * lv), 0.97f * A));
-                dl->AddPolyline(k5, 5, ps5 ? Col(0.66f, 0.67f, 0.71f, 0.95f * A) : ColA(deep, 0.55f * A), ImDrawFlags_Closed, 1.6f * k);
-                dl->AddTriangleFilled(ImVec2(m.x + q.dx * hl * 0.15f, m.y + q.dy * hl * 0.15f), ImVec2(m.x - q.dx * hl * 0.25f + pr.x * hwid * 0.3f, m.y - q.dy * hl * 0.25f + pr.y * hwid * 0.3f),
-                                      ImVec2(m.x - q.dx * hl * 0.25f - pr.x * hwid * 0.3f, m.y - q.dy * hl * 0.25f - pr.y * hwid * 0.3f), ps5 ? Col(0.62f, 0.63f, 0.67f, 0.9f * A) : ColA(deep, 0.5f * A));
+                auto Q = [&](float a, float b) { return ImVec2(m.x + q.dx * a * hl + pr.x * b * hwid, m.y + q.dy * a * hl + pr.y * b * hwid); };
+                // de afuera (a = 1) redondeado hacia adentro, con los lados que se cierran en una punta corta
+                ImVec2 kp[9] = { Q(-1.0f, 0.0f), Q(-0.55f, 0.85f), Q(0.55f, 1.0f), Q(0.85f, 0.95f), Q(1.0f, 0.6f), Q(1.0f, -0.6f), Q(0.85f, -0.95f), Q(0.55f, -1.0f), Q(-0.55f, -0.85f) };
+                const ImVec4 kc = ps5 ? ImVec4(0.93f, 0.93f, 0.95f, 1) : mix(body, W1, 0.06f);
+                dl->AddConvexPolyFilled(kp, 9, ColA(mix(kc, accent, 0.8f * lv), 0.97f * A));
+                dl->AddPolyline(kp, 9, ps5 ? Col(0.62f, 0.63f, 0.67f, 0.95f * A) : ColA(deep, 0.6f * A), ImDrawFlags_Closed, 1.8f * k);
+                if (ps5) dl->AddTriangleFilled(Q(0.55f, 0.0f), Q(0.15f, 0.28f), Q(0.15f, -0.28f), Col(0.66f, 0.67f, 0.71f, 0.9f * A));   // flechita
+                else dl->AddPolyline(kp, 9, ColA(mix(body, W1, 0.25f), 0.35f * A), ImDrawFlags_Closed, 0.8f * k);
             }
         }
     }
@@ -981,25 +1134,20 @@ void MvPadDraw(ImDrawList* dl, ImVec2 o, float k, const MvPad& p, float alpha, b
     {
         const float lp = lit(kPadPS);
         if (xb) {
-            const ImVec2 c = P(0.0f, 0.21f); const float r = 0.070f * hw;
+            const ImVec2 c = P(0.0f, 0.212f); const float r = 0.072f * hw;
             const float gl = (anim ? 0.75f + 0.25f * sinf((float)now * 1.4f) : 0.9f) * (0.7f + 0.3f * lp);
-            for (int i = 3; i >= 1; i--) dl->AddCircleFilled(c, r * (1.0f + 0.25f * i), Col(1, 1, 1, 0.07f * gl * A), 24);
-            dl->AddCircleFilled(c, r, ColA(mix(ImVec4(0.94f, 0.94f, 0.96f, 1), accent, 0.5f * lp), 0.95f * gl * A), 24);
-            const float x = r * 0.45f; const ImU32 lc = Col(0.55f, 0.56f, 0.60f, 0.95f * A);
-            dl->AddBezierQuadratic(ImVec2(c.x - x, c.y - x), c, ImVec2(c.x + x, c.y + x), lc, 2.0f * k);
-            dl->AddBezierQuadratic(ImVec2(c.x + x, c.y - x), c, ImVec2(c.x - x, c.y + x), lc, 2.0f * k);
+            for (int i = 3; i >= 1; i--) dl->AddCircleFilled(c, r * (1.0f + 0.28f * i), Col(1, 1, 1, 0.08f * gl * A), 28);
+            XboxLogo(dl, c, r, ColA(mix(ImVec4(0.96f, 0.96f, 0.97f, 1), accent, 0.5f * lp), 0.97f * A), Col(0.62f, 0.63f, 0.67f, 0.95f * A));
         } else if (ps5) {
-            const ImVec2 pc = P(0.0f, 0.60f);
-            if (lp > 0.01f) dl->AddCircleFilled(pc, 9.0f * k, ColA(accent, 0.30f * lp * A), 16);
-            const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(10.0f * k, FLT_MAX, 0, "PS");
-            dl->AddText(ImGui::GetFont(), 10.0f * k, ImVec2(pc.x - ts.x * 0.5f, pc.y - ts.y * 0.5f), ColA(mix(ImVec4(0.66f, 0.67f, 0.71f, 1), accent, lp), A), "PS");
-            for (int r = 0; r < 2; r++) for (int i = -4; i <= 4; i++) dl->AddCircleFilled(P(i * 0.020f, 0.475f + r * 0.022f), 0.9f * k, Col(0.66f, 0.67f, 0.71f, 0.9f * A), 6);
+            const ImVec2 pc = P(0.0f, 0.600f); const float r = 0.050f * hw;
+            if (lp > 0.01f) dl->AddCircleFilled(pc, r * 1.4f, ColA(accent, 0.30f * lp * A), 20);
+            PsLogo(dl, pc, r, ColA(mix(ImVec4(0.64f, 0.65f, 0.69f, 1), accent, lp), A));
+            for (int r2 = 0; r2 < 2; r2++) for (int i = -4; i <= 4; i++) dl->AddCircleFilled(P(i * 0.020f, 0.475f + r2 * 0.022f), 0.9f * k, Col(0.66f, 0.67f, 0.71f, 0.9f * A), 6);
         } else {
-            const ImVec2 pc = P(0.0f, 0.59f); const float r = 0.045f * hw;
-            dl->AddCircleFilled(pc, r, ColA(mix(ImVec4(0.06f, 0.06f, 0.08f, 1), accent, 0.6f * lp), 0.97f * A), 20);
-            dl->AddCircle(pc, r, Col(0.7f, 0.7f, 0.72f, 0.6f * A), 20, 1.0f);
-            const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(7.5f * k, FLT_MAX, 0, "PS");
-            dl->AddText(ImGui::GetFont(), 7.5f * k, ImVec2(pc.x - ts.x * 0.5f, pc.y - ts.y * 0.5f), Col(0.92f, 0.92f, 0.94f, 0.95f * A), "PS");
+            const ImVec2 pc = P(0.0f, 0.59f); const float r = 0.048f * hw;
+            dl->AddCircleFilled(pc, r, ColA(mix(ImVec4(0.05f, 0.05f, 0.07f, 1), accent, 0.6f * lp), 0.97f * A), 24);
+            dl->AddCircle(pc, r, Col(0.75f, 0.75f, 0.78f, 0.7f * A), 24, 1.2f * k);
+            PsLogo(dl, pc, r * 0.78f, Col(0.95f, 0.95f, 0.97f, A));
         }
     }
 }
