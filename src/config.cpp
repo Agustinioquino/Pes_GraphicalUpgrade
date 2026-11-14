@@ -150,6 +150,7 @@ static bool LoadConfigLocked() {
             else if (kl == "mouse_menus") c.menuMouse = atoi(v.c_str()) != 0 ? 1 : 0;   // (11/11) mouse en los menus nativos del juego
             else if (kl == "mouse_menus_retraso") c.menuMouseDelay = std::clamp(atoi(v.c_str()), 0, 4);
             else if (kl == "mouse_menus_cerca") c.menuMouseNear = std::clamp(atoi(v.c_str()), 0, 2);   // (14/11 ythnmm) 2 = lejos como antes
+            else if (kl == "mouse_barra_botones") c.menuMouseGuide = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 ythnmm)
             else if (kl == "mouse_rueda_opciones") c.menuMouseWheelOpt = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 ythnmm)
             else if (kl == "ayuda_mouse") c.mouseHint = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 d) botones del mouse abajo a la derecha
             else if (kl == "camara_share") c.camShareHold = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 j)

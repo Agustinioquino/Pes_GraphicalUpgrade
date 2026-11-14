@@ -76,8 +76,7 @@ static std::atomic<int> s_curX{0}, s_curY{0}; static std::atomic<double> s_moveT
 static std::atomic<int> s_nSel{0}, s_nClick{0}, s_nBack{0}, s_nWheel{0}, s_nStep{0}, s_nNear{0}, s_nOpt{0}, s_nExtra{0};
 // (14/11 ythnmm) acciones del juego por indice (tabla 0x1427bcdf0, codigo del boton = 19 + boton de DirectInput): 0 aceptar, 1 volver,
 // 2 cuadrado, 3 triangulo, 4 OPTIONS, 5 SHARE, 6 / 7 L2 / R2, 8 / 9 L1 / R1, 10 / 11 L3 / R3. Agustin 14/11 09:34: con el mouse solo
-// rueda, clic izquierdo y clic derecho (nada de botones extra ni teclas). s_extraAct queda para pedir una accion desde un clic.
-static int s_extraAct = -1; static double s_extraT = 0;
+// rueda, clic izquierdo y clic derecho (nada de botones extra ni teclas): los demas botones se piden con un clic en la barra de abajo.
 static void* s_wheelOptWin = nullptr; static float s_wheelOptMx = 0;       // (14/11 ythnmm) el mouse esta sobre la fila elegida y es un selector: la rueda cambia la opcion
 
 static bool Readable(const void* p, size_t n) {
@@ -173,6 +172,53 @@ static int AbsRow(void* win, uint8_t* I, int g, int r) {
 }
 static void SelectLikeGame(void* win, int g, int absRow) { ((PFN_Select)kSelect)(win, g, (long long)absRow); }
 
+// (14/11 ythnmm, Agustin: "moverse solo con el mouse" / "no uses botones que no sean la rueda y el clic izquierdo y derecho") BARRA DE
+// BOTONES DE ABAJO CLICKEABLE. menusystem::GuideBar (vtable 0x1427bc3c8, unico en DAT_143707d10, lo crea 0x140e36ed0) muestra la ayuda de
+// la ventana activa: 0x140e73660 recorre las 17 acciones de la ventana y por cada una con modo (Impl+0x120 + 4a) y texto
+// (Impl+0x168 + 0x20a) llama a 0x140e37540(barra, a, texto), que la guarda con la clave de la tabla de abajo. 0x140e37ac0 la dibuja en
+// orden de clave: lista mostrada en +0x6b8 (std::list, nodo +0x10 = clave, +0x6c0 cantidad), icono = hijo de tipo 0x13 numero i de la
+// pagina [barra+0x70]+0x98 y texto = hijo de tipo 0x13 numero i + 7 (desensamblado 0x140e37cbd / 0x140e37cd9), a lo sumo 7.
+// Un clic sobre el icono o el texto = esa accion de la ventana que la tiene, igual que apretar el boton del mando.
+static const uintptr_t kGuideBarPtr = 0x143707d10ull;
+static int GuideKeyToAction(int key) {   // inversa del switch de 0x140e37540 (accion -> clave)
+    static const int t[13] = { 4, 5, 0, 1, 2, 3, 12, 13, 16, 15, 10, 14, 11 };
+    return key >= 0 && key < 13 ? t[key] : -1;
+}
+struct GuideHitRes { double t = -1; int action = -1; bool over = false; };
+static GuideHitRes s_guide;
+static bool NodeRect(uint8_t* node, float* pos, float* size) {
+    if (!Ptr(node) || !NodeFlag(node, 0x0c)) return false;
+    void** vt = *(void***)node; if (!Ptr(vt) || !RowClass(vt)) return false;
+    if (((PFN_NodeVec2)vt[0xa0 / 8])(node, pos) < 0) return false;
+    ((PFN_NodeVec2)vt[0xc0 / 8])(node, size);
+    return size[0] > 0.0f && size[1] > 0.0f && size[0] < 4000.0f && size[1] < 4000.0f && std::fabs(pos[0]) < 8000.0f && std::fabs(pos[1]) < 8000.0f;
+}
+// accion de la barra de abajo que esta debajo del mouse (o -1); una vez por muestra del mouse
+static int GuideHit(float mx, float my) {
+    if (s_guide.t == s_m.t) return s_guide.action;
+    s_guide = GuideHitRes(); s_guide.t = s_m.t;
+    if (g_cfg.menuMouseGuide == 0) return -1;
+    if (!Readable((const void*)kGuideBarPtr, 8)) return -1;
+    uint8_t* gb = *(uint8_t**)kGuideBarPtr; if (!Ptr(gb) || !Readable(gb, 0x6e8)) return -1;
+    if (gb[0x6b2] == 0) return -1;                                       // barra escondida ("plate_off")
+    uint8_t* page = P8(gb + 0x70); if (!Ptr(page) || !Readable(page, 0xa0)) return -1;
+    uint8_t* head = P8(gb + 0x6b8); const uint64_t n = *(uint64_t*)(gb + 0x6c0);
+    if (!Ptr(head) || n == 0 || n > 7) return -1;
+    uint8_t* nd = P8(head);
+    for (uint32_t i = 0; i < (uint32_t)n && Ptr(nd) && nd != head; i++, nd = P8(nd)) {
+        if (!Readable(nd, 0x18)) break;
+        const int a = GuideKeyToAction((int)U32(nd + 0x10));
+        uint8_t* icon = ((PFN_ChildByType)kChildByType)(page + 0x98, 0x13, (int)i);
+        uint8_t* text = ((PFN_ChildByType)kChildByType)(page + 0x98, 0x13, (int)i + 7);
+        float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f; float pos[2], size[2];
+        if (NodeRect(icon, pos, size)) { x0 = std::min(x0, pos[0]); y0 = std::min(y0, pos[1]); x1 = std::max(x1, pos[0] + size[0]); y1 = std::max(y1, pos[1] + size[1]); }
+        if (NodeRect(text, pos, size)) { x0 = std::min(x0, pos[0]); y0 = std::min(y0, pos[1]); x1 = std::max(x1, pos[0] + size[0]); y1 = std::max(y1, pos[1] + size[1]); }
+        if (x1 <= x0) continue;
+        if (mx > x0 - 4.0f && mx < x1 + 4.0f && my > y0 - 6.0f && my < y1 + 6.0f) { s_guide.action = a; s_guide.over = a >= 0; return a; }
+    }
+    return -1;
+}
+
 // (v3) fila con selector de opciones. En el juego "aceptar" sobre una de esas filas no hace nada (0x140e3c660 -> 0x140e3daa0 lo da
 // por atendido) y la opcion se cambia con izquierda / derecha (0x140e3c770). Con el mouse: el clic pasa a ser "derecha", o "izquierda"
 // si cae en la mitad izquierda del selector. Aca solo se mira lo mismo que mira 0x140e3c770: clase de control 0 o 9 de la fila
@@ -221,7 +267,7 @@ static void Step(void* win) {
     const bool fresh = now - s_stepT > 0.25;      // primer paso de un menu despues de un rato sin menus
     const bool batch = fresh || now - s_m.t > 0.004;
     s_stepT = now; s_pendWin = nullptr; s_pendAction = -1; s_pendDxWin = nullptr;
-    if (fresh) { s_wheelAcc = 0; s_wheel.store(0); s_latchWin = nullptr; s_extraAct = -1; s_wheelOptWin = nullptr; }
+    if (fresh) { s_wheelAcc = 0; s_wheel.store(0); s_latchWin = nullptr; s_wheelOptWin = nullptr; }
     if (batch) Sample(now, fresh);                 // siempre, para no inventar un clic al volver del menu de PES21FX
     // (12/11) en el Motor el juego no ve el teclado (freecam.cpp FreeCamBlocksKeys): Esc = "volver" lo pone la DLL, este o no el
     // mouse en menus prendido, para que siempre se pueda salir sin mando
@@ -249,19 +295,6 @@ static void Step(void* win) {
     const float cw = s_m.cw, ch = s_m.ch; float sw = cw, sh = ch, ox = 0, oy = 0;
     if (cw * 9.0f > ch * 16.0f) { sw = ch * 16.0f / 9.0f; ox = (cw - sw) * 0.5f; } else if (cw * 9.0f < ch * 16.0f) { sh = cw * 9.0f / 16.0f; oy = (ch - sh) * 0.5f; }
     const float mx = ((float)s_m.p.x - ox) * 1920.0f / sw, my = ((float)s_m.p.y - oy) * 1080.0f / sh;
-    if (s_extraAct >= 0) {   // (14/11 ythnmm) accion pedida: la ventana bajo el mouse que tenga esa accion; si ninguna, la primera que la tenga
-        if (now - s_extraT > 0.5) s_extraAct = -1;
-        else {
-            const uint32_t mode = U32(I + 0x120 + (size_t)s_extraAct * 4);
-            Hit h2; const bool over = HitTest(I, mx, my, h2) && h2.dist <= 0.0f;
-            if (mode >= 1 && mode <= 3 && (over || now - s_extraT > 0.05)) {
-                s_pendWin = win; s_pendAction = s_extraAct; s_extraAct = -1; s_moveT.store(now);
-                const int k = s_nExtra.fetch_add(1, std::memory_order_relaxed);
-                if (k < 12) Log("mouse en menus: accion pedida -> %d de la pagina (vtable %p)", s_pendAction, *(void**)win);
-                return;
-            }
-        }
-    }
     if (!s_m.moved && !s_m.lEdge && !s_m.rEdge) return;
     {   // (v4) panel del Motor: arrastrar desde la franja del titulo (motorpage.cpp). La primera fila dibujada del grupo 0 da el lugar
         float tx = 0, ty = 0, tw = 0;
@@ -271,6 +304,22 @@ static void Step(void* win) {
         if (MotorPageDrag(win, mx, my, s_lWas, s_m.lEdge, tx, ty, tw)) { s_m.lEdge = false; s_moveT.store(now); return; }
     }
     if (MotorGizmoOver((float)s_m.p.x, (float)s_m.p.y)) { s_m.lEdge = false; s_moveT.store(now); return; }   // el gizmo de camara del Motor (motorgizmo.cpp): el clic es suyo
+    {   // (14/11 ythnmm) barra de botones de abajo: el clic sobre un boton = esa accion de la ventana que la tiene (mira su texto de ayuda)
+        const int ga = (s_m.moved || s_m.lEdge) ? GuideHit(mx, my) : -1;
+        if (ga >= 0) {
+            if (s_m.moved) { s_overB = true; s_over.store(true); }
+            if (s_m.lEdge && ga < 12) {
+                const uint32_t mode = U32(I + 0x120 + (size_t)ga * 4);
+                const uint64_t tl = *(uint64_t*)(I + 0x168 + (size_t)ga * 0x20 + 0x10);   // largo del texto de ayuda de esa accion
+                if (mode >= 1 && mode <= 3 && tl > 0 && tl < 4096) {
+                    s_m.lEdge = false; s_pendWin = win; s_pendAction = ga; s_moveT.store(now);
+                    const int k = s_nExtra.fetch_add(1, std::memory_order_relaxed);
+                    if (k < 16) Log("mouse en menus: clic en la barra de botones -> accion %d (vtable de la ventana %p)", ga, *(void**)win);
+                }
+            }
+            return;                                       // sobre la barra no se eligen filas
+        }
+    }
     Hit hit; const bool on = (s_m.moved || s_m.lEdge) && HitTest(I, mx, my, hit);
     // (v3) la fila actual del juego (Impl+0xd8) cuenta el desplazamiento de la lista: se compara con ese numero, no con el de la fila dibujada
     const int hitAbs = on ? AbsRow(win, I, hit.group, hit.row) : -1;
