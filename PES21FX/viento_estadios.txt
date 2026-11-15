@@ -1,0 +1,7 @@
+; Viento unico: datos por estadio (PES21 FX). Una linea por estadio:
+;   id = reparo ; fuerza ; nombre
+; id      = numero del estadio (el que aparece en PES21FX.log: "viento del partido: estadio N")
+; reparo  = 0 cancha abierta .. 1 estadio cerrado y techado (cuanto tapan las tribunas). Sin linea = 0.5
+; fuerza  = viento tipico de la ciudad en m/s (4 = promedio; 6 = ciudad ventosa; 2.5 = ciudad calma; 0 = no cambia nada)
+; Ejemplo (borrar el ; del principio y poner el id real):
+; 9 = 0.8 ; 3.5 ; Camp Nou
