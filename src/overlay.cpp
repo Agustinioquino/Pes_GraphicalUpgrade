@@ -986,7 +986,7 @@ static void DrawWindNowPanel() {
     if (!w.on) {
         ImGui::TextDisabled("%s", TRS("Viento unico apagado: prende 'Viento distinto en cada partido' y 'Viento unico (rachas reales)'."));
         if (Anim()) {   // (14/11) igual se puede elegir el rumbo fijo en la cancha
-            MvWindIn wi; wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now(); { auto& L = g_cfg.live; wi.preset = &L[501][0]; wi.change = &L[501][3]; wi.gusts = &L[502][0]; wi.gustLen = &L[502][1]; wi.turbP = &L[502][2]; wi.veer = &L[502][3]; wi.shelterMode = &L[503][0]; wi.shelter = &L[503][1]; wi.grass = &L[503][2]; wi.cloth = &L[503][3]; }
+            MvWindIn wi; wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now(); { auto& L = g_cfg.live; wi.preset = &L[501][0]; wi.change = &L[501][3]; wi.gusts = &L[502][0]; wi.gustLen = &L[502][1]; wi.turbP = &L[502][2]; wi.veer = &L[502][3]; wi.shelterMode = &L[503][0]; wi.shelter = &L[503][1]; wi.grass = &L[503][2]; wi.cloth = &L[503][3]; if (L[500][2] < 0.05f) L[500][2] = 1.8f; wi.height = &L[500][2]; wi.hem = &L[508][3]; wi.flag = &L[514][1]; const WindHeight hp{ std::clamp(L[508][0], 0.0f, 1.0f), std::clamp(L[508][1], 0.0f, 1.0f), std::clamp(L[508][2], 1.0f, 3.0f), std::clamp(L[500][2], 0.2f, 10.0f) }; wi.kGrass = WindHeightK(hp, 0.08f); wi.kCloth = WindHeightK(hp, 1.2f); wi.kFlag = WindHeightK(hp, 1.4f); wi.kHead = WindHeightK(hp, 1.8f); wi.kTop = WindHeightK(hp, 20.0f); }
             MvWindWidget(wi);
         }
         return;
@@ -998,11 +998,11 @@ static void DrawWindNowPanel() {
     }
     { const WindHeight hp = g_windHeight;   // (14/11) viento a cada altura (fila 508)
       ImGui::TextDisabled(TRS("Al ras del pasto %.1f m/s, ropa %.1f, cabeza %.1f, arriba de la tribuna (20 m) %.1f"),
-          w.speed * w.grassK, w.speed * w.clothK, w.speed, w.speed * WindHeightK(hp, 20.0f)); }
+          w.speed * w.grassK, w.speed * w.clothK, w.speed * WindHeightK(hp, 1.8f), w.speed * WindHeightK(hp, 20.0f)); }
     if (Anim()) {   // (14/11) la cancha con el viento que vuela; arrastrar fija el rumbo
         ImGui::TextDisabled(TRS("En 2 s: %.1f m/s. Promedio del partido: %.1f m/s"), w.soonSpeed, w.base);
         MvWindIn wi; wi.live = true; wi.speed = w.speed; wi.dirDeg = w.dirDeg; wi.soonSpeed = w.soonSpeed; wi.soonDirDeg = w.soonDirDeg; wi.gust = w.gust; wi.turb = w.turb;
-        wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now(); { auto& L = g_cfg.live; wi.preset = &L[501][0]; wi.change = &L[501][3]; wi.gusts = &L[502][0]; wi.gustLen = &L[502][1]; wi.turbP = &L[502][2]; wi.veer = &L[502][3]; wi.shelterMode = &L[503][0]; wi.shelter = &L[503][1]; wi.grass = &L[503][2]; wi.cloth = &L[503][3]; }
+        wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now(); { auto& L = g_cfg.live; wi.preset = &L[501][0]; wi.change = &L[501][3]; wi.gusts = &L[502][0]; wi.gustLen = &L[502][1]; wi.turbP = &L[502][2]; wi.veer = &L[502][3]; wi.shelterMode = &L[503][0]; wi.shelter = &L[503][1]; wi.grass = &L[503][2]; wi.cloth = &L[503][3]; if (L[500][2] < 0.05f) L[500][2] = 1.8f; wi.height = &L[500][2]; wi.hem = &L[508][3]; wi.flag = &L[514][1]; const WindHeight hp{ std::clamp(L[508][0], 0.0f, 1.0f), std::clamp(L[508][1], 0.0f, 1.0f), std::clamp(L[508][2], 1.0f, 3.0f), std::clamp(L[500][2], 0.2f, 10.0f) }; wi.kGrass = WindHeightK(hp, 0.08f); wi.kCloth = WindHeightK(hp, 1.2f); wi.kFlag = WindHeightK(hp, 1.4f); wi.kHead = WindHeightK(hp, 1.8f); wi.kTop = WindHeightK(hp, 20.0f); }
         MvWindWidget(wi);
     } else {
     ImGui::TextDisabled(TRS("En 2 s: %.1f m/s. Promedio del partido: %.1f m/s"), w.soonSpeed, w.base);

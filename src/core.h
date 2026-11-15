@@ -460,9 +460,9 @@ extern std::atomic<int> g_grassSeenFrame;   // (13/11 sk9ema) ultimo cuadro con 
 struct WindNow { bool on = false; float speed = 0, dirDeg = 0, gust = 0, turb = 0, outside = 1, base = 0, shelter = 0.5f, soonSpeed = 0, soonDirDeg = 0, hour = -1;
                  int preset = 0, stadium = -1, season = -1, src = 0, test = 0; float up = 0, grassK = 1, clothK = 1; bool fixedDir = false, shelterManual = false, rain = false, fromCloth = false; };
 extern WindNow g_windNow;
-struct WindHeight { float prof = 0.5f, ground = 0.3f, top = 2.0f; };   // (14/11 sk9ema) perfil por altura (fila 508)
+struct WindHeight { float prof = 0.5f, ground = 0.3f, top = 2.0f, ref = 1.8f; };   // (14/11 sk9ema) perfil por altura (fila 508); (15/11) ref = z500, altura del viento: a que altura (m) sopla con toda su fuerza
 extern WindHeight g_windHeight;
-float WindHeightK(const WindHeight& hp, float h);   // viento a la altura h (m) / viento a 1.8 m
+float WindHeightK(const WindHeight& hp, float h);   // viento a la altura h (m) / viento a la altura del viento (hp.ref, de fabrica 1.8 m)
 void WindFrame(float (*p)[4], double tReal);   // (13/11 sk9ema) viento unico: filas 494 / 495 (wind.cpp), despues de la fila 157
 void SolLibreFrame(float (*p)[4], double t);
 bool SolLibreRealSun(float& azDeg, float& elDeg);   // (14/11) sol del partido para el menu (con g_cfgMutex tomado)   // UpdateTimeParams
