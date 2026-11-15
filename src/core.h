@@ -192,7 +192,7 @@ struct Config {
     int cursorKey = VK_F1;                     // (14/11 c) tecla que prende / apaga el cursor ([PES21FX] tecla_cursor = F1, 0 = ninguna)
     int menuMouseKey = 0;                      // (11/11 v2) tecla que saca / pone el mouse en los menus (0 = ninguna, de fabrica: Agustin 22:23 no la necesita) ([PES21FX] tecla_mouse_menus = F8...)
     int keyHud = 4;                            // (11/11) cuadrito con la ultima tecla apretada: 0 apagado, 1..4 esquina ([PES21FX] ultima_tecla)
-    int motorHelpBar = 0; int motorBg = 1, motorCam = 1, motorGizmo = 1, motorKeys = 1, motorOwnMenu = 1, motorGameUi = 0, motorGrid = 1, motorStartPlayer = 0; float motorPanelX = 0, motorPanelY = 0; int motorPage = 1;                         // (11/11) motorpage.cpp: el estudio del Motor con filas nativas del juego ([PES21FX] motor_pagina)
+    int motorHelpBar = 0; int motorBg = 1, motorCam = 1, motorGizmo = 1, motorKeys = 1, motorOwnMenu = 1, motorGameUi = 0, motorGrid = 1, motorStartPlayer = 0; float motorScale = 1.4f; float motorPanelX = 0, motorPanelY = 0; int motorPage = 1;                         // (11/11) motorpage.cpp: el estudio del Motor con filas nativas del juego ([PES21FX] motor_pagina)
     int motorDress = 1;                        // (11/11) motorpage.cpp: vestir al jugador del estudio por la via nativa ([PES21FX] motor_vestir)
     int blockPad = 1; bool menuPadOpen = true; int menuCursor = 1; int camPad = 1; int camHud = 1;   // (14/11 k: a la vista de fabrica otra vez) camara_hud: 0 escondido, 1 se apaga solo a los 3 s, 2 siempre completo; camara_mando: el mando mueve la camara libre (modo foto)
       // menu_cursor: 0 sin cursor, 1 cursor nuevo, 2 el clasico de ImGui   // (14/11) [PES21FX] bloquear_mando 0 nunca / 1 con el menu abierto; menu_mando_abrir: L3 + R3 abre y cierra el menu
@@ -683,7 +683,7 @@ struct MotorSceneInfo { int scenes, objects, models, lights; };
 int MotorSceneLights(MotorLight* out, int max, MotorSceneInfo* info); bool MotorLightSetOn(const MotorLight& L, bool on);
 void MotorErr(const char* fmt, ...);   // (15/11 f) error del Motor: al registro y a un recuadro rojo en pantalla (motorgizmo.cpp)
 bool MotorUiSkipGameDraw(ID3D11DeviceContext* c, uint64_t ps); int MotorViewCount(int row); const char* MotorViewName(int row, int op); int MotorViewGet(int row); void MotorViewSet(int row, int op);   // (15/11 b)
-bool MotorUiEscBusy(); bool MotorUiOn(); bool MotorUiPanel(); bool MotorUiPlayer(); void MotorUiTogglePanel(); void MotorUiTogglePlayer(); void MotorUiBack(); bool MotorUiTakeBack();                     // motorgizmo.cpp
+bool MotorUiWheel(int delta); bool MotorUiEscBusy(); bool MotorUiOn(); bool MotorUiPanel(); bool MotorUiPlayer(); void MotorUiTogglePanel(); void MotorUiTogglePlayer(); void MotorUiBack(); bool MotorUiTakeBack();                     // motorgizmo.cpp
 bool CamHookLast(float* pos, float* tgt, int* id, int* frame);   // camhook.cpp: ultima camara aplicada por el CameraSystem
 // (27/10 c) sombra propia de la cabeza (headshadow.cpp): atlas de sombras de alta resolucion de las cabezas mas cercanas
 // (04/11 boca) mascara del interior de la boca (mouthmask.cpp): la luz de la piel no cambia la boca

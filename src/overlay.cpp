@@ -184,7 +184,7 @@ static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                 if (ri.data.mouse.usButtonFlags & RI_MOUSE_WHEEL) wd = (int)(short)ri.data.mouse.usButtonData;
             }
         }
-        if (wd != 0) { if (FreeCamActive()) FreeCamWheel(wd); else MenuMouseWheel(wd); }
+        if (wd != 0) { if (MotorUiWheel(wd)) {} else if (FreeCamActive()) FreeCamWheel(wd); else MenuMouseWheel(wd); }   // (15/11 h) sobre un panel del editor del Motor la rueda es del panel
     }
     if ((g_menuOpen || g_inspectOn) && s_init) {
         ImGui_ImplWin32_WndProcHandler(h, m, w, l);
@@ -2990,6 +2990,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (lightIcons) DrawEditorLightIcons();
     if (sunCompass && !g_menuOpen) DrawSunCompass();
     if (g_cfg.live[426][0] > 0.5f) DrawSkeletonView();   // (09/11 f) vista del esqueleto (Diagnostico)
+    if (gizmo) MotorGizmoDraw();   // (15/11 h, Agustin 03:17: "el cursor parece estar atras") el editor del Motor se dibuja ANTES que el cursor, asi la flecha queda arriba de los paneles
     if (mmCur && g_cfg.menuCursor == 1) {   // (14/11 c / d, Agustin: "que se mantenga igual con el menu abierto o cerrado", "que muestre donde puede clickear")
         const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);   // el mismo dardo del menu; mano justo sobre una fila del juego
         MvCursorDraw(ImGui::GetForegroundDrawList(), ImVec2(mmx, mmy), MenuMouseOverRow() ? 1 : 0, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, k, 1.0f, g_cfg.menuVisual);
@@ -3016,7 +3017,6 @@ void OverlayPresent(IDXGISwapChain* sc) {
         dl->AddRectFilled(ImVec2(a0.x, a0.y + 4.0f * k), ImVec2(a0.x + 3.0f * k, b.y - 4.0f * k), ImGui::GetColorU32(ImGuiCol_CheckMark, a), 1.5f * k);
         dl->AddText(ImVec2(a0.x + pad.x, a0.y + pad.y), IM_COL32(235, 240, 245, (int)(255 * a)), msg.c_str());
     }
-    if (gizmo) MotorGizmoDraw();
     if (repe) RepeticionDraw(mmCur);   // (14/11 n) solo la marca y el minuto al pasar el mouse sobre la barra DEL JUEGO, con o sin camara libre (antes no se dibujaba nada con la camara libre)
     if (keyHud) KeyHudDraw();
     InspectDrawOverlay();
