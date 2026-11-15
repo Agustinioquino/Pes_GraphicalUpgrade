@@ -1705,7 +1705,6 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
         const ImVec4 grn(0.20f, 0.91f, 0.50f, 1.0f);
         const ImU32 arr = ColA(Lerp4(ImVec4(0.92f, 0.94f, 0.96f, 1), grn, s_dn), alpha), arrD = ColA(Lerp4(ImVec4(0.47f, 0.51f, 0.55f, 1), ImVec4(0.10f, 0.55f, 0.29f, 1), s_dn), alpha);
         const ImU32 shadow = Col(0, 0, 0, 0.28f * alpha); const float lw = std::max(1.0f, 0.9f * k);
-        const ImU32 cFront = Col(0.91f, 0.93f, 0.95f, alpha), cDark = Col(0.24f, 0.26f, 0.30f, alpha), cDarker = Col(0.16f, 0.18f, 0.22f, alpha), cGrey = Col(0.59f, 0.62f, 0.67f, alpha), cSide = Col(0.66f, 0.70f, 0.75f, alpha);
         auto P = [&](float x, float y) { return ImVec2(m.x + x * sc, m.y + y * sc); };
         auto Q = [&](float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy, ImU32 fill, bool line) {
             const ImVec2 a = P(ax, ay), b = P(bx, by), c = P(cx, cy), d = P(dx, dy); dl->AddQuadFilled(a, b, c, d, fill); if (line) dl->AddQuad(a, b, c, d, edge, lw); };
@@ -1718,38 +1717,24 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
                 Q(a.x, a.y, b.x, b.y, b.x + ex, b.y + ey, a.x + ex, a.y + ey, arrD, false);
                 Q(a.x, a.y, b.x, b.y, b.x + tx, b.y + ty, a.x + tx, a.y + ty, arr, false); }
         };
-        auto Head = [&](bool hz, float t, float dir) {
-            const ImVec2 o = RP(hz, t), o2 = RP(hz, t + 1e-3f * dir); float tx = o2.x - o.x, ty = o2.y - o.y; const float L = sqrtf(tx * tx + ty * ty); tx /= L; ty /= L;
-            const float nx = -ty, ny = tx; const ImVec2 tip = P(o.x + tx * 3.3f, o.y + ty * 3.3f), a = P(o.x + nx * 2.3f, o.y + ny * 2.3f), b = P(o.x - nx * 2.3f, o.y - ny * 2.3f);
+        const float PI = 3.1415927f;
+        Band(true, PI, PI * 2.0f); Band(false, -PI * 0.5f, PI * 0.5f);              // los aros por detras
+        // (15/11, Agustin 17:44 / 17:45: "que se vea la parte de atras y mas pequena la camara", "que al hacer click cambie su color a
+        // verde y brille levemente") la camara se ve DE ATRAS en tres cuartos: el fondo (visor y pantallita) hacia el que mira, el lente
+        // y el parasol se van hacia arriba a la derecha, los rollos de costado arriba. Mas chica que los aros. Con el boton apretado el
+        // cuerpo se tine de verde y un brillo verde suave lo rodea.
+        // (15/11, Agustin 17:51: "mejor sin camara y solo con las flechas, apuntando cada una para su lado") sin camara: los dos aros y
+        // un punto en el centro; con el boton apretado el punto se pone verde y brilla suave.
+        if (s_dn > 0.01f) for (int i = 5; i >= 1; i--) dl->AddCircleFilled(P(0.0f, 1.0f), (2.0f + (float)i * 1.4f) * sc, ColA(grn, 0.06f * s_dn * alpha), 24);
+        Circ(0.0f, 1.0f, 1.3f, ColA(Lerp4(ImVec4(0.94f, 0.95f, 0.97f, 1), grn, s_dn), alpha), true);
+        Band(true, 0.0f, PI); Band(false, PI * 0.5f, PI * 1.5f);              // los aros por delante
+        auto Out = [&](float x, float y, float tx, float ty) {   // flecha que apunta hacia afuera (su lado)
+            const float nx = -ty, ny = tx; const ImVec2 tip = P(x + tx * 3.3f, y + ty * 3.3f), a = P(x + nx * 2.4f, y + ny * 2.4f), b = P(x - nx * 2.4f, y - ny * 2.4f);
             const ImVec2 sh(0.5f * sc, 0.8f * sc);
             dl->AddTriangleFilled(ImVec2(tip.x + sh.x, tip.y + sh.y), ImVec2(a.x + sh.x, a.y + sh.y), ImVec2(b.x + sh.x, b.y + sh.y), shadow);
-            dl->AddTriangleFilled(tip, a, b, arrD); dl->AddTriangleFilled(tip, a, P(o.x, o.y), arr); dl->AddTriangle(tip, a, b, edge, lw);
+            dl->AddTriangleFilled(tip, a, b, arrD); dl->AddTriangleFilled(tip, a, P(x, y), arr); dl->AddTriangle(tip, a, b, edge, lw);
         };
-        const float PI = 3.1415927f;
-        Band(true, PI * 1.08f, PI * 1.92f); Band(false, -PI * 0.42f, PI * 0.42f);              // los aros por detras
-        // cuerpo: costado (de frente al que mira) -6..4 x -1.5..4.5, fondo hacia atras a la izquierda (-2.6, -2.2)
-        dl->AddQuadFilled(P(4.6f, -0.6f), P(4.6f, 5.4f), P(-5.4f, 5.4f), P(-8.0f, 3.2f), shadow);
-        Q(-6.0f, -1.5f, -8.6f, -3.7f, -8.6f, 2.3f, -6.0f, 4.5f, cSide, true);                   // fondo
-        Q(-6.0f, -1.5f, 4.0f, -1.5f, 1.4f, -3.7f, -8.6f, -3.7f, white, true);                  // techo
-        Q(-6.0f, -1.5f, 4.0f, -1.5f, 4.0f, 4.5f, -6.0f, 4.5f, cFront, true);                   // costado
-        // rollos de pelicula arriba
-        const float RC[2][3] = { { -3.6f, -5.4f, 2.7f }, { 1.3f, -5.7f, 3.0f } };
-        for (const auto& rc : RC) {
-            const float x = rc[0], y = rc[1], r = rc[2];
-            Q(x - 0.6f, y + r * 0.6f, x + 0.6f, y + r * 0.6f, x + 0.6f, -1.9f, x - 0.6f, -1.9f, Col(0.78f, 0.81f, 0.84f, alpha), true);
-            Circ(x + 0.5f, y, r, cGrey, true); Circ(x, y, r, Col(0.94f, 0.95f, 0.97f, alpha), true); Circ(x, y, r * 0.33f, cDark, false);
-            for (int q = 0; q < 3; q++) { const float a = (float)q * 2.094f + 0.5f; Circ(x + cosf(a) * r * 0.62f, y + sinf(a) * r * 0.62f, r * 0.18f, cGrey, false); }
-        }
-        Q(-6.0f, 0.2f, -8.2f, 0.6f, -8.2f, 2.4f, -6.0f, 2.6f, cDark, true);                     // visor de atras
-        Circ(1.8f, 0.3f, 0.55f, Col(0.90f, 0.24f, 0.24f, alpha), false);                        // lucecita roja
-        dl->AddLine(P(-4.5f, 3.0f), P(2.5f, 3.0f), cSide, lw);
-        // lente y parasol hacia la derecha
-        Q(4.0f, 0.0f, 6.8f, 0.2f, 6.8f, 3.6f, 4.0f, 3.8f, cDark, true);
-        Q(6.8f, -0.8f, 9.6f, -2.2f, 9.6f, 6.0f, 6.8f, 4.6f, cDarker, true);
-        Q(9.6f, -2.2f, 10.4f, -2.0f, 10.4f, 5.8f, 9.6f, 6.0f, Col(0.10f, 0.12f, 0.15f, alpha), true);
-        dl->AddEllipseFilled(P(9.95f, 1.9f), ImVec2(0.55f * sc, 1.9f * sc), ColA(Lerp4(ImVec4(0.10f, 0.16f, 0.19f, 1), ImVec4(0.08f, 0.30f, 0.18f, 1), s_dn), alpha), 0.0f, 16);
-        Band(true, -0.05f * PI, 1.05f * PI); Band(false, PI * 0.58f, PI * 1.42f);              // los aros por delante
-        Head(true, -0.05f * PI, -1.0f); Head(true, 1.05f * PI, 1.0f); Head(false, PI * 0.58f, -1.0f); Head(false, PI * 1.42f, 1.0f);
+        Out(13.6f, 2.5f, 1, 0); Out(-13.6f, 2.5f, -1, 0); Out(0.0f, -12.6f, 0, -1); Out(0.0f, 13.6f, 0, 1);
         return;
     }
     (void)style; (void)grey;
