@@ -286,7 +286,7 @@ static void ToolbarDraw() {
         const ImVec2 o((p0.x + p1.x) * 0.5f, barH * 0.5f); const float h2 = barH * 0.27f;
         if (s_icon[0]) dl->AddImage((ImTextureID)(uintptr_t)s_icon[0], ImVec2(o.x - h2, o.y - h2), ImVec2(o.x + h2, o.y + h2), ImVec2(0, 0), ImVec2(1, 1), ink); else IconFallback(dl, 0, o, barH * 0.95f, ink, k);
         x = p1.x; dl->AddLine(ImVec2(x, 6.0f * k), ImVec2(x, barH - 6.0f * k), IM_COL32(80, 80, 84, 255), 1.0f); }
-      x += 14.0f * k; x += text(x, barH * 0.5f, acc, "FOX ENGINE", fs) + 10.0f * k; x += text(x, barH * 0.5f, ink, "Motor en tiempo real", fs) + 22.0f * k;
+      x += 14.0f * k; x += text(x, barH * 0.5f, acc, "FOX ENGINE", fs) + 14.0f * k;      // el nombre largo y la escena abierta van a la derecha de la barra
       dl->AddLine(ImVec2(x, 6.0f * k), ImVec2(x, barH - 6.0f * k), IM_COL32(80, 80, 84, 255), 1.0f); x += 8.0f * k;
       // (15/11 g) barra de menus: cada titulo abre su lista de acciones (se dibuja al final, encima de todo)
       { const char* const mn[6] = { "Archivo", "Escena", "Ver", "Render", "Luces", "Ayuda" };
