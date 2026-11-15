@@ -43,10 +43,18 @@ static bool s_tlWas = false; static int s_tPress = -1;
 
 static void IconsLoad() {
     s_iconTried = true;
-    wchar_t exe[MAX_PATH] = L""; const DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH || !g_dev.dev) return;
-    std::wstring dir(exe); const size_t cut = dir.find_last_of(L"\\/"); if (cut == std::wstring::npos) return;
-    dir = dir.substr(0, cut + 1) + L"content\\motor-tiempo-real\\iconos\\";
+    // (15/11 b) la carpeta content del Motor esta al lado de sider.dll (en la PC de Agustin: <juego>\Dream Patch Sider\), no al
+    // lado del exe: se busca primero ahi y, si Sider no esta cargado o no tiene la carpeta, al lado del exe.
+    if (!g_dev.dev) return;
+    std::wstring dir;
+    for (int k = 0; k < 2 && dir.empty(); k++) {
+        HMODULE m = k == 0 ? GetModuleHandleW(L"sider.dll") : nullptr; if (k == 0 && !m) continue;
+        wchar_t mod[MAX_PATH] = L""; const DWORD n = GetModuleFileNameW(m, mod, MAX_PATH); if (n == 0 || n >= MAX_PATH) continue;
+        std::wstring d(mod); const size_t cut = d.find_last_of(L"\\/"); if (cut == std::wstring::npos) continue;
+        d = d.substr(0, cut + 1) + L"content\\motor-tiempo-real\\iconos\\";
+        if (GetFileAttributesW(d.c_str()) != INVALID_FILE_ATTRIBUTES) dir = d;
+    }
+    if (dir.empty()) { Log("motor (iconos): no esta la carpeta content\\motor-tiempo-real\\iconos (ni junto a sider.dll ni junto al exe): los dibuja la DLL"); return; }
     EnsureComInit(); int ok = 0;
     for (int i = 0; i < 4; i++) {
         std::wstring f = dir; for (const char* c = kIconFile[i]; *c; c++) f += (wchar_t)*c; f += L".png";
