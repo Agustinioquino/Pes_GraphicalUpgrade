@@ -264,13 +264,42 @@ static inline float EaseIO(float p) { return p < 0.5f ? 4.0f * p * p * p : 1.0f 
 // barra de carga de la tapa: MotorCoverLoad(objetivo 0..1, etapa) en cada cuadro antes de MotorGlitchCover; lo mostrado se acerca
 // suave al objetivo, nunca vuelve atras dentro de una tapa y arranca de 0 en una tapa nueva (objetivo mas bajo o 0.5 s sin pedidos)
 static float s_cvShown = 0.0f; static int s_cvStage = 0; static double s_cvLoadT = -1.0e9;
+// (15/11 n, Agustin 05:04: "la barra de carga es poco precisa") la barra avanza con el TIEMPO que tarda de verdad cada paso, aprendido de
+// las entradas anteriores (se guarda en [PES21FX] motor_carga_tiempos): pasos 0 pagina del Motor abierta, 1 pagina armada (MotorUiReady),
+// 2 escena leida, 3 iconos, 4 destapado; 5 = salir hasta que vuelve el Editar. Entre un paso y el siguiente se llena en proporcion al
+// tiempo esperado y nunca pasa al siguiente sin que ocurra; al ocurrir salta a su lugar. Asi el 50 % es la mitad del tiempo real.
+static double s_ldT0 = -1.0e9, s_ldHit[5] = {}; static float s_ldE[6] = { 0.35f, 0.70f, 0.78f, 0.82f, 0.90f, 0.45f }; static bool s_ldRead = false;
+static void LdRead() { if (s_ldRead) return; s_ldRead = true; float v[6];
+    if (sscanf(g_cfg.motorLoadTimes.c_str(), "%f,%f,%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 6) for (int i = 0; i < 6; i++) if (v[i] > 0.02f && v[i] < 5.0f) s_ldE[i] = v[i];
+    for (int i = 1; i < 5; i++) s_ldE[i] = std::max(s_ldE[i], s_ldE[i - 1] + 0.02f); }
+static void LdSave() { char b[96]; snprintf(b, sizeof b, "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f", s_ldE[0], s_ldE[1], s_ldE[2], s_ldE[3], s_ldE[4], s_ldE[5]); SaveOption("motor_carga_tiempos", b); }
+static void LdStart(double now) { LdRead(); s_ldT0 = now; for (double& h : s_ldHit) h = 0.0; }
+static void LdHit(int i, double now) { if (s_ldHit[i] == 0.0) s_ldHit[i] = now;
+    if (i == 4) { for (int q = 0; q < 5; q++) if (s_ldHit[q] > 0.0) s_ldE[q] = 0.6f * s_ldE[q] + 0.4f * (float)(s_ldHit[q] - s_ldT0);
+        for (int q = 1; q < 5; q++) s_ldE[q] = std::max(s_ldE[q], s_ldE[q - 1] + 0.02f); LdSave();
+        Log("motor (editor): carga en %.2f s (pagina %.2f, armada %.2f, escena %.2f, iconos %.2f)", (float)(now - s_ldT0), s_ldHit[0] > 0 ? (float)(s_ldHit[0] - s_ldT0) : -1.0f,
+            s_ldHit[1] > 0 ? (float)(s_ldHit[1] - s_ldT0) : -1.0f, s_ldHit[2] > 0 ? (float)(s_ldHit[2] - s_ldT0) : -1.0f, s_ldHit[3] > 0 ? (float)(s_ldHit[3] - s_ldT0) : -1.0f); } }
+static float LdProgress(double now, int* stage) {
+    int k = -1; for (int i = 0; i < 5; i++) if (s_ldHit[i] > 0.0) k = i;
+    if (stage) *stage = std::clamp(k + 1, 0, 4);
+    if (k >= 4) return 1.0f;
+    const float Ed = s_ldE[4], lo = k >= 0 ? s_ldE[k] / Ed : 0.0f, hi = s_ldE[k + 1] / Ed;
+    const float t0 = k >= 0 ? (float)(s_ldHit[k] - s_ldT0) : 0.0f, span = std::max(0.05f, s_ldE[k + 1] - (k >= 0 ? s_ldE[k] : 0.0f));
+    const float f = std::clamp(((float)(now - s_ldT0) - t0) / span, 0.0f, 1.0f);
+    return std::min(hi - 0.01f, lo + (hi - lo) * f);
+}
 static void MotorCoverLoad(float tgt, int stage) {
     const double now = Now(); const float dt = (float)std::min(0.1, std::max(0.0, now - s_cvLoadT));
     if (now - s_cvLoadT > 0.5 || tgt < s_cvShown - 0.3f) s_cvShown = 0.0f;
     s_cvLoadT = now; s_cvStage = stage;
-    if (tgt > s_cvShown) s_cvShown = std::min(tgt, s_cvShown + (tgt - s_cvShown) * std::min(1.0f, dt * (tgt >= 0.999f ? 16.0f : 7.0f)) + dt * 0.05f);
+    if (tgt > s_cvShown) s_cvShown = std::min(tgt, s_cvShown + (tgt - s_cvShown) * std::min(1.0f, dt * (tgt >= 0.999f ? 18.0f : 12.0f)));
 }
-void MotorGlitchCover(float a, float side) {
+// (15/11 n, Agustin 05:03: "algunas partes del menu se colan en la pantalla de carga al entrar y salir") la tapa se dibuja al FINAL
+// del cuadro (MotorCoverFlush, overlay.cpp antes de ImGui::Render): el gizmo de camara, la ayuda del mouse, el cursor y los avisos que
+// se dibujan despues del editor ya no quedan encima. MotorGlitchCover solo anota lo pedido en este cuadro.
+static float s_cvPendA = 0.0f, s_cvPendSide = 1.0f; static bool s_cvPend = false;
+void MotorGlitchCover(float a, float side) { if (!s_cvPend || a > s_cvPendA) { s_cvPendA = a; s_cvPendSide = side; } s_cvPend = true; }
+static void GlitchCoverDraw(float a, float side) {
     a = std::clamp(a, 0.0f, 1.0f); if (a <= 0.001f) return;
     ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
     const float k = ds.y / 540.0f;                                         // las medidas de la vista previa son para 960 x 540
@@ -353,11 +382,12 @@ void MotorGlitchCover(float a, float side) {
           dl->AddText(font, fsz, ImVec2(bx0 + bw - ts.x, by + bh + 6.0f * k), IM_COL32(52, 232, 128, (int)(255.0f * la)), pc); }
     }
 }
+void MotorCoverFlush() { if (!s_cvPend) return; s_cvPend = false; GlitchCoverDraw(s_cvPendA, s_cvPendSide); }
 // estado de la tapa fuera del editor: antes de que abra (se acepto el boton 12) y despues de cerrarlo (hasta que vuelve el Editar)
 static std::atomic<double> s_cvArriveT{ -1.0e9 }, s_cvCancelT{ -1.0e9 }, s_cvExitT{ -1.0e9 }, s_cvRevT{ -1.0e9 };
 static double s_sndEnterT = -1.0e9;
 static void EnterSoundOnce() { const double n = Now(); if (n - s_sndEnterT > 3.0) { s_sndEnterT = n; MotorGlitchSound(0); } }
-void MotorCoverArrive() { s_cvArriveT.store(Now()); s_cvCancelT.store(-1.0e9); EnterSoundOnce(); }
+void MotorCoverArrive() { s_cvArriveT.store(Now()); s_cvCancelT.store(-1.0e9); EnterSoundOnce(); LdStart(Now()); }
 void MotorCoverCancel() { const double t = Now() - s_cvArriveT.load(); if (t >= 0.0 && t < 2.8) { s_cvArriveT.store(-1.0e9); s_cvCancelT.store(Now()); } }
 bool MotorCoverArriving() { const double t = Now() - s_cvArriveT.load(); return t >= 0.0 && t < 2.8; }
 // overlay.cpp, cada cuadro, antes del editor (con el editor a la vista la tapa la dibuja ToolbarDraw)
@@ -367,15 +397,16 @@ void MotorPreCoverDraw() {
     if (MotorUiOn()) return;
     const double now = Now();
     if (now - s_cvExitT.load() < 3.0) {                                    // despues de salir: tapado hasta que vuelve el menu de Editar
-        if (s_cvRevT.load() < s_cvExitT.load() && (MotorEditMenuSeenT() > s_cvExitT.load() + 0.05 || now - s_cvExitT.load() > 2.0)) s_cvRevT.store(now);
+        if (s_cvRevT.load() < s_cvExitT.load() && (MotorEditMenuSeenT() > s_cvExitT.load() + 0.05 || now - s_cvExitT.load() > 2.0)) { s_cvRevT.store(now);
+            if (now - s_cvExitT.load() < 2.0) { s_ldE[5] = 0.6f * s_ldE[5] + 0.4f * (float)(now - s_cvExitT.load()); LdSave(); } }
         const float a = s_cvRevT.load() < s_cvExitT.load() ? 1.0f : 1.0f - (float)(now - s_cvRevT.load()) / 0.5f;
         const bool back = s_cvRevT.load() >= s_cvExitT.load();
-        MotorCoverLoad(back ? 1.0f : 0.15f + 0.6f * (1.0f - std::exp(-(float)(now - s_cvExitT.load()) / 0.5f)), back ? 4 : 5);
+        MotorCoverLoad(back ? 1.0f : std::min(0.97f, (0.38f + (float)(now - s_cvExitT.load())) / (0.38f + s_ldE[5])), back ? 4 : 5);
         if (a > 0.0f) { MotorGlitchCover(a, -1.0f); return; }
     }
     { const double t = now - s_cvArriveT.load();                           // antes de entrar: llega desde la izquierda
       if (t >= 0.0 && t < 2.8) { float a = EaseIO(std::min(1.0f, (float)t / 0.32f)); if (t > 2.5) a = std::max(0.0f, 1.0f - (float)(t - 2.5) / 0.3f);
-        MotorCoverLoad(0.28f * (1.0f - std::exp(-(float)t / 0.35f)), 0); MotorGlitchCover(a, -1.0f); return; } }
+        int st = 0; const float pr = LdProgress(now, &st); MotorCoverLoad(pr, st); MotorGlitchCover(a, -1.0f); return; } }
     { const double t = now - s_cvCancelT.load();                           // no era el Motor: se retira por donde vino
       if (t >= 0.0 && t < 0.3) MotorGlitchCover(1.0f - (float)t / 0.3f, -1.0f); }
 }
@@ -395,7 +426,7 @@ static void ToolbarDraw() {
     // del arbol se desliza de una fila a otra; el contenido del inspector entra con un fundido corto al cambiar de fila. Se hace
     // moviendo / atenuando los vertices ya emitidos de cada parte (la lista de dibujo no tiene transformaciones).
     { const double now = Now(); const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
-      if (now - s_uiT > 0.4) { s_openA = 0.0f; s_selY = -1.0f; s_inspA = 1.0f; s_menuOpen = -1; s_menuKb = -1; s_modal = 0; s_origN = 0; s_pendN = 0; s_enterT = now; s_exitT = -1.0; s_exitSent = false; s_coverEnd = -1.0; s_sceneOnce = false; EnterSoundOnce(); }
+      if (now - s_uiT > 0.4) { s_openA = 0.0f; s_selY = -1.0f; s_inspA = 1.0f; s_menuOpen = -1; s_menuKb = -1; s_modal = 0; s_origN = 0; s_pendN = 0; s_enterT = now; s_exitT = -1.0; s_exitSent = false; s_coverEnd = -1.0; s_sceneOnce = false; EnterSoundOnce(); if (now - s_ldT0 > 3.0) LdStart(now); LdHit(0, now); }
       s_uiT = now; s_openA = std::min(1.0f, s_openA + dt / 0.28f); s_inspA = std::min(1.0f, s_inspA + dt / 0.16f);
       if (s_sel != s_selWas) { s_selWas = s_sel; s_inspA = 0.0f; } }
     const float eo = 1.0f - (1.0f - s_openA) * (1.0f - s_openA) * (1.0f - s_openA);      // salida suave
@@ -686,14 +717,13 @@ static void ToolbarDraw() {
         if (s_coverEnd < 0.0) { const bool ready = MotorUiReady() && s_sceneOnce && s_iconTried;
             if ((te >= 0.2f && ready) || te >= 2.0f) { s_coverEnd = now; s_openA = 0.0f; Log("motor (editor): entrada destapada a los %.2f s (%s)", te, ready ? "todo cargado" : "tope de 2 s"); } }
         if (s_coverEnd < 0.0) a = 1.0f; else { const float tf = (float)(now - s_coverEnd); if (tf < 0.55f) a = 1.0f - tf / 0.55f; }
-        if (s_coverEnd < 0.0) { const bool uiR = MotorUiReady();      // lo que lleva cargado: 0.30 la pagina abierta, 0.30 armada, 0.25 escena, 0.15 iconos
-            const float pr = 0.30f + 0.30f * (uiR ? 1.0f : std::clamp(te / 0.3f, 0.0f, 0.9f)) + (s_sceneOnce ? 0.25f : 0.0f) + (s_iconTried ? 0.15f : 0.0f);
-            MotorCoverLoad(std::min(1.0f, pr), !uiR ? 1 : !s_sceneOnce ? 2 : !s_iconTried ? 3 : 4); }
-        else MotorCoverLoad(1.0f, 4);
+        if (MotorUiReady()) LdHit(1, now); if (s_sceneOnce) LdHit(2, now); if (s_iconTried) LdHit(3, now);    // pasos de la carga (barra por tiempo aprendido)
+        if (s_coverEnd >= 0.0) LdHit(4, now);
+        { int st = 0; const float pr = LdProgress(now, &st); MotorCoverLoad(pr, st); }
         s_cvArriveT.store(-1.0e9);    // la tapa de antes de entrar ya la sigue esta
         // destapar al entrar: side +1 (los bloques se van hacia la derecha). Salir: llegan con side +1 (corriendose a la izquierda) y, ya
         // cerrado el editor, MotorPreCoverDraw sigue tapando hasta que vuelve el Editar y destapa con side -1
-        if (s_exitT >= 0.0) { const float tx = (float)(now - s_exitT); a = std::max(a, EaseIO(std::min(1.0f, tx / 0.36f))); MotorCoverLoad(0.15f * std::min(1.0f, tx / 0.38f), 5);
+        if (s_exitT >= 0.0) { const float tx = (float)(now - s_exitT); a = std::max(a, EaseIO(std::min(1.0f, tx / 0.36f))); MotorCoverLoad(std::min(0.97f, tx / (0.38f + s_ldE[5])), 5);
             if (tx >= 0.38f && !s_exitSent) { s_exitSent = true; MotorUiBack(); s_cvExitT.store(now); s_cvRevT.store(-1.0e9); }
             if (tx > 1.2f) { s_exitT = -1.0; MotorErr("El juego no acept\xC3\xB3 el pedido de volver al Editar. Prob\xC3\xA1 de nuevo con Archivo > Cerrar el Motor."); } }
         MotorGlitchCover(a, 1.0f);

@@ -3140,6 +3140,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         if (g_cfg.clothDirty && Now() - g_cfg.clothChangeT > 0.4) SaveCloth();
     }
+    MotorCoverFlush();   // (15/11 n) la tapa del Motor arriba de todo lo demas (motorgizmo.cpp)
     ImGui::Render();
     if (glassBB) { GlassBlur(glassBB); glassBB->Release(); }
     ID3D11RenderTargetView* oldRT[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};

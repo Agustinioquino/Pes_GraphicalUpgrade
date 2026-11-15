@@ -175,6 +175,7 @@ static bool LoadConfigLocked() {
             else if (kl == "motor_grilla_tamano") c.motorGridSize = std::clamp(atoi(v.c_str()), 10, 400);   // (15/11) lado de la grilla en metros
             else if (kl == "motor_sonido") c.motorSound = atoi(v.c_str()) != 0 ? 1 : 0;                     // (15/11 m) motorsound.cpp: sonido de la transicion
             else if (kl == "motor_sonido_volumen") c.motorSoundVol = std::clamp(atoi(v.c_str()), 0, 100);
+            else if (kl == "motor_carga_tiempos") c.motorLoadTimes = v;                                       // (15/11 n) tiempos aprendidos de la barra de carga
             else if (kl == "motor_letra") c.motorFont = atoi(v.c_str()) != 0 ? 1 : 0;                       // (15/11 m) letra Lack UA del editor (textures\pes_motor*.ttf)
             else if (kl == "motor_grilla") c.motorGrid = atoi(v.c_str()) != 0;               // (15/11) 1 = fondo con grilla de piso
             else if (kl == "motor_jugador_al_abrir") c.motorStartPlayer = atoi(v.c_str()) != 0;   // (15/11) 1 = carga al jugador al abrir (0 = solo el menu)
