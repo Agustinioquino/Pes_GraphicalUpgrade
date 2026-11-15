@@ -78,7 +78,9 @@ const unsigned char* Frames(int n) {
         const uintptr_t dm = *(const uintptr_t*)kDmGlobal; if (!dm) return nullptr;
         const uintptr_t u = *(const uintptr_t*)(dm + 0x6a8); if (!u) return nullptr;
         const unsigned char* f = *(const unsigned char* const*)(u + 0x40);
-        if (!f || !Readable(f, (size_t)n * kFrame)) return nullptr;
+        // (15/11) antes se tocaba cada pagina de TODO el anillo (con la repeticion de 10 min = 32400 cuadros, 263 MB y 64.000 paginas)
+        // en cada llamada del visor: decenas de ms por cuadro. Alcanza con el primer cuadro; quien lee un cuadro lo hace bajo __try
+        if (!f || !Readable(f, kFrame)) return nullptr;
         return f;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
 }
