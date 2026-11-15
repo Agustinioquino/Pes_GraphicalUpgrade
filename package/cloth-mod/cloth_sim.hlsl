@@ -255,9 +255,6 @@ cbuffer Params : register(b2)
 #define PES_JK_TETHER     0.025   // (m) tope de la correa de distancia maxima
 #define PES_JK_DAMP       1.6     // freno relativo al cuerpo (x)
 #define PES_IS_JACKET (g_legCount == 0 && !PES_IS_BIB && g_vertexCount >= PES_JK_MINV)
-// (15/11 c, Agustin: "revisa los calculos del short que parece que siguen alto") con la brisa de los menus el short (mas
-// corto y mas libre abajo) se abria hasta 47-53 mm de su pose: al short le llega una parte de la brisa
-#define PES_MENU_BREEZE_SHORTS 0.35
 #define PES_MENU_JUMP    3.0      // (m/s) en menus, mas rapido que esto = salto de pose: la tela viaja con el cuerpo
 struct ParticleRest { float4 posPin; float4 nrm; uint4 skin; };
 struct Capsule      { float4 a; float4 b; };
@@ -1577,7 +1574,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                           s_windLen = 2.0; }
             s_pesWindOn = pesWOn; s_windHem = pesEffOk ? pesEff.z : 1.0;
             if (s_menu && PES_MENU_BREEZE > 0.0 && length(windBase) < 0.1) {   // (15/11 b) brisa leve de los menus, con rachas lentas
-                windBase = mul(transpose(W), float3(0.92, 0.0, 0.39)) * (PES_MENU_BREEZE * (g_legCount > 0 ? PES_MENU_BREEZE_SHORTS : 1.0) * (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0)));
+                windBase = mul(transpose(W), float3(0.92, 0.0, 0.39)) * (PES_MENU_BREEZE * (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0)));
                 s_windLen = 1.5; }
             // PES21 FX (25/10): el cuerpo real de este personaje (cuerpo.cpp): de las tablas que la DLL armo en el ultimo Present (una
             // por personaje, con la piel del cuadro anterior), la que tiene su origen en el mundo mas cerca del de la prenda

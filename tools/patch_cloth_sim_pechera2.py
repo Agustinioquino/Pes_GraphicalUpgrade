@@ -36,9 +36,7 @@ t = t[:j] + (
     "#define PES_JK_TETHER     0.025   // (m) tope de la correa de distancia maxima\n"
     "#define PES_JK_DAMP       1.6     // freno relativo al cuerpo (x)\n"
     "#define PES_IS_JACKET (g_legCount == 0 && !PES_IS_BIB && g_vertexCount >= PES_JK_MINV)\n"
-    "// (15/11 c, Agustin: \"revisa los calculos del short que parece que siguen alto\") con la brisa de los menus el short (mas\n"
-    "// corto y mas libre abajo) se abria hasta 47-53 mm de su pose: al short le llega una parte de la brisa\n"
-    "#define PES_MENU_BREEZE_SHORTS 0.35\n") + t[j:]
+    "#define PES_MENU_JUMP    3.0      // (m/s) en menus, mas rapido que esto = salto de pose: la tela viaja con el cuerpo\n") + t[j:]
 
 rep("    if (PES_IS_BIB) damp *= PES_BIB_DAMP;   // (15/11) pechera: tela liviana\n",
     "    if (PES_IS_BIB) damp *= PES_BIB_DAMP;   // (15/11) pechera: tela liviana\n"
@@ -64,9 +62,6 @@ rep("        if (legTracked) {\n",
     "        }\n"
     "        if (legTracked) {\n")
 
-rep("* (PES_MENU_BREEZE * (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0)));\n",
-    "* (PES_MENU_BREEZE * (g_legCount > 0 ? PES_MENU_BREEZE_SHORTS : 1.0) * (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0)));\n")
-
 # (15/11 c, Agustin: "el short ... se recargaba muchas veces") cloth.log 16:45 local: en Apariencia el short saltaba cada ~2.5 s
 # a 85 mm de su pose y volvia, con escala de huesos 0.60 en esos cuadros (el esqueleto que llega cambia de golpe). 85 mm en un
 # cuadro son ~5 m/s, por debajo del salto de 50 m/s: la tela lo tomaba como movimiento real, quedaba atras y rebotaba. En los
@@ -74,9 +69,7 @@ rep("* (PES_MENU_BREEZE * (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 +
 rep("    if (dot(vBody, vBody) > 50.0 * 50.0) {\n",
     "    const float pesJump = s_menu ? PES_MENU_JUMP : 50.0;   // (15/11 c) en menus, un cambio de pose de golpe no es movimiento\n"
     "    if (dot(vBody, vBody) > pesJump * pesJump) {\n")
-rep("#define PES_MENU_BREEZE_SHORTS 0.35\n",
-    "#define PES_MENU_BREEZE_SHORTS 0.35\n"
-    "#define PES_MENU_JUMP    3.0      // (m/s) en menus, mas rapido que esto = salto de pose: la tela viaja con el cuerpo\n")
+# (15/11 c, Agustin: "no cambies la fisica solo el error") la fisica del short queda como estaba (sin cambio de brisa)
 
 if crlf: t = t.replace('\n', '\r\n')
 open(p, 'wb').write(t.encode('latin1'))
