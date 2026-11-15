@@ -216,6 +216,21 @@ cbuffer Params : register(b2)
     uint   g_mapped;
     uint2  g_pad5;
 };
+// PES21 FX (15/11, Agustin: "la fisica de las pecheras deberia ser mas suelta que la remera", "que no atraviese la remera
+// normal y que no se choquen en extremo"). La pechera (bibs.fmdl, pieza 0; bibs_reserve.fmdl, pieza 8) entra al mod de ropa
+// como una camiseta sin mangas (sin capsulas). Se reconoce por eso + su cantidad de vertices. Es una tela liviana que cuelga
+// de los hombros: anclaje a la pose de armado mas flojo, correa mas larga, menos freno y unos mm colgando. Para que no se
+// meta en lo que tiene abajo (torso o camiseta) no puede quedar mas adentro que su superficie de armado + PES_BIB_AIR, y en
+// la correccion al dibujar (x256 = 2) queda PES_BIB_SKIN mas lejos de la piel que la camiseta.
+#define PES_BIB_VERTS0   3542     // bibs.fmdl (visto en cloth.log 15/11: 3542 vertices, 16014 indices)
+#define PES_BIB_VERTS1   0        // bibs_reserve.fmdl (0 = todavia sin dato: no se reconoce)
+#define PES_BIB_PIN      3.0      // anclaje a la pose de armado: veces mas flojo que la camiseta
+#define PES_BIB_TETHER   1.6      // correa de distancia maxima: veces mas larga
+#define PES_BIB_DAMP     0.70     // freno relativo al cuerpo (<1 = se balancea mas tiempo)
+#define PES_BIB_HANG     0.006    // (m) cuanto cuelga la tela suelta por debajo de su pose de armado
+#define PES_BIB_AIR      0.004    // (m) aire minimo sobre su superficie de armado (lo que tiene abajo)
+#define PES_BIB_SKIN     0.004    // (m) separacion extra de la piel al dibujar, sobre la de la camiseta (y256)
+#define PES_IS_BIB (g_legCount == 0 && g_capsuleCount == 0 && (g_vertexCount == PES_BIB_VERTS0 || (PES_BIB_VERTS1 > 0 && g_vertexCount == PES_BIB_VERTS1)))
 struct ParticleRest { float4 posPin; float4 nrm; uint4 skin; };
 struct Capsule      { float4 a; float4 b; };
 ByteAddressBuffer               g_bindPos   : register(t0);
@@ -647,6 +662,7 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
     if (s == 0) v += s_kick;
     float sleeveW = float((g_rest[p].skin.w >> 8) & 255) / 255.0;
     float damp = g_damping + g_sleeveDamping * sleeveW;
+    if (PES_IS_BIB) damp *= PES_BIB_DAMP;   // (15/11) pechera: tela liviana
     bool pesShorts = g_legCount > 0;                                   // PES21 FX: esta prenda es el short
     if (pesShorts) { damp *= PES_SHORTS_DAMP; if (s == 0) v += s_kick * (PES_SHORTS_KICK - 1.0); }
     // PES21 FX inercia por zona: la cara que mira en contra de la aceleracion recibe mas impulso (se queda atras)
@@ -877,7 +893,7 @@ float3 pesBodyLift(uint p, uint k, float t, float3 y0)
     float3 T = float3(A[0].w, A[1].w, A[2].w);
     float3 c0 = cross(A[1].xyz, A[2].xyz), c1 = cross(A[2].xyz, A[0].xyz), c2 = cross(A[0].xyz, A[1].xyz);
     float sg = dot(A[0].xyz, c0) < 0.0 ? -1.0 : 1.0;
-    float m = clamp(s_bodyPrm.y * 0.001, 0.0, 0.03);
+    float m = clamp(s_bodyPrm.y * 0.001, 0.0, 0.03) + (PES_IS_BIB ? PES_BIB_SKIN : 0.0);   // (15/11) la pechera va por fuera de la camiseta
     float3 y = y0;
     [unroll] for (uint j = 0; j < 2; ++j) {
         if ((s_bv[k][j].y & 0x10000u) == 0) continue;
@@ -945,6 +961,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
 #endif
         float rel = (1.0 - pin) / max(pin, 1e-4);
         float alpha = g_pinCompliance * rel * rel;
+        if (PES_IS_BIB) alpha *= PES_BIB_PIN;   // (15/11) pechera: mas suelta que la camiseta
         // PES21 FX: deslizamiento por gravedad. Componente de la gravedad tangente a la superficie del cuerpo:
         // grande = la tela quiere resbalar (muslo levantado, brazo arriba). Solo tela lejos de las costuras (pin bajo).
         float pesSlide = 0.0;
@@ -993,6 +1010,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         // delgado: el punto de reposo baja con la gravedad -> la remera cuelga mas larga (solo tela libre)
         float3 restT = rest1;
         if (pesFit > 0.0) { float gl = length(s_grav); if (gl > 1e-4) restT += (s_grav / gl) * pesFit * PES_FIT_HANG * fitFree; }
+        if (PES_IS_BIB) { float glb = length(s_grav); if (glb > 1e-4) restT += (s_grav / glb) * PES_BIB_HANG * fitFree; }   // (15/11) la pechera cuelga
         // (02/11) fila 352 (Agustin: en la vida real las mangas van mas pegadas al brazo): el REPOSO de la manga se cierra hacia
         // el eje de su tramo (centro de la tela de ese tramo, como el brazo como volumen): x352 = cuanto del exceso sobre el radio
         // minimo del tramo se saca, y352 = maximo en cm. Solo cambia adonde la tira el anclaje: la manga sigue igual de libre
@@ -1026,7 +1044,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
 #endif
         x += (restT - x) * (1.0 / (1.0 + alpha / hh));
         float3 off = x - restT;
-        float maxD0 = g_tetherRadius * (1.0 - pin);
+        float maxD0 = g_tetherRadius * (1.0 - pin) * (PES_IS_BIB ? PES_BIB_TETHER : 1.0);
         float maxD = maxD0 * (1.0 + pesSlide * PES_SLIDE_TETHER) * clamp(1.0 + pesFit * 25.0, 0.7, 1.3) * (1.0 + pesLift * 0.6) * clamp(1.0 - pesLimbK * 0.6, 0.6, 1.3) / (1.0 + pesFollow * 0.5);
         float dl = length(off);
         if (dl > maxD) x = restT + off * (maxD / dl);
@@ -1037,6 +1055,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         bool legTracked = lp.x != 0xffffffff;
         if (legTracked && (g_rest[p].skin.w & 1)) inset = max(inset, g_legMaxRoom);
         float insetF = inset - min(max(pesFit, 0.0), 0.008);   // PES21 FX: delgado = la tela queda a 'fit' del cuerpo
+        if (PES_IS_BIB) insetF = min(insetF, -PES_BIB_AIR * fitFree);   // (15/11) pechera: aire sobre lo que tiene abajo
         // (25/10) donde se conoce la piel real, la tela puede ir mas adentro que el cuerpo que adivina el mod: la frena la piel
         if (pesBodyHas) insetF += clamp(s_bodyPrm.z * 0.01, 0.0, 0.08);   // cm
         if (capN == 0 && sd < -insetF) {
