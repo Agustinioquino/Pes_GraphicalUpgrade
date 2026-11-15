@@ -645,7 +645,8 @@ static void Step(void* win) {
     if (g_cfg.menuExitBtn != 0 && pageVt == kTopModeVt) {                  // (15/11) boton "Salir del juego" del menu principal
         float r[4];
         if (((I[9] >> 1) & 1) != 0 && *(int32_t*)((uint8_t*)win + 0x98) == 0 && ExitTabRect(I, r)) {
-            const float bh = 44.0f, gap = 10.0f, bx = r[0], bw = r[2], by = std::max(4.0f, r[1] - gap - bh);
+            // (Agustin 04:16: "un icono que quede ni muy grande y similar al estilo del resto de cartas del menu") cuadrado chico con el icono de apagar, alineado al borde derecho de la pestana
+            const float bh = 54.0f, gap = 12.0f, bw = bh, bx = r[0] + r[2] - bw, by = std::max(4.0f, r[1] - gap - bh);
             s_exitX.store(ox + bx * sw / 1920.0f); s_exitY.store(oy + by * sh / 1080.0f); s_exitW.store(bw * sw / 1920.0f); s_exitH.store(bh * sh / 1080.0f);
             s_exitShowT.store(now);
             const bool over = mx >= bx && mx < bx + bw && my >= by && my < by + bh;

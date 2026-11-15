@@ -2998,17 +2998,22 @@ void OverlayPresent(IDXGISwapChain* sc) {
         float bx, by, bw, bh; int st = 0;
         if (!g_menuOpen && MenuExitButton(&bx, &by, &bw, &bh, &st)) {
             ImDrawList* dl = ImGui::GetForegroundDrawList(); const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);
-            const ImVec2 a0(bx, by), b0(bx + bw, by + bh);
-            const ImU32 fill = st == 2 ? IM_COL32(150, 28, 32, 225) : (st == 1 ? IM_COL32(40, 60, 92, 230) : IM_COL32(12, 22, 40, 190));
-            dl->AddRectFilled(a0, b0, fill, 6.0f * k);
-            dl->AddRect(a0, b0, st ? IM_COL32(255, 255, 255, 235) : IM_COL32(170, 190, 215, 150), 6.0f * k, 0, (st ? 2.0f : 1.2f) * k);
-            const char* txt = TRS(st == 2 ? "Salir? Clic otra vez" : "Salir del juego");
-            const ImVec2 ts = ImGui::CalcTextSize(txt); const float r = std::min(bh * 0.18f, 8.0f * k);   // icono de apagar a la izquierda del texto
-            const float tw = ts.x + r * 2.0f + 10.0f * k, tx = bx + (bw - tw) * 0.5f, cy = by + bh * 0.5f;
-            const ImU32 fg = IM_COL32(240, 244, 248, 255);
-            dl->PathArcTo(ImVec2(tx + r, cy + r * 0.12f), r, -3.14159f * 0.5f + 0.75f, 3.14159f * 1.5f - 0.75f, 16); dl->PathStroke(fg, 0, 1.8f * k);
-            dl->AddLine(ImVec2(tx + r, cy - r * 1.05f), ImVec2(tx + r, cy - r * 0.05f), fg, 1.8f * k);
-            dl->AddText(ImVec2(tx + r * 2.0f + 10.0f * k, cy - ts.y * 0.5f), fg, txt);
+            // estilo de las pestanas / cartas del menu: azul translucido, borde fino claro, esquinas apenas redondeadas; con el mouse encima
+            // borde blanco grueso como la carta elegida; primer clic: rojo y el aviso a la izquierda
+            const ImVec2 a0(bx, by), b0(bx + bw, by + bh); const float rr = bh * 0.14f;
+            const ImU32 fill = st == 2 ? IM_COL32(150, 30, 36, 215) : (st == 1 ? IM_COL32(40, 70, 140, 200) : IM_COL32(22, 42, 100, 150));
+            dl->AddRectFilled(a0, b0, fill, rr);
+            dl->AddRect(a0, b0, st ? IM_COL32(255, 255, 255, 245) : IM_COL32(160, 172, 196, 190), rr, 0, (st ? 3.0f : 1.6f) * k);
+            const ImU32 fg = st ? IM_COL32(255, 255, 255, 255) : IM_COL32(200, 208, 222, 235);
+            const float r = bh * 0.24f, cx = bx + bw * 0.5f, cy = by + bh * 0.5f + r * 0.08f;           // icono de apagar
+            dl->PathArcTo(ImVec2(cx, cy), r, -3.14159f * 0.5f + 0.7f, 3.14159f * 1.5f - 0.7f, 20); dl->PathStroke(fg, 0, std::max(2.0f, bh * 0.065f));
+            dl->AddLine(ImVec2(cx, cy - r * 1.18f), ImVec2(cx, cy - r * 0.15f), fg, std::max(2.0f, bh * 0.065f));
+            if (st >= 1) {                                                   // con el mouse encima, el nombre; armado, el aviso
+                const char* txt = TRS(st == 2 ? "Salir? Clic otra vez" : "Salir del juego"); const ImVec2 ts = ImGui::CalcTextSize(txt), pad(10.0f * k, 6.0f * k);
+                const ImVec2 t1(bx - 8.0f * k, cy + ts.y * 0.5f + pad.y), t0(t1.x - ts.x - pad.x * 2, cy - ts.y * 0.5f - pad.y);
+                dl->AddRectFilled(t0, t1, IM_COL32(12, 22, 50, 215), 5.0f * k);
+                dl->AddText(ImVec2(t0.x + pad.x, t0.y + pad.y), IM_COL32(255, 255, 255, 255), txt);
+            }
         }
     }
     if (gizmo) MotorGizmoDraw();   // (15/11 h, Agustin 03:17: "el cursor parece estar atras") el editor del Motor se dibuja ANTES que el cursor, asi la flecha queda arriba de los paneles
