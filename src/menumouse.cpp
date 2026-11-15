@@ -565,6 +565,126 @@ bool MenuExitButton(float* x, float* y, float* w, float* h, int* state) {   // o
     return *w > 4.0f && *h > 4.0f;
 }
 
+// (15/11 ythnmm, Agustin 17:24: "le falta opciones en el modo editar jugador opciones para mover la camara, hacer zoom") CAMARA DEL
+// VISOR DEL EDITAR CON EL MOUSE. Solo rueda, clic izquierdo y derecho (regla del 14/11), y solo con el mouse FUERA de las filas del menu
+// (sobre el jugador): arrastrar con el izquierdo = girar alrededor del jugador, arrastrar con el derecho = correr la camara (arriba /
+// abajo / costados), rueda = acercar / alejar. Un clic derecho sin arrastrar sigue siendo "volver" (se manda al soltar). Sobre las filas
+// todo sigue como antes (la rueda mueve la lista).
+// El visor existe mientras vive edit::ModelView ([0x1438040d0], visor-editar-impl); su camara (CameraImpl) llega cada cuadro a
+// RenderTarget::SetCamera 0x1419bf3f0 (gancho de freecam.cpp). Ahi MenuViewCamAdjust corre posicion / objetivo sobre la camara del
+// juego (giro y altura alrededor del objetivo, distancia x zoom, corrimiento en el plano de la pantalla) y freecam.cpp devuelve los
+// valores del juego despues de mandarla: nada se acumula en el juego y al salir del visor (otro ModelView o ninguno) todo vuelve a cero.
+// [PES21FX] mouse_camara_editar = 0 lo apaga.
+static const uintptr_t kModelView = 0x1438040d0ull;
+static std::atomic<double> s_vcLiveT{-1.0e9};
+static std::atomic<int> s_vcDrag{0};                 // 0 nada, 1 girando (izquierdo), 2 corriendo (derecho)
+static std::atomic<int> s_vcWheel{0};
+static std::atomic<bool> s_vcBackReq{false};          // clic derecho sin arrastrar fuera de las filas: "volver" al soltar
+static void* s_vcBackWin = nullptr; static double s_vcBackT = 0;
+static std::atomic<float> s_vcDYaw{0}, s_vcDPitch{0}, s_vcDPanX{0}, s_vcDPanY{0};   // pedido del mouse (lo consume MenuViewCamAdjust)
+static float s_vcYaw = 0, s_vcPitch = 0, s_vcZoom = 1.0f, s_vcZoomCur = 1.0f, s_vcPan[3] = {};
+static uintptr_t s_vcMv = 0; static double s_vcT = 0; static int s_vcLog = 0;
+static bool VcLive() { return s_ok && g_cfg.menuMouse != 0 && g_cfg.menuViewCam != 0 && Now() - s_vcLiveT.load() < 0.3; }
+static void VcReset(const char* why) {
+    if (s_vcYaw != 0 || s_vcPitch != 0 || s_vcZoom != 1.0f || s_vcPan[0] != 0 || s_vcPan[1] != 0 || s_vcPan[2] != 0) Log("mouse en menus: camara del visor del Editar vuelve a la del juego (%s)", why);
+    s_vcYaw = s_vcPitch = 0; s_vcZoom = s_vcZoomCur = 1.0f; s_vcPan[0] = s_vcPan[1] = s_vcPan[2] = 0;
+    s_vcDYaw = 0; s_vcDPitch = 0; s_vcDPanX = 0; s_vcDPanY = 0; s_vcWheel = 0;
+}
+// (15/11 b, Agustin 17:31: "lo de arrastrar que detecte el menu a la izquierda para poder seguir haciendo click en las partes del menu o
+// volver avanzar") ZONA DEL MENU: todo lo que esta a la izquierda del borde derecho de las filas visibles (mas 32 px) es del menu, aunque
+// no haya una fila justo debajo: ahi los clics y la rueda siguen como siempre (elegir, aceptar, volver, mover la lista). La camara solo se
+// maneja a la derecha de esa franja. Cada ventana del cuadro suma sus filas (Step); el valor se renueva cada 0.15 s.
+static std::atomic<float> s_menuRightPx{-1.0f}; static std::atomic<double> s_menuRightT{-1.0e9};
+static void VcMenuExtent(uint8_t* I, double now) {
+    uint8_t* root = P8(I + 0x98); if (!Ptr(root)) return;
+    const float cw = s_m.cw, ch = s_m.ch; if (cw < 160.0f || ch < 90.0f) return;
+    float sw = cw, sh = ch, ox = 0, oy = 0;
+    if (cw * 9.0f > ch * 16.0f) { sw = ch * 16.0f / 9.0f; ox = (cw - sw) * 0.5f; } else if (cw * 9.0f < ch * 16.0f) { sh = cw * 9.0f / 16.0f; oy = (ch - sh) * 0.5f; }
+    (void)oy; (void)sh;
+    float right = -1.0f; int n = 0;
+    const uint32_t ng = std::min<uint32_t>(U32(I + 0xa4), 64);
+    for (uint32_t g = 0; g < ng; g++) { uint8_t* grp = Child(root, g); if (!Ptr(grp)) continue; const uint32_t nr = std::min<uint32_t>(ChildCount(grp), 512);
+        for (uint32_t r = 0; r < nr; r++) { uint8_t* nd = Child(grp, r); if (!Ptr(nd) || !NodeFlag(nd, 0x0c)) continue; void** v = *(void***)nd; if (!Ptr(v) || !RowClass(v)) continue;
+            float pos[2] = { 0, 0 }, size[2] = { 0, 0 }; if (((PFN_NodeVec2)v[0xa0 / 8])(nd, pos) < 0) continue; ((PFN_NodeVec2)v[0xc0 / 8])(nd, size);
+            float x = pos[0], w = size[0], dy = 0, dw = 0, dh = 0; if (DrawnRect(nd, x, dy, dw, dh) && dw > 0) w = dw; else x = pos[0];
+            if (!(x == x) || !(w == w) || w <= 0 || x + w < 0 || x > 1920.0f) continue;
+            right = std::max(right, x + w); n++; } }
+    if (n == 0) return;
+    const float px = ox + right * sw / 1920.0f + 32.0f;
+    const bool fresh = now - s_menuRightT.load() > 0.15;
+    if (fresh || px > s_menuRightPx.load()) s_menuRightPx.store(px);
+    if (fresh) s_menuRightT.store(now);
+}
+static bool VcInMenu(int x) { return Now() - s_menuRightT.load() < 0.5 && (float)x < s_menuRightPx.load(); }
+bool MenuViewCamHint() { return VcLive() && !s_over.load() && !VcInMenu(s_curX.load()); }   // overlay.cpp: la guia de abajo muestra girar / mover / zoom
+// lo llama freecam.cpp hk_SetCam antes de mandar la camara; save = 0x34 bytes desde +0x10 (lo devuelve despues)
+bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
+    if (!s_ok || g_cfg.menuMouse == 0 || g_cfg.menuViewCam == 0 || g_menuOpen.load(std::memory_order_relaxed)) return false;
+    const uintptr_t mv = Readable((const void*)kModelView, 8) ? *(const uintptr_t*)kModelView : 0;
+    if (!mv) { if (s_vcMv) { VcReset("salio del visor"); s_vcMv = 0; } return false; }
+    if (mv != s_vcMv) { VcReset("visor nuevo"); s_vcMv = mv; }
+    int proj; memcpy(&proj, cam + 0x3c, 4); if (proj != 0) return false;
+    float pos[3], tgt[3], fov; memcpy(pos, cam + 0x10, 12); memcpy(tgt, cam + 0x1c, 12); memcpy(&fov, cam + 0x40, 4);
+    for (float f : pos) if (!(f == f) || fabsf(f) > 1.0e5f) return false;
+    for (float f : tgt) if (!(f == f) || fabsf(f) > 1.0e5f) return false;
+    if (!(fov > 0.005f && fov < 3.0f)) return false;
+    const float v[3] = { pos[0] - tgt[0], pos[1] - tgt[1], pos[2] - tgt[2] };
+    const float d = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (d < 0.01f) return false;
+    s_vcLiveT.store(Now());
+    if (s_vcLog < 2) { s_vcLog++; Log("mouse en menus: camara del visor del Editar a mano (camara del juego a %.2f m, campo de vision %.3f): arrastrar = girar, derecho = mover, rueda = zoom", d, fov); }
+    // pedido del mouse
+    const double now = Now(); const float dt = (float)std::clamp(now - s_vcT, 0.0, 0.1); s_vcT = now;
+    s_vcYaw += s_vcDYaw.exchange(0); s_vcPitch += s_vcDPitch.exchange(0);
+    { const int w = s_vcWheel.exchange(0); if (w) s_vcZoom = std::clamp(s_vcZoom * powf(0.88f, (float)w / 120.0f), 0.12f, 3.0f); }
+    if (fabsf(s_vcZoomCur - s_vcZoom) > 1e-4f) s_vcZoomCur += (s_vcZoom - s_vcZoomCur) * std::clamp(12.0f * dt, 0.0f, 1.0f); else s_vcZoomCur = s_vcZoom;
+    const float pitch0 = asinf(std::clamp(v[1] / d, -1.0f, 1.0f)), yaw0 = atan2f(v[0], v[2]);
+    s_vcPitch = std::clamp(s_vcPitch, -1.35f - pitch0, 1.35f - pitch0);   // nunca justo arriba / abajo del jugador
+    if (s_vcYaw > 6.2831853f || s_vcYaw < -6.2831853f) s_vcYaw = fmodf(s_vcYaw, 6.2831853f);
+    const float pt = pitch0 + s_vcPitch, yw = yaw0 + s_vcYaw, dn = d * s_vcZoomCur;
+    const float nv[3] = { dn * cosf(pt) * sinf(yw), dn * sinf(pt), dn * cosf(pt) * cosf(yw) };
+    // ejes de la camara nueva (derecha / arriba de la pantalla) para correrla en el plano de la pantalla
+    const float f[3] = { -nv[0] / dn, -nv[1] / dn, -nv[2] / dn };
+    float r[3] = { -f[2], 0.0f, f[0] }; { const float l = sqrtf(r[0] * r[0] + r[2] * r[2]); if (l < 1e-4f) return false; r[0] /= l; r[2] /= l; }   // f x (0,1,0)
+    const float u[3] = { r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0] };
+    { const float px = s_vcDPanX.exchange(0), py = s_vcDPanY.exchange(0);   // fraccion del alto de la pantalla
+      if (px != 0 || py != 0) { const float h = 2.0f * dn * tanf(fov * 0.5f);
+          for (int i = 0; i < 3; i++) s_vcPan[i] += (-r[i] * px + u[i] * py) * h;
+          const float pl = sqrtf(s_vcPan[0] * s_vcPan[0] + s_vcPan[1] * s_vcPan[1] + s_vcPan[2] * s_vcPan[2]), mx = std::max(1.5f, 1.5f * d);
+          if (pl > mx) for (float& c : s_vcPan) c *= mx / pl; } }
+    if (s_vcYaw == 0 && s_vcPitch == 0 && s_vcZoomCur == 1.0f && s_vcPan[0] == 0 && s_vcPan[1] == 0 && s_vcPan[2] == 0) return false;
+    memcpy(save, cam + 0x10, 0x34);
+    float nt[3], np[3]; for (int i = 0; i < 3; i++) { nt[i] = tgt[i] + s_vcPan[i]; np[i] = nt[i] + nv[i]; }
+    memcpy(cam + 0x10, np, 12); memcpy(cam + 0x1c, nt, 12);
+    return true;
+}
+// cada cuadro (MenuMousePresent): botones y movimiento del mouse para la camara del visor
+static void VcInput() {
+    static bool s_l = true, s_r = true; static POINT s_p0{}, s_pl{}; static double s_t0 = 0; static bool s_far = false;
+    const bool lNow = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, rNow = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+    const bool lEdge = lNow && !s_l, rEdge = rNow && !s_r, lUp = !lNow && s_l, rUp = !rNow && s_r; s_l = lNow; s_r = rNow;
+    HWND h = OverlayHwnd(); POINT p{}; RECT rc{};
+    const bool ok = VcLive() && h && GetForegroundWindow() == h && GetCursorPos(&p) && ScreenToClient(h, &p) && GetClientRect(h, &rc)
+        && p.x >= 0 && p.y >= 0 && p.x < rc.right && p.y < rc.bottom && rc.bottom > 90;
+    if (!ok) { s_vcDrag = 0; return; }
+    const float ch = (float)rc.bottom;
+    int drag = s_vcDrag.load();
+    if (drag == 0 && (lEdge || rEdge) && !s_over.load() && !VcInMenu(p.x)) {
+        drag = lEdge ? 1 : 2; s_vcDrag = drag; s_p0 = s_pl = p; s_t0 = Now(); s_far = false;
+        static int s_nl = 0; if (s_nl++ < 6) Log("mouse en menus: camara del visor: %s desde x %d (el menu llega hasta x %.0f de %d)", drag == 1 ? "girar" : "mover", (int)p.x, s_menuRightPx.load(), (int)rc.right);
+    }
+    if (drag != 0) {
+        const float dx = (float)(p.x - s_pl.x), dy = (float)(p.y - s_pl.y); s_pl = p;
+        if (abs(p.x - s_p0.x) + abs(p.y - s_p0.y) > 6) s_far = true;
+        if (drag == 1 && (dx != 0 || dy != 0)) { const float k = 3.6f / ch;   // alto de la pantalla = ~200 grados
+            s_vcDYaw.store(s_vcDYaw.load() - dx * k); s_vcDPitch.store(s_vcDPitch.load() + dy * k); }
+        if (drag == 2 && (dx != 0 || dy != 0)) { s_vcDPanX.store(s_vcDPanX.load() + dx / ch); s_vcDPanY.store(s_vcDPanY.load() + dy / ch); }
+        if ((drag == 1 && lUp) || (drag == 2 && rUp)) {
+            if (drag == 2 && !s_far && Now() - s_t0 < 0.6) s_vcBackReq = true;   // fue un clic derecho: "volver"
+            s_vcDrag = 0;
+        }
+    }
+}
+
 static void Step(void* win) {
     const double now = Now();
     const bool fresh = now - s_stepT > 0.25;      // primer paso de un menu despues de un rato sin menus
@@ -586,6 +706,14 @@ static void Step(void* win) {
     uint8_t* I = P8((uint8_t*)win + 0x88); if (!Ptr(I)) return;
     s_liveT.store(now); s_nStep.fetch_add(1, std::memory_order_relaxed);
     if (!s_m.ok) return;
+    if (s_vcBackReq.load() && (win == s_vcBackWin || now - s_vcBackT > 1.0)) {   // (15/11) clic derecho sin arrastrar sobre el visor: volver
+        s_vcBackReq = false; s_vcBackWin = nullptr; s_pendWin = win; s_pendAction = 1; s_moveT.store(now); return;
+    }
+    if (VcLive()) VcMenuExtent(I, now);
+    if (s_vcDrag.load() != 0 || (VcLive() && !s_over.load() && !VcInMenu(s_m.p.x) && (s_m.lEdge || s_m.rEdge))) {   // (15/11) el mouse esta moviendo la camara del visor: no elige filas
+        if (s_m.rEdge && (!s_vcBackWin || now - s_vcBackT > 0.1)) { s_vcBackWin = win; s_vcBackT = now; }
+        s_m.lEdge = s_m.rEdge = false; s_moveT.store(now); return;
+    }
     if (s_m.lEdge && s_movieOk && *(uintptr_t*)win == kMovieVt) {        // video de la intro: clic = saltearlo
         uint8_t* w = (uint8_t*)win;
         if (w[0xa4] == 2 && Ptr(P8(w + 0x90))) {
@@ -906,7 +1034,11 @@ static void Install() {
     Log("mouse en menus: listo (prueba del puntero 0x140e400d0, direcciones 0x140e3e6b0, acciones 0x140e48f80); mouse_menus = %d (0 lo apaga)", g_cfg.menuMouse);
 }
 
-void MenuMouseWheel(int delta) { if (s_ok && g_cfg.menuMouse != 0) s_wheel.fetch_add(delta, std::memory_order_relaxed); }
+void MenuMouseWheel(int delta) {
+    if (!s_ok || g_cfg.menuMouse == 0) return;
+    if (VcLive() && !s_over.load() && !VcInMenu(s_curX.load())) { s_vcWheel.fetch_add(delta, std::memory_order_relaxed); return; }   // (15/11) rueda sobre el jugador del Editar = zoom
+    s_wheel.fetch_add(delta, std::memory_order_relaxed);
+}
 
 bool MenuMouseOverRow() { return s_over.load(); }   // (14/11 d) para la mano del cursor sobre los menus del juego
 
@@ -932,6 +1064,7 @@ bool MenuMouseCursor(float* x, float* y) {
 void MenuMousePresent() {
     if (!s_tried) Install();
     if (!s_ok) return;
+    VcInput();
     {   // (v2) atajo para sacar / poner el mouse en los menus (y su flecha): [PES21FX] tecla_mouse_menus (sin tecla de fabrica; ej. F8).
         // No se guarda en el ini: al abrir el juego vale lo que diga mouse_menus
         static bool s_was = false; const int vk = g_cfg.menuMouseKey;

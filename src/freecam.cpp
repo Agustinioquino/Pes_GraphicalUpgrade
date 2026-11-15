@@ -655,7 +655,13 @@ static void hk_SetCam(void* rt, unsigned char* cam) {
           float cn; memcpy(&cn, cam + 0x34, 4); const float on = od > 20.0f ? std::min(5.0f, od * 0.25f) : 0.0f; if (on > 0.0f && cn == cn && cn < on) memcpy(cam + 0x34, &on, 4); }   // ortografica: lejos sin cortar, cerca un poco mas afuera (precision)
         static int nl = 0; if (nl++ < 3) Log("camara libre (Motor): cerca / lejos del visor %.3f / %.1f -> %.3f / %.1f", nr, fr, wn > 0.0f && nr > wn ? wn : nr, wf > 0.0f && fr < wf ? wf : fr);
     } }
+    // (15/11 ythnmm, Agustin: "le falta opciones en el modo editar jugador para mover la camara, hacer zoom") camara del visor del Editar
+    // con el mouse (menumouse.cpp MenuViewCamAdjust): se corre solo la copia que se manda al render target y despues se devuelve lo del
+    // juego, asi el CameraImpl del visor no acumula nada y al salir queda la camara de siempre. Nunca con la camara libre ni en el Motor.
+    unsigned char vcSave[0x34];
+    const bool vc = cam && !FreeCamActive() && !MotorPageActive() && MenuViewCamAdjust(cam, vcSave);
     o_setCam(rt, cam);
+    if (vc) memcpy(cam + 0x10, vcSave, sizeof vcSave);
 }
 
 static bool Readable(const void* p, size_t n) {
