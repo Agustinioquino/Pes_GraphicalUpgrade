@@ -15,6 +15,7 @@
 #include <WICTextureLoader.h>
 #include <string>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <cstdarg>
 #include <cstdio>
@@ -125,10 +126,10 @@ static void LangSet(int i) { static const char* const kKey[3] = { "es", "en", "p
     SaveOption("idioma_auto", "0"); SaveOption("language", kKey[i]); }
 // nombre de una vista en el idioma elegido ("Normales" ya existe en la tabla con otro sentido: se resuelve aca)
 static const char* ViewTr(int row, int op) { if (row == 0 && op == 3 && g_cfg.lang != 0) return g_cfg.lang == 2 ? "Normais" : "Normals"; return TRS(MotorViewName(row, op)); }
-static void ScaleSet(int i) { i = std::clamp(i, 0, 3); g_cfg.motorScale = kScales[i]; char b[16]; snprintf(b, sizeof b, "%.1f", kScales[i]); SaveOption("motor_escala", b); }
+static void ScaleSet(int i) { i = std::clamp(i, 0, 3); g_cfg.motorScale = kScales[i]; char b[16]; snprintf(b, sizeof b, "%.1f", kScales[i]); SaveOption("motor_escala", b); MenuFontsDirty(); }   // la letra del editor se rehace a su tamano
 // (15/11 h, Agustin 03:19: "al ingresar a veces aparece el fondo de edicion, podrias agregar una transicion al ingresar y salir")
 // al entrar: tapa oscura 0.2 s y fundido de 0.35 s; al salir (boton, menu o Esc): fundido a oscuro de 0.18 s y recien ahi se vuelve.
-static double s_enterT = -1.0e9, s_exitT = -1.0; static bool s_exitSent = false;
+static double s_enterT = -1.0e9, s_exitT = -1.0, s_coverEnd = -1.0; static bool s_exitSent = false, s_sceneOnce = false;
 static std::atomic<int> s_uiWheel{0}; static int s_treeScroll = 0;      // rueda sobre el arbol: corre la lista de luces
 // (15/11 g) Agustin 02:47: "separa cada accion en una barra arriba asi como lo hacen programas o menus como blender", "por
 // ejemplo abrir. cerrar. crear escena guardar escena. abrir interfaz para cargar ganis"; 02:49: "la vista del motor tiene que
@@ -247,6 +248,137 @@ static const char* const kHelp[][2] = {
     { "Esc", "cerrar el men\xC3\xBA abierto o salir del Motor" },
 };
 static const int kHelpN = (int)(sizeof kHelp / sizeof kHelp[0]);
+// (15/11 k, Agustin 04:09: "cuadrados deslizandose a la derecha o izquierda dependiendo si se entra o sale, como si fuera un efecto
+// glitch"; 04:11: "una animacion dinamica, y con estilo") TAPA DE BLOQUES. Vista previa con las mismas cuentas:
+// scratchpad glitch/prev.py -> /mnt/project-files/motor/transicion_glitch_v2.mp4. La pantalla se parte en 14 filas de alto desparejo;
+// cada fila se mueve con su atraso (barrido en diagonal + azar fijo por fila) y una curva suave. a = cuanto tapa (0..1).
+// side -1 = la tapa esta pegada a la izquierda (su borde avanza hacia la derecha al subir a); +1 = pegada a la derecha.
+//   entrar: llega con side -1 y se destapa con side +1 (todo corre hacia la derecha);
+//   salir:  llega con side +1 y se destapa con side -1 (todo corre hacia la izquierda).
+// En el borde: astillas de la fila (dos tiras por fila, faltantes, ancho que cambia 24 veces por segundo, alguna verde o lima),
+// una linea verde con su fantasma lima (separacion de color) y "desgarros" (el borde salta un poco). Adentro: lineas de barrido.
+// Con todo tapado: el logo del menu con separacion de color, "MOTOR EN TIEMPO REAL" y una barra con lo que lleva cargado.
+// Suena MotorGlitchSound (motorsound.cpp): uno al entrar y otro mas grave al salir.
+static inline float Hash1(uint32_t x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return (float)(x & 0xffffff) / 16777215.0f; }
+static inline float EaseIO(float p) { return p < 0.5f ? 4.0f * p * p * p : 1.0f - (-2.0f * p + 2.0f) * (-2.0f * p + 2.0f) * (-2.0f * p + 2.0f) * 0.5f; }
+// barra de carga de la tapa: MotorCoverLoad(objetivo 0..1, etapa) en cada cuadro antes de MotorGlitchCover; lo mostrado se acerca
+// suave al objetivo, nunca vuelve atras dentro de una tapa y arranca de 0 en una tapa nueva (objetivo mas bajo o 0.5 s sin pedidos)
+static float s_cvShown = 0.0f; static int s_cvStage = 0; static double s_cvLoadT = -1.0e9;
+static void MotorCoverLoad(float tgt, int stage) {
+    const double now = Now(); const float dt = (float)std::min(0.1, std::max(0.0, now - s_cvLoadT));
+    if (now - s_cvLoadT > 0.5 || tgt < s_cvShown - 0.3f) s_cvShown = 0.0f;
+    s_cvLoadT = now; s_cvStage = stage;
+    if (tgt > s_cvShown) s_cvShown = std::min(tgt, s_cvShown + (tgt - s_cvShown) * std::min(1.0f, dt * (tgt >= 0.999f ? 16.0f : 7.0f)) + dt * 0.05f);
+}
+void MotorGlitchCover(float a, float side) {
+    a = std::clamp(a, 0.0f, 1.0f); if (a <= 0.001f) return;
+    ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const float k = ds.y / 540.0f;                                         // las medidas de la vista previa son para 960 x 540
+    const ImU32 cBg = IM_COL32(10, 19, 14, 255);                      // (15/11 m, Agustin 04:20: "colores verdes")
+    const double now = Now(); const uint32_t tick = (uint32_t)(now * 24.0);
+    const int kRows = 14; const float kD = 0.36f;
+    float ys[kRows + 1]; { float w[kRows], sum = 0.0f; for (int r = 0; r < kRows; r++) { w[r] = 0.6f + 0.8f * Hash1(0x9e37u + (uint32_t)r * 2654435761u); sum += w[r]; }
+        ys[0] = 0.0f; for (int r = 0; r < kRows; r++) ys[r + 1] = ys[r] + w[r] / sum * ds.y; }
+    for (int r = 0; r < kRows; r++) {
+        const float y0 = ys[r], y1 = ys[r + 1], rh = y1 - y0;
+        const float dly = kD * (0.62f * ((float)r / (float)(kRows - 1)) + 0.38f * Hash1(0x51u + (uint32_t)r * 7919u));
+        const float p = EaseIO(std::clamp(a * (1.0f + kD) - dly, 0.0f, 1.0f));
+        if (p <= 0.0f) continue;
+        const float mot = 4.0f * p * (1.0f - p);
+        float tear = 0.0f;
+        if (p < 1.0f && Hash1((uint32_t)r * 977u + tick * 131u) > 0.86f) tear = (Hash1((uint32_t)r * 31u + tick * 7u) - 0.5f) * 2.0f * rh * 1.6f;
+        const float xe = (side < 0.0f ? ds.x * p : ds.x * (1.0f - p)) + tear * mot;
+        const float x0 = side < 0.0f ? 0.0f : xe, x1 = side < 0.0f ? xe : ds.x;
+        if (x1 > x0) {
+            dl->AddRectFilled(ImVec2(std::max(0.0f, x0), y0), ImVec2(std::min(ds.x, x1), y1 + 0.5f), cBg);
+            for (float yy = y0 + 2.0f * k; yy < y1; yy += 4.0f * k) dl->AddLine(ImVec2(std::max(0.0f, x0), yy), ImVec2(std::min(ds.x, x1), yy), IM_COL32(120, 255, 170, 10), 1.0f);
+        }
+        if (p < 1.0f) {
+            const float dir = side < 0.0f ? 1.0f : -1.0f;                   // hacia donde queda lo destapado
+            for (int sub = 0; sub < 2; sub++) {
+                const float sy0 = y0 + rh * 0.5f * (float)sub, sy1 = sy0 + rh * 0.5f; float x = xe;
+                for (int q = 0; q < 4; q++) {
+                    const float h = Hash1((uint32_t)r * 131u + (uint32_t)sub * 7717u + (uint32_t)q * 17u + tick * 977u);
+                    const float bw = rh * (0.5f + 1.8f * Hash1((uint32_t)r * 53u + (uint32_t)sub * 11u + (uint32_t)q * 3u + tick * 3u)) * (0.4f + 0.6f * mot);
+                    x += dir * rh * 0.35f * Hash1((uint32_t)r * 71u + (uint32_t)q + (uint32_t)sub * 5u + tick * 5u);
+                    if (h < 0.30f + 0.17f * (float)q) { x += dir * bw; continue; }
+                    const ImU32 c = h > 0.955f ? IM_COL32(52, 232, 128, (int)(215.0f * mot + 40.0f)) : h > 0.925f ? IM_COL32(186, 255, 92, (int)(120.0f * mot + 20.0f)) : cBg;
+                    const float xa = std::min(x, x + dir * bw), xb = std::max(x, x + dir * bw);
+                    dl->AddRectFilled(ImVec2(xa, sy0), ImVec2(xb, sy1), c);
+                    x += dir * bw;
+                }
+            }
+            const int al = (int)(235.0f * mot);
+            dl->AddRectFilled(ImVec2(xe - 1.5f * k, y0), ImVec2(xe + 1.5f * k, y1), IM_COL32(52, 232, 128, al));
+            const float gx = xe - dir * 6.0f * k;
+            dl->AddRectFilled(ImVec2(gx - 1.0f, y0), ImVec2(gx + 1.0f, y1), IM_COL32(186, 255, 92, (int)((float)al * 0.55f)));
+        }
+    }
+    const float la = std::clamp((a - 0.86f) / 0.14f, 0.0f, 1.0f);
+    if (la > 0.0f) {
+        const float cx = ds.x * 0.5f, cy = ds.y * 0.5f - 14.0f * k;
+        const float j = Hash1(tick * 11u) > 0.7f ? (Hash1(tick * 3u + 1u) - 0.5f) * 6.0f * k : 0.0f;
+        float asp = 1.0f; void* lg = MenuLogoTex(&asp); ImFont* font = MotorFont(0);
+        if (lg && asp > 0.05f) {
+            const float lh = 70.0f * k, lw = std::min(lh * asp, ds.x * 0.5f); const ImVec2 p0(cx - lw * 0.5f, cy - lh * 0.5f - 6.0f * k), p1(p0.x + lw, p0.y + lh);
+            dl->AddImage((ImTextureID)(uintptr_t)lg, ImVec2(p0.x - 3.0f * k + j, p0.y), ImVec2(p1.x - 3.0f * k + j, p1.y), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(186, 255, 92, (int)(110.0f * la)));
+            dl->AddImage((ImTextureID)(uintptr_t)lg, ImVec2(p0.x + 3.0f * k - j, p0.y), ImVec2(p1.x + 3.0f * k - j, p1.y), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(52, 232, 128, (int)(130.0f * la)));
+            dl->AddImage((ImTextureID)(uintptr_t)lg, p0, p1, ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, (int)(255.0f * la)));
+        } else {
+            const char* t = "FOX ENGINE"; const float fsz = 40.0f * k; const ImVec2 ts = font->CalcTextSizeA(fsz, FLT_MAX, 0.0f, t); const ImVec2 o(cx - ts.x * 0.5f, cy - ts.y * 0.5f - 6.0f * k);
+            dl->AddText(font, fsz, ImVec2(o.x - 3.0f * k + j, o.y), IM_COL32(186, 255, 92, (int)(110.0f * la)), t);
+            dl->AddText(font, fsz, ImVec2(o.x + 3.0f * k - j, o.y), IM_COL32(52, 232, 128, (int)(130.0f * la)), t);
+            dl->AddText(font, fsz, o, IM_COL32(235, 235, 238, (int)(255.0f * la)), t);
+        }
+        { const char* t = TRS("MOTOR EN TIEMPO REAL"); ImFont* fl = MotorFont(2); const float fsz = 16.0f * k; const ImVec2 ts = fl->CalcTextSizeA(fsz, FLT_MAX, 0.0f, t);
+          dl->AddText(fl, fsz, ImVec2(cx - ts.x * 0.5f, cy + 44.0f * k - ts.y * 0.5f), IM_COL32(190, 255, 215, (int)(255.0f * la)), t); }   // letra de contorno (Lack UA Line)
+        // (15/11 m, Agustin 04:20: "una barra de cuanto lleva cargado") la barra sigue la carga real (MotorCoverLoad): boton aceptado,
+        // pagina armada, escena leida, iconos; abajo la etapa y el porcentaje
+        const float bw = 220.0f * k, bh = 4.0f * k, by = cy + 62.0f * k, bx0 = cx - bw * 0.5f; const float u = s_cvShown;
+        dl->AddRectFilled(ImVec2(bx0, by), ImVec2(bx0 + bw, by + bh), IM_COL32(22, 48, 33, (int)(255.0f * la)), 2.0f * k);
+        const float fx = bx0 + bw * std::clamp(u, 0.0f, 1.0f);
+        if (fx > bx0 + 0.5f) {
+            dl->AddRectFilled(ImVec2(bx0, by - 2.0f * k), ImVec2(fx, by + bh + 2.0f * k), IM_COL32(52, 232, 128, (int)(38.0f * la)), 3.0f * k);
+            dl->AddRectFilled(ImVec2(bx0, by), ImVec2(fx, by + bh), IM_COL32(52, 232, 128, (int)(255.0f * la)), 2.0f * k);
+            const float sx = bx0 + (fx - bx0) * (float)std::fmod(now * 0.85, 1.0);          // brillo que corre por lo cargado
+            if (std::min(fx, sx + 16.0f * k) > std::max(bx0, sx - 16.0f * k))
+                dl->AddRectFilled(ImVec2(std::max(bx0, sx - 16.0f * k), by), ImVec2(std::min(fx, sx + 16.0f * k), by + bh), IM_COL32(214, 255, 228, (int)(110.0f * la)), 2.0f * k);
+            dl->AddRectFilled(ImVec2(fx - 1.5f * k, by - 3.0f * k), ImVec2(fx + 1.5f * k, by + bh + 3.0f * k), IM_COL32(214, 255, 228, (int)(235.0f * la)));
+        }
+        { static const char* const kSt[6] = { "Abriendo el Motor", "Armando la interfaz", "Leyendo la escena", "Cargando los iconos", "Listo", "Volviendo al Editar" };
+          const float fsz = 10.0f * k; const char* t = TRS(kSt[std::clamp(s_cvStage, 0, 5)]);
+          dl->AddText(font, fsz, ImVec2(bx0, by + bh + 6.0f * k), IM_COL32(130, 196, 158, (int)(230.0f * la)), t);
+          char pc[16]; snprintf(pc, sizeof pc, "%d %%", (int)(std::clamp(u, 0.0f, 1.0f) * 100.0f + 0.5f));
+          const ImVec2 ts = font->CalcTextSizeA(fsz, FLT_MAX, 0.0f, pc);
+          dl->AddText(font, fsz, ImVec2(bx0 + bw - ts.x, by + bh + 6.0f * k), IM_COL32(52, 232, 128, (int)(255.0f * la)), pc); }
+    }
+}
+// estado de la tapa fuera del editor: antes de que abra (se acepto el boton 12) y despues de cerrarlo (hasta que vuelve el Editar)
+static std::atomic<double> s_cvArriveT{ -1.0e9 }, s_cvCancelT{ -1.0e9 }, s_cvExitT{ -1.0e9 }, s_cvRevT{ -1.0e9 };
+static double s_sndEnterT = -1.0e9;
+static void EnterSoundOnce() { const double n = Now(); if (n - s_sndEnterT > 3.0) { s_sndEnterT = n; MotorGlitchSound(0); } }
+void MotorCoverArrive() { s_cvArriveT.store(Now()); s_cvCancelT.store(-1.0e9); EnterSoundOnce(); }
+void MotorCoverCancel() { const double t = Now() - s_cvArriveT.load(); if (t >= 0.0 && t < 2.8) { s_cvArriveT.store(-1.0e9); s_cvCancelT.store(Now()); } }
+bool MotorCoverArriving() { const double t = Now() - s_cvArriveT.load(); return t >= 0.0 && t < 2.8; }
+// overlay.cpp, cada cuadro, antes del editor (con el editor a la vista la tapa la dibuja ToolbarDraw)
+void MotorPreCoverDraw() {
+    if (g_cfg.motorOwnMenu == 0 || g_cfg.motorPage == 0) return;
+    MotorPreCoverPoll();                                                   // motorpage.cpp: se acepto el boton 12?
+    if (MotorUiOn()) return;
+    const double now = Now();
+    if (now - s_cvExitT.load() < 3.0) {                                    // despues de salir: tapado hasta que vuelve el menu de Editar
+        if (s_cvRevT.load() < s_cvExitT.load() && (MotorEditMenuSeenT() > s_cvExitT.load() + 0.05 || now - s_cvExitT.load() > 2.0)) s_cvRevT.store(now);
+        const float a = s_cvRevT.load() < s_cvExitT.load() ? 1.0f : 1.0f - (float)(now - s_cvRevT.load()) / 0.5f;
+        const bool back = s_cvRevT.load() >= s_cvExitT.load();
+        MotorCoverLoad(back ? 1.0f : 0.15f + 0.6f * (1.0f - std::exp(-(float)(now - s_cvExitT.load()) / 0.5f)), back ? 4 : 5);
+        if (a > 0.0f) { MotorGlitchCover(a, -1.0f); return; }
+    }
+    { const double t = now - s_cvArriveT.load();                           // antes de entrar: llega desde la izquierda
+      if (t >= 0.0 && t < 2.8) { float a = EaseIO(std::min(1.0f, (float)t / 0.32f)); if (t > 2.5) a = std::max(0.0f, 1.0f - (float)(t - 2.5) / 0.3f);
+        MotorCoverLoad(0.28f * (1.0f - std::exp(-(float)t / 0.35f)), 0); MotorGlitchCover(a, -1.0f); return; } }
+    { const double t = now - s_cvCancelT.load();                           // no era el Motor: se retira por donde vino
+      if (t >= 0.0 && t < 0.3) MotorGlitchCover(1.0f - (float)t / 0.3f, -1.0f); }
+}
 static void ToolbarDraw() {
     if (!s_iconTried) IconsLoad();
     ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
@@ -255,7 +387,7 @@ static void ToolbarDraw() {
     { HWND h = OverlayHwnd(); POINT p{}; RECT rc{};
       if (h && GetForegroundWindow() == h && GetCursorPos(&p) && ScreenToClient(h, &p) && GetClientRect(h, &rc) && rc.right > rc.left && rc.bottom > rc.top) {
           sx = (float)(rc.right - rc.left) / ds.x; sy = (float)(rc.bottom - rc.top) / ds.y; mx = (float)p.x / sx; my = (float)p.y / sy; front = true; } }
-    ImFont* font = ImGui::GetFont();
+    ImFont* font = MotorFont(0);                 // (15/11 m) letra Lack UA (overlay.cpp); sin el archivo, la del menu
     const ImU32 cPanel = IM_COL32(37, 37, 38, 244), cHead = IM_COL32(51, 51, 55, 255), cLine = IM_COL32(14, 14, 15, 255), cRow = IM_COL32(62, 62, 66, 255),
                 ink = IM_COL32(222, 222, 222, 255), dim = IM_COL32(142, 142, 146, 255), acc = IM_COL32(240, 138, 36, 255), cField = IM_COL32(27, 27, 28, 255);
     const float barH = kBarH * k, leftW = kLeftW * k, rightW = kRightW * k, statH = kStatH * k, fs = 15.0f * k, fsS = 12.5f * k, rowH = 28.0f * k;
@@ -263,7 +395,7 @@ static void ToolbarDraw() {
     // del arbol se desliza de una fila a otra; el contenido del inspector entra con un fundido corto al cambiar de fila. Se hace
     // moviendo / atenuando los vertices ya emitidos de cada parte (la lista de dibujo no tiene transformaciones).
     { const double now = Now(); const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
-      if (now - s_uiT > 0.4) { s_openA = 0.0f; s_selY = -1.0f; s_inspA = 1.0f; s_menuOpen = -1; s_menuKb = -1; s_modal = 0; s_origN = 0; s_pendN = 0; s_enterT = now; s_exitT = -1.0; s_exitSent = false; }
+      if (now - s_uiT > 0.4) { s_openA = 0.0f; s_selY = -1.0f; s_inspA = 1.0f; s_menuOpen = -1; s_menuKb = -1; s_modal = 0; s_origN = 0; s_pendN = 0; s_enterT = now; s_exitT = -1.0; s_exitSent = false; s_coverEnd = -1.0; s_sceneOnce = false; EnterSoundOnce(); }
       s_uiT = now; s_openA = std::min(1.0f, s_openA + dt / 0.28f); s_inspA = std::min(1.0f, s_inspA + dt / 0.16f);
       if (s_sel != s_selWas) { s_selWas = s_sel; s_inspA = 0.0f; } }
     const float eo = 1.0f - (1.0f - s_openA) * (1.0f - s_openA) * (1.0f - s_openA);      // salida suave
@@ -271,7 +403,7 @@ static void ToolbarDraw() {
     // segundo se releen las luces y el conteo de objetos de la escena grafica (motorscene.cpp); la marcada se sigue por su direccion
     if (Now() - s_sceneT > 0.25) { s_sceneT = Now();
         static MotorLight tmp[64]; MotorSceneInfo si{}; const int n = MotorSceneLights(tmp, 64, &si);
-        if (n >= 0) { memcpy(s_lights, tmp, sizeof(MotorLight) * (size_t)n); s_nLights = n; s_info = si;
+        if (n >= 0) { memcpy(s_lights, tmp, sizeof(MotorLight) * (size_t)n); s_nLights = n; s_info = si; s_sceneOnce = true;
             for (int i = 0; i < n; i++) { bool f = false; for (int q = 0; q < s_origN; q++) if (s_orig[q].obj == s_lights[i].obj) f = true; if (!f && s_origN < 64) s_orig[s_origN++] = OrigL{ s_lights[i].obj, s_lights[i].on }; }
             if (s_pendN > 0 && Now() < s_pendUntil) PendApply(); }
         else MotorErr("No se pudo leer la escena del motor: el juego estaba cambiando sus listas de objetos. Se reintenta solo; si este aviso sigue, sal\xC3\xAD del Motor y volv\xC3\xA9 a entrar.");
@@ -308,7 +440,8 @@ static void ToolbarDraw() {
         const ImVec2 o((p0.x + p1.x) * 0.5f, barH * 0.5f); const float h2 = barH * 0.27f;
         if (s_icon[0]) dl->AddImage((ImTextureID)(uintptr_t)s_icon[0], ImVec2(o.x - h2, o.y - h2), ImVec2(o.x + h2, o.y + h2), ImVec2(0, 0), ImVec2(1, 1), ink); else IconFallback(dl, 0, o, barH * 0.95f, ink, k);
         x = p1.x; dl->AddLine(ImVec2(x, 6.0f * k), ImVec2(x, barH - 6.0f * k), IM_COL32(80, 80, 84, 255), 1.0f); }
-      x += 14.0f * k; x += text(x, barH * 0.5f, acc, "FOX ENGINE", fs) + 14.0f * k;      // el nombre largo y la escena abierta van a la derecha de la barra
+      x += 14.0f * k; { ImFont* fi = MotorFont(1); const ImVec2 ts = fi->CalcTextSizeA(fs, FLT_MAX, 0.0f, "FOX ENGINE");   // cursiva
+        dl->AddText(fi, fs, ImVec2(x, barH * 0.5f - ts.y * 0.5f), acc, "FOX ENGINE"); x += ts.x + 14.0f * k; }      // el nombre largo y la escena abierta van a la derecha de la barra
       dl->AddLine(ImVec2(x, 6.0f * k), ImVec2(x, barH - 6.0f * k), IM_COL32(80, 80, 84, 255), 1.0f); x += 8.0f * k;
       // (15/11 g) barra de menus: cada titulo abre su lista de acciones (se dibuja al final, encima de todo)
       { const char* const mn[6] = { "Archivo", "Escena", "Ver", "Render", "Luces", "Ayuda" };
@@ -416,7 +549,7 @@ static void ToolbarDraw() {
           } else text(lx, y + 10.0f * k, dim, "La c\xC3\xA1mara la maneja el juego.", fsS + 1.0f * k);
       } else if (s_sel == 2) {
           label("VISIBLE"); { const char* const nms[2] = { "S\xC3\xAD", "No" }; seg(210, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, grid ? 0 : 1, nms); y += rowH + 12.0f * k; }
-          label("MEDIDAS"); value("Celda", "1 m"); value("L\xC3\xADnea fuerte", "cada 5 m"); value("Eje X", "rojo"); value("Eje Z", "azul");
+          label("MEDIDAS"); { char gs[24]; snprintf(gs, sizeof gs, "%d x %d m", g_cfg.motorGridSize, g_cfg.motorGridSize); value("Tama\xC3\xB1o", gs); } value("Celda", "1 m"); value("L\xC3\xADnea fuerte", "cada 5 m"); value("Eje X", "rojo"); value("Eje Z", "azul");
       } else if (s_sel >= 4) {
           if (s_sel - 4 < s_nLights) { const MotorLight& L = s_lights[s_sel - 4]; char b1[48];
               label("ESTADO"); { const char* const nms[2] = { "Prendida", "Apagada" }; seg(250, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, L.on ? 0 : 1, nms); y += rowH + 12.0f * k; }
@@ -503,7 +636,9 @@ static void ToolbarDraw() {
     auto menuItems = [&](int m, MI* it) { int n = 0;
         auto add = [&](const char* t, const char* sc, int id, int chk = -1, int kind = 0) { if (n < 28) it[n++] = MI{ TRS(t), TRS(sc), id, chk, kind }; };
         if (m == 0) { add("Nueva escena", "Ctrl + N", 710); add("Abrir escena...", "Ctrl + O", 711); add("Guardar escena", "Ctrl + S", 712); add("Guardar como escena nueva", "Ctrl + Shift + S", 713); add(nullptr, "", -1, -1, 1); add("Cerrar el Motor", "Esc", 0); }
-        else if (m == 1) { add(player ? "Quitar el jugador" : "Cargar el jugador", "J", 2); add("Grilla de piso", "G", 1, grid ? 1 : 0); add(nullptr, "", -1, -1, 1);
+        else if (m == 1) { add(player ? "Quitar el jugador" : "Cargar el jugador", "J", 2); add("Grilla de piso", "G", 1, grid ? 1 : 0);
+            add("TAMA\xC3\x91O DE LA GRILLA", "", -1, -1, 2); { static const char* const gn[4] = { "20 x 20 m", "40 x 40 m", "100 x 100 m", "200 x 200 m" }; static const int gv[4] = { 20, 40, 100, 200 };
+              for (int i = 0; i < 4; i++) add(gn[i], "", 780 + i, g_cfg.motorGridSize == gv[i] ? 3 : 2); } add(nullptr, "", -1, -1, 1);
             add("Cargar animaci\xC3\xB3n (.gani)...", "en preparaci\xC3\xB3n", -1, -1, 3); add("Cargar estadio...", "en preparaci\xC3\xB3n", -1, -1, 3); add("Cinem\xC3\xA1ticas del juego...", "en preparaci\xC3\xB3n", -1, -1, 3); }
         else if (m == 2) { add("C\xC3\xA1mara libre", "C", 3, camFree ? 1 : 0); add(nullptr, "", -1, -1, 1); add("MIRAR DESDE", "", -1, -1, 2);
             add("Frente", "Num 1", 232); add("Atr\xC3\xA1s", "Ctrl + Num 1", 235); add("Derecha", "Num 3", 230); add("Izquierda", "Ctrl + Num 3", 233); add("Arriba", "Num 7", 231); add("Abajo", "Ctrl + Num 7", 234);
@@ -546,11 +681,22 @@ static void ToolbarDraw() {
     } else s_miN = 0;
     {   // ---------------- transicion de entrada y de salida (tapa todo menos el cursor) ----------------
         const double now = Now(); float a = 0.0f; const float te = (float)(now - s_enterT);
-        if (te < 0.55f) a = te < 0.2f ? 1.0f : 1.0f - (te - 0.2f) / 0.35f;
-        if (s_exitT >= 0.0) { const float tx = (float)(now - s_exitT); a = std::max(a, std::min(1.0f, tx / 0.18f));
-            if (tx >= 0.18f && !s_exitSent) { s_exitSent = true; MotorUiBack(); }
+        // tapado hasta que este todo cargado: la pagina lista (MotorUiReady), la escena leida una vez y los iconos; minimo 0.2 s, tope 2 s.
+        // Recien al destaparse entran los paneles deslizando (s_openA)
+        if (s_coverEnd < 0.0) { const bool ready = MotorUiReady() && s_sceneOnce && s_iconTried;
+            if ((te >= 0.2f && ready) || te >= 2.0f) { s_coverEnd = now; s_openA = 0.0f; Log("motor (editor): entrada destapada a los %.2f s (%s)", te, ready ? "todo cargado" : "tope de 2 s"); } }
+        if (s_coverEnd < 0.0) a = 1.0f; else { const float tf = (float)(now - s_coverEnd); if (tf < 0.55f) a = 1.0f - tf / 0.55f; }
+        if (s_coverEnd < 0.0) { const bool uiR = MotorUiReady();      // lo que lleva cargado: 0.30 la pagina abierta, 0.30 armada, 0.25 escena, 0.15 iconos
+            const float pr = 0.30f + 0.30f * (uiR ? 1.0f : std::clamp(te / 0.3f, 0.0f, 0.9f)) + (s_sceneOnce ? 0.25f : 0.0f) + (s_iconTried ? 0.15f : 0.0f);
+            MotorCoverLoad(std::min(1.0f, pr), !uiR ? 1 : !s_sceneOnce ? 2 : !s_iconTried ? 3 : 4); }
+        else MotorCoverLoad(1.0f, 4);
+        s_cvArriveT.store(-1.0e9);    // la tapa de antes de entrar ya la sigue esta
+        // destapar al entrar: side +1 (los bloques se van hacia la derecha). Salir: llegan con side +1 (corriendose a la izquierda) y, ya
+        // cerrado el editor, MotorPreCoverDraw sigue tapando hasta que vuelve el Editar y destapa con side -1
+        if (s_exitT >= 0.0) { const float tx = (float)(now - s_exitT); a = std::max(a, EaseIO(std::min(1.0f, tx / 0.36f))); MotorCoverLoad(0.15f * std::min(1.0f, tx / 0.38f), 5);
+            if (tx >= 0.38f && !s_exitSent) { s_exitSent = true; MotorUiBack(); s_cvExitT.store(now); s_cvRevT.store(-1.0e9); }
             if (tx > 1.2f) { s_exitT = -1.0; MotorErr("El juego no acept\xC3\xB3 el pedido de volver al Editar. Prob\xC3\xA1 de nuevo con Archivo > Cerrar el Motor."); } }
-        if (a > 0.003f) dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(16, 16, 17, (int)(255.0f * std::clamp(a, 0.0f, 1.0f))));
+        MotorGlitchCover(a, 1.0f);
     }
     s_hrN.store(nz);
     // ---------------- acciones: las mismas para el clic, los menus y el teclado ----------------
@@ -563,7 +709,7 @@ static void ToolbarDraw() {
         if (bad) MotorErr("%d luces no se pudieron cambiar: son de una clase que el Motor no conoce o el juego las sac\xC3\xB3 de la escena mientras tanto.", bad);
         if (say) { if (mode == 0) Note("%d luces apagadas", n); else if (mode == 1) Note("%d luces prendidas", n); else Note("%d luces vueltas a como estaban", n); } };
     auto act = [&](int id) {
-        if (id == 0) { if (s_exitT < 0.0) { s_exitT = Now(); s_exitSent = false; } }      // salir: primero el fundido (abajo)
+        if (id == 0) { if (s_exitT < 0.0) { s_exitT = Now(); s_exitSent = false; MotorGlitchSound(1); } }      // salir: primero el fundido (abajo)
         else if (id == 1 || id == 20) g_cfg.motorGrid = grid ? 0 : 1;
         else if (id == 2 || id == 21 || id == 220) MotorUiTogglePlayer();
         else if (id == 3) SetCam(!camFree);
@@ -593,6 +739,7 @@ static void ToolbarDraw() {
         else if (id == 730) s_modal = 2;
         else if (id >= 750 && id < 754) ScaleSet(id - 750);
         else if (id >= 770 && id < 774) LangSet(id - 770);
+        else if (id >= 780 && id < 784) { static const int gv[4] = { 20, 40, 100, 200 }; g_cfg.motorGridSize = gv[id - 780]; if (!grid) g_cfg.motorGrid = 1; char b[8]; snprintf(b, sizeof b, "%d", gv[id - 780]); SaveOption("motor_grilla_tamano", b); Note("Grilla de %d x %d m", gv[id - 780], gv[id - 780]); }
         else if (id == 760 || id == 761) ScaleSet(ScaleIdx() + (id == 760 ? 1 : -1));
         else if (id == 740 || id == 741) { const int n = std::max(1, MotorViewCount(0)); MotorViewSet(0, (MotorViewGet(0) + (id == 740 ? 1 : n - 1)) % n); Note("Vista: %s", ViewTr(0, MotorViewGet(0))); }
         else if (id == 742) { const int n = std::max(1, std::min(3, MotorViewCount(1))); MotorViewSet(1, (MotorViewGet(1) + 1) % n); }
@@ -729,7 +876,7 @@ void MotorGizmoDraw() {
     if (inBall || s_dragging.load()) dl->AddCircleFilled(C, R * 1.2f, IM_COL32(255, 255, 255, 34), 48);
     static const ImU32 kCol[3] = { IM_COL32(234, 72, 84, 255), IM_COL32(126, 196, 46, 255), IM_COL32(64, 140, 240, 255) };
     static const char* const kNom[3] = { "X", "Y", "Z" };
-    ImFont* font = ImGui::GetFont(); const float fs = 15.0f * k;
+    ImFont* font = MotorFont(0); const float fs = 15.0f * k;
     for (int i = 0; i < 6; i++) {
         const int a = pt[i].idx / 2; const bool pos = (pt[i].idx & 1) == 0; const bool h = hot == pt[i].idx;
         ImU32 c = kCol[a]; c = (c & 0x00ffffffu) | ((ImU32)A(pos ? 255 : 150) << 24);

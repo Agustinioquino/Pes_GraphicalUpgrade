@@ -2156,6 +2156,7 @@ static void OnSwapChain(IUnknown* devUnk, IDXGISwapChain* sc) {
     if (g_cfg.optPresent) HookSwapChain(sc);
     DXGI_SWAP_CHAIN_DESC sd{}; sc->GetDesc(&sd);
     Log("cadena de intercambio del juego: %ux%u", sd.BufferDesc.Width, sd.BufferDesc.Height);
+    BorderlessEnsure(sd.OutputWindow, sd.Windowed != FALSE, sd.BufferDesc.Width, sd.BufferDesc.Height);   // (15/11) borderless.cpp
 }
 static HRESULT STDMETHODCALLTYPE hk_CreateSC(IDXGIFactory* f, IUnknown* dev, DXGI_SWAP_CHAIN_DESC* d, IDXGISwapChain** sc) {
     HRESULT hr = o_CreateSC(f, dev, d, sc);

@@ -134,12 +134,35 @@ int GameTextLang() {
     if (!b || !RdOk(b + 0x13024, 4)) return -1;
     return (int)*(const uint32_t*)(b + 0x13024);
 }
+// (15/11, Agustin 03:59: el idioma lo elige Steam en Propiedades > Idioma; el juego no deja cambiarlo adentro) Steam deja el idioma
+// del juego en steamapps\appmanifest_<appid>.acf, clave "language" (dentro de "UserConfig"). La carpeta del juego es
+// steamapps\common\<nombre>\, asi que el archivo esta dos niveles arriba del exe. Se lee al arrancar y cada 30 s (solo lectura).
+static int SteamLang() {
+    static double t = -100.0; static int last = -1;
+    if (Now() - t < 30.0) return last; t = Now();
+    wchar_t exe[MAX_PATH] = {}; if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return last;
+    std::wstring d(exe); for (int up = 0; up < 3; up++) { const size_t k = d.find_last_of(L"\\/"); if (k == std::wstring::npos) return last; d.resize(k); }
+    WIN32_FIND_DATAW fd{}; HANDLE h = FindFirstFileW((d + L"\\appmanifest_*.acf").c_str(), &fd); if (h == INVALID_HANDLE_VALUE) return last;
+    int found = -1; std::string lang;
+    do { FILE* f = _wfopen((d + L"\\" + fd.cFileName).c_str(), L"rb"); if (!f) continue;
+        std::string txt; char buf[4096]; size_t n; while ((n = fread(buf, 1, sizeof buf, f)) > 0 && txt.size() < 65536) txt.append(buf, n); fclose(f);
+        if (txt.find("\"1259970\"") == std::string::npos && txt.find("PES 2021") == std::string::npos) continue;   // PES 2021 = app 1259970
+        size_t k = txt.find("\"language\""); if (k == std::string::npos) continue;
+        k = txt.find('"', k + 10); const size_t e = k == std::string::npos ? k : txt.find('"', k + 1); if (e == std::string::npos) continue;
+        lang = txt.substr(k + 1, e - k - 1); for (char& c : lang) c = (char)tolower((unsigned char)c);
+        found = (lang == "english") ? 1 : (lang == "portuguese" || lang == "brazilian") ? 2 : (lang == "spanish" || lang == "latam") ? 0 : 3;
+        break; } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    if (found != last) Log("idioma de Steam del juego: %s (%s)", lang.empty() ? "no encontrado" : lang.c_str(), found == 0 ? "castellano" : found == 1 ? "ingles" : found == 2 ? "portugues" : found == 3 ? "otro: queda el ultimo elegido" : "-");
+    last = found; return last;
+}
 static void GameLangPoll() {
     static double t = 0; if (Now() - t < 1.0) return; t = Now();
     static int last = -2; const int id = GameTextLang();
-    if (id < 0) return;
+    if (id < 0) { if (g_cfg.langAuto) { const int sl = SteamLang(); if (sl >= 0 && sl <= 2 && g_cfg.lang != sl) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.lang = sl; LoadMenuLang(); } } return; }
     if (id != last) { last = id; static int n = 0; if (n++ < 40) Log("idioma del juego: textos = numero %d (idioma_auto %d, tabla es %d en %d pt %d)", id, g_cfg.langAuto, g_cfg.langGame[0], g_cfg.langGame[1], g_cfg.langGame[2]); }
     if (!g_cfg.langAuto) return;
+    { const int sl = SteamLang(); if (sl >= 0 && sl <= 2) { if (g_cfg.lang != sl) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.lang = sl; LoadMenuLang(); Log("idioma del menu: sigue a Steam -> %d", sl); } return; } }
     for (int i = 0; i < 3; i++) if (g_cfg.langGame[i] == id && g_cfg.lang != i) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.lang = i; LoadMenuLang(); Log("idioma del menu: sigue al juego -> %d", i); }
 }
 

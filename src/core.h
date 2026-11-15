@@ -194,12 +194,12 @@ struct Config {
     int cursorKey = VK_F1;                     // (14/11 c) tecla que prende / apaga el cursor ([PES21FX] tecla_cursor = F1, 0 = ninguna)
     int menuMouseKey = 0;                      // (11/11 v2) tecla que saca / pone el mouse en los menus (0 = ninguna, de fabrica: Agustin 22:23 no la necesita) ([PES21FX] tecla_mouse_menus = F8...)
     int keyHud = 4;                            // (11/11) cuadrito con la ultima tecla apretada: 0 apagado, 1..4 esquina ([PES21FX] ultima_tecla)
-    int motorHelpBar = 0; int motorBg = 1, motorCam = 1, motorGizmo = 1, motorKeys = 1, motorOwnMenu = 1, motorGameUi = 0, motorGrid = 1, motorStartPlayer = 0; float motorScale = 1.4f; float motorPanelX = 0, motorPanelY = 0; int motorPage = 1;                         // (11/11) motorpage.cpp: el estudio del Motor con filas nativas del juego ([PES21FX] motor_pagina)
+    int motorHelpBar = 0; int motorBg = 1, motorCam = 1, motorGizmo = 1, motorKeys = 1, motorOwnMenu = 1, motorGameUi = 0, motorGrid = 1, motorGridSize = 40, motorStartPlayer = 0, motorSound = 1, motorSoundVol = 55, motorFont = 1; float motorScale = 1.4f; float motorPanelX = 0, motorPanelY = 0; int motorPage = 1;                         // (11/11) motorpage.cpp: el estudio del Motor con filas nativas del juego ([PES21FX] motor_pagina)
     int motorDress = 1;                        // (11/11) motorpage.cpp: vestir al jugador del estudio por la via nativa ([PES21FX] motor_vestir)
     int blockPad = 1; bool menuPadOpen = true; int menuCursor = 1; int camPad = 1; int camHud = 1;   // (14/11 k: a la vista de fabrica otra vez) camara_hud: 0 escondido, 1 se apaga solo a los 3 s, 2 siempre completo; camara_mando: el mando mueve la camara libre (modo foto)
       // menu_cursor: 0 sin cursor, 1 cursor nuevo, 2 el clasico de ImGui   // (14/11) [PES21FX] bloquear_mando 0 nunca / 1 con el menu abierto; menu_mando_abrir: L3 + R3 abre y cierra el menu
     int blockKeys = 1;                         // (31/10) teclas del juego con el menu: 0 nunca se bloquean, 1 al escribir en un campo, 2 con el menu abierto ([PES21FX] bloquear_teclado)
-    int langAuto = 0; int langGame[3] = { -1, -1, -1 };   // (15/11 3icxbh) idioma_auto: seguir el idioma de textos del juego; idioma_juego_ids = numero del juego para es, en, pt
+    int langAuto = 1; int langGame[3] = { -1, -1, -1 };   // (15/11 3icxbh) idioma_auto (1 de fabrica; elegir un idioma a mano lo apaga): seguir el idioma de Steam / de textos del juego; idioma_juego_ids = numero del juego para es, en, pt
     int lang = 0;                              // (27/10) idioma del menu: 0 espanol, 1 ingles ([PES21FX] language = es / en)
     bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150; bool autoCapAB = false; bool exeDump = true; bool motorPatch = true; bool motorSunFix = true; int motorShadowFix = 1; int motorShadowRes = 0; float motorCascadeScale = 0.0f;   // [Motor]: parches en memoria (exepatch.cpp)   // exe_dump: volcado del exe desempaquetado (una vez por version)   // auto_captura_ab: pares A (todo) / B (un grupo del menu apagado 3 cuadros)
     int aniso = 16; float mipBias = 0.0f;   // 20/10: filtrado anisotropico forzado (1 = el del juego) y sesgo de mip global ([PES21FX] aniso, mip_bias)   // 19/10: captura automatica en partido ([PES21FX] auto_captura, auto_captura_seg, auto_captura_max)
@@ -208,6 +208,7 @@ struct Config {
     bool coverOn = false; int coverDelay = 30;   // (08/11 h) [PES21FX] cobertura / cobertura_demora: medidor de que funciones del exe corren (cobertura.cpp)
     bool rastroOn = false; int rastroMaxMb = 2000, rastroFps = 2; bool rastroFalta = true;   // (08/11 j) rastro_faltas: vigia de escritura del registro de faltas (quien marca el offside)
       // (08/11 i) [PES21FX] rastro / rastro_max_mb / rastro_fotos: registro de depuracion del juego + fotos del partido (rastro.cpp)
+    int borderless = 0;   // (15/11) [PES21FX] ventana_sin_bordes: 1 = la ventana del juego sale sin bordes y ocupa el monitor (borderless.cpp); vale al abrir el juego
     int optHangSec = 20;   // (08/11 c) [PES21FX] congelado_seg: segundos sin cuadros = congelamiento -> volcado (main.cpp vigia); 0 apagado
     int optCrashDump = 1;   // (08/11) [PES21FX] crash_dump: 0 sin volcado, 1 minidump con datos, 2 memoria completa (main.cpp)
     bool optExprPalette = true;
@@ -439,6 +440,8 @@ void SolRelojPresent();   // (02/11) registro de hora del dia / sol / sunLux del
 void GrassDistPresent();  // (26/10) busca el recorte de distancia del pasto 3D del juego ya descifrado (grassdist.cpp)
 // (23/10) camara del motor (camhook.cpp): cortes de camara del juego (CameraSystem 0x14198d3b0) y reinicios del TAA del juego
 int PresentNo();
+void BorderlessStart();   // (15/11) borderless.cpp
+void BorderlessEnsure(HWND w, bool windowed, unsigned bw, unsigned bh);
 void StartHangWatch();   // (08/11 c) vigia de congelamientos (main.cpp)
 void OnDeviceLost(unsigned reason);   // (08/11 e) placa reiniciada (TDR): aviso y cierre ordenado (main.cpp)
 // (08/11 e) liberar un recurso nuestro que pudo quedar grabado en una lista diferida del juego: se suelta a los 30 s (hooks.cpp)
@@ -676,7 +679,7 @@ void AutoCapturePresent(ID3D11Texture2D* frame);   // hooks.cpp
 void PanelStart(int port); void PanelPresent(ID3D11Texture2D* frame);
 void FreeCamSetPose(const float* pos, float yaw, float pitch); bool FreeCamGetPose(float* pos, float* yaw, float* pitch);
 void FreeCamGizmoOrbit(float dyaw, float dpitch); void FreeCamGizmoAxis(int a); void FreeCamGizmoHome();   // (11/11) gizmo de camara del Motor
-bool MotorGizmoPoll(); void MotorGizmoDraw(); bool MotorGizmoOver(float px, float py);
+bool MotorGizmoPoll(); void MotorGizmoDraw(); void MotorPreCoverDraw(); void MotorGlitchCover(float a, float side); void MotorPreCoverPoll(); double MotorEditMenuSeenT(); void MotorCoverArrive(); void MotorCoverCancel(); void MotorGlitchSound(int which); ImFont* MotorFont(int i); void MenuFontsDirty(); bool MotorUiReady(); bool MotorGizmoOver(float px, float py);
 void MotorGridPresent(); ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx);   // (15/11) motorgrid.cpp: fondo con grilla del Motor
 void FreeCamMotorTick(); float FreeCamFovNow();                                              // (15/11) freecam.cpp: camara del Motor sin modelo
 // (15/11) menu propio del Motor (motorpage.cpp): estado y pedidos de la barra de iconos (motorgizmo.cpp)
