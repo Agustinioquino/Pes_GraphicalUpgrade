@@ -3011,7 +3011,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
             if (st >= 1) {                                                   // con el mouse encima, el nombre; armado, el aviso
                 // (Agustin 04:19: "una fuente mas similar a la de game settings y bajarle la opacidad al fondo del texto y al texto")
                 // negrita condensada del menu (Saira Semi Condensed, si esta) en mayusculas, gris claro translucido sobre fondo tenue
-                const char* src = TRS(st == 2 ? "Salir? Clic otra vez" : "Salir del juego");
+                const char* src = TRS("Salir del juego");   // (Agustin 04:21: "que no se muestre lo de quieres salir si o no") sin aviso: el primer clic solo pone el boton en rojo
                 char up[96]; size_t n = 0; for (; src[n] && n < sizeof up - 1; n++) up[n] = (src[n] >= 'a' && src[n] <= 'z') ? (char)(src[n] - 32) : src[n]; up[n] = 0;
                 ImFont* f = s_fontBold ? s_fontBold : ImGui::GetFont(); const float fs = std::max(f->FontSize, bh * 0.42f);
                 const ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, up), pad(12.0f * k, 5.0f * k);
