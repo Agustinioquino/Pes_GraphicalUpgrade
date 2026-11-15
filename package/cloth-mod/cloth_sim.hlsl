@@ -1411,6 +1411,11 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             float3 Ow = floor(Tw / 256.0) * 256.0;
             s_W[0].w -= Ow.x; s_W[1].w -= Ow.y; s_W[2].w -= Ow.z;
             s_Wp[0].w -= Ow.x; s_Wp[1].w -= Ow.y; s_Wp[2].w -= Ow.z;
+            // PES21 FX (15/11, Agustin: "el short sigue vibrando" en Editar): a 10 km la matriz del modelo que manda el juego ya viene
+            // redondeada a ~1 mm (un float no da mas) y salta de un cuadro al otro aunque el jugador este quieto. En modo mundo (el
+            // short: world_motion > 0) la tela leia ese salto como movimiento del cuerpo dentro de cada sub-paso y temblaba. En la
+            // escena de menu el cuadro anterior se toma igual al actual: sin velocidad inventada (el partido no pasa por aca).
+            if (s_menu) { s_Wp[0] = s_W[0]; s_Wp[1] = s_W[1]; s_Wp[2] = s_W[2]; }
             s_kick = 0;
         }
     }
@@ -1473,7 +1478,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
 #endif
         GroupMemoryBarrierWithGroupSync();
         if ((mode & 2) && !(mode & 4) && s_substeps > 0) {
-            float h = me.kick.w > 0 ? me.kick.w : g_h;
+            float h = (me.kick.w > 0 && !s_menu) ? me.kick.w : g_h;   // (15/11) en menus paso fijo: el paso por tirones (stutter_smooth) mide el movimiento del cuerpo, que en Editar es el ruido de 1 mm
             float3x3 W = (s_flags & 32) ? float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1)
                                         : float3x3(s_W[0].xyz, s_W[1].xyz, s_W[2].xyz);
             float3 grav = mul(transpose(W), g_gravity.xyz);
