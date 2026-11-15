@@ -592,7 +592,34 @@ static std::atomic<int> s_vcFocusReq{0}; static std::atomic<float> s_vcFocusX{0}
 static bool s_vcFocused = false;
 static std::atomic<double> s_vcPulseT{-1.0e9}; static std::atomic<float> s_vcPulseX{0}, s_vcPulseY{0}; static std::atomic<int> s_vcPulseKind{0};
 static uintptr_t s_vcMv = 0; static double s_vcT = 0; static int s_vcLog = 0;
-static bool VcLive() { return s_ok && g_cfg.menuMouse != 0 && g_cfg.menuViewCam != 0 && Now() - s_vcLiveT.load() < 0.3; }
+// (15/11 d, Agustin 17:56: "unicamente en el menu editar jugador y sus submenus, pero no en el resto de menus y no en el motor") la
+// camara a mano solo vale dentro de Editar > Jugadores. La clase de cada pagina sale del RTTI del exe (vtable[-1] -> localizador ->
+// descriptor de tipo ".?AV<clase>@menu@@"): menu::MenuEditPl* / MenuEditPlayerMain prenden el modo jugador, cualquier otra pagina
+// menu::MenuEdit* (Equipos, Ligas, Entrenadores, el menu de Editar...) lo apaga, y las comunes (MenuEditCmn*: listas, colores,
+// nacionalidad) y las que no son del Editar (avisos) lo dejan como estaba. Salir del visor (sin ModelView) tambien lo apaga.
+static std::atomic<bool> s_vcPlayer{false};
+static int VcPageKind(void* win) {   // 1 jugador, 2 comun / ajena, 3 otra del Editar
+    static uintptr_t s_vt[64] = {}; static int8_t s_kind[64] = {}; static int s_n = 0;
+    const uintptr_t vt = *(uintptr_t*)win;
+    for (int i = 0; i < s_n; i++) if (s_vt[i] == vt) return s_kind[i];
+    int kind = 2; const char* nm = nullptr;
+    const uintptr_t col = Readable((const void*)(vt - 8), 8) ? *(const uintptr_t*)(vt - 8) : 0;
+    if (col && Readable((const void*)col, 0x18) && U32((const uint8_t*)col) == 1) {
+        const uint32_t tdRva = U32((const uint8_t*)col + 0x0c), selfRva = U32((const uint8_t*)col + 0x14);
+        const uintptr_t base = col - selfRva, td = base + tdRva;
+        if (base == 0x140000000ull && Readable((const void*)(td + 0x10), 64)) {
+            nm = (const char*)(td + 0x10);
+            if (memchr(nm, 0, 64) == nullptr) nm = nullptr;
+        }
+    }
+    if (nm && strncmp(nm, ".?AVMenuEdit", 12) == 0) {
+        const char* r = nm + 12;
+        kind = strncmp(r, "Pl", 2) == 0 ? 1 : strncmp(r, "Cmn", 3) == 0 ? 2 : 3;
+    }
+    if (s_n < 64) { s_vt[s_n] = vt; s_kind[s_n] = (int8_t)kind; s_n++; Log("mouse en menus: pagina %s (vtable %p) -> camara del visor %s", nm ? nm : "(sin RTTI)", (void*)vt, kind == 1 ? "si (Editar jugador)" : kind == 3 ? "no (otra parte del Editar)" : "sin cambio"); }
+    return kind;
+}
+static bool VcLive() { return s_ok && g_cfg.menuMouse != 0 && g_cfg.menuViewCam != 0 && s_vcPlayer.load() && Now() - s_vcLiveT.load() < 0.3; }
 static void VcReset(const char* why) {
     if (s_vcYaw != 0 || s_vcPitch != 0 || s_vcZoom != 1.0f || s_vcPan[0] != 0 || s_vcPan[1] != 0 || s_vcPan[2] != 0) Log("mouse en menus: camara del visor del Editar vuelve a la del juego (%s)", why);
     s_vcYaw = s_vcPitch = 0; s_vcZoom = s_vcZoomCur = 1.0f; s_vcPan[0] = s_vcPan[1] = s_vcPan[2] = 0;
@@ -630,7 +657,8 @@ bool MenuViewCamHint() { return VcLive() && !s_over.load() && !VcInMenu(s_curX.l
 bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
     if (!s_ok || g_cfg.menuMouse == 0 || g_cfg.menuViewCam == 0 || g_menuOpen.load(std::memory_order_relaxed)) return false;
     const uintptr_t mv = Readable((const void*)kModelView, 8) ? *(const uintptr_t*)kModelView : 0;
-    if (!mv) { if (s_vcMv) { VcReset("salio del visor"); s_vcMv = 0; } return false; }
+    if (!mv) { if (s_vcMv) { VcReset("salio del visor"); s_vcMv = 0; } s_vcPlayer = false; return false; }
+    if (!s_vcPlayer.load()) { if (s_vcYawCur != 0 || s_vcPitchCur != 0 || s_vcZoomCur != 1.0f || s_vcPan[0] != 0 || s_vcPan[1] != 0 || s_vcPan[2] != 0) VcReset("fuera de Editar jugador"); return false; }
     if (mv != s_vcMv) { VcReset("visor nuevo"); s_vcMv = mv; }
     int proj; memcpy(&proj, cam + 0x3c, 4); if (proj != 0) return false;
     float pos[3], tgt[3], fov; memcpy(pos, cam + 0x10, 12); memcpy(tgt, cam + 0x1c, 12); memcpy(&fov, cam + 0x40, 4);
@@ -745,6 +773,7 @@ static void Step(void* win) {
     if (s_vcBackReq.load() && (win == s_vcBackWin || now - s_vcBackT > 1.0)) {   // (15/11) clic derecho sin arrastrar sobre el visor: volver
         s_vcBackReq = false; s_vcBackWin = nullptr; s_pendWin = win; s_pendAction = 1; s_moveT.store(now); return;
     }
+    if (((I[9] >> 1) & 1) != 0) { const int pk = VcPageKind(win); if (pk == 1) s_vcPlayer = true; else if (pk == 3) s_vcPlayer = false; }   // solo la pagina activa decide
     if (VcLive()) VcMenuExtent(I, now);
     if (s_vcDrag.load() != 0 || (VcLive() && !s_over.load() && !VcInMenu(s_m.p.x) && (s_m.lEdge || s_m.rEdge))) {   // (15/11) el mouse esta moviendo la camara del visor: no elige filas
         if (s_m.rEdge && (!s_vcBackWin || now - s_vcBackT > 0.1)) { s_vcBackWin = win; s_vcBackT = now; }
