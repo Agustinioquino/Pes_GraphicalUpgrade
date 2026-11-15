@@ -677,6 +677,10 @@ bool MotorGizmoPoll(); void MotorGizmoDraw(); bool MotorGizmoOver(float px, floa
 void MotorGridPresent(); ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx);   // (15/11) motorgrid.cpp: fondo con grilla del Motor
 void FreeCamMotorTick(); float FreeCamFovNow();                                              // (15/11) freecam.cpp: camara del Motor sin modelo
 // (15/11) menu propio del Motor (motorpage.cpp): estado y pedidos de la barra de iconos (motorgizmo.cpp)
+// (15/11) motorscene.cpp: luces y conteo de objetos de la escena grafica del motor, para el editor del Motor
+struct MotorLight { uintptr_t obj, data; int kind, scene; bool on, shadow, writable; float color[4], pos[3], range; char name[40]; };   // kind: 0 Luz, 1 Sol, 2 Local, 3 Punto, 4 Foco
+struct MotorSceneInfo { int scenes, objects, models, lights; };
+int MotorSceneLights(MotorLight* out, int max, MotorSceneInfo* info); bool MotorLightSetOn(const MotorLight& L, bool on);
 bool MotorUiSkipGameDraw(ID3D11DeviceContext* c, uint64_t ps); int MotorViewCount(int row); const char* MotorViewName(int row, int op); int MotorViewGet(int row); void MotorViewSet(int row, int op);   // (15/11 b)
 bool MotorUiOn(); bool MotorUiPanel(); bool MotorUiPlayer(); void MotorUiTogglePanel(); void MotorUiTogglePlayer(); void MotorUiBack(); bool MotorUiTakeBack();                     // motorgizmo.cpp
 bool CamHookLast(float* pos, float* tgt, int* id, int* frame);   // camhook.cpp: ultima camara aplicada por el CameraSystem
