@@ -520,7 +520,7 @@ static void Step(void* win) {
     if (g_cfg.motorKeys != 0 && Ptr(win) && MotorPageIs(win) && !g_menuOpen.load(std::memory_order_relaxed)) {
         static bool s_escWas = true; HWND h = OverlayHwnd();
         const bool esc = h && GetForegroundWindow() == h && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
-        const bool edge = esc && !s_escWas && !fresh; s_escWas = esc;
+        const bool edge = esc && !s_escWas && !fresh && !MotorUiEscBusy(); s_escWas = esc;   // (15/11 g) con un menu o una ventana del Motor abiertos, Esc cierra eso (motorgizmo.cpp)
         const bool btn = MotorUiTakeBack();              // (15/11) boton Volver de la barra de iconos del Motor (motorgizmo.cpp)
         if (edge || btn) { s_pendWin = win; s_pendAction = 1; Log("mouse en menus: %s en el Motor -> volver", btn ? "boton Volver" : "Esc"); return; }
     }

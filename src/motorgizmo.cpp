@@ -18,6 +18,7 @@
 #include <cstring>
 #include <cstdarg>
 #include <cstdio>
+#include <cwchar>
 #include <mutex>
 #include <atomic>
 #include <cmath>
@@ -106,12 +107,128 @@ void MotorErr(const char* fmt, ...) {
         if (nuevo) { MErr& e = s_err[s_errTotal & 7]; e.t = Now(); memcpy(e.msg, b, sizeof b); s_errTotal++; } }
     if (nuevo) Log("motor (ERROR): %s", b);
 }
-static std::atomic<float> s_hr[4][4];                // zonas que tapan el clic (pixeles de la ventana): barra, escena, inspector, estado
+static std::atomic<float> s_hr[6][4];                // zonas que tapan el clic (pixeles de la ventana): barra, escena, inspector, estado, ventana del centro, menu abierto
 static std::atomic<int> s_hrN{0};
 static float s_openA = 0.0f, s_selY = -1.0f, s_inspA = 1.0f; static double s_uiT = -1.0e9; static int s_selWas = 0;   // (15/11 d) animaciones
 static MotorLight s_lights[64]; static int s_nLights = 0; static MotorSceneInfo s_info{}; static double s_sceneT = -1.0e9; static uintptr_t s_selObj = 0;   // (15/11 e) luces de la escena
 static int s_sel = 0, s_hotPrev = -1;                // fila marcada del arbol (0 render, 1 camara, 2 grilla, 3 jugador)
 static const float kBarH = 38.0f, kLeftW = 250.0f, kRightW = 320.0f, kStatH = 26.0f;
+// (15/11 g) Agustin 02:47: "separa cada accion en una barra arriba asi como lo hacen programas o menus como blender", "por
+// ejemplo abrir. cerrar. crear escena guardar escena. abrir interfaz para cargar ganis"; 02:49: "la vista del motor tiene que
+// depender del mouse para acceder a opciones y del teclado" (el mando por ahora no hace falta).
+// Barra de MENUS desplegables (Archivo, Escena, Ver, Render, Luces, Ayuda): cada accion del Motor es un renglon con su atajo de
+// teclado a la derecha. Mouse: clic en el titulo, pasar por encima cambia de menu, clic afuera cierra. Teclado: F2 abre la
+// barra, flechas, Enter, Esc; y los atajos directos (Ayuda > Controles y atajos, F1). En el Motor el juego no ve el teclado
+// (freecam.cpp FreeCamBlocksKeys), asi que las letras no mueven nada del juego. Los numeros de arriba (2..8) son de los
+// modulos de Sider: aca no se usan.
+// ESCENAS: una escena del Motor es un archivo de texto en content\motor-tiempo-real\escenas\ de la carpeta de Sider (si Sider
+// no esta, PES21FX\escenas\ junto a la DLL) con la camara, las vistas, la grilla, si esta el jugador y que luces estan
+// prendidas. Lo que todavia no existe (animaciones .gani, estadios, cinematicas) figura en gris "en preparacion": no hace nada.
+static int s_menuOpen = -1, s_menuKb = -1, s_modal = 0, s_miAct[28], s_miN = 0; static float s_menuA = 0.0f, s_mLastX = 0.0f, s_mLastY = 0.0f;
+static std::atomic<bool> s_escOpen{false}; static std::atomic<double> s_escT{-1.0e9}; static bool s_kWas[256];
+static std::wstring s_scDir; static bool s_scDirTried = false; static char s_scName[64] = ""; static char s_scList[14][64]; static int s_scListN = 0;
+static char s_note[220] = ""; static double s_noteT = -1.0e9;
+struct PendL { int kind; bool on; char name[40]; }; static PendL s_pend[64]; static int s_pendN = 0; static double s_pendUntil = -1.0e9;
+struct OrigL { uintptr_t obj; bool on; }; static OrigL s_orig[64]; static int s_origN = 0;       // como estaba cada luz al entrar al Motor
+bool MotorUiEscBusy() { return MotorUiOn() && (s_escOpen.load(std::memory_order_relaxed) || Now() - s_escT.load(std::memory_order_relaxed) < 0.4); }   // menumouse.cpp: Esc cierra el menu abierto, no el Motor
+static void Note(const char* fmt, ...) { va_list ap; va_start(ap, fmt); vsnprintf(s_note, sizeof s_note, fmt, ap); va_end(ap); s_noteT = Now(); Log("motor (editor): %s", s_note); }
+static const std::wstring& SceneDir() {
+    if (s_scDirTried) return s_scDir;
+    s_scDirTried = true; std::wstring base;
+    if (HMODULE m = GetModuleHandleW(L"sider.dll")) { wchar_t mod[MAX_PATH] = L""; const DWORD n = GetModuleFileNameW(m, mod, MAX_PATH);
+        if (n > 0 && n < MAX_PATH) { std::wstring d(mod); const size_t cut = d.find_last_of(L"\\/");
+            if (cut != std::wstring::npos) { d = d.substr(0, cut + 1) + L"content\\motor-tiempo-real\\"; if (GetFileAttributesW(d.c_str()) != INVALID_FILE_ATTRIBUTES) base = d; } } }
+    if (base.empty()) { base = g_cfg.baseDir + L"PES21FX\\"; CreateDirectoryW(base.c_str(), nullptr); }
+    base += L"escenas\\"; CreateDirectoryW(base.c_str(), nullptr);
+    if (GetFileAttributesW(base.c_str()) != INVALID_FILE_ATTRIBUTES) s_scDir = base;
+    Log("motor (escenas): carpeta %ls", s_scDir.empty() ? L"(no se pudo crear)" : s_scDir.c_str());
+    return s_scDir;
+}
+static std::wstring ScenePath(const char* name) { std::wstring f = SceneDir(); for (const char* c = name; *c; c++) f += (wchar_t)(unsigned char)*c; return f; }
+static void SceneLabel(const char* nm, char* out, size_t cap) {
+    int Y, M, D, h, m, s;
+    if (sscanf(nm, "escena_%4d%2d%2d_%2d%2d%2d", &Y, &M, &D, &h, &m, &s) == 6) snprintf(out, cap, "Escena del %02d/%02d/%04d a las %02d:%02d:%02d", D, M, Y, h, m, s);
+    else snprintf(out, cap, "%.60s", nm);
+}
+// las luces pedidas por la escena abierta: por tipo + nombre (y orden, si hay varias con el mismo nombre)
+static void PendApply() {
+    for (int j = 0; j < s_pendN; j++) { int occ = 0;
+        for (int q = 0; q < j; q++) if (s_pend[q].kind == s_pend[j].kind && strcmp(s_pend[q].name, s_pend[j].name) == 0) occ++;
+        for (int i = 0; i < s_nLights; i++) { MotorLight& L = s_lights[i];
+            if (L.kind != s_pend[j].kind || strcmp(L.name, s_pend[j].name) != 0) continue;
+            if (occ-- > 0) continue;
+            if (L.writable && L.on != s_pend[j].on && MotorLightSetOn(L, s_pend[j].on)) L.on = s_pend[j].on;
+            break; } }
+}
+static bool SceneSave(bool asNew) {
+    if (SceneDir().empty()) { MotorErr("No se pudo guardar la escena: no existe ni se pudo crear la carpeta de escenas (content\\motor-tiempo-real\\escenas en la carpeta de Sider)."); return false; }
+    if (asNew || !s_scName[0]) { SYSTEMTIME t; GetLocalTime(&t); snprintf(s_scName, sizeof s_scName, "escena_%04d%02d%02d_%02d%02d%02d.txt", (int)t.wYear, (int)t.wMonth, (int)t.wDay, (int)t.wHour, (int)t.wMinute, (int)t.wSecond); }
+    FILE* fp = _wfopen(ScenePath(s_scName).c_str(), L"wb");
+    if (!fp) { MotorErr("No se pudo guardar la escena %s: Windows no dej\xC3\xB3 escribir el archivo en la carpeta de escenas.", s_scName); return false; }
+    float pos[3] = {}, yaw = 0.0f, pitch = 0.0f; const bool cf = FreeCamGetPose(pos, &yaw, &pitch) && g_cfg.live[344][0] > 0.5f;
+    fprintf(fp, "escena del Motor en tiempo real 1\r\n");
+    fprintf(fp, "camara %d %.4f %.4f %.4f %.5f %.5f\r\n", cf ? 1 : 0, pos[0], pos[1], pos[2], yaw, pitch);
+    fprintf(fp, "vista %d %d %d\r\n", MotorViewGet(0), MotorViewGet(1), MotorViewGet(2));
+    fprintf(fp, "grilla %d\r\njugador %d\r\n", g_cfg.motorGrid != 0 ? 1 : 0, MotorUiPlayer() ? 1 : 0);
+    for (int i = 0; i < s_nLights; i++) fprintf(fp, "luz %d %d %s\r\n", s_lights[i].on ? 1 : 0, s_lights[i].kind, s_lights[i].name);
+    fclose(fp); char lb[96]; SceneLabel(s_scName, lb, sizeof lb); Note("Guardada: %s", lb);
+    return true;
+}
+static bool SceneLoad(const char* name) {
+    FILE* fp = SceneDir().empty() ? nullptr : _wfopen(ScenePath(name).c_str(), L"rb");
+    if (!fp) { MotorErr("No se pudo abrir la escena %s: el archivo no est\xC3\xA1 o no se puede leer.", name); return false; }
+    char ln[200]; bool head = false, hasCam = false; int cf = 0, v[3] = { 0, 0, 0 }, gr = 1, pl = 0, np = 0; float p[3] = {}, yaw = 0.0f, pitch = 0.0f; static PendL pend[64];
+    while (fgets(ln, sizeof ln, fp)) {
+        size_t n = strlen(ln); while (n > 0 && (ln[n - 1] == '\r' || ln[n - 1] == '\n')) ln[--n] = 0;
+        if (!head) { if (strncmp(ln, "escena del Motor en tiempo real", 31) != 0) break; head = true; continue; }
+        int a = 0, b = 0, off = 0;
+        if (sscanf(ln, "camara %d %f %f %f %f %f", &cf, &p[0], &p[1], &p[2], &yaw, &pitch) == 6) hasCam = true;
+        else if (sscanf(ln, "vista %d %d %d", &v[0], &v[1], &v[2]) == 3) {}
+        else if (sscanf(ln, "grilla %d", &gr) == 1) {}
+        else if (sscanf(ln, "jugador %d", &pl) == 1) {}
+        else if (sscanf(ln, "luz %d %d %n", &a, &b, &off) >= 2 && off > 0 && np < 64 && b >= 0 && b < 5) { pend[np].on = a != 0; pend[np].kind = b; snprintf(pend[np].name, sizeof pend[np].name, "%.39s", ln + off); np++; }
+    }
+    fclose(fp);
+    if (!head) { MotorErr("El archivo %s no es una escena del Motor: le falta la primera l\xC3\xADnea (\"escena del Motor en tiempo real\").", name); return false; }
+    for (int r = 0; r < 3; r++) if (v[r] >= 0 && v[r] < MotorViewCount(r)) MotorViewSet(r, v[r]);
+    g_cfg.motorGrid = gr != 0 ? 1 : 0;
+    if ((pl != 0) != MotorUiPlayer()) MotorUiTogglePlayer();
+    const bool fin = std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]) && std::isfinite(yaw) && std::isfinite(pitch);
+    if (hasCam && cf != 0 && fin) FreeCamSetPose(p, yaw, pitch); else if (hasCam && cf == 0) SetCam(false);
+    memcpy(s_pend, pend, sizeof(PendL) * (size_t)np); s_pendN = np; s_pendUntil = Now() + 3.0; PendApply();
+    snprintf(s_scName, sizeof s_scName, "%.63s", name); char lb[96]; SceneLabel(s_scName, lb, sizeof lb); Note("Abierta: %s", lb);
+    return true;
+}
+static void SceneList() {
+    s_scListN = 0; if (SceneDir().empty()) return;
+    WIN32_FIND_DATAW fd; HANDLE h = FindFirstFileW((SceneDir() + L"escena_*.txt").c_str(), &fd); if (h == INVALID_HANDLE_VALUE) return;
+    static char all[64][64]; int n = 0;
+    do { if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || n >= 64) continue;
+         int q = 0; bool ok = true; for (; fd.cFileName[q] && q < 63; q++) { if (fd.cFileName[q] < 32 || fd.cFileName[q] > 126) { ok = false; break; } all[n][q] = (char)fd.cFileName[q]; }
+         all[n][q] = 0; if (ok && !fd.cFileName[q]) n++; } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    for (int i = 0; i < n && s_scListN < 14; i++) { int best = -1; for (int j = 0; j < n; j++) if (all[j][0] && (best < 0 || strcmp(all[j], all[best]) > 0)) best = j;      // las mas nuevas primero
+        if (best < 0) break; memcpy(s_scList[s_scListN++], all[best], 64); all[best][0] = 0; }
+}
+static const char* const kHelp[][2] = {
+    { "Clic izquierdo", "elegir en los men\xC3\xBAs, el \xC3\xA1rbol de escena y el inspector" },
+    { "Bot\xC3\xB3n derecho", "mantenerlo apretado: mirar y volar con W A S D, Q y E" },
+    { "Bot\xC3\xB3n del medio", "panear" },
+    { "Alt + clic izquierdo", "orbitar alrededor del centro" },
+    { "Rueda", "acercar y alejar" },
+    { "F2", "abrir la barra de men\xC3\xBAs (flechas, Enter, Esc)" },
+    { "Ctrl + N  /  O  /  S", "escena nueva  /  abrir  /  guardar" },
+    { "Ctrl + Shift + S", "guardar como escena nueva" },
+    { "G  /  J  /  C", "grilla  /  jugador  /  c\xC3\xA1mara libre o del juego" },
+    { "V  /  Shift + V", "vista del render siguiente  /  anterior" },
+    { "Z", "alambre: no, s\xC3\xAD, con teselaci\xC3\xB3n" },
+    { "L  /  Shift + L", "prender o apagar todas las luces  /  como estaban" },
+    { "Num 1  /  3  /  7", "mirar de frente  /  derecha  /  arriba (con Ctrl, el lado opuesto)" },
+    { "Num 0", "volver a la pose inicial de la c\xC3\xA1mara" },
+    { "F1", "esta ayuda" },
+    { "Esc", "cerrar el men\xC3\xBA abierto o salir del Motor" },
+};
+static const int kHelpN = (int)(sizeof kHelp / sizeof kHelp[0]);
 static void ToolbarDraw() {
     if (!s_iconTried) IconsLoad();
     ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
@@ -128,7 +245,7 @@ static void ToolbarDraw() {
     // del arbol se desliza de una fila a otra; el contenido del inspector entra con un fundido corto al cambiar de fila. Se hace
     // moviendo / atenuando los vertices ya emitidos de cada parte (la lista de dibujo no tiene transformaciones).
     { const double now = Now(); const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
-      if (now - s_uiT > 0.4) { s_openA = 0.0f; s_selY = -1.0f; s_inspA = 1.0f; }
+      if (now - s_uiT > 0.4) { s_openA = 0.0f; s_selY = -1.0f; s_inspA = 1.0f; s_menuOpen = -1; s_menuKb = -1; s_modal = 0; s_origN = 0; s_pendN = 0; }
       s_uiT = now; s_openA = std::min(1.0f, s_openA + dt / 0.28f); s_inspA = std::min(1.0f, s_inspA + dt / 0.16f);
       if (s_sel != s_selWas) { s_selWas = s_sel; s_inspA = 0.0f; } }
     const float eo = 1.0f - (1.0f - s_openA) * (1.0f - s_openA) * (1.0f - s_openA);      // salida suave
@@ -136,7 +253,9 @@ static void ToolbarDraw() {
     // segundo se releen las luces y el conteo de objetos de la escena grafica (motorscene.cpp); la marcada se sigue por su direccion
     if (Now() - s_sceneT > 0.25) { s_sceneT = Now();
         static MotorLight tmp[64]; MotorSceneInfo si{}; const int n = MotorSceneLights(tmp, 64, &si);
-        if (n >= 0) { memcpy(s_lights, tmp, sizeof(MotorLight) * (size_t)n); s_nLights = n; s_info = si; }
+        if (n >= 0) { memcpy(s_lights, tmp, sizeof(MotorLight) * (size_t)n); s_nLights = n; s_info = si;
+            for (int i = 0; i < n; i++) { bool f = false; for (int q = 0; q < s_origN; q++) if (s_orig[q].obj == s_lights[i].obj) f = true; if (!f && s_origN < 64) s_orig[s_origN++] = OrigL{ s_lights[i].obj, s_lights[i].on }; }
+            if (s_pendN > 0 && Now() < s_pendUntil) PendApply(); }
         else MotorErr("No se pudo leer la escena del motor: el juego estaba cambiando sus listas de objetos. Se reintenta solo; si este aviso sigue, sal\xC3\xAD del Motor y volv\xC3\xA9 a entrar.");
         if (s_sel >= 4) { int f = -1; for (int i = 0; i < s_nLights; i++) if (s_lights[i].obj == s_selObj) f = i; if (f < 0) { s_sel = 0; s_selObj = 0; } else s_sel = 4 + f; } }
     static const char* const kKind[5] = { "Luz", "Sol", "Local", "Punto", "Foco" };
@@ -148,7 +267,7 @@ static void ToolbarDraw() {
     auto text = [&](float x, float yc, ImU32 c, const char* t, float size) { const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t); dl->AddText(font, size, ImVec2(x, yc - ts.y * 0.5f), c, t); return ts.x; };
     auto textC = [&](const ImVec2& a, const ImVec2& b, ImU32 c, const char* t, float size) { const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t); dl->AddText(font, size, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), c, t); };
     int nz = 0;
-    auto zone = [&](const ImVec2& a, const ImVec2& b) { if (nz < 4) { s_hr[nz][0].store(a.x * sx); s_hr[nz][1].store(a.y * sy); s_hr[nz][2].store(b.x * sx); s_hr[nz][3].store(b.y * sy); nz++; } };
+    auto zone = [&](const ImVec2& a, const ImVec2& b) { if (nz < 6) { s_hr[nz][0].store(a.x * sx); s_hr[nz][1].store(a.y * sy); s_hr[nz][2].store(b.x * sx); s_hr[nz][3].store(b.y * sy); nz++; } };
     const bool camFree = g_cfg.live[344][0] > 0.5f, grid = g_cfg.motorGrid != 0, player = MotorUiPlayer();
     // selector partido: n opciones en una caja; devuelve nada, anota hot = id0 + i
     auto seg = [&](int id0, const ImVec2& a, const ImVec2& b, int n, int cur, const char* const* names) {
@@ -158,6 +277,7 @@ static void ToolbarDraw() {
             textC(p0, p1, i == cur ? IM_COL32(20, 20, 20, 255) : hv ? ink : IM_COL32(190, 190, 192, 255), names[i], fsS + 1.0f * k); }
         dl->AddRect(a, b, cLine, 3.0f * k);
     };
+    float mX[6] = {};      // donde empieza cada titulo de la barra de menus (para colgar su lista)
     // ---------------- barra de herramientas ----------------
     { const int v0 = dl->VtxBuffer.Size; const ImVec2 a(0, 0), b(ds.x, barH); zone(a, b);
       dl->AddRectFilled(a, b, cHead); dl->AddLine(ImVec2(0, barH), ImVec2(ds.x, barH), cLine, 1.0f);
@@ -168,14 +288,14 @@ static void ToolbarDraw() {
         x = p1.x; dl->AddLine(ImVec2(x, 6.0f * k), ImVec2(x, barH - 6.0f * k), IM_COL32(80, 80, 84, 255), 1.0f); }
       x += 14.0f * k; x += text(x, barH * 0.5f, acc, "FOX ENGINE", fs) + 10.0f * k; x += text(x, barH * 0.5f, ink, "Motor en tiempo real", fs) + 22.0f * k;
       dl->AddLine(ImVec2(x, 6.0f * k), ImVec2(x, barH - 6.0f * k), IM_COL32(80, 80, 84, 255), 1.0f); x += 8.0f * k;
-      const char* const tn[3] = { "Grilla", "Jugador", "C\xC3\xA1mara libre" }; const bool on[3] = { grid, player, camFree }; const int ic[3] = { 3, 2, 1 };
-      for (int i = 0; i < 3; i++) { const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, tn[i]); const float w = ts.x + 46.0f * k;
-          const ImVec2 p0(x, 5.0f * k), p1(x + w, barH - 5.0f * k); const bool hv = hit(1 + i, p0, p1);
-          if (on[i]) dl->AddRectFilled(p0, p1, IM_COL32(240, 138, 36, 48), 3.0f * k); else if (hv) dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 24), 3.0f * k);
-          if (on[i]) dl->AddRectFilled(ImVec2(p0.x, p1.y - 2.0f * k), p1, acc);
-          const ImVec2 o(p0.x + 17.0f * k, barH * 0.5f); const float h2 = 8.5f * k; const ImU32 c = on[i] ? IM_COL32(255, 190, 120, 255) : ink;
-          if (s_icon[ic[i]]) dl->AddImage((ImTextureID)(uintptr_t)s_icon[ic[i]], ImVec2(o.x - h2, o.y - h2), ImVec2(o.x + h2, o.y + h2), ImVec2(0, 0), ImVec2(1, 1), c); else IconFallback(dl, ic[i], o, 28.0f * k, c, k);
-          text(p0.x + 32.0f * k, barH * 0.5f, c, tn[i], fs); x = p1.x + 4.0f * k; }
+      // (15/11 g) barra de menus: cada titulo abre su lista de acciones (se dibuja al final, encima de todo)
+      { const char* const mn[6] = { "Archivo", "Escena", "Ver", "Render", "Luces", "Ayuda" };
+        for (int i = 0; i < 6; i++) { const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, mn[i]); const float w = ts.x + 24.0f * k;
+            const ImVec2 p0(x, 0), p1(x + w, barH); const bool hv = hit(600 + i, p0, p1), op = s_menuOpen == i;
+            if (op) { dl->AddRectFilled(p0, p1, IM_COL32(43, 43, 46, 255)); dl->AddRectFilled(p0, ImVec2(p1.x, 2.0f * k), acc); } else if (hv) dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 24));
+            textC(p0, p1, op ? IM_COL32(255, 214, 170, 255) : ink, mn[i], fs); mX[i] = x; x = p1.x; }
+        char sn[140], lb[96]; if (s_scName[0]) { SceneLabel(s_scName, lb, sizeof lb); snprintf(sn, sizeof sn, "Motor en tiempo real  \xC2\xB7  %s", lb); } else snprintf(sn, sizeof sn, "Motor en tiempo real  \xC2\xB7  escena sin guardar");
+        const ImVec2 ts = font->CalcTextSizeA(fsS + 1.0f * k, FLT_MAX, 0.0f, sn); if (ds.x - ts.x - 14.0f * k > x + 20.0f * k) text(ds.x - ts.x - 14.0f * k, barH * 0.5f, dim, sn, fsS + 1.0f * k); }
       anim(v0, 0.0f, -(1.0f - eo) * barH, eo);
     }
     // ---------------- arbol de escena ----------------
@@ -296,7 +416,7 @@ static void ToolbarDraw() {
     }
     // ---------------- barra de estado ----------------
     { const int v0 = dl->VtxBuffer.Size; const ImVec2 a(0, y1), b(ds.x, ds.y); zone(a, b); dl->AddRectFilled(a, b, IM_COL32(30, 30, 31, 250)); dl->AddLine(a, ImVec2(ds.x, y1), cLine, 1.0f);
-      char st[160]; snprintf(st, sizeof st, "Vista: %s    Alambre: %s    C\xC3\xA1mara: %s    Objetos: %d    Luces: %d", MotorViewName(0, MotorViewGet(0)), MotorViewName(1, MotorViewGet(1)), camFree ? "libre" : "del juego", s_info.objects, s_info.lights);
+      char st[200]; snprintf(st, sizeof st, "Vista: %s    Alambre: %s    C\xC3\xA1mara: %s    Objetos: %d    Luces: %d", MotorViewName(0, MotorViewGet(0)), MotorViewName(1, MotorViewGet(1)), camFree ? "libre" : "del juego", s_info.objects, s_info.lights);
       text(12.0f * k, y1 + statH * 0.5f, dim, st, fsS);
       char fp[32]; snprintf(fp, sizeof fp, "%.0f fps", ImGui::GetIO().Framerate); const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, fp); text(ds.x - ts.x - 12.0f * k, y1 + statH * 0.5f, dim, fp, fsS);
       anim(v0, 0.0f, (1.0f - eo) * statH, eo); }
@@ -317,40 +437,169 @@ static void ToolbarDraw() {
             const ImVec2 p0(ds.x - ts.x - 110.0f * k, y1 + 3.0f * k), p1(p0.x + ts.x + 16.0f * k, ds.y - 3.0f * k); const bool hv = hit(500, p0, p1);
             dl->AddRectFilled(p0, p1, IM_COL32(150, 28, 28, hv ? 255 : 220), 3.0f * k); textC(p0, p1, IM_COL32(255, 230, 230, 255), eb, fsS); }
     }
+    // ---------------- aviso corto (no es un error): pastilla arriba al centro de la vista 3D ----------------
+    { const float age = (float)(Now() - s_noteT);
+      if (s_note[0] && age < 3.5f) { const float a = std::max(0.0f, std::min(1.0f, std::min(age / 0.15f, (3.5f - age) / 0.4f))); const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, s_note);
+          const float cx = (leftW + ds.x - rightW) * 0.5f, yy = barH + 14.0f * k - (1.0f - a) * 8.0f * k; const ImVec2 p0(cx - ts.x * 0.5f - 16.0f * k, yy), p1(cx + ts.x * 0.5f + 16.0f * k, yy + 32.0f * k);
+          dl->AddRectFilled(p0, p1, IM_COL32(30, 30, 31, (int)(240 * a)), 16.0f * k); dl->AddRect(p0, p1, IM_COL32(240, 138, 36, (int)(220 * a)), 16.0f * k, 0, 1.2f * k);
+          dl->AddText(font, fs, ImVec2(cx - ts.x * 0.5f, yy + (32.0f * k - ts.y) * 0.5f), IM_COL32(236, 236, 236, (int)(255 * a)), s_note); } }
+    // ---------------- ventana al centro de la vista 3D: abrir escena / controles y atajos ----------------
+    if (s_modal != 0) {
+        const ImVec2 va(leftW + 1.0f, y0), vb(ds.x - rightW - 1.0f, y1); zone(va, vb); hit(898, va, vb);
+        dl->AddRectFilled(va, vb, IM_COL32(0, 0, 0, 120));
+        const float pw = std::min((s_modal == 1 ? 520.0f : 700.0f) * k, vb.x - va.x - 24.0f * k), lh = 27.0f * k; const int rows = s_modal == 1 ? std::max(1, s_scListN) : kHelpN;
+        const float ph = rowH + 12.0f * k + (float)rows * lh + 56.0f * k;
+        const ImVec2 p0((va.x + vb.x - pw) * 0.5f, std::max(y0 + 8.0f * k, (y0 + y1 - ph) * 0.5f)), p1(p0.x + pw, p0.y + ph); hit(897, p0, p1);
+        dl->AddRectFilled(ImVec2(p0.x + 5.0f * k, p0.y + 6.0f * k), ImVec2(p1.x + 5.0f * k, p1.y + 6.0f * k), IM_COL32(0, 0, 0, 100), 5.0f * k);
+        dl->AddRectFilled(p0, p1, IM_COL32(37, 37, 38, 255), 4.0f * k); dl->AddRectFilled(p0, ImVec2(p1.x, p0.y + rowH), cHead, 4.0f * k); dl->AddRect(p0, p1, cLine, 4.0f * k);
+        dl->AddRectFilled(p0, ImVec2(p0.x + 3.0f * k, p0.y + rowH), acc);
+        text(p0.x + 14.0f * k, p0.y + rowH * 0.5f, ink, s_modal == 1 ? "ABRIR ESCENA" : "CONTROLES Y ATAJOS", fsS + 1.0f * k);
+        float y = p0.y + rowH + 8.0f * k;
+        if (s_modal == 1) {
+            if (s_scListN == 0) text(p0.x + 16.0f * k, y + lh * 0.5f, dim, "Todav\xC3\xAD" "a no hay escenas guardadas. Se guardan con Archivo > Guardar escena (Ctrl + S).", fsS + 1.0f * k);
+            for (int i = 0; i < s_scListN; i++) { const ImVec2 r0(p0.x + 8.0f * k, y + (float)i * lh), r1(p1.x - 8.0f * k, y + (float)(i + 1) * lh); const bool hv = hit(800 + i, r0, r1), cur = strcmp(s_scList[i], s_scName) == 0;
+                if (hv) dl->AddRectFilled(r0, r1, IM_COL32(240, 138, 36, 96), 3.0f * k); else if (cur) dl->AddRectFilled(r0, r1, cRow, 3.0f * k);
+                char lb[96]; SceneLabel(s_scList[i], lb, sizeof lb); text(r0.x + 10.0f * k, (r0.y + r1.y) * 0.5f, ink, lb, fs);
+                if (cur) { const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, "abierta"); text(r1.x - ts.x - 10.0f * k, (r0.y + r1.y) * 0.5f, dim, "abierta", fsS); } }
+        } else {
+            const float kx = p0.x + 16.0f * k, dx = p0.x + pw * 0.33f;
+            for (int i = 0; i < kHelpN; i++) { const float yc = y + (float)i * lh + lh * 0.5f; if (i == 5) dl->AddLine(ImVec2(p0.x + 10.0f * k, yc - lh * 0.5f), ImVec2(p1.x - 10.0f * k, yc - lh * 0.5f), IM_COL32(70, 70, 74, 255), 1.0f);
+                const ImVec2 ts = font->CalcTextSizeA(fsS + 1.0f * k, FLT_MAX, 0.0f, kHelp[i][0]);
+                dl->AddRectFilled(ImVec2(kx - 6.0f * k, yc - 10.0f * k), ImVec2(kx + ts.x + 6.0f * k, yc + 10.0f * k), cField, 3.0f * k); dl->AddRect(ImVec2(kx - 6.0f * k, yc - 10.0f * k), ImVec2(kx + ts.x + 6.0f * k, yc + 10.0f * k), IM_COL32(80, 80, 84, 255), 3.0f * k);
+                text(kx, yc, IM_COL32(255, 214, 170, 255), kHelp[i][0], fsS + 1.0f * k); text(dx, yc, ink, kHelp[i][1], fsS + 1.5f * k); }
+        }
+        { const char* ct = "Cerrar  (Esc)"; const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, ct); const ImVec2 c0(p1.x - ts.x - 44.0f * k, p1.y - 42.0f * k), c1(p1.x - 12.0f * k, p1.y - 12.0f * k); const bool hv = hit(899, c0, c1);
+          dl->AddRectFilled(c0, c1, hv ? IM_COL32(86, 86, 92, 255) : IM_COL32(66, 66, 70, 255), 3.0f * k); dl->AddRect(c0, c1, cLine, 3.0f * k); textC(c0, c1, ink, ct, fs); }
+    }
+    // ---------------- menu desplegable abierto (lo ultimo: queda encima y gana el clic) ----------------
+    struct MI { const char* t; const char* sc; int id; int chk; int kind; };      // kind 0 accion, 1 separador, 2 titulo de grupo, 3 en preparacion (gris); chk 1 = tilde, 3 = opcion elegida
+    auto menuItems = [&](int m, MI* it) { int n = 0;
+        auto add = [&](const char* t, const char* sc, int id, int chk = -1, int kind = 0) { if (n < 28) it[n++] = MI{ t, sc, id, chk, kind }; };
+        if (m == 0) { add("Nueva escena", "Ctrl + N", 710); add("Abrir escena...", "Ctrl + O", 711); add("Guardar escena", "Ctrl + S", 712); add("Guardar como escena nueva", "Ctrl + Shift + S", 713); add(nullptr, "", -1, -1, 1); add("Cerrar el Motor", "Esc", 0); }
+        else if (m == 1) { add(player ? "Quitar el jugador" : "Cargar el jugador", "J", 2); add("Grilla de piso", "G", 1, grid ? 1 : 0); add(nullptr, "", -1, -1, 1);
+            add("Cargar animaci\xC3\xB3n (.gani)...", "en preparaci\xC3\xB3n", -1, -1, 3); add("Cargar estadio...", "en preparaci\xC3\xB3n", -1, -1, 3); add("Cinem\xC3\xA1ticas del juego...", "en preparaci\xC3\xB3n", -1, -1, 3); }
+        else if (m == 2) { add("C\xC3\xA1mara libre", "C", 3, camFree ? 1 : 0); add(nullptr, "", -1, -1, 1); add("MIRAR DESDE", "", -1, -1, 2);
+            add("Frente", "Num 1", 232); add("Atr\xC3\xA1s", "Ctrl + Num 1", 235); add("Derecha", "Num 3", 230); add("Izquierda", "Ctrl + Num 3", 233); add("Arriba", "Num 7", 231); add("Abajo", "Ctrl + Num 7", 234);
+            add(nullptr, "", -1, -1, 1); add("Volver a la pose inicial", "Num 0", 202); }
+        else if (m == 3) { add("VISTA", "V  /  Shift + V", -1, -1, 2); { const int c = MotorViewGet(0); for (int i = 0; i < MotorViewCount(0) && i < 16; i++) add(MotorViewName(0, i), "", 100 + i, c == i ? 3 : 2); }
+            add(nullptr, "", -1, -1, 1); add("ALAMBRE", "Z", -1, -1, 2); { const int c = MotorViewGet(1); for (int i = 0; i < MotorViewCount(1) && i < 4; i++) add(i == 2 ? "S\xC3\xAD, con teselaci\xC3\xB3n" : i == 1 ? "S\xC3\xAD" : MotorViewName(1, i), "", 116 + i, c == i ? 3 : 2); }
+            add(nullptr, "", -1, -1, 1); add("PANTALLA PARTIDA", "", -1, -1, 2); { const int c = MotorViewGet(2); for (int i = 0; i < MotorViewCount(2) && i < 4; i++) add(MotorViewName(2, i), "", 132 + i, c == i ? 3 : 2); } }
+        else if (m == 4) { add("Prender todas", "L", 700); add("Apagar todas", "L", 701); add("Volver a como estaban", "Shift + L", 702); }
+        else { add("Controles y atajos", "F1", 730); add("Volver a mostrar los errores", "", 500); }
+        return n; };
+    if (s_menuOpen >= 0) {
+        MI it[28]; const int n = menuItems(s_menuOpen, it); s_miN = n; s_menuA = std::min(1.0f, s_menuA + ImGui::GetIO().DeltaTime / 0.11f);
+        const float ih = 26.0f * k, sepH = 9.0f * k, headH = 22.0f * k, padX = 12.0f * k, chkW = 24.0f * k; float wT = 0.0f, wS = 0.0f, h = 10.0f * k;
+        for (int i = 0; i < n; i++) { if (it[i].kind == 1) { h += sepH; continue; } const bool hd = it[i].kind == 2;
+            wT = std::max(wT, font->CalcTextSizeA(hd ? fsS : fs, FLT_MAX, 0.0f, it[i].t).x - (hd ? chkW : 0.0f)); wS = std::max(wS, font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, it[i].sc).x); h += hd ? headH : ih; }
+        const float w = padX + chkW + wT + (wS > 0.0f ? 40.0f * k + wS : 0.0f) + padX;
+        const ImVec2 a(std::max(0.0f, std::min(mX[s_menuOpen], ds.x - w - 4.0f * k)), barH), b(a.x + w, a.y + h);
+        zone(a, b); const int v0 = dl->VtxBuffer.Size; hit(699, a, b);
+        dl->AddRectFilled(ImVec2(a.x + 4.0f * k, a.y + 5.0f * k), ImVec2(b.x + 4.0f * k, b.y + 5.0f * k), IM_COL32(0, 0, 0, 90), 5.0f * k);
+        dl->AddRectFilled(a, b, IM_COL32(43, 43, 46, 253)); dl->AddRect(a, b, cLine);
+        float y = a.y + 5.0f * k;
+        for (int i = 0; i < n; i++) { const MI& e = it[i]; s_miAct[i] = -1;
+            if (e.kind == 1) { dl->AddLine(ImVec2(a.x + 8.0f * k, y + sepH * 0.5f), ImVec2(b.x - 8.0f * k, y + sepH * 0.5f), IM_COL32(70, 70, 74, 255), 1.0f); y += sepH; continue; }
+            if (e.kind == 2) { text(a.x + padX, y + headH * 0.55f, dim, e.t, fsS); if (e.sc[0]) { const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, e.sc); text(b.x - padX - ts.x, y + headH * 0.55f, dim, e.sc, fsS); } y += headH; continue; }
+            const ImVec2 p0(a.x + 1.0f, y), p1(b.x - 1.0f, y + ih); const bool en = e.kind == 0; bool hv = false;
+            if (en) { s_miAct[i] = e.id; hv = hit(1000 + i, p0, p1); if (s_menuKb >= 0) hv = i == s_menuKb; }
+            if (hv) dl->AddRectFilled(p0, p1, IM_COL32(240, 138, 36, 100));
+            const float yc = y + ih * 0.5f, cxk = a.x + padX + 7.0f * k; const ImU32 off = IM_COL32(112, 112, 116, 255);
+            if (e.chk == 1) { dl->AddLine(ImVec2(cxk - 5.0f * k, yc), ImVec2(cxk - 1.5f * k, yc + 4.0f * k), acc, 2.0f * k); dl->AddLine(ImVec2(cxk - 1.5f * k, yc + 4.0f * k), ImVec2(cxk + 6.0f * k, yc - 4.5f * k), acc, 2.0f * k); }
+            else if (e.chk == 3) dl->AddCircleFilled(ImVec2(cxk, yc), 3.4f * k, acc, 12);
+            text(a.x + padX + chkW, yc, en ? (hv ? IM_COL32(255, 255, 255, 255) : ink) : off, e.t, fs);
+            if (e.sc[0]) { const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, e.sc); text(b.x - padX - ts.x, yc, en ? (hv ? IM_COL32(255, 230, 200, 255) : dim) : off, e.sc, fsS); }
+            y += ih; }
+        anim(v0, 0.0f, -(1.0f - s_menuA) * 8.0f * k, s_menuA);
+    } else s_miN = 0;
     s_hrN.store(nz);
-    // ---------------- clic (al soltar, sobre lo mismo que se apreto) ----------------
-    const bool lNow = front && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0; const bool lEdge = lNow && !s_tlWas, lUp = !lNow && s_tlWas; s_tlWas = lNow;
-    if (lEdge) s_tPress = hot;
-    if (lUp && s_tPress >= 0 && s_tPress == hot) {
-        if (hot == 0) MotorUiBack();
-        else if (hot == 1 || hot == 20) g_cfg.motorGrid = grid ? 0 : 1;
-        else if (hot == 2 || hot == 21 || hot == 220) MotorUiTogglePlayer();
-        else if (hot == 3) SetCam(!camFree);
-        else if (hot >= 10 && hot < 14) { s_sel = hot - 10; s_selObj = 0; }
-        else if (hot >= 300 && hot < 364 && hot - 300 < s_nLights) { s_sel = 4 + (hot - 300); s_selObj = s_lights[hot - 300].obj; }
-        else if (hot >= 400 && hot < 464 && hot - 400 < s_nLights) { MotorLight& L = s_lights[hot - 400];
+    // ---------------- acciones: las mismas para el clic, los menus y el teclado ----------------
+    auto lightsAll = [&](int mode, bool say) {       // 0 apagar todas, 1 prender todas, 2 como estaban al entrar
+        int bad = 0, n = 0;
+        for (int i = 0; i < s_nLights; i++) { MotorLight& L = s_lights[i]; bool want = mode == 1;
+            if (mode == 2) { bool f = false; for (int q = 0; q < s_origN; q++) if (s_orig[q].obj == L.obj) { want = s_orig[q].on; f = true; } if (!f) continue; }
+            if (L.on == want) continue;
+            if (L.writable && MotorLightSetOn(L, want)) { L.on = want; n++; } else bad++; }
+        if (bad) MotorErr("%d luces no se pudieron cambiar: son de una clase que el Motor no conoce o el juego las sac\xC3\xB3 de la escena mientras tanto.", bad);
+        if (say) { if (mode == 0) Note("%d luces apagadas", n); else if (mode == 1) Note("%d luces prendidas", n); else Note("%d luces vueltas a como estaban", n); } };
+    auto act = [&](int id) {
+        if (id == 0) MotorUiBack();
+        else if (id == 1 || id == 20) g_cfg.motorGrid = grid ? 0 : 1;
+        else if (id == 2 || id == 21 || id == 220) MotorUiTogglePlayer();
+        else if (id == 3) SetCam(!camFree);
+        else if (id >= 10 && id < 14) { s_sel = id - 10; s_selObj = 0; }
+        else if (id >= 300 && id < 364 && id - 300 < s_nLights) { s_sel = 4 + (id - 300); s_selObj = s_lights[id - 300].obj; }
+        else if (id >= 400 && id < 464 && id - 400 < s_nLights) { MotorLight& L = s_lights[id - 400];
             if (!L.writable) MotorErr("La luz \"%s\" es de una clase que el Motor no conoce todav\xC3\xAD" "a: se puede ver pero no cambiar.", L.name);
             else if (MotorLightSetOn(L, !L.on)) L.on = !L.on; else MotorErr("No se pudo %s la luz \"%s\": el juego la sac\xC3\xB3 de la escena mientras tanto.", L.on ? "apagar" : "prender", L.name); }
-        else if ((hot == 250 || hot == 251) && s_sel >= 4 && s_sel - 4 < s_nLights) { MotorLight& L = s_lights[s_sel - 4];
+        else if ((id == 250 || id == 251) && s_sel >= 4 && s_sel - 4 < s_nLights) { MotorLight& L = s_lights[s_sel - 4];
             if (!L.writable) MotorErr("La luz \"%s\" es de una clase que el Motor no conoce todav\xC3\xAD" "a: se puede ver pero no cambiar.", L.name);
-            else if (MotorLightSetOn(L, hot == 250)) L.on = hot == 250; else MotorErr("No se pudo %s la luz \"%s\": el juego la sac\xC3\xB3 de la escena mientras tanto.", hot == 250 ? "prender" : "apagar", L.name); }
-        else if (hot == 500) { std::lock_guard<std::mutex> lk(s_errMx); for (MErr& m : s_err) if (m.msg[0]) m.t = Now(); }
-        else if (hot >= 100 && hot < 148) MotorViewSet((hot - 100) / 16, (hot - 100) % 16);
-        else if (hot == 200 || hot == 201) SetCam(hot == 200);
-        else if (hot == 202) FreeCamGizmoHome();
-        else if (hot >= 230 && hot < 236) { static const int kAx[6] = { 0, 2, 4, 1, 3, 5 }; FreeCamGizmoAxis(kAx[hot - 230]); }   // +X, +Y, +Z / -X, -Y, -Z
-        else if (hot == 210 || hot == 211) g_cfg.motorGrid = hot == 210 ? 1 : 0;
+            else if (MotorLightSetOn(L, id == 250)) L.on = id == 250; else MotorErr("No se pudo %s la luz \"%s\": el juego la sac\xC3\xB3 de la escena mientras tanto.", id == 250 ? "prender" : "apagar", L.name); }
+        else if (id == 500) { int tot = 0; { std::lock_guard<std::mutex> lk(s_errMx); tot = s_errTotal; for (MErr& m : s_err) if (m.msg[0]) m.t = Now(); } if (tot == 0) Note("No hubo errores del Motor"); }
+        else if (id >= 100 && id < 148) MotorViewSet((id - 100) / 16, (id - 100) % 16);
+        else if (id == 200 || id == 201) SetCam(id == 200);
+        else if (id == 202) { if (camFree) FreeCamGizmoHome(); else Note("La pose inicial es de la c\xC3\xA1mara libre: Ver > C\xC3\xA1mara libre (C)"); }
+        else if (id >= 230 && id < 236) { static const int kAx[6] = { 0, 2, 4, 1, 3, 5 };      // +X, +Y, +Z / -X, -Y, -Z
+            if (camFree) FreeCamGizmoAxis(kAx[id - 230]); else Note("Mirar desde un lado es de la c\xC3\xA1mara libre: Ver > C\xC3\xA1mara libre (C)"); }
+        else if (id == 210 || id == 211) g_cfg.motorGrid = id == 210 ? 1 : 0;
+        else if (id >= 700 && id < 703) lightsAll(id == 700 ? 1 : id == 701 ? 0 : 2, true);
+        else if (id == 710) {      // escena nueva: el estudio vacio, como al entrar
+            if (MotorUiPlayer()) MotorUiTogglePlayer();
+            g_cfg.motorGrid = 1; for (int r = 0; r < 3; r++) MotorViewSet(r, 0);
+            if (camFree) FreeCamGizmoHome();
+            lightsAll(2, false); s_pendN = 0; s_scName[0] = 0; s_sel = 0; s_selObj = 0; Note("Escena nueva: el estudio vac\xC3\xADo"); }
+        else if (id == 711) { SceneList(); s_modal = 1; }
+        else if (id == 712 || id == 713) SceneSave(id == 713);
+        else if (id == 730) s_modal = 2;
+        else if (id == 740 || id == 741) { const int n = std::max(1, MotorViewCount(0)); MotorViewSet(0, (MotorViewGet(0) + (id == 740 ? 1 : n - 1)) % n); Note("Vista: %s", MotorViewName(0, MotorViewGet(0))); }
+        else if (id == 742) { const int n = std::max(1, std::min(3, MotorViewCount(1))); MotorViewSet(1, (MotorViewGet(1) + 1) % n); }
+        else if (id >= 800 && id < 814) { if (id - 800 < s_scListN) SceneLoad(s_scList[id - 800]); s_modal = 0; }
+        else if (id == 898 || id == 899) s_modal = 0;
+    };
+    // ---------------- teclado (el juego no lo ve dentro del Motor); volando con el boton derecho las letras son de la camara ----------------
+    { auto tap = [&](int vk) { const bool d = (GetAsyncKeyState(vk) & 0x8000) != 0; const bool t = d && !s_kWas[vk & 255]; s_kWas[vk & 255] = d; return t; };
+      const bool tF1 = tap(VK_F1), tF2 = tap(VK_F2), tEsc = tap(VK_ESCAPE), tLe = tap(VK_LEFT), tRi = tap(VK_RIGHT), tUp = tap(VK_UP), tDn = tap(VK_DOWN), tEn = tap(VK_RETURN),
+                 tN = tap('N'), tO = tap('O'), tS = tap('S'), tG = tap('G'), tJ = tap('J'), tC = tap('C'), tV = tap('V'), tZ = tap('Z'), tL = tap('L'),
+                 t0 = tap(VK_NUMPAD0), t1 = tap(VK_NUMPAD1), t3 = tap(VK_NUMPAD3), t7 = tap(VK_NUMPAD7);
+      const bool kb = front && !g_menuOpen.load(std::memory_order_relaxed) && !g_menuTyping.load(std::memory_order_relaxed) && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) == 0;
+      const bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0, shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0, alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+      if (fabsf(mx - s_mLastX) + fabsf(my - s_mLastY) > 2.0f) { s_mLastX = mx; s_mLastY = my; s_menuKb = -1; }      // el mouse se movio: manda el mouse
+      if (!kb) {}
+      else if (s_modal != 0) { if (tEsc || tEn) { s_modal = 0; s_escT.store(Now()); } }
+      else if (s_menuOpen >= 0) {
+          auto step = [&](int d) { int i = s_menuKb; for (int q = 0; q < s_miN; q++) { i = (i < 0 ? (d > 0 ? 0 : s_miN - 1) : (i + d + s_miN) % s_miN); if (s_miAct[i] >= 0) { s_menuKb = i; return; } } };
+          if (tEsc || tF2) { s_menuOpen = -1; s_escT.store(Now()); }
+          else if (tLe || tRi) { s_menuOpen = (s_menuOpen + (tRi ? 1 : 5)) % 6; s_menuA = 0.0f; s_menuKb = -1; }
+          else if (tDn) step(1); else if (tUp) step(-1);
+          else if (tEn && s_menuKb >= 0 && s_menuKb < s_miN && s_miAct[s_menuKb] >= 0) { const int a = s_miAct[s_menuKb]; s_menuOpen = -1; act(a); }
+      } else if (tF2) { s_menuOpen = 0; s_menuA = 0.0f; s_menuKb = -1; }
+      else if (tF1) act(730);
+      else if (ctrl && !alt) { if (tN) act(710); else if (tO) act(711); else if (tS) act(shift ? 713 : 712); else if (t1) act(235); else if (t3) act(233); else if (t7) act(234); }
+      else if (!alt) {
+          if (tG) act(1); else if (tJ) act(2); else if (tC) act(3); else if (tV) act(shift ? 741 : 740); else if (tZ) act(742);
+          else if (tL) { bool any = false; for (int i = 0; i < s_nLights; i++) if (s_lights[i].on) any = true; act(shift ? 702 : any ? 701 : 700); }
+          else if (t1) act(232); else if (t3) act(230); else if (t7) act(231); else if (t0) act(202); }
+    }
+    // ---------------- clic (al soltar, sobre lo mismo que se apreto) ----------------
+    const bool lNow = front && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0; const bool lEdge = lNow && !s_tlWas, lUp = !lNow && s_tlWas; s_tlWas = lNow;
+    const bool inMenu = (hot >= 600 && hot < 606) || hot == 699 || (hot >= 1000 && hot < 1028);
+    if (s_menuOpen >= 0 && hot >= 600 && hot < 606 && hot - 600 != s_menuOpen) { s_menuOpen = hot - 600; s_menuA = 0.0f; s_menuKb = -1; }      // con un menu abierto, pasar por otro titulo lo cambia
+    if (lEdge) { s_tPress = hot; if (s_menuOpen >= 0 && !inMenu) { s_menuOpen = -1; s_tPress = -1; } }      // clic afuera: cierra el menu y no hace nada mas
+    if (lUp && s_tPress >= 0 && s_tPress == hot) {
+        if (hot >= 600 && hot < 606) { s_menuOpen = s_menuOpen == hot - 600 ? -1 : hot - 600; s_menuA = 0.0f; s_menuKb = -1; }
+        else if (hot >= 1000 && hot < 1028) { const int a = hot - 1000 < s_miN ? s_miAct[hot - 1000] : -1; s_menuOpen = -1; if (a >= 0) act(a); }
+        else if (hot != 699 && hot != 897) act(hot);
         static int nl = 0; if (nl++ < 60) Log("motor (editor): clic %d", hot);
     }
     if (!lNow) s_tPress = -1;
-    s_hotPrev = hot;
+    s_hotPrev = hot; s_escOpen.store(s_menuOpen >= 0 || s_modal != 0, std::memory_order_relaxed);
 }
 
 // (px, py) en pixeles de la ventana del juego
 bool MotorGizmoOver(float px, float py) {
     if (Now() - s_drawT.load(std::memory_order_relaxed) > 0.3) return false;
     if (s_dragging.load(std::memory_order_relaxed)) return true;
-    if (MotorUiOn()) { const int n = s_hrN.load(); for (int i = 0; i < n && i < 4; i++) if (px >= s_hr[i][0].load() && px <= s_hr[i][2].load() && py >= s_hr[i][1].load() && py <= s_hr[i][3].load()) return true; }   // menu propio: volver, capsula, tarjeta
+    if (MotorUiOn()) { const int n = s_hrN.load(); for (int i = 0; i < n && i < 6; i++) if (px >= s_hr[i][0].load() && px <= s_hr[i][2].load() && py >= s_hr[i][1].load() && py <= s_hr[i][3].load()) return true; }   // menu propio: volver, capsula, tarjeta
     const float dx = px - s_cx.load(), dy = py - s_cy.load(), r = s_rad.load() * 1.22f;
     if (dx * dx + dy * dy <= r * r) return true;
     return px >= s_bx0.load() && px <= s_bx1.load() && py >= s_by0.load() && py <= s_by1.load();
