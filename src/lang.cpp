@@ -1586,6 +1586,7 @@ static const char* const kPt[][2] = {
 // (15/11 3icxbh) textos del editor del Motor en tiempo real: castellano, ingles, portugues
 static const char* const kMotor[][3] = {
     { "Motor en tiempo real", "Real-time Engine", "Motor em tempo real" },
+    { "MOTOR EN TIEMPO REAL", "REAL-TIME ENGINE", "MOTOR EM TEMPO REAL" },
     { "%d a %d de %d  \302\267  rueda del mouse: ver m\303\241s", "%d to %d of %d  \302\267  mouse wheel: see more", "%d a %d de %d  \302\267  roda do mouse: ver mais" },
     { "%d errores", "%d errors", "%d erros" },
     { "1 error", "1 error", "1 erro" },

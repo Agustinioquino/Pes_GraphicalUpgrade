@@ -15,6 +15,7 @@
 #include <WICTextureLoader.h>
 #include <string>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <cstdarg>
 #include <cstdio>
@@ -248,45 +249,104 @@ static const char* const kHelp[][2] = {
 };
 static const int kHelpN = (int)(sizeof kHelp / sizeof kHelp[0]);
 // (15/11 k, Agustin 04:09: "cuadrados deslizandose a la derecha o izquierda dependiendo si se entra o sale, como si fuera un efecto
-// glitch") tapa de bloques: la pantalla se parte en filas de cuadrados; cada fila llega con su propio atraso (azar fijo por fila) y se
-// corre de costado. a = cuanto tapa (0..1); sign = de donde viene el bloque cuando a sube (-1 desde la izquierda, +1 desde la derecha):
-// entrar = la tapa llega desde la izquierda y se va hacia la derecha; salir = llega desde la derecha (se mueve hacia la izquierda).
-// En el borde que avanza algunos cuadrados faltan o titilan (cambian 30 veces por segundo) y unos pocos se tinen de naranja.
+// glitch"; 04:11: "una animacion dinamica, y con estilo") TAPA DE BLOQUES. Vista previa con las mismas cuentas:
+// scratchpad glitch/prev.py -> /mnt/project-files/motor/transicion_glitch_v2.mp4. La pantalla se parte en 14 filas de alto desparejo;
+// cada fila se mueve con su atraso (barrido en diagonal + azar fijo por fila) y una curva suave. a = cuanto tapa (0..1).
+// side -1 = la tapa esta pegada a la izquierda (su borde avanza hacia la derecha al subir a); +1 = pegada a la derecha.
+//   entrar: llega con side -1 y se destapa con side +1 (todo corre hacia la derecha);
+//   salir:  llega con side +1 y se destapa con side -1 (todo corre hacia la izquierda).
+// En el borde: astillas de la fila (dos tiras por fila, faltantes, ancho que cambia 24 veces por segundo, alguna naranja o cian),
+// una linea naranja con su fantasma cian (separacion de color) y "desgarros" (el borde salta un poco). Adentro: lineas de barrido.
+// Con todo tapado: el logo del menu con separacion de color, "MOTOR EN TIEMPO REAL" y una barra de carga.
 static inline float Hash1(uint32_t x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return (float)(x & 0xffffff) / 16777215.0f; }
-void MotorGlitchCover(float a, float sign) {
+static inline float EaseIO(float p) { return p < 0.5f ? 4.0f * p * p * p : 1.0f - (-2.0f * p + 2.0f) * (-2.0f * p + 2.0f) * (-2.0f * p + 2.0f) * 0.5f; }
+void MotorGlitchCover(float a, float side) {
     a = std::clamp(a, 0.0f, 1.0f); if (a <= 0.001f) return;
     ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const float k = ds.y / 540.0f;                                         // las medidas de la vista previa son para 960 x 540
     const ImU32 cBg = IM_COL32(16, 16, 17, 255);
-    if (a >= 0.999f) { dl->AddRectFilled(ImVec2(0, 0), ds, cBg); return; }
-    const int rows = 12; const float rh = ds.y / (float)rows, sq = rh;
-    const uint32_t tick = (uint32_t)(Now() * 30.0);
-    for (int r = 0; r < rows; r++) {
-        const float delay = Hash1(0x51u + (uint32_t)r * 7919u) * 0.45f;
-        float c = std::clamp(a * 1.45f - delay, 0.0f, 1.0f);
-        c = c * c * (3.0f - 2.0f * c);                                      // suave al llegar
-        if (c <= 0.0f) continue;
-        const float off = sign * (1.0f - c) * ds.x * 1.08f;                 // corrimiento de la fila
-        const float y0 = (float)r * rh, y1 = y0 + rh + 0.5f;
-        // la fila entera menos el borde que avanza: un rectangulo (rapido)
-        const float edgeW = sq * 3.0f;
-        float x0 = off, x1 = off + ds.x;
-        if (sign < 0) x1 -= edgeW * (1.0f - c); else x0 += edgeW * (1.0f - c);
-        if (x1 > x0) dl->AddRectFilled(ImVec2(std::max(0.0f, x0), y0), ImVec2(std::min(ds.x, x1), y1), cBg);
-        // borde que avanza: cuadrados sueltos con faltantes y titileo
-        for (int q = 0; q < 4; q++) {
-            const float bx = sign < 0 ? x1 + (float)q * sq : x0 - (float)(q + 1) * sq;
-            if (bx + sq < 0.0f || bx > ds.x) continue;
-            const float h = Hash1((uint32_t)r * 131u + (uint32_t)q * 17u + tick * 977u);
-            if (h < 0.18f + 0.18f * (float)q) continue;                     // faltan mas cuanto mas lejos del borde
-            const bool hot = h > 0.965f;
-            dl->AddRectFilled(ImVec2(bx, y0), ImVec2(bx + sq * (0.55f + 0.45f * Hash1((uint32_t)r * 31u + (uint32_t)q + tick)), y1), hot ? IM_COL32(240, 138, 36, 200) : cBg);
+    const double now = Now(); const uint32_t tick = (uint32_t)(now * 24.0);
+    const int kRows = 14; const float kD = 0.36f;
+    float ys[kRows + 1]; { float w[kRows], sum = 0.0f; for (int r = 0; r < kRows; r++) { w[r] = 0.6f + 0.8f * Hash1(0x9e37u + (uint32_t)r * 2654435761u); sum += w[r]; }
+        ys[0] = 0.0f; for (int r = 0; r < kRows; r++) ys[r + 1] = ys[r] + w[r] / sum * ds.y; }
+    for (int r = 0; r < kRows; r++) {
+        const float y0 = ys[r], y1 = ys[r + 1], rh = y1 - y0;
+        const float dly = kD * (0.62f * ((float)r / (float)(kRows - 1)) + 0.38f * Hash1(0x51u + (uint32_t)r * 7919u));
+        const float p = EaseIO(std::clamp(a * (1.0f + kD) - dly, 0.0f, 1.0f));
+        if (p <= 0.0f) continue;
+        const float mot = 4.0f * p * (1.0f - p);
+        float tear = 0.0f;
+        if (p < 1.0f && Hash1((uint32_t)r * 977u + tick * 131u) > 0.86f) tear = (Hash1((uint32_t)r * 31u + tick * 7u) - 0.5f) * 2.0f * rh * 1.6f;
+        const float xe = (side < 0.0f ? ds.x * p : ds.x * (1.0f - p)) + tear * mot;
+        const float x0 = side < 0.0f ? 0.0f : xe, x1 = side < 0.0f ? xe : ds.x;
+        if (x1 > x0) {
+            dl->AddRectFilled(ImVec2(std::max(0.0f, x0), y0), ImVec2(std::min(ds.x, x1), y1 + 0.5f), cBg);
+            for (float yy = y0 + 2.0f * k; yy < y1; yy += 4.0f * k) dl->AddLine(ImVec2(std::max(0.0f, x0), yy), ImVec2(std::min(ds.x, x1), yy), IM_COL32(255, 255, 255, 9), 1.0f);
         }
-        // linea fina de "senal rota" en algunas filas
-        if (c < 0.98f && Hash1((uint32_t)r * 53u + tick * 13u) > 0.82f) {
-            const float ly = y0 + rh * Hash1((uint32_t)r + tick * 3u);
-            dl->AddLine(ImVec2(std::max(0.0f, sign < 0 ? x0 : x0 - sq * 4.0f), ly), ImVec2(std::min(ds.x, sign < 0 ? x1 + sq * 4.0f : x1), ly), IM_COL32(240, 138, 36, 110), std::max(1.0f, rh * 0.03f));
+        if (p < 1.0f) {
+            const float dir = side < 0.0f ? 1.0f : -1.0f;                   // hacia donde queda lo destapado
+            for (int sub = 0; sub < 2; sub++) {
+                const float sy0 = y0 + rh * 0.5f * (float)sub, sy1 = sy0 + rh * 0.5f; float x = xe;
+                for (int q = 0; q < 4; q++) {
+                    const float h = Hash1((uint32_t)r * 131u + (uint32_t)sub * 7717u + (uint32_t)q * 17u + tick * 977u);
+                    const float bw = rh * (0.5f + 1.8f * Hash1((uint32_t)r * 53u + (uint32_t)sub * 11u + (uint32_t)q * 3u + tick * 3u)) * (0.4f + 0.6f * mot);
+                    x += dir * rh * 0.35f * Hash1((uint32_t)r * 71u + (uint32_t)q + (uint32_t)sub * 5u + tick * 5u);
+                    if (h < 0.30f + 0.17f * (float)q) { x += dir * bw; continue; }
+                    const ImU32 c = h > 0.955f ? IM_COL32(240, 138, 36, (int)(215.0f * mot + 40.0f)) : h > 0.925f ? IM_COL32(70, 205, 255, (int)(120.0f * mot + 20.0f)) : cBg;
+                    const float xa = std::min(x, x + dir * bw), xb = std::max(x, x + dir * bw);
+                    dl->AddRectFilled(ImVec2(xa, sy0), ImVec2(xb, sy1), c);
+                    x += dir * bw;
+                }
+            }
+            const int al = (int)(235.0f * mot);
+            dl->AddRectFilled(ImVec2(xe - 1.5f * k, y0), ImVec2(xe + 1.5f * k, y1), IM_COL32(240, 138, 36, al));
+            const float gx = xe - dir * 6.0f * k;
+            dl->AddRectFilled(ImVec2(gx - 1.0f, y0), ImVec2(gx + 1.0f, y1), IM_COL32(70, 205, 255, (int)((float)al * 0.55f)));
         }
     }
+    const float la = std::clamp((a - 0.86f) / 0.14f, 0.0f, 1.0f);
+    if (la > 0.0f) {
+        const float cx = ds.x * 0.5f, cy = ds.y * 0.5f - 14.0f * k;
+        const float j = Hash1(tick * 11u) > 0.7f ? (Hash1(tick * 3u + 1u) - 0.5f) * 6.0f * k : 0.0f;
+        float asp = 1.0f; void* lg = MenuLogoTex(&asp); ImFont* font = ImGui::GetFont();
+        if (lg && asp > 0.05f) {
+            const float lh = 70.0f * k, lw = std::min(lh * asp, ds.x * 0.5f); const ImVec2 p0(cx - lw * 0.5f, cy - lh * 0.5f - 6.0f * k), p1(p0.x + lw, p0.y + lh);
+            dl->AddImage((ImTextureID)(uintptr_t)lg, ImVec2(p0.x - 3.0f * k + j, p0.y), ImVec2(p1.x - 3.0f * k + j, p1.y), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(70, 205, 255, (int)(110.0f * la)));
+            dl->AddImage((ImTextureID)(uintptr_t)lg, ImVec2(p0.x + 3.0f * k - j, p0.y), ImVec2(p1.x + 3.0f * k - j, p1.y), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(240, 138, 36, (int)(130.0f * la)));
+            dl->AddImage((ImTextureID)(uintptr_t)lg, p0, p1, ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, (int)(255.0f * la)));
+        } else {
+            const char* t = "FOX ENGINE"; const float fsz = 40.0f * k; const ImVec2 ts = font->CalcTextSizeA(fsz, FLT_MAX, 0.0f, t); const ImVec2 o(cx - ts.x * 0.5f, cy - ts.y * 0.5f - 6.0f * k);
+            dl->AddText(font, fsz, ImVec2(o.x - 3.0f * k + j, o.y), IM_COL32(70, 205, 255, (int)(110.0f * la)), t);
+            dl->AddText(font, fsz, ImVec2(o.x + 3.0f * k - j, o.y), IM_COL32(240, 138, 36, (int)(130.0f * la)), t);
+            dl->AddText(font, fsz, o, IM_COL32(235, 235, 238, (int)(255.0f * la)), t);
+        }
+        { const char* t = TRS("MOTOR EN TIEMPO REAL"); const float fsz = 11.0f * k; const ImVec2 ts = font->CalcTextSizeA(fsz, FLT_MAX, 0.0f, t);
+          dl->AddText(font, fsz, ImVec2(cx - ts.x * 0.5f, cy + 40.0f * k - ts.y * 0.5f), IM_COL32(150, 150, 154, (int)(255.0f * la)), t); }
+        const float bw = 180.0f * k, by = cy + 58.0f * k; const float u = (float)std::fmod(now * 0.9, 1.0);
+        dl->AddRectFilled(ImVec2(cx - bw * 0.5f, by), ImVec2(cx + bw * 0.5f, by + 2.0f * k), IM_COL32(60, 60, 64, (int)(255.0f * la)));
+        dl->AddRectFilled(ImVec2(cx - bw * 0.5f + bw * std::clamp(u * 1.4f - 0.4f, 0.0f, 1.0f), by), ImVec2(cx - bw * 0.5f + bw * std::clamp(u * 1.4f, 0.0f, 1.0f), by + 2.0f * k), IM_COL32(240, 138, 36, (int)(255.0f * la)));
+    }
+}
+// estado de la tapa fuera del editor: antes de que abra (se acepto el boton 12) y despues de cerrarlo (hasta que vuelve el Editar)
+static std::atomic<double> s_cvArriveT{ -1.0e9 }, s_cvCancelT{ -1.0e9 }, s_cvExitT{ -1.0e9 }, s_cvRevT{ -1.0e9 };
+void MotorCoverArrive() { s_cvArriveT.store(Now()); s_cvCancelT.store(-1.0e9); }
+void MotorCoverCancel() { const double t = Now() - s_cvArriveT.load(); if (t >= 0.0 && t < 2.8) { s_cvArriveT.store(-1.0e9); s_cvCancelT.store(Now()); } }
+bool MotorCoverArriving() { const double t = Now() - s_cvArriveT.load(); return t >= 0.0 && t < 2.8; }
+// overlay.cpp, cada cuadro, antes del editor (con el editor a la vista la tapa la dibuja ToolbarDraw)
+void MotorPreCoverDraw() {
+    if (g_cfg.motorOwnMenu == 0 || g_cfg.motorPage == 0) return;
+    MotorPreCoverPoll();                                                   // motorpage.cpp: se acepto el boton 12?
+    if (MotorUiOn()) return;
+    const double now = Now();
+    if (now - s_cvExitT.load() < 3.0) {                                    // despues de salir: tapado hasta que vuelve el menu de Editar
+        if (s_cvRevT.load() < s_cvExitT.load() && (MotorEditMenuSeenT() > s_cvExitT.load() + 0.05 || now - s_cvExitT.load() > 2.0)) s_cvRevT.store(now);
+        const float a = s_cvRevT.load() < s_cvExitT.load() ? 1.0f : 1.0f - (float)(now - s_cvRevT.load()) / 0.5f;
+        if (a > 0.0f) { MotorGlitchCover(a, -1.0f); return; }
+    }
+    { const double t = now - s_cvArriveT.load();                           // antes de entrar: llega desde la izquierda
+      if (t >= 0.0 && t < 2.8) { float a = EaseIO(std::min(1.0f, (float)t / 0.32f)); if (t > 2.5) a = std::max(0.0f, 1.0f - (float)(t - 2.5) / 0.3f); MotorGlitchCover(a, -1.0f); return; } }
+    { const double t = now - s_cvCancelT.load();                           // no era el Motor: se retira por donde vino
+      if (t >= 0.0 && t < 0.3) MotorGlitchCover(1.0f - (float)t / 0.3f, -1.0f); }
 }
 static void ToolbarDraw() {
     if (!s_iconTried) IconsLoad();
@@ -593,12 +653,14 @@ static void ToolbarDraw() {
         // Recien al destaparse entran los paneles deslizando (s_openA)
         if (s_coverEnd < 0.0) { const bool ready = MotorUiReady() && s_sceneOnce && s_iconTried;
             if ((te >= 0.2f && ready) || te >= 2.0f) { s_coverEnd = now; s_openA = 0.0f; Log("motor (editor): entrada destapada a los %.2f s (%s)", te, ready ? "todo cargado" : "tope de 2 s"); } }
-        if (s_coverEnd < 0.0) a = 1.0f; else { const float tf = (float)(now - s_coverEnd); if (tf < 0.5f) a = 1.0f - tf / 0.5f; }
-        float sign = 1.0f;      // destapar al entrar: los bloques se van hacia la derecha
-        if (s_exitT >= 0.0) { const float tx = (float)(now - s_exitT); a = std::max(a, std::min(1.0f, tx / 0.32f)); sign = 1.0f;   // salir: llegan desde la derecha, corriendose a la izquierda
-            if (tx >= 0.34f && !s_exitSent) { s_exitSent = true; MotorUiBack(); }
+        if (s_coverEnd < 0.0) a = 1.0f; else { const float tf = (float)(now - s_coverEnd); if (tf < 0.55f) a = 1.0f - tf / 0.55f; }
+        s_cvArriveT.store(-1.0e9);    // la tapa de antes de entrar ya la sigue esta
+        // destapar al entrar: side +1 (los bloques se van hacia la derecha). Salir: llegan con side +1 (corriendose a la izquierda) y, ya
+        // cerrado el editor, MotorPreCoverDraw sigue tapando hasta que vuelve el Editar y destapa con side -1
+        if (s_exitT >= 0.0) { const float tx = (float)(now - s_exitT); a = std::max(a, EaseIO(std::min(1.0f, tx / 0.36f)));
+            if (tx >= 0.38f && !s_exitSent) { s_exitSent = true; MotorUiBack(); s_cvExitT.store(now); s_cvRevT.store(-1.0e9); }
             if (tx > 1.2f) { s_exitT = -1.0; MotorErr("El juego no acept\xC3\xB3 el pedido de volver al Editar. Prob\xC3\xA1 de nuevo con Archivo > Cerrar el Motor."); } }
-        MotorGlitchCover(a, sign);
+        MotorGlitchCover(a, 1.0f);
     }
     s_hrN.store(nz);
     // ---------------- acciones: las mismas para el clic, los menus y el teclado ----------------

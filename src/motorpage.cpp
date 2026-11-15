@@ -434,7 +434,7 @@ bool MotorUiTakeBack() { return s_uiBack.exchange(false); }
 // (15/11 j, Agustin 04:04: "evita que cargue el menu de editar al abrir el menu o que se muestre por un segundo") el menu de
 // Editar (menu::MenuEditMenu, tabla 0x1427012b0) recibe entrada mientras se elige; si la ultima vez que se lo vio tenia el cursor
 // en el boton 12 (fila 11, el del Motor) y deja de recibir entrada sin que otra ventana la reciba, se acepto el Motor: desde ese
-// cuadro se tapa la pantalla (MotorPreCoverDraw) hasta que el editor del Motor dibuja su propia entrada. Si a los 0.25 s otra
+// cuadro se tapa la pantalla (MotorPreCoverDraw en motorgizmo.cpp) hasta que el editor del Motor dibuja su propia entrada. Si a los 0.25 s otra
 // ventana recibe entrada (por ejemplo se volvio atras), se destapa enseguida. Tope 2.5 s.
 static const uintptr_t kVtEditMenu = 0x1427012b0ull;
 static std::atomic<double> s_edSeenT{ -1.0e9 }, s_coverT{ -1.0e9 }; static std::atomic<bool> s_ed12{ false }, s_coverArmed{ false };
@@ -445,27 +445,22 @@ static void EditMenuSeen(void* win) {
         const int row = Readable(I, 0xe0) ? (int)*(uint32_t*)(I + 0xd8) : -1;
         static int lastRow = -2; if (row != lastRow) { lastRow = row; static int n = 0; if (n++ < 30) Log("motor (pagina): menu de Editar, cursor en la fila %d", row); }
         s_ed12.store(row == 11); s_edSeenT.store(Now()); s_coverArmed.store(!g_menuOpen.load());
-        if (Now() - s_coverT.load() < 2.8 && Now() - s_coverT.load() > 0.05) s_coverT.store(-1.0e9);   // el menu de Editar sigue: no era el Motor
+        if (Now() - s_coverT.load() < 2.8 && Now() - s_coverT.load() > 0.05) { s_coverT.store(-1.0e9); MotorCoverCancel(); }   // el menu de Editar sigue: no era el Motor
         return;
     }
     if (win == s_motorWin.load(std::memory_order_relaxed)) return;
     s_coverArmed.store(false);                                           // otra ventana: no se acepto el Motor (o ya paso)
-    if (Now() - s_coverT.load() > 0.25 && Now() - s_coverT.load() < 2.5 && !MotorPageActive()) { s_coverT.store(-1.0e9); Log("motor (pagina): tapa de entrada sacada (otra ventana)"); }
+    if (Now() - s_coverT.load() > 0.25 && Now() - s_coverT.load() < 2.5 && !MotorPageActive()) { s_coverT.store(-1.0e9); MotorCoverCancel(); Log("motor (pagina): tapa de entrada sacada (otra ventana)"); }
 }
 // overlay.cpp, cada cuadro, antes del editor del Motor
-void MotorPreCoverDraw() {
-    if (g_cfg.motorOwnMenu == 0 || g_cfg.motorPage == 0) return;
+// la llama motorgizmo.cpp (MotorPreCoverDraw) en cada cuadro: el menu de Editar dejo de recibir entrada con el cursor en el boton 12?
+void MotorPreCoverPoll() {
     const double now = Now();
     if (s_coverArmed.load() && !g_menuOpen.load() && s_ed12.load() && now - s_edSeenT.load() > 0.05 && now - s_edSeenT.load() < 0.5) {
-        s_coverArmed.store(false); s_coverT.store(now); Log("motor (pagina): se acepto el boton 12 -> tapa de entrada");
+        s_coverArmed.store(false); s_coverT.store(now); MotorCoverArrive(); Log("motor (pagina): se acepto el boton 12 -> tapa de entrada");
     }
-    const double t = now - s_coverT.load();
-    if (t < 0.0 || t > 2.8) return;
-    if (MotorUiOn()) { s_coverT.store(-1.0e9); return; }                 // el editor ya dibuja su entrada (empieza tapado)
-    float a = std::min(1.0f, (float)t / 0.26f);
-    if (t > 2.5) a = std::max(0.0f, 1.0f - (float)(t - 2.5) / 0.3f);
-    MotorGlitchCover(a, -1.0f);          // (15/11 k) entrar: los bloques llegan desde la izquierda
 }
+double MotorEditMenuSeenT() { return s_edSeenT.load(); }
 
 void MotorPageSeen(void* win) {
     if (win) EditMenuSeen(win);

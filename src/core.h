@@ -675,7 +675,7 @@ void AutoCapturePresent(ID3D11Texture2D* frame);   // hooks.cpp
 void PanelStart(int port); void PanelPresent(ID3D11Texture2D* frame);
 void FreeCamSetPose(const float* pos, float yaw, float pitch); bool FreeCamGetPose(float* pos, float* yaw, float* pitch);
 void FreeCamGizmoOrbit(float dyaw, float dpitch); void FreeCamGizmoAxis(int a); void FreeCamGizmoHome();   // (11/11) gizmo de camara del Motor
-bool MotorGizmoPoll(); void MotorGizmoDraw(); void MotorPreCoverDraw(); void MotorGlitchCover(float a, float sign); bool MotorUiReady(); bool MotorGizmoOver(float px, float py);
+bool MotorGizmoPoll(); void MotorGizmoDraw(); void MotorPreCoverDraw(); void MotorGlitchCover(float a, float side); void MotorPreCoverPoll(); double MotorEditMenuSeenT(); void MotorCoverArrive(); void MotorCoverCancel(); bool MotorUiReady(); bool MotorGizmoOver(float px, float py);
 void MotorGridPresent(); ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx);   // (15/11) motorgrid.cpp: fondo con grilla del Motor
 void FreeCamMotorTick(); float FreeCamFovNow();                                              // (15/11) freecam.cpp: camara del Motor sin modelo
 // (15/11) menu propio del Motor (motorpage.cpp): estado y pedidos de la barra de iconos (motorgizmo.cpp)
