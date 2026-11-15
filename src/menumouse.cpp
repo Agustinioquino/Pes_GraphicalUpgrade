@@ -202,7 +202,8 @@ static bool AfpShown(uint8_t* node, uint32_t* why = nullptr) {
     const uint32_t id = U32(hd + 0xc); if (((id >> 27) & 0xf) != 4) return true;
     uint8_t* o = ((PFN_AfpObj)kAfpObj)(id);
     for (int i = 0; i < 32 && Ptr(o); i++) {
-        if (U32(o + 0x20) & 0x20000u) { if (why) *why = 0x100u + (uint32_t)i; return false; }
+        // (15/11) NO se mira 0x20000 en +0x20: el log del 14/11 21:59 lo muestra prendido en TODOS los objetos (tambien en los que se ven).
+        // La lista escondida del menu principal se reconoce por el alfa: un padre con 0x8000000 en +0x24 y +0xdc = 0.00
         if (U32(o + 0x24) & 0x8000000u) { float a; memcpy(&a, o + 0xdc, 4); if (std::isfinite(a) && a < 0.02f) { if (why) *why = 0x200u + (uint32_t)i; return false; } }
         int16_t depth; memcpy(&depth, o + 0x78, 2); if (depth < 1) break;
         o = P8(o + 0x40);
@@ -554,8 +555,8 @@ static void Step(void* win) {
             int rows = 0, rowsOk = 0; uint8_t* root = P8(I + 0x98); const uint32_t ng = Ptr(root) ? std::min<uint32_t>(U32(I + 0xa4), 64) : 0;
             for (uint32_t g = 0; g < ng; g++) { uint8_t* grp = Child(root, g); if (!Ptr(grp)) continue; const uint32_t n = std::min<uint32_t>(ChildCount(grp), 512);
                 for (uint32_t r = 0; r < n; r++) { uint8_t* nd = Child(grp, r); if (!Ptr(nd)) continue; rows++; void** v = *(void***)nd; if (Ptr(v) && RowClass(v)) rowsOk++; } }
-            Log("mouse en menus: pagina vtable %p: puntero propio %d, grupos %u, filas %d (%d que la DLL sabe medir), grupo / fila actual %d / %d",
-                (void*)vt, (int)I[0x44], ng, rows, rowsOk, (int)U32(I + 0xa0), (int)U32(I + 0xd8));
+            Log("mouse en menus: pagina vtable %p: puntero propio %d, grupos %u, filas %d (%d que la DLL sabe medir), grupo / fila actual %d / %d, activa %d",
+                (void*)vt, (int)I[0x44], ng, rows, rowsOk, (int)U32(I + 0xa0), (int)U32(I + 0xd8), (int)((I[9] >> 1) & 1));
             int shown = 0;                           // (14/11 e) rect del juego y rect dibujado de cada fila (hasta 24 por pagina)
             for (uint32_t g = 0; g < ng && shown < 24; g++) { uint8_t* grp = Child(root, g); if (!Ptr(grp)) continue; const uint32_t n = std::min<uint32_t>(ChildCount(grp), 512);
                 for (uint32_t r = 0; r < n && shown < 24; r++) { uint8_t* nd = Child(grp, r); if (!Ptr(nd)) continue; void** v = *(void***)nd; if (!Ptr(v) || !RowClass(v)) continue;
@@ -572,6 +573,16 @@ static void Step(void* win) {
         }
     }
     if (I[0x44]) return;                              // pagina con puntero propio del juego: no se toca (por ahora)
+    // (15/11, Agustin: "si se selecciona un partido y detecta el mouse moverse al momento de cargar se abre el menu que permite cambiarse
+    // de local o visitante") la pantalla de elegir lado (menu::SideSelect 0x14267c718 / menu::SideSelectEach 0x14271ecf8) sigue armada
+    // durante la carga: el log del 14/11 22:16:24 muestra al mouse eligiendo su fila 2 con 16330 cuadros de menu (carga). Ahi el mouse solo
+    // actua si la ventana esta activa para el mando (Impl+9 bit 1, lo mismo que mira 0x140e3f270) y con un clic, nunca solo por moverse.
+    const uintptr_t pageVt = *(uintptr_t*)win;
+    const bool sideSel = pageVt == 0x14267c718ull || pageVt == 0x14271ecf8ull;
+    if (sideSel) {
+        if (((I[9] >> 1) & 1) == 0) { if (s_m.lEdge || s_m.rEdge) { static int s_n = 0; if (s_n++ < 6) Log("mouse en menus: elegir lado inactivo (carga): el mouse no lo toca"); } return; }
+        if (!s_m.lEdge && !s_m.rEdge) return;
+    }
     if (s_latchWin == win) {                          // clic del paso anterior que primero tuvo que elegir la fila
         const bool same = (int)U32(I + 0xa0) == s_latchG && (int)U32(I + 0xd8) == s_latchR && now - s_latchT < 0.25;
         s_latchWin = nullptr;
