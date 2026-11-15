@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------- (15/11) grilla de piso del Motor en tiempo real
 // Agustin 01:51: "enfocate en el menu en si, sin fondo con grilla". El estudio del Motor no muestra el fondo del Editar: en su
 // lugar va un fondo gris oscuro con una grilla de piso en perspectiva (como la de Blender), con el eje X en rojo y el Z en azul.
-// Se dibuja en una textura propia (CPU, 960 x 540) con la camara libre del Motor (freecam.cpp: posicion, giro y campo de vision)
+// Se dibuja en una textura propia (CPU, 1920 x 1080 desde el 15/11 r) con la camara libre del Motor (freecam.cpp: posicion, giro y campo de vision)
 // y se entrega como fondo en el mismo dibujo donde antes iba el negro (glass.cpp EditorBgFor): queda DETRAS del jugador y de los
 // paneles, no encima. Una vez por cuadro. [PES21FX] motor_grilla = 0 deja el fondo gris sin lineas (15/11 o; antes negro).
 #ifndef MOTORGRID_TEST
@@ -15,7 +15,9 @@
 
 namespace fx {
 
-static const int kW = 960, kH = 540;
+// (15/11 r, Agustin 19:22 con video: "sobre la grilla la resolucion") antes 960 x 540 estirado a la pantalla: lineas borrosas y
+// escalonadas. Ahora a la resolucion de 1920 x 1080 (solo se rehace cuando cambia la camara o las opciones)
+static const int kW = 1920, kH = 1080;
 static ID3D11Texture2D* s_tex = nullptr; static ID3D11ShaderResourceView* s_srv = nullptr; static bool s_tried = false;
 static std::vector<uint32_t> s_px;
 static std::atomic<bool> s_fresh{false};       // ya se dibujo en este cuadro
@@ -157,6 +159,27 @@ static void GridPaint(const Cam& c) {
             if (!maxi) break;
         }
     }
+    // --- (15/11 r, Agustin 19:22: "pq el jugador parece un png") sombra de contacto del jugador sobre el piso: el jugador lo dibuja el
+    // visor del Editar en su propia imagen y se pega encima de este fondo, sin tocar el piso. Una mancha oscura suave en el piso
+    // (y = 0) alrededor de los pies (el jugador del visor esta en el origen) lo apoya. Por pixel: rayo de la camara contra el piso.
+    {   const float R = 0.75f; const float asp = s_asp, hx = 0.5f * kW, hy = 0.5f * kH;
+        if (c.pos[1] > 0.05f) {
+            float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f; bool any = false;
+            for (int q = 0; q < 16; q++) { const float an = (float)q * 0.3926991f; const float w[3] = { cosf(an) * R, 0.0f, sinf(an) * R };
+                const float d[3] = { w[0] - c.pos[0], w[1] - c.pos[1], w[2] - c.pos[2] };
+                const float z = d[0] * c.f[0] + d[1] * c.f[1] + d[2] * c.f[2]; if (z < 0.05f) { any = false; x0 = 0; y0 = 0; x1 = (float)kW; y1 = (float)kH; break; }
+                const float sx = hx + (d[0] * c.r[0] + d[1] * c.r[1] + d[2] * c.r[2]) / (z * c.th * asp) * hx, sy = hy - (d[0] * c.u[0] + d[1] * c.u[1] + d[2] * c.u[2]) / (z * c.th) * hy;
+                x0 = std::min(x0, sx); x1 = std::max(x1, sx); y0 = std::min(y0, sy); y1 = std::max(y1, sy); any = true; }
+            (void)any;
+            const int ix0 = std::max(0, (int)x0 - 2), ix1 = std::min(kW - 1, (int)x1 + 2), iy0 = std::max(0, (int)y0 - 2), iy1 = std::min(kH - 1, (int)y1 + 2);
+            for (int y = iy0; y <= iy1; y++) { const float b = (hy - (float)y) / hy * c.th;
+                for (int x = ix0; x <= ix1; x++) { const float a = ((float)x - hx) / hx * c.th * asp;
+                    const float dir[3] = { c.f[0] + c.r[0] * a + c.u[0] * b, c.f[1] + c.r[1] * a + c.u[1] * b, c.f[2] + c.r[2] * a + c.u[2] * b };
+                    if (dir[1] > -1e-5f) continue; const float t = -c.pos[1] / dir[1]; const float gx = c.pos[0] + dir[0] * t, gz = c.pos[2] + dir[2] * t;
+                    const float dd = sqrtf(gx * gx + gz * gz) / R; if (dd >= 1.0f) continue;
+                    const float k = (1.0f - dd) * (1.0f - dd) * 0.55f;      // mas oscura al centro, se desvanece hacia el borde
+                    uint32_t& px = s_px[(size_t)y * kW + x]; const int m = (int)((1.0f - k) * 256.0f);
+                    px = 0xff000000u | (uint32_t)(((px & 255) * m) >> 8) | ((uint32_t)((((px >> 8) & 255) * m) >> 8) << 8) | ((uint32_t)((((px >> 16) & 255) * m) >> 8) << 16); } } } }
 }
 
 #ifndef MOTORGRID_TEST
