@@ -1705,7 +1705,7 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
         const ImVec4 grn(0.20f, 0.91f, 0.50f, 1.0f);
         const ImU32 arr = ColA(Lerp4(ImVec4(0.92f, 0.94f, 0.96f, 1), grn, s_dn), alpha), arrD = ColA(Lerp4(ImVec4(0.47f, 0.51f, 0.55f, 1), ImVec4(0.10f, 0.55f, 0.29f, 1), s_dn), alpha);
         const ImU32 shadow = Col(0, 0, 0, 0.28f * alpha); const float lw = std::max(1.0f, 0.9f * k);
-        const ImU32 cDark = Col(0.24f, 0.26f, 0.30f, alpha), cDarker = Col(0.16f, 0.18f, 0.22f, alpha), cSide = Col(0.66f, 0.70f, 0.75f, alpha);
+        const ImU32 cDark = Col(0.24f, 0.26f, 0.30f, alpha);
         auto P = [&](float x, float y) { return ImVec2(m.x + x * sc, m.y + y * sc); };
         auto Q = [&](float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy, ImU32 fill, bool line) {
             const ImVec2 a = P(ax, ay), b = P(bx, by), c = P(cx, cy), d = P(dx, dy); dl->AddQuadFilled(a, b, c, d, fill); if (line) dl->AddQuad(a, b, c, d, edge, lw); };
@@ -1731,27 +1731,18 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
         // verde y brille levemente") la camara se ve DE ATRAS en tres cuartos: el fondo (visor y pantallita) hacia el que mira, el lente
         // y el parasol se van hacia arriba a la derecha, los rollos de costado arriba. Mas chica que los aros. Con el boton apretado el
         // cuerpo se tine de verde y un brillo verde suave lo rodea.
-        auto Tint = [&](float r, float g, float b) { return ColA(Lerp4(ImVec4(r, g, b, 1), ImVec4(0.62f + 0.38f * r * 0.4f, 0.93f, 0.70f, 1), 0.75f * s_dn), alpha); };
-        if (s_dn > 0.01f) for (int i = 5; i >= 1; i--) dl->AddCircleFilled(P(0.8f, 0.0f), (3.5f + (float)i * 1.6f) * sc, ColA(grn, 0.06f * s_dn * alpha), 28);   // brillo
-        dl->AddQuadFilled(P(1.9f, 4.6f), P(5.6f, 2.0f), P(5.6f, -2.6f), P(-3.4f, 4.6f), shadow);
-        Q(3.8f, -2.2f, 6.6f, -4.4f, 7.2f, -3.4f, 4.4f, -1.2f, cDark, true);                    // lente (se va hacia atras)
-        Q(6.2f, -6.0f, 8.6f, -7.6f, 8.6f, -1.6f, 6.2f, -0.4f, cDarker, true);                  // parasol
-        const float RC[2][3] = { { 3.3f, -6.4f, 2.6f }, { 0.5f, -4.9f, 2.4f } };              // rollos: de costado, se ven angostos
-        for (const auto& rc : RC) {
-            const float x = rc[0], y = rc[1], ry = rc[2];
-            Q(x - 0.35f, y + ry * 0.5f, x + 0.35f, y + ry * 0.5f, x + 0.35f, y + ry + 0.4f, x - 0.35f, y + ry + 0.4f, Tint(0.78f, 0.81f, 0.84f), true);
-            dl->AddEllipseFilled(P(x + 0.45f, y), ImVec2(1.35f * sc, ry * sc), Tint(0.59f, 0.62f, 0.67f), 0.0f, 20); dl->AddEllipse(P(x + 0.45f, y), ImVec2(1.35f * sc, ry * sc), edge, 0.0f, 20, lw);
-            dl->AddEllipseFilled(P(x, y), ImVec2(1.35f * sc, ry * sc), Tint(0.94f, 0.95f, 0.97f), 0.0f, 20); dl->AddEllipse(P(x, y), ImVec2(1.35f * sc, ry * sc), edge, 0.0f, 20, lw);
-            dl->AddEllipseFilled(P(x, y), ImVec2(0.45f * sc, ry * 0.33f * sc), cDark, 0.0f, 12);
-        }
-        Q(1.5f, -1.0f, 5.0f, -3.6f, 5.0f, 1.4f, 1.5f, 4.0f, Tint(0.66f, 0.70f, 0.75f), true);  // costado
-        Q(-4.0f, -1.0f, 1.5f, -1.0f, 5.0f, -3.6f, -0.5f, -3.6f, Tint(1.0f, 1.0f, 1.0f), true); // techo
-        Q(-4.0f, -1.0f, 1.5f, -1.0f, 1.5f, 4.0f, -4.0f, 4.0f, Tint(0.91f, 0.93f, 0.95f), true); // la parte de atras
-        Q(-3.2f, 0.0f, -1.0f, 0.0f, -1.0f, 1.8f, -3.2f, 1.8f, cDark, true);                    // visor
-        Circ(-2.1f, 0.9f, 0.55f, Col(0.10f, 0.16f, 0.19f, alpha), false);
-        Q(-0.4f, 0.2f, 0.9f, 0.2f, 0.9f, 1.4f, -0.4f, 1.4f, ColA(Lerp4(ImVec4(0.18f, 0.24f, 0.28f, 1), grn, 0.6f * s_dn), alpha), true);   // pantallita
-        Circ(0.9f, 3.0f, 0.4f, Col(0.90f, 0.24f, 0.24f, alpha), false);                         // lucecita roja
-        dl->AddLine(P(-3.4f, 3.1f), P(0.0f, 3.1f), cSide, lw);
+        // (15/11, Agustin 17:47: "la forma esta un poco rara y como muy poco ancha, dale mas minimalismo") version simple: cuerpo ancho
+        // visto de atras, dos rollos lisos arriba, un lente corto asomando del otro lado y solo el visor de detalle.
+        auto Tint = [&](float r, float g, float b) { return ColA(Lerp4(ImVec4(r, g, b, 1), ImVec4(0.62f, 0.93f, 0.70f, 1), 0.75f * s_dn), alpha); };
+        if (s_dn > 0.01f) for (int i = 5; i >= 1; i--) dl->AddCircleFilled(P(0.0f, 0.0f), (3.5f + (float)i * 1.6f) * sc, ColA(grn, 0.06f * s_dn * alpha), 28);   // brillo
+        dl->AddQuadFilled(P(-4.4f, 4.4f), P(3.6f, 4.4f), P(6.2f, 2.4f), P(6.2f, -1.6f), shadow);
+        Q(4.2f, -2.6f, 6.6f, -4.4f, 6.6f, -0.2f, 4.2f, 1.4f, cDark, true);                     // lente (del otro lado)
+        Circ(-2.6f, -4.6f, 2.1f, Tint(0.94f, 0.95f, 0.97f), true); Circ(-2.6f, -4.6f, 0.67f, cDark, false);   // rollos
+        Circ(1.6f, -4.6f, 2.1f, Tint(0.94f, 0.95f, 0.97f), true); Circ(1.6f, -4.6f, 0.67f, cDark, false);
+        Q(2.4f, -1.8f, 5.0f, -3.6f, 5.0f, 2.0f, 2.4f, 3.8f, Tint(0.69f, 0.71f, 0.76f), true);  // costado
+        Q(-5.6f, -1.8f, 2.4f, -1.8f, 5.0f, -3.6f, -3.0f, -3.6f, Tint(1.0f, 1.0f, 1.0f), true); // techo
+        Q(-5.6f, -1.8f, 2.4f, -1.8f, 2.4f, 3.8f, -5.6f, 3.8f, Tint(0.92f, 0.93f, 0.95f), true); // la parte de atras
+        Q(-4.4f, -0.6f, -2.2f, -0.6f, -2.2f, 1.4f, -4.4f, 1.4f, cDark, true);                  // visor
         Band(true, -0.05f * PI, 1.05f * PI); Band(false, PI * 0.58f, PI * 1.42f);              // los aros por delante
         Head(true, -0.05f * PI, -1.0f); Head(true, 1.05f * PI, 1.0f); Head(false, PI * 0.58f, -1.0f); Head(false, PI * 1.42f, 1.0f);
         return;
