@@ -569,7 +569,13 @@ static float s_slotTv[kCharSlots] = {};   // (26/10) variante de los personajes 
 static void LegMoments(float dt);   // (08/11) apoyo / empuje / frenada / patada / salto / caida por pierna (mas abajo)
 static void UpdateDynamics() {
     const double t = Now();
-    static double tPrev = 0; const float dt = tPrev > 0 ? (float)std::clamp(t - tPrev, 0.0, 0.1) : 0.0f; tPrev = t;
+    static double tPrev = 0; float dt = tPrev > 0 ? (float)std::clamp(t - tPrev, 0.0, 0.1) : 0.0f; tPrev = t;
+    // (14/11 0kygek, Agustin: "las deformaciones de musculo al estar muy cerca a veces se rompen o vibran") en partido manda el reloj del
+    // juego, como los gestos (exprbones.cpp AnimT) y las arrugas (expr.cpp WrClock): con el reloj real, en la repeticion lenta o en pausa
+    // la velocidad salia de posiciones que avanzan a saltos (cuadro igual / cuadro que salta) y la contraccion y la respiracion latian
+    { static double gPrev = -1.0; const double g = (double)g_cfg.live[157][0];
+      double dG = gPrev < 0.0 ? 0.0 : g - gPrev; if (dG < -50000.0) dG += 100000.0; gPrev = g;
+      if (g_cfg.live[157][3] >= 0.5f && g_cfg.live[93][3] >= 0.5f) dt = (float)std::clamp(dG, 0.0, 0.1); }
     s_dynT = (float)fmod(t, 3600.0);
     const float kb = s_dynK[1], kag = std::clamp(g_cfg.live[263][2], 0.0f, 2.0f);
     for (int i = 0; i < kCharSlots; i++) {

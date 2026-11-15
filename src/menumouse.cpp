@@ -27,6 +27,7 @@
 #include <MinHook.h>
 #include <atomic>
 #include <cstring>
+#include <cstdio>
 #include <cmath>
 #include <cstdlib>
 #include <algorithm>
@@ -59,7 +60,65 @@ static const uintptr_t kChildByType = 0x140e4f5d0ull;
 static PFN_Hover o_hover = nullptr; static PFN_Dirs o_dirs = nullptr; static PFN_Action o_action = nullptr;
 
 static bool s_tried = false, s_ok = false;
+// (14/11 ythnmm, Agustin: "continuar al igual que en el primer menu de apretar cualquier tecla") pantalla del titulo menu::TitleStart
+// (vtable 0x142671970): su vf40 0x140a9ae40 -> 0x140a9ac10 lee el mando 0 boton por boton (vf+0x40) y si hay alguno llama a
+// 0x141b58200(1) (mando activo) y 0x140a99250(pagina) ("titleOut", +0x9c = 1). Con el mouse: el clic izquierdo hace lo mismo, cuando
+// el "pressStart_on" ya se mostro (+0xd8) y no salio todavia (+0x9c != 1).
+static const uintptr_t kTitleVt = 0x142671970ull, kPadActive = 0x141b58200ull, kTitleGo = 0x140a99250ull;
+static const unsigned char kPadActiveSig[14] = { 0x8b,0xd1,0x48,0x8b,0x0d,0x8f,0x6c,0xca,0x01,0x48,0x85,0xc9,0x74,0x07 };
+static const unsigned char kTitleGoSig[14] = { 0x40,0x53,0x48,0x83,0xec,0x20,0xba,0x13,0x00,0x00,0x00,0x48,0x8b,0xd9 };
+static bool s_titleOk = false;
+// (14/11 ythnmm, Agustin: "el video de introduccion no es salteable") video de la intro menu::Movie (vtable 0x142671230): su vf40
+// 0x140a98b80, en el estado 2 (+0xa4, video andando), con el boton aceptar (codigo 0x24) o 0x1b corta el video: si +0xa5 == 0 lo pone
+// en 1 y llama a 0x140e72ee0([pagina+0x90]) (para el video), despues +0xa4 = 3 y +0xa6 = 1. El clic izquierdo hace exactamente eso.
+static const uintptr_t kMovieVt = 0x142671230ull, kMovieStop = 0x140e72ee0ull;
+static const unsigned char kMovieStopSig[14] = { 0x48,0x89,0x5c,0x24,0x08,0x57,0x48,0x83,0xec,0x20,0x48,0x8b,0xd9,0xe8 };
+static bool s_movieOk = false;
 // estado del hilo del menu (los tres ganchos corren ahi)
+// (14/11 e, Agustin: "la deteccion del mouse en este menu es rara"; "no todos los menus son iguales") RECTANGULO DIBUJADO de una fila.
+// El tamano de la fila que usa el juego (nodo +0x8c) es el del diseno ORIGINAL; un parche que redibuja el menu (tarjetas grandes,
+// pestanas en otro lugar) lo deja mal. El reproductor de las pantallas (AFP) sabe lo que dibuja: 0x1400c17b0(id, propiedad, salida)
+// con 0x1015 / 0x1016 = ancho / alto, que calcula 0x14002e950 y guarda en objeto+0xf0 {x0, x1, y0, y1} en el espacio del PADRE
+// (contenido x matriz propia, objeto+0x80), y 0x100f = matriz global {a, b, c, d, tx, ty} (0x14002d240, la misma de la posicion
+// 0x1008). id = [nodo+0x40]+0xc; objeto = 0x14004a890(id). Rect global = (rect del padre) x (matriz propia)^-1 x (matriz global).
+typedef int (*PFN_AfpGet)(uint64_t id, uint32_t prop, void* out, void* p4);
+typedef uint8_t* (*PFN_AfpObj)(uint32_t id);
+static const uintptr_t kAfpGet = 0x1400c17b0ull, kAfpObj = 0x14004a890ull;
+static const unsigned char kAfpGetSig[20] = { 0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x48,0x83,0xec,0x38,0x89,0xc8,0xc1,0xe8,0x1b,0x83,0xe0,0x0f,0x89 };
+static const unsigned char kAfpObjSig[20] = { 0x0f,0xb7,0xd1,0x48,0x8b,0x05,0x7e,0x11,0x6f,0x03,0x48,0x8b,0x04,0xd0,0x48,0x85,0xc0,0x74,0x0d,0x33 };
+static bool s_afpOk = false;
+// (14/11 e) ELEGIR EQUIPO (menu::TeamSelectCommon y las clases que comparten sus funciones): la lista de ligas / equipos es un carrusel
+// de 9 elementos "listItem_0..8" (el elegido es el 4) que la ventana mueve por su cuenta: 0x140c975b0 mira arriba / abajo mantenidos
+// y llama a la ranura 0x250 (anterior, 0x140c97420) o 0x258 (siguiente, 0x140c97330) si no esta deshabilitada ([ventana+0x120]),
+// esta activa (Impl+9 bit 1) y termino la animacion anterior (0x140c96f40). Con el mouse: rueda = esas mismas ranuras; clic en un
+// elemento = tantos pasos como falten para traerlo al centro; clic en el del centro = aceptar. Los rectangulos se leen en cada
+// movimiento del mouse (la lista se puede mover o cambiar de liga): 0x140e4f120(contenedor+0x98, nombre) con los nombres del juego.
+typedef uint8_t* (*PFN_FindChild)(void* sub, const char* name);
+typedef char (*PFN_WinBool)(void*);
+static const uintptr_t kFindChild = 0x140e4f120ull, kTsIdle = 0x140c96f40ull, kTsPrev = 0x140c97420ull, kTsNext = 0x140c97330ull, kTsMove = 0x140c97440ull, kTsNames = 0x1434c83c0ull;
+static const unsigned char kFindChildSig[20] = { 0x4c,0x8b,0xdc,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x83,0xec,0x60,0x49,0xc7,0x43,0xa0 };
+static const unsigned char kTsIdleSig[20] = { 0x40,0x53,0x48,0x83,0xec,0x20,0x48,0x8b,0xd9,0xe8,0x72,0x8c,0x1a,0x00,0x48,0x8b,0x15,0x33,0x14,0x83 };
+static bool s_tsOk = false;
+static void* s_tsWin = nullptr; static double s_tsT = 0; static int s_tsPend = 0; static double s_tsPendT = 0; static void* s_tsPendWin = nullptr;
+// (14/11 e, Agustin: "si se usa el mouse que no aparezcan los iconos del mando y cuando se mueva el mando vuelvan, asi como el cursor
+// desaparezca") barra de botones del juego (menusystem::GuideBar, unica, DAT_143707d10; nodo raiz en +0x70): visible = propiedad 0x1007
+// del AFP, que el juego pone con 0x141f96bc0([nodo+0x40], 0 / 1). Se esconde mientras lo ultimo usado sea el mouse y vuelve con el mando.
+static const uintptr_t kGuideBar = 0x143707d10ull, kAfpSetVisible = 0x141f96bc0ull;
+static const unsigned char kAfpSetVisibleSig[13] = { 0x8b,0x49,0x0c,0x44,0x0f,0xb6,0xc2,0xba,0x07,0x10,0x00,0x00,0xe9 };
+static bool s_guideOk = false, s_guideHidden = false; static double s_guideT = 0;
+static std::atomic<double> s_padT{0};                                    // ultima vez que el mando / teclado movio o apreto algo en un menu
+
+// (14/11 g, Agustin: "al usar mando, para que funcione bien, que se reinicie la seleccion") por ventana: la fila que tenia elegida el
+// mando antes de que el mouse eligiera otra. La primera direccion del mando despues del mouse vuelve a esa fila (y no mueve).
+struct PadSel { void* win; uintptr_t vt; int g, r; bool dirty; double t; };   // vt: la misma direccion puede ser otra pagina despues
+static PadSel s_padSel[8] = {};
+static PadSel* PadSelFor(void* win, bool create) {
+    PadSel* old = &s_padSel[0];
+    for (PadSel& e : s_padSel) { if (e.win == win) return &e; if (e.t < old->t) old = &e; }
+    if (!create) return nullptr;
+    *old = PadSel{ win, 0, -1, -1, false, 0 }; return old;
+}
+
 static void* s_pendWin = nullptr; static int s_pendAction = -1;
 static void* s_pendDxWin = nullptr; static int s_pendDx = 0;              // (v3) clic sobre una fila con selector: "derecha" / "izquierda" para el juego
 static POINT s_last = { -32000, -32000 }; static bool s_lWas = false, s_rWas = false; static double s_stepT = 0;
@@ -71,8 +130,14 @@ static void* s_rGiven[8] = {}; static int s_rN = 0;                       // ven
 static void* s_latchWin = nullptr; static int s_latchG = -1, s_latchR = -1, s_latchDir = 0; static double s_latchT = 0;   // clic que tuvo que elegir la fila: acepta en el paso siguiente
 // compartido con el hilo de Present / la ventana
 static std::atomic<int> s_wheel{0};
+static bool s_overB = false; static std::atomic<bool> s_over{false};   // (14/11 d) el mouse esta justo sobre una fila (se puede hacer clic): mano
 static std::atomic<int> s_curX{0}, s_curY{0}; static std::atomic<double> s_moveT{0}, s_liveT{0};
-static std::atomic<int> s_nSel{0}, s_nClick{0}, s_nBack{0}, s_nWheel{0}, s_nStep{0}, s_nNear{0}, s_nOpt{0};
+static std::atomic<int> s_nSel{0}, s_nClick{0}, s_nBack{0}, s_nWheel{0}, s_nStep{0}, s_nNear{0}, s_nOpt{0}, s_nExtra{0};
+// (14/11 ythnmm) acciones del juego por indice (tabla 0x1427bcdf0, codigo del boton = 19 + boton de DirectInput): 0 aceptar, 1 volver,
+// 2 cuadrado, 3 triangulo, 4 OPTIONS, 5 SHARE, 6 / 7 L2 / R2, 8 / 9 L1 / R1, 10 / 11 L3 / R3. Agustin 14/11 09:34: con el mouse solo
+// rueda, clic izquierdo y clic derecho (nada de botones extra ni teclas). s_extraAct queda para pedir una accion desde un clic.
+static int s_extraAct = -1; static double s_extraT = 0;
+static void* s_wheelOptWin = nullptr; static float s_wheelOptMx = 0;       // (14/11 ythnmm) el mouse esta sobre la fila elegida y es un selector: la rueda cambia la opcion
 
 static bool Readable(const void* p, size_t n) {
     MEMORY_BASIC_INFORMATION mi{};
@@ -96,15 +161,75 @@ static inline bool RowClass(void** vt) {
     return a == 0x140e4d9e0ull && (b == 0x140e4ade0ull || b == 0x140e54130ull || b == 0x140e5b9c0ull || b == 0x140e90710ull || b == 0x140e92170ull);
 }
 
+// todas las clases de nodo comparten la posicion (ranura 20) y guardan el objeto del AFP en +0x40
+static inline bool NodeClass(void** vt) { return (uintptr_t)vt[0xa0 / 8] == 0x140e4d9e0ull; }
+
+// (14/11 e) rectangulo de lo que el nodo DIBUJA, en el escenario de 1920 x 1080. false = no se pudo leer (se usa el del juego)
+static bool DrawnRect(uint8_t* node, float& x, float& y, float& w, float& h) {
+    if (!s_afpOk || g_cfg.menuMouseDrawn == 0) return false;
+    uint8_t* hd = P8(node + 0x40); if (!Ptr(hd)) return false;
+    const uint32_t id = U32(hd + 0xc); if (((id >> 27) & 0xf) != 4) return false;
+    uint8_t* o = ((PFN_AfpObj)kAfpObj)(id); if (!Ptr(o)) return false;
+    float ww = 0, G[6] = { 1, 0, 0, 1, 0, 0 };
+    if (((PFN_AfpGet)kAfpGet)(id, 0x1015, &ww, nullptr) != 0) return false;     // deja el rect al dia en objeto+0xf0
+    if (((PFN_AfpGet)kAfpGet)(id, 0x100f, G, nullptr) != 0) return false;
+    float b[4]; memcpy(b, o + 0xf0, 16);                                        // x0, x1, y0, y1 (padre)
+    float L[6] = { 1, 0, 0, 1, 0, 0 };
+    if (o[0xcc] == 0) { memcpy(&L[0], o + 0x80, 4); memcpy(&L[1], o + 0x84, 4); memcpy(&L[2], o + 0x90, 4); memcpy(&L[3], o + 0x94, 4); memcpy(&L[4], o + 0xb0, 4); memcpy(&L[5], o + 0xb4, 4); }
+    if (o[0xcd] != 0) { float px, py; memcpy(&px, o + 0xc0, 4); memcpy(&py, o + 0xc4, 4); L[4] -= px * L[0] + py * L[2]; L[5] -= px * L[1] + py * L[3]; }
+    const float det = L[0] * L[3] - L[1] * L[2];
+    for (float v : b) if (!std::isfinite(v)) return false;
+    for (float v : G) if (!std::isfinite(v)) return false;
+    if (!std::isfinite(det) || std::fabs(det) < 1e-6f || !(b[1] > b[0]) || !(b[3] > b[2])) return false;
+    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+    for (int i = 0; i < 4; i++) {
+        const float px = ((i & 1) ? b[1] : b[0]) - L[4], py = ((i & 2) ? b[3] : b[2]) - L[5];
+        const float lx = (px * L[3] - py * L[2]) / det, ly = (py * L[0] - px * L[1]) / det;      // punto en el espacio del objeto
+        const float gx = lx * G[0] + ly * G[2] + G[4], gy = lx * G[1] + ly * G[3] + G[5];
+        x0 = std::min(x0, gx); y0 = std::min(y0, gy); x1 = std::max(x1, gx); y1 = std::max(y1, gy);
+    }
+    if (!(x1 - x0 >= 4.0f) || !(y1 - y0 >= 4.0f) || !(x1 - x0 < 2600.0f) || !(y1 - y0 < 1600.0f) || x1 < -200.0f || y1 < -200.0f || x0 > 2120.0f || y0 > 1280.0f) return false;
+    x = x0; y = y0; w = x1 - x0; h = y1 - y0; return true;
+}
+
+// (14/11 f) el nodo dice "visible" pero el AFP no lo muestra: el objeto o un padre con la bandera de invisible (0x20000 en +0x20, la de
+// la propiedad 0x1007) o con el alfa de su color en 0 (+0xdc, si tiene transformacion de color: 0x8000000 en +0x24). En el menu
+// principal del Dream Patch la lista del medio (grupo 1) no se dibuja pero sus filas siguen "visibles" para el juego: el mouse las
+// elegia y despues el mando quedaba moviendose en una lista que no se ve (Agustin 14/11 13:42).
+static bool AfpShown(uint8_t* node, uint32_t* why = nullptr) {
+    if (!s_afpOk || g_cfg.menuMouseDrawn == 0) return true;
+    uint8_t* hd = P8(node + 0x40); if (!Ptr(hd)) return true;
+    const uint32_t id = U32(hd + 0xc); if (((id >> 27) & 0xf) != 4) return true;
+    uint8_t* o = ((PFN_AfpObj)kAfpObj)(id);
+    for (int i = 0; i < 32 && Ptr(o); i++) {
+        if (U32(o + 0x20) & 0x20000u) { if (why) *why = 0x100u + (uint32_t)i; return false; }
+        if (U32(o + 0x24) & 0x8000000u) { float a; memcpy(&a, o + 0xdc, 4); if (std::isfinite(a) && a < 0.02f) { if (why) *why = 0x200u + (uint32_t)i; return false; } }
+        int16_t depth; memcpy(&depth, o + 0x78, 2); if (depth < 1) break;
+        o = P8(o + 0x40);
+    }
+    return true;
+}
+
 struct Hit { int group = -1, row = -1; float x = 0, y = 0, w = 0, h = 0, dist = 0; };   // dist > 0: no esta justo encima, es la fila mas cercana de su grupo
 
 // replica de la recorrida de 0x140e400d0 con (mx, my) en vez del puntero del juego
-static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
+static bool HitTest(uint8_t* I, float mx, float my, Hit& out, bool useShown = true) {
+    int nSeen = 0, nHidden = 0;                    // si el AFP da por escondidas TODAS las filas, la lectura esta mal: se repite sin esa prueba
     uint8_t* root = P8(I + 0x98); if (!Ptr(root)) return false;
     const uint32_t ng = U32(I + 0xa4); if (ng == 0 || ng > 64) return false;
     // (v2) huecos entre filas de un mismo grupo (pestanas separadas, listas con margen): con el mouse dentro del rectangulo que
     // encierra a las filas del grupo vale la fila mas cercana. Una fila justo debajo del mouse gana siempre (se devuelve al toque).
     Hit best; float bestD = 1e9f;
+    // (14/11 ythnmm, Agustin: "la precision") filas que se pisan (grillas de iconos, el rect del juego es mas grande que el dibujo): gana la
+    // que tiene el centro mas cerca del mouse, no la primera de la lista. Y la "mas cercana" en los huecos solo vale a pocos pixeles
+    // (antes llegaba a 160 y elegia iconos a 140 px). mouse_menus_cerca 2 = como antes.
+    Hit direct; float directD = 1e9f;
+    // (14/11 e) segunda prueba con lo que la fila DIBUJA (DrawnRect). Una fila cuyo rect del juego cae casi todo fuera de su dibujo
+    // (menu redibujado por un parche) se prueba solo con el dibujo; las demas primero con el rect del juego (como siempre) y, si el
+    // mouse no cae en ninguno, con el dibujo: gana el dibujo mas chico que contiene al mouse.
+    Hit drawn; float drawnA = 1e18f;
+    Hit directAll; float directAllD = 1e9f; int nRows = 0, nBogus = 0;   // si la mayoria de las filas "no coincide" el que esta mal es el dibujo leido: se ignora
+    const bool wide = g_cfg.menuMouseNear >= 2;
     for (uint32_t g = 0; g < ng; g++) {
         {   // grupo anotado en el vector con +0xc en 0: no se prueba
             uint8_t* vb = P8(I + 0xa8); uint8_t* ve = P8(I + 0xb0); bool skip = false;
@@ -119,6 +244,48 @@ static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
           if (lb != le && Ptr(lb) && le > lb && (size_t)(le - lb) <= 4 * 256) for (uint8_t* e = lb; e + 4 <= le; e += 4) if (U32(e) == g) { inList = true; break; } }
         const uint32_t n = ChildCount(grp); if (n > 512) continue;
         Hit cand; float nearD = 1e9f; int rows = 0; float bx0 = 1e9f, by0 = 1e9f, bx1 = -1e9f, by1 = -1e9f;
+        // (14/11 f) GRILLA CON FILAS CHICAS: en un menu redibujado por un parche la fila del juego puede ser solo la esquina de la tarjeta
+        // (126 x 126 con tarjetas cada 420 px). Si las filas del grupo son mucho mas chicas que la distancia entre ellas, cada fila
+        // ocupa su celda: hasta la columna siguiente y hasta la fila siguiente de su columna (o el borde de la grilla).
+        struct Cell { uint32_t r; float x, y, w, h; }; static Cell s_cell[96]; int nc = 0; bool cells = false;
+        if (g_cfg.menuMouseDrawn != 0 && n <= 96) {
+            for (uint32_t r = 0; r < n; r++) {
+                uint8_t* node = Child(grp, r);
+                if (!Ptr(node) || !NodeFlag(node, 0x0c) || (!NodeFlag(node, 0x10) && !inList)) continue;
+                void** vt = *(void***)node; if (!Ptr(vt) || !RowClass(vt)) continue;
+                float pos[2] = { 0, 0 }, size[2] = { 0, 0 };
+                if (((PFN_NodeVec2)vt[0xa0 / 8])(node, pos) < 0) continue;
+                ((PFN_NodeVec2)vt[0xc0 / 8])(node, size);
+                if (!(size[0] > 0.0f) || !(size[1] > 0.0f) || !(size[0] < 4000.0f) || !(size[1] < 4000.0f) || !(std::fabs(pos[0]) < 8000.0f) || !(std::fabs(pos[1]) < 8000.0f)) continue;
+                if (useShown && !AfpShown(node)) continue;
+                s_cell[nc++] = { r, pos[0], pos[1], size[0], size[1] };
+            }
+            float xs[96], ys[96]; int nx = 0, ny = 0; float maxW = 0, maxH = 0;
+            for (int i = 0; i < nc; i++) {
+                bool fx = false, fy = false;
+                for (int k = 0; k < nx; k++) if (std::fabs(xs[k] - s_cell[i].x) < 6.0f) fx = true;
+                for (int k = 0; k < ny; k++) if (std::fabs(ys[k] - s_cell[i].y) < 6.0f) fy = true;
+                if (!fx) xs[nx++] = s_cell[i].x; if (!fy) ys[ny++] = s_cell[i].y;
+                maxW = std::max(maxW, s_cell[i].w); maxH = std::max(maxH, s_cell[i].h);
+            }
+            std::sort(xs, xs + nx); std::sort(ys, ys + ny);
+            float pitchX = 1e9f, pitchY = 1e9f;
+            for (int k = 1; k < nx; k++) pitchX = std::min(pitchX, xs[k] - xs[k - 1]);
+            for (int k = 1; k < ny; k++) pitchY = std::min(pitchY, ys[k] - ys[k - 1]);
+            cells = nc >= 2 && ((nx >= 2 && maxW < 0.6f * pitchX) || (nx < 2 && ny >= 2 && maxH < 0.6f * pitchY));
+            if (cells) {
+                const float right = nx >= 2 ? xs[nx - 1] + (xs[nx - 1] - xs[nx - 2]) : xs[0] + maxW;
+                const float bottom = ny >= 2 ? ys[ny - 1] + (ys[ny - 1] - ys[ny - 2]) : ys[0] + maxH;
+                for (int i = 0; i < nc; i++) {
+                    Cell& c = s_cell[i]; float nxX = right, nxY = bottom;
+                    for (int k = 0; k < nx; k++) if (xs[k] > c.x + 6.0f) { nxX = xs[k]; break; }
+                    for (int j = 0; j < nc; j++) if (std::fabs(s_cell[j].x - c.x) < 6.0f && s_cell[j].y > c.y + 6.0f) nxY = std::min(nxY, s_cell[j].y);
+                    const float gapX = nx >= 2 ? 0.03f * (nxX - c.x) : 0.0f;
+                    if (nx >= 2) c.w = std::max(8.0f, nxX - c.x - gapX);
+                    c.h = std::max(8.0f, nxY - c.y - 2.0f);
+                }
+            }
+        }
         for (uint32_t r = 0; r < n; r++) {
             uint8_t* node = Child(grp, r);
             if (!Ptr(node) || !NodeFlag(node, 0x0c) || (!NodeFlag(node, 0x10) && !inList)) continue;
@@ -127,18 +294,49 @@ static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
             if (((PFN_NodeVec2)vt[0xa0 / 8])(node, pos) < 0) continue;      // sin clip: el juego usaria valores viejos, aca se saltea
             ((PFN_NodeVec2)vt[0xc0 / 8])(node, size);
             if (!(size[0] > 0.0f) || !(size[1] > 0.0f)) continue;
+            nSeen++;
+            if (useShown && !AfpShown(node)) { nHidden++; continue; }       // (14/11 f) el juego la da por visible pero no se dibuja
+            if (cells) for (int i = 0; i < nc; i++) if (s_cell[i].r == r) { size[0] = s_cell[i].w; size[1] = s_cell[i].h; break; }
+            if (!cells) {
+                float dx0, dy0, dw, dh;
+                if (DrawnRect(node, dx0, dy0, dw, dh)) {
+                    const float ix = std::min(pos[0] + size[0], dx0 + dw) - std::max(pos[0], dx0), iy = std::min(pos[1] + size[1], dy0 + dh) - std::max(pos[1], dy0);
+                    const bool bogus = !(ix > 0.0f && iy > 0.0f && ix * iy >= 0.5f * size[0] * size[1]);
+                    if (mx > dx0 && mx < dx0 + dw && my > dy0 && my < dy0 + dh && dw * dh < drawnA) {
+                        drawnA = dw * dh; drawn.group = (int)g; drawn.row = (int)r; drawn.x = dx0; drawn.y = dy0; drawn.w = dw; drawn.h = dh; drawn.dist = 0;
+                    }
+                    nRows++;
+                    if (bogus) {
+                        nBogus++;
+                        if (mx > pos[0] && pos[0] + size[0] > mx && my > pos[1] && pos[1] + size[1] > my) {
+                            const float nx = (mx - (pos[0] + size[0] * 0.5f)) / size[0], ny = (my - (pos[1] + size[1] * 0.5f)) / size[1];
+                            const float dd = std::max(std::fabs(nx), std::fabs(ny));
+                            if (dd < directAllD) { directAllD = dd; directAll.group = (int)g; directAll.row = (int)r; directAll.x = pos[0]; directAll.y = pos[1]; directAll.w = size[0]; directAll.h = size[1]; directAll.dist = 0; }
+                        }
+                        continue;
+                    }
+                }
+            }
             if (mx > pos[0] && pos[0] + size[0] > mx && my > pos[1] && pos[1] + size[1] > my) {
-                out.group = (int)g; out.row = (int)r; out.x = pos[0]; out.y = pos[1]; out.w = size[0]; out.h = size[1]; out.dist = 0;
-                return true;
+                const float nx = (mx - (pos[0] + size[0] * 0.5f)) / size[0], ny = (my - (pos[1] + size[1] * 0.5f)) / size[1];
+                const float dd = std::max(std::fabs(nx), std::fabs(ny));
+                if (dd < directD) { directD = dd; direct.group = (int)g; direct.row = (int)r; direct.x = pos[0]; direct.y = pos[1]; direct.w = size[0]; direct.h = size[1]; direct.dist = 0; }
+                continue;
             }
             if (!(size[0] < 4000.0f) || !(size[1] < 4000.0f) || !(std::fabs(pos[0]) < 8000.0f) || !(std::fabs(pos[1]) < 8000.0f)) continue;
             rows++; bx0 = std::min(bx0, pos[0]); by0 = std::min(by0, pos[1]); bx1 = std::max(bx1, pos[0] + size[0]); by1 = std::max(by1, pos[1] + size[1]);
             const float dx = std::max(std::max(pos[0] - mx, mx - (pos[0] + size[0])), 0.0f), dy = std::max(std::max(pos[1] - my, my - (pos[1] + size[1])), 0.0f);
-            const float d = std::sqrt(dx * dx + dy * dy), cap = std::min(160.0f, 1.25f * std::max(size[0], size[1]));
+            const float d = std::sqrt(dx * dx + dy * dy);
+            const float cap = wide ? std::min(160.0f, 1.25f * std::max(size[0], size[1])) : std::min(28.0f, 0.30f * std::min(size[0], size[1]));
             if (d <= cap && d < nearD) { nearD = d; cand.group = (int)g; cand.row = (int)r; cand.x = pos[0]; cand.y = pos[1]; cand.w = size[0]; cand.h = size[1]; cand.dist = std::max(d, 0.01f); }
         }
         if (rows >= 2 && cand.group >= 0 && nearD < bestD && mx > bx0 && mx < bx1 && my > by0 && my < by1) { bestD = nearD; best = cand; }
     }
+    if (useShown && nSeen > 0 && nHidden == nSeen) return HitTest(I, mx, my, out, false);
+    const bool drawnBad = nBogus * 10 > nRows * 6;
+    if (drawnBad && directAll.group >= 0 && (direct.group < 0 || directAllD < directD)) { out = directAll; return true; }
+    if (direct.group >= 0) { out = direct; return true; }
+    if (!drawnBad && drawn.group >= 0) { out = drawn; return true; }
     if (g_cfg.menuMouseNear != 0 && best.group >= 0) { out = best; return true; }
     return false;
 }
@@ -194,10 +392,119 @@ static void Sample(double now, bool fresh) {
     s_m.cw = (float)(rc.right - rc.left); s_m.ch = (float)(rc.bottom - rc.top);
     s_m.moved = (p.x != s_last.x || p.y != s_last.y) && !fresh && s_last.x != -32000;
     s_last = p; s_m.p = p; s_m.lEdge = lEdge; s_m.rEdge = rEdge;
+    if (s_m.moved) s_overB = false;
     s_m.ok = s_m.cw >= 160.0f && s_m.ch >= 90.0f && p.x >= 0 && p.y >= 0 && (float)p.x < s_m.cw && (float)p.y < s_m.ch;
     if (rEdge) s_rN = 0;
     s_curX.store(p.x); s_curY.store(p.y);
     if (s_m.ok && (s_m.moved || lEdge || rEdge)) s_moveT.store(now);
+}
+
+// (14/11 e) barra de botones del juego: escondida mientras lo ultimo usado sea el mouse (hilo del menu)
+static void GuideSync(double now) {
+    if (!s_guideOk) return;
+    const double mt = s_moveT.load();
+    const bool want = g_cfg.menuMouseHideGuide != 0 && Enabled() && mt > 0 && mt > s_padT.load();
+    if (want == s_guideHidden && (!want || now - s_guideT < 0.5)) return;       // escondida: se repite cada medio segundo por si el juego la vuelve a mostrar
+    uint8_t* gb = *(uint8_t**)kGuideBar; if (!Ptr(gb)) return;
+    uint8_t* node = P8(gb + 0x70); if (!Ptr(node)) return;
+    void** vt = *(void***)node; if (!Ptr(vt) || !NodeClass(vt)) return;
+    uint8_t* hd = P8(node + 0x40); if (!Ptr(hd)) return;
+    ((void (*)(void*, unsigned char))kAfpSetVisible)(hd, want ? 0 : 1);
+    if (want != s_guideHidden) { static int s_n = 0; if (s_n++ < 6) Log("mouse en menus: barra de botones del juego %s", want ? "escondida (se usa el mouse)" : "a la vista (se uso el mando)"); }
+    s_guideHidden = want; s_guideT = now;
+}
+
+static bool IsTeamSel(void* win) {
+    if (!s_tsOk) return false;
+    void** vt = *(void***)win;
+    return Ptr(vt) && (uintptr_t)vt[0x250 / 8] == kTsPrev && (uintptr_t)vt[0x258 / 8] == kTsNext && (uintptr_t)vt[0x260 / 8] == kTsMove;
+}
+
+// rect de un nodo cualquiera: lo que dibuja; si no se puede leer, el del juego
+static bool AnyRect(uint8_t* node, float r[4]) {
+    if (!Ptr(node)) return false;
+    void** vt = *(void***)node; if (!Ptr(vt) || !NodeClass(vt)) return false;
+    if (DrawnRect(node, r[0], r[1], r[2], r[3])) return true;
+    if (!RowClass(vt)) return false;
+    float pos[2] = { 0, 0 }, size[2] = { 0, 0 };
+    if (((PFN_NodeVec2)vt[0xa0 / 8])(node, pos) < 0) return false;
+    ((PFN_NodeVec2)vt[0xc0 / 8])(node, size);
+    if (!(size[0] > 4.0f) || !(size[1] > 4.0f) || !(size[0] < 2600.0f) || !(size[1] < 1600.0f)) return false;
+    r[0] = pos[0]; r[1] = pos[1]; r[2] = size[0]; r[3] = size[1]; return true;
+}
+
+// (14/11 e) Elegir equipo. Devuelve true si la ventana quedo atendida aca (no sigue la prueba general de filas)
+static bool TeamSelStep(void* win, uint8_t* I, float mx, float my, double now) {
+    uint8_t* w = (uint8_t*)win;
+    static struct { void* win; bool inside; double t; } s_in[4] = {};
+    int slot = -1; for (int i = 0; i < 4; i++) if (s_in[i].win == win) slot = i;
+    if (slot < 0) { slot = 0; for (int i = 1; i < 4; i++) if (s_in[i].t < s_in[slot].t) slot = i; s_in[slot].win = win; s_in[slot].inside = false; }
+    s_in[slot].t = now;
+    if (s_tsPendWin == win && s_tsPend != 0) {                             // pasos pedidos por la rueda o por un clic: uno por vez, cuando el juego puede
+        if (now - s_tsPendT > 2.0) s_tsPend = 0;
+        else if (w[0x120] == 0 && ((I[9] >> 1) & 1) != 0 && Ptr(P8(I + 0x90)) && ((PFN_WinBool)kTsIdle)(win) != 0) {
+            void** vt = *(void***)win; w[0x16e] = 0;
+            ((void (*)(void*))vt[(s_tsPend > 0 ? 0x258 : 0x250) / 8])(win);
+            s_tsPend += s_tsPend > 0 ? -1 : 1; s_tsPendT = now;
+            s_nWheel.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    const bool act = s_m.moved || s_m.lEdge;
+    int hit = -1; bool inside = s_in[slot].inside; int nItems = 0; float rr[9][4] = {};
+    if (act) {
+        uint8_t* root = P8(I + 0x98); uint8_t* c0 = Ptr(root) ? Child(root, 0) : nullptr; uint8_t* c1 = Ptr(c0) ? Child(c0, 0) : nullptr;
+        const char** names = (const char**)kTsNames;
+        if (!Ptr(c1) || !Ptr(P8(c1 + 0x98 + 0x88))) return false;
+        float bx0 = 1e9f, by0 = 1e9f, bx1 = -1e9f, by1 = -1e9f, bestA = 1e18f;
+        for (int k = 0; k < 9; k++) {
+            uint8_t* nd = ((PFN_FindChild)kFindChild)(c1 + 0x98, names[k]);
+            float* r = rr[k];
+            if (!AnyRect(nd, r)) { r[2] = 0; continue; }
+            nItems++;
+            bx0 = std::min(bx0, r[0]); by0 = std::min(by0, r[1]); bx1 = std::max(bx1, r[0] + r[2]); by1 = std::max(by1, r[1] + r[3]);
+            if (mx > r[0] && mx < r[0] + r[2] && my > r[1] && my < r[1] + r[3] && r[2] * r[3] < bestA) { bestA = r[2] * r[3]; hit = k; }
+        }
+        {   // diagnostico: una vez por clase de ventana, donde quedo cada elemento
+            static uintptr_t s_seen[8] = {}; static int s_n = 0; const uintptr_t vt = *(uintptr_t*)win; bool seen = false;
+            for (int i = 0; i < s_n; i++) if (s_seen[i] == vt) seen = true;
+            if (!seen && s_n < 8) {
+                s_seen[s_n++] = vt; char buf[640]; int o = 0;
+                for (int k = 0; k < 9 && o < 560; k++) o += snprintf(buf + o, sizeof buf - (size_t)o, " %d:(%.0f %.0f %.0fx%.0f)", k, rr[k][0], rr[k][1], rr[k][2], rr[k][3]);
+                Log("mouse en menus: Elegir equipo (vtable %p): %d elementos de la lista medidos;%s; activa %d, modo equipo %d", (void*)vt, nItems, buf, (int)((I[9] >> 1) & 1), (int)w[0x9b]);
+            }
+        }
+        if (nItems == 0) return false;
+        inside = mx > bx0 && mx < bx1 && my > by0 && my < by1;
+        s_in[slot].inside = inside;
+    }
+    if (!inside) {
+        if (s_tsWin == win) s_tsWin = nullptr;
+        if (s_m.rEdge) { bool given = false; for (int i = 0; i < s_rN; i++) if (s_rGiven[i] == win) given = true;
+            if (!given && s_rN < 8) { s_rGiven[s_rN++] = win; s_pendWin = win; s_pendAction = 1; } }
+        return true;
+    }
+    s_tsWin = win; s_tsT = now;
+    if (act && hit >= 0) s_overB = true;
+    if (s_m.moved) s_over.store(s_overB);
+    {   // rueda: adelante = el de arriba
+        static int s_acc = 0; const int wv = s_wheel.exchange(0);
+        s_acc = std::clamp(s_acc + wv, -720, 720);
+        while (std::abs(s_acc) >= 120) {
+            const int sgn = s_acc > 0 ? 1 : -1; s_acc -= sgn * 120;
+            if (s_tsPendWin != win) { s_tsPendWin = win; s_tsPend = 0; }
+            s_tsPend = std::clamp(s_tsPend - sgn, -8, 8); s_tsPendT = now; s_moveT.store(now);
+        }
+    }
+    if (s_m.lEdge && hit >= 0) {
+        s_m.lEdge = false; s_moveT.store(now);
+        static int s_n = 0;
+        if (hit == 4) { s_pendWin = win; s_pendAction = 0; if (s_n++ < 12) Log("mouse en menus: Elegir equipo, clic en el elegido -> aceptar"); }
+        else { s_tsPendWin = win; s_tsPend = hit - 4; s_tsPendT = now; if (s_n++ < 12) Log("mouse en menus: Elegir equipo, clic en el elemento %d -> %d pasos", hit, hit - 4); }
+    } else if (s_m.rEdge) {
+        bool given = false; for (int i = 0; i < s_rN; i++) if (s_rGiven[i] == win) given = true;
+        if (!given && s_rN < 8) { s_rGiven[s_rN++] = win; s_pendWin = win; s_pendAction = 1; }
+    }
+    return true;
 }
 
 static void Step(void* win) {
@@ -205,8 +512,8 @@ static void Step(void* win) {
     const bool fresh = now - s_stepT > 0.25;      // primer paso de un menu despues de un rato sin menus
     const bool batch = fresh || now - s_m.t > 0.004;
     s_stepT = now; s_pendWin = nullptr; s_pendAction = -1; s_pendDxWin = nullptr;
-    if (fresh) { s_wheelAcc = 0; s_wheel.store(0); s_latchWin = nullptr; }
-    if (batch) Sample(now, fresh);                 // siempre, para no inventar un clic al volver del menu de PES21FX
+    if (fresh) { s_wheelAcc = 0; s_wheel.store(0); s_latchWin = nullptr; s_extraAct = -1; s_wheelOptWin = nullptr; }
+    if (batch) { Sample(now, fresh); GuideSync(now); }   // siempre, para no inventar un clic al volver del menu de PES21FX
     // (12/11) en el Motor el juego no ve el teclado (freecam.cpp FreeCamBlocksKeys): Esc = "volver" lo pone la DLL, este o no el
     // mouse en menus prendido, para que siempre se pueda salir sin mando
     if (g_cfg.motorKeys != 0 && Ptr(win) && MotorPageIs(win) && !g_menuOpen.load(std::memory_order_relaxed)) {
@@ -220,6 +527,50 @@ static void Step(void* win) {
     uint8_t* I = P8((uint8_t*)win + 0x88); if (!Ptr(I)) return;
     s_liveT.store(now); s_nStep.fetch_add(1, std::memory_order_relaxed);
     if (!s_m.ok) return;
+    if (s_m.lEdge && s_movieOk && *(uintptr_t*)win == kMovieVt) {        // video de la intro: clic = saltearlo
+        uint8_t* w = (uint8_t*)win;
+        if (w[0xa4] == 2 && Ptr(P8(w + 0x90))) {
+            s_m.lEdge = false; s_moveT.store(now);
+            if (w[0xa5] == 0) { w[0xa5] = 1; ((void (*)(void*))kMovieStop)(P8(w + 0x90)); }
+            w[0xa4] = 3; w[0xa6] = 1;
+            Log("mouse en menus: clic en el video de la intro -> saltearlo (permitido por el juego %d / %d)", (int)w[0xb9], (int)U32(w + 0xa0));
+            return;
+        }
+    }
+    if (s_m.lEdge && s_titleOk && *(uintptr_t*)win == kTitleVt) {        // titulo: clic = "apreta cualquier boton"
+        uint8_t* w = (uint8_t*)win;
+        if (U32(w + 0x9c) != 1 && w[0xd8] != 0) {
+            s_m.lEdge = false; s_moveT.store(now);
+            ((void (*)(int))kPadActive)(1); ((void (*)(void*))kTitleGo)(win);
+            Log("mouse en menus: clic en la pantalla del titulo -> continuar");
+            return;
+        }
+    }
+    {   // (14/11 ythnmm) diagnostico: la primera vez que se usa el mouse en cada clase de pagina, cuantos grupos / filas ve la DLL
+        static uintptr_t s_seen[32] = {}; static int s_nSeen = 0; const uintptr_t vt = *(uintptr_t*)win;
+        bool seen = false; for (int i = 0; i < s_nSeen; i++) if (s_seen[i] == vt) { seen = true; break; }
+        if (!seen && s_nSeen < 32 && (s_m.moved || s_m.lEdge)) {
+            s_seen[s_nSeen++] = vt;
+            int rows = 0, rowsOk = 0; uint8_t* root = P8(I + 0x98); const uint32_t ng = Ptr(root) ? std::min<uint32_t>(U32(I + 0xa4), 64) : 0;
+            for (uint32_t g = 0; g < ng; g++) { uint8_t* grp = Child(root, g); if (!Ptr(grp)) continue; const uint32_t n = std::min<uint32_t>(ChildCount(grp), 512);
+                for (uint32_t r = 0; r < n; r++) { uint8_t* nd = Child(grp, r); if (!Ptr(nd)) continue; rows++; void** v = *(void***)nd; if (Ptr(v) && RowClass(v)) rowsOk++; } }
+            Log("mouse en menus: pagina vtable %p: puntero propio %d, grupos %u, filas %d (%d que la DLL sabe medir), grupo / fila actual %d / %d",
+                (void*)vt, (int)I[0x44], ng, rows, rowsOk, (int)U32(I + 0xa0), (int)U32(I + 0xd8));
+            int shown = 0;                           // (14/11 e) rect del juego y rect dibujado de cada fila (hasta 24 por pagina)
+            for (uint32_t g = 0; g < ng && shown < 24; g++) { uint8_t* grp = Child(root, g); if (!Ptr(grp)) continue; const uint32_t n = std::min<uint32_t>(ChildCount(grp), 512);
+                for (uint32_t r = 0; r < n && shown < 24; r++) { uint8_t* nd = Child(grp, r); if (!Ptr(nd)) continue; void** v = *(void***)nd; if (!Ptr(v) || !RowClass(v)) continue;
+                    float pos[2] = { 0, 0 }, size[2] = { 0, 0 }, d[4] = { 0, 0, 0, 0 };
+                    const int pr = ((PFN_NodeVec2)v[0xa0 / 8])(nd, pos); ((PFN_NodeVec2)v[0xc0 / 8])(nd, size);
+                    const bool dk = DrawnRect(nd, d[0], d[1], d[2], d[3]); shown++;
+                    uint32_t why = 0; const bool sh = AfpShown(nd, &why);
+                    char chain[160]; int co = 0; chain[0] = 0;      // cadena de padres del AFP: banderas +0x20 y alfa
+                    { uint8_t* hd = P8(nd + 0x40); const uint32_t id = Ptr(hd) ? U32(hd + 0xc) : 0; uint8_t* o = (s_afpOk && ((id >> 27) & 0xf) == 4) ? ((PFN_AfpObj)kAfpObj)(id) : nullptr;
+                      for (int i = 0; i < 6 && Ptr(o) && co < 130; i++) { float a; memcpy(&a, o + 0xdc, 4); int16_t dp; memcpy(&dp, o + 0x78, 2);
+                          co += snprintf(chain + co, sizeof chain - (size_t)co, " %x/%x/%.2f", U32(o + 0x20) & 0xfffffu, U32(o + 0x24) >> 24, a); if (dp < 1) break; o = P8(o + 0x40); } }
+                    Log("mouse en menus:   fila %u / %u: juego %.0f %.0f %.0f x %.0f (%d), dibujo %s %.0f %.0f %.0f x %.0f, visible %d activa %d, mostrada %d (%x), afp%s",
+                        g, r, pos[0], pos[1], size[0], size[1], pr, dk ? "si" : "no", d[0], d[1], d[2], d[3], (int)NodeFlag(nd, 0x0c), (int)NodeFlag(nd, 0x10), (int)sh, why, chain); } }
+        }
+    }
     if (I[0x44]) return;                              // pagina con puntero propio del juego: no se toca (por ahora)
     if (s_latchWin == win) {                          // clic del paso anterior que primero tuvo que elegir la fila
         const bool same = (int)U32(I + 0xa0) == s_latchG && (int)U32(I + 0xd8) == s_latchR && now - s_latchT < 0.25;
@@ -229,11 +580,25 @@ static void Step(void* win) {
             return;
         }
     }
-    if (!s_m.moved && !s_m.lEdge && !s_m.rEdge) return;
     // escenario de 1920 x 1080 centrado en la ventana
     const float cw = s_m.cw, ch = s_m.ch; float sw = cw, sh = ch, ox = 0, oy = 0;
     if (cw * 9.0f > ch * 16.0f) { sw = ch * 16.0f / 9.0f; ox = (cw - sw) * 0.5f; } else if (cw * 9.0f < ch * 16.0f) { sh = cw * 9.0f / 16.0f; oy = (ch - sh) * 0.5f; }
     const float mx = ((float)s_m.p.x - ox) * 1920.0f / sw, my = ((float)s_m.p.y - oy) * 1080.0f / sh;
+    if (g_cfg.menuMouseTeamSel != 0 && IsTeamSel(win) && TeamSelStep(win, I, mx, my, now)) return;
+    if (s_extraAct >= 0) {   // (14/11 ythnmm) accion pedida: la ventana bajo el mouse que tenga esa accion; si ninguna, la primera que la tenga
+        if (now - s_extraT > 0.5) s_extraAct = -1;
+        else {
+            const uint32_t mode = U32(I + 0x120 + (size_t)s_extraAct * 4);
+            Hit h2; const bool over = HitTest(I, mx, my, h2) && h2.dist <= 0.0f;
+            if (mode >= 1 && mode <= 3 && (over || now - s_extraT > 0.05)) {
+                s_pendWin = win; s_pendAction = s_extraAct; s_extraAct = -1; s_moveT.store(now);
+                const int k = s_nExtra.fetch_add(1, std::memory_order_relaxed);
+                if (k < 12) Log("mouse en menus: accion pedida -> %d de la pagina (vtable %p)", s_pendAction, *(void**)win);
+                return;
+            }
+        }
+    }
+    if (!s_m.moved && !s_m.lEdge && !s_m.rEdge) return;
     {   // (v4) panel del Motor: arrastrar desde la franja del titulo (motorpage.cpp). La primera fila dibujada del grupo 0 da el lugar
         float tx = 0, ty = 0, tw = 0;
         uint8_t* root0 = P8(I + 0x98); uint8_t* g0 = Ptr(root0) ? Child(root0, 0) : nullptr; uint8_t* r0 = Ptr(g0) ? Child(g0, 0) : nullptr;
@@ -245,14 +610,21 @@ static void Step(void* win) {
     Hit hit; const bool on = (s_m.moved || s_m.lEdge) && HitTest(I, mx, my, hit);
     // (v3) la fila actual del juego (Impl+0xd8) cuenta el desplazamiento de la lista: se compara con ese numero, no con el de la fila dibujada
     const int hitAbs = on ? AbsRow(win, I, hit.group, hit.row) : -1;
+    if (on && hit.dist <= 0.0f) s_overB = true;
+    if (s_m.moved) s_over.store(s_overB);
     bool chose = false;
     if (on && !((int)U32(I + 0xa0) == hit.group && (int)U32(I + 0xd8) == hitAbs)) {
+        if (PadSel* ps = PadSelFor(win, true)) { if (!ps->dirty || ps->vt != *(uintptr_t*)win) { ps->vt = *(uintptr_t*)win; ps->g = (int)U32(I + 0xa0); ps->r = (int)U32(I + 0xd8); ps->dirty = true; } ps->t = now; }
         SelectLikeGame(win, hit.group, hitAbs); chose = true;
         const int k = s_nSel.fetch_add(1, std::memory_order_relaxed);
         if (hit.dist > 0) s_nNear.fetch_add(1, std::memory_order_relaxed);
         if (k < 12 || (hit.dist > 0 && s_nNear.load(std::memory_order_relaxed) <= 8))
             Log("mouse en menus: fila %s -> grupo %d fila %d (rect %.0f %.0f %.0f x %.0f; mouse %.0f %.0f de 1920 x 1080; a %.0f; ventana %.0f x %.0f; seleccion ahora %d / %d)",
                 hit.dist > 0 ? "mas cercana" : "bajo el mouse", hit.group, hit.row, hit.x, hit.y, hit.w, hit.h, mx, my, hit.dist, cw, ch, (int)U32(I + 0xa0), (int)U32(I + 0xd8));
+    }
+    if (s_m.moved) {   // (14/11 ythnmm) rueda sobre un selector = cambiar la opcion (si la fila bajo el mouse ya es la elegida)
+        if (on && hit.dist <= 0.0f && g_cfg.menuMouseWheelOpt != 0 && (int)U32(I + 0xa0) == hit.group && (int)U32(I + 0xd8) == hitAbs && SelectorDir(I, hit, mx) != 0) { s_wheelOptWin = win; s_wheelOptMx = mx; }
+        else if (s_wheelOptWin == win) s_wheelOptWin = nullptr;
     }
     if (s_m.lEdge && on) {
         s_m.lEdge = false;                            // un clic es para una sola ventana
@@ -276,7 +648,23 @@ static void hk_Hover(void* win) {
 
 static void hk_Dirs(void* win, int* dx, int* dy, unsigned char* trig) {
     o_dirs(win, dx, dy, trig);
-    const int w = s_wheel.exchange(0);
+    if (dx && dy && (*dx != 0 || *dy != 0)) {                            // (14/11 e) el mando / teclado movio: vuelve la barra de botones, se va la flecha
+        const bool mouseLast = s_moveT.load() > s_padT.load();
+        s_padT.store(Now());
+        PadSel* ps = PadSelFor(win, false);
+        if (ps && ps->dirty) {                                           // (14/11 g) vuelve la seleccion que tenia el mando
+            ps->dirty = false;
+            uint8_t* I = Ptr(win) ? P8((uint8_t*)win + 0x88) : nullptr;
+            if (mouseLast && g_cfg.menuMousePadReset != 0 && Enabled() && Ptr(I) && ps->vt == *(uintptr_t*)win && Now() - ps->t < 300.0 && ps->g >= 0 && ps->r >= 0 && (uint32_t)ps->g < U32(I + 0xa4) &&
+                !((int)U32(I + 0xa0) == ps->g && (int)U32(I + 0xd8) == ps->r)) {
+                SelectLikeGame(win, ps->g, ps->r);
+                *dx = 0; *dy = 0; if (trig) *trig = 0;
+                static int s_n = 0; if (s_n++ < 8) Log("mouse en menus: se uso el mando -> vuelve la seleccion a grupo %d fila %d", ps->g, ps->r);
+            }
+        }
+    }
+    const bool ts = s_tsWin != nullptr && Now() - s_tsT < 0.2;           // el mouse esta sobre la lista de Elegir equipo: la rueda es de esa ventana (TeamSelStep)
+    const int w = ts ? 0 : s_wheel.exchange(0);
     void* const optWin = s_pendDxWin; s_pendDxWin = nullptr;
     if (!Enabled() || !dx || !dy) { s_wheelAcc = 0; return; }
     if (optWin && optWin == win && *dx == 0 && *dy == 0) {               // (v3) clic sobre un selector: lo mismo que apretar derecha / izquierda
@@ -290,22 +678,30 @@ static void hk_Dirs(void* win, int* dx, int* dy, unsigned char* trig) {
     if (std::abs(s_wheelAcc) < 120 || *dx != 0 || *dy != 0) return;       // el mando / teclado mandan
     HWND h = OverlayHwnd(); if (!h || GetForegroundWindow() != h) { s_wheelAcc = 0; return; }
     const int sgn = s_wheelAcc > 0 ? 1 : -1; s_wheelAcc -= sgn * 120;
+    if (s_wheelOptWin == win) {                                          // sobre un selector: la rueda cambia la opcion (adelante = siguiente)
+        *dx = sgn > 0 ? 1 : -1; if (trig) *trig = 1;
+        s_pendWin = nullptr; s_pendAction = -1;
+        s_nWheel.fetch_add(1, std::memory_order_relaxed); s_nOpt.fetch_add(1, std::memory_order_relaxed); s_moveT.store(Now());
+        return;
+    }
     *dy = sgn > 0 ? -1 : 1;                                             // rueda hacia adelante = arriba
     s_pendWin = nullptr; s_pendAction = -1;
     s_nWheel.fetch_add(1, std::memory_order_relaxed); s_moveT.store(Now());
 }
 
 static char hk_Action(void* win, void* pad, int action) {
-    if (win && pad && s_pendWin == win && s_pendAction == action && action >= 0 && action < 2) {
+    if (win && pad && s_pendWin == win && s_pendAction == action && action >= 0 && action < 12) {
         uint8_t* I = P8((uint8_t*)win + 0x88);
         const uint32_t mode = Ptr(I) ? U32(I + 0x120 + (size_t)action * 4) : 0;
         if (mode >= 1 && mode <= 3) {                                    // la pagina tiene esa accion
             s_pendWin = nullptr; s_pendAction = -1;
-            (action == 0 ? s_nClick : s_nBack).fetch_add(1, std::memory_order_relaxed);
+            if (action < 2) (action == 0 ? s_nClick : s_nBack).fetch_add(1, std::memory_order_relaxed);
             return 1;
         }
     }
-    return o_action(win, pad, action);
+    const char r = o_action(win, pad, action);
+    if (r) s_padT.store(Now());                                          // (14/11 e) boton del mando / teclado
+    return r;
 }
 
 static void Install() {
@@ -330,17 +726,28 @@ static void Install() {
         MH_DisableHook((void*)kHover); MH_DisableHook((void*)kDirs); MH_DisableHook((void*)kAction);
         Log("mouse en menus: MinHook no pudo prender los ganchos: se omite"); return;
     }
+    s_titleOk = SigAt(kPadActive, kPadActiveSig, sizeof kPadActiveSig) && SigAt(kTitleGo, kTitleGoSig, sizeof kTitleGoSig);
+    s_movieOk = SigAt(kMovieStop, kMovieStopSig, sizeof kMovieStopSig);
+    s_afpOk = SigAt(kAfpGet, kAfpGetSig, sizeof kAfpGetSig) && SigAt(kAfpObj, kAfpObjSig, sizeof kAfpObjSig);
+    s_guideOk = s_afpOk && SigAt(kAfpSetVisible, kAfpSetVisibleSig, sizeof kAfpSetVisibleSig) && Readable((const void*)kGuideBar, 8);
+    s_tsOk = SigAt(kFindChild, kFindChildSig, sizeof kFindChildSig) && SigAt(kTsIdle, kTsIdleSig, sizeof kTsIdleSig) && Readable((const void*)kTsNames, 72);
+    if (s_tsOk) { const char** names = (const char**)kTsNames; for (int k = 0; k < 9; k++) if (!Readable(names[k], 11) || memcmp(names[k], "listItem_", 9) != 0) s_tsOk = false; }
+    Log("mouse en menus: rect dibujado %d, barra de botones %d, Elegir equipo %d (1 = firmas del exe bien)", (int)s_afpOk, (int)s_guideOk, (int)s_tsOk);
+    if (!s_titleOk) Log("mouse en menus: firma del titulo distinta (0x141b58200 / 0x140a99250): sin clic en el titulo");
     s_ok = true;
     Log("mouse en menus: listo (prueba del puntero 0x140e400d0, direcciones 0x140e3e6b0, acciones 0x140e48f80); mouse_menus = %d (0 lo apaga)", g_cfg.menuMouse);
 }
 
 void MenuMouseWheel(int delta) { if (s_ok && g_cfg.menuMouse != 0) s_wheel.fetch_add(delta, std::memory_order_relaxed); }
 
+bool MenuMouseOverRow() { return s_over.load(); }   // (14/11 d) para la mano del cursor sobre los menus del juego
+
 // para el cursor: posicion en pixeles de la ventana si el mouse se uso hace poco dentro de un menu del juego
 bool MenuMouseCursor(float* x, float* y) {
     if (!s_ok || g_cfg.menuMouse == 0) return false;
     const double now = Now();
     if (now - s_liveT.load() > 0.25 || now - s_moveT.load() > 4.0) return false;
+    if (s_padT.load() > s_moveT.load()) return false;                    // (14/11 e) se uso el mando despues del mouse: la flecha se va enseguida
     CURSORINFO ci{}; ci.cbSize = sizeof ci;
     if (GetCursorInfo(&ci) && (ci.flags & CURSOR_SHOWING)) return false;   // Windows ya muestra el suyo
     // (v2) el juego tarda 2 cuadros en mostrar la fila elegida (medido en video a 60 fps): la flecha se dibuja con ese mismo retraso

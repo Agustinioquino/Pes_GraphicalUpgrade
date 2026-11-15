@@ -99,6 +99,7 @@ float3 PESSunColor() {
 }
 // === FIN SOL ===
 #define PES_SK_FACESHADOW 1
+#define PES_SK_NO_MICRO 1   // (13/11) micro sombras v4: la del sol va en la composicion
 #include "pes_skinlight.hlsli"   // (03/11) modelo de piel compacto (la piel igual en todos los modos)
 #include "pes_headshadow.hlsli"  // (04/11 b) atlas de sombras de las cabezas y piernas cercanas (t30, la DLL lo ata a esta pasada)
 #include "pes_skinthick.hlsli"   // (04/11 b) grosor real de la piel con ese atlas

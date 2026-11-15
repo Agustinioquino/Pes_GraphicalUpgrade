@@ -184,7 +184,14 @@ void main(
         float pesSc = pesTaa[11].x;
         float2 uvV = (pesSc > 0.0) ? min(uvP * pesSc, pesTaa[11].zw) : uvP;   // la velocidad esta en el espacio del cuadro actual del TAA
         float2 vPx = PesVel.SampleLevel(g_samplerPoint_Clamp_s, uvV, 0).xy - pesTaa[10].zw;
-        still *= 1.0 - saturate(P454.w) * smoothstep(0.5, 1.2, min(length(vPx), 1e4));
+        // (13/11 tanda 2, BUG FIX) la velocidad de este pixel tambien es la del viento en las hojas: con viento el pasto contaba como paneo y
+        // perdia la nitidez quieta. Con la fila 498 (camara, la escribe la DLL; w498 = 1 valida) se mira cuanto se mueve la CAMARA (z498 =
+        // el mayor de 9 puntos, px por cuadro a 1080 lineas, pasado a los pixeles de la velocidad: alto del area usada = alto de PesVel x la
+        // misma escala de uvV); un jugador rapido (> 2-3 px propios) sigue contando. Sin la fila 498 (DLL vieja, corte) como antes
+        float lP = min(length(vPx), 1e4); float4 T498 = IniParams.Load(int2(498, 0));
+        uint wV, hV0; PesVel.GetDimensions(wV, hV0); float hV = (float)hV0 * (pesSc > 0.0 ? pesSc : 1.0);
+        float mvC = (T498.w > 0.5) ? max(T498.z * hV / 1080.0, lP * smoothstep(2.0, 3.0, lP)) : lP;
+        still *= 1.0 - saturate(P454.w) * smoothstep(0.5, 1.2, mvC);
       }
       float3 base = PESCas(uvP, g_psSystem.m_renderBuffer.zw, saturate(PP.x + clamp(Q330.x, 0.0, 1.0) * still));
       float lumB = dot(base, float3(0.2126, 0.7152, 0.0722));

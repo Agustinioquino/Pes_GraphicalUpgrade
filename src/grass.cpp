@@ -25,6 +25,8 @@
 #include <map>
 
 namespace fx {
+std::atomic<int> g_grassLevelOff{0};   // (13/11) prueba automatica (menutest.cpp): bits 0..2 niveles, bit 3 hojas 3D
+std::atomic<int> g_grassSeenFrame{-1000000};   // (13/11 sk9ema) ultimo cuadro con el pasto de la cancha (wind.cpp: bajo techo)
 
 static const uint64_t kGrassVS = 0x498b30bad256e8edULL;
 static const uint64_t kGrassPS = 0x18afff0f79d9aaa5ULL;   // PS de las hojas (G-buffer): solo desde ese dibujo se guarda estado y se emite
@@ -288,13 +290,30 @@ static ID3D11ComputeShader* s_cs = nullptr; static bool s_csTried = false;
 // (2/11) w325 prepasada de profundidad: PS solo-profundidad (shaders\pes_grass_depth_ps.hlsl, mismo recorte por alfa que 18afff) y
 // variante del estado de profundidad con LESS_EQUAL para la segunda pasada (la hoja ya escrita pasa con igual profundidad)
 static ID3D11PixelShader* s_depthPS = nullptr; static bool s_depthTried = false;
+// (14/11, paso 2 del plan) variante del PS de las hojas (18afff con PES_BLADE3D = 1) para la pasada de color de las hojas 3D (ranuras 18 / 19)
+static ID3D11PixelShader* s_blade3dPS = nullptr; static bool s_blade3dTried = false;
 struct PreDss { ID3D11DepthStencilState *src = nullptr, *out = nullptr; }; static PreDss s_preD[4]; static int s_preNext = 0; static std::mutex s_preMx;
 static ID3D11DepthStencilState* PrepassDSS2(ID3D11DepthStencilState* cur) {   // devuelve con referencia (o nullptr = usar el mismo)
     if (!g_dev.dev) return nullptr;
     std::lock_guard<std::mutex> lk(s_preMx);
     D3D11_DEPTH_STENCIL_DESC d = {};
     if (cur) cur->GetDesc(&d); else { d.DepthEnable = TRUE; d.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; d.DepthFunc = D3D11_COMPARISON_LESS; d.StencilReadMask = d.StencilWriteMask = 0xff; }
-    if (d.DepthFunc == D3D11_COMPARISON_LESS) d.DepthFunc = D3D11_COMPARISON_LESS_EQUAL; else if (d.DepthFunc == D3D11_COMPARISON_GREATER) d.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL; else return nullptr;
+    // (14/11) su log: las hojas usan GREATER_EQUAL (func 7, profundidad invertida); antes esto devolvia nullptr y la segunda pasada seguia
+    // con el estado de la prepasada (escribiendo profundidad): ahora los _EQUAL tambien pasan y solo se les saca la escritura
+    if (d.DepthFunc == D3D11_COMPARISON_LESS) d.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+    else if (d.DepthFunc == D3D11_COMPARISON_GREATER) d.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL;
+    else if (d.DepthFunc != D3D11_COMPARISON_LESS_EQUAL && d.DepthFunc != D3D11_COMPARISON_GREATER_EQUAL && d.DepthFunc != D3D11_COMPARISON_EQUAL) return nullptr;
+    // (14/11, prueba de Agustin: de cerca 18afff = 91 de 106 ms) la segunda pasada ya NO escribe profundidad: la prepasada la dejo escrita
+    // con el mismo VS y el mismo recorte. 18afff tiene discard, y un PS con discard que escribe profundidad (o stencil) obliga a la placa a
+    // probar la profundidad DESPUES del PS: cada capa de hojas tapada se sombreaba entera igual. Sin escritura, la prueba va antes del PS
+    // y solo se sombrea la hoja de adelante. El stencil tampoco se escribe de nuevo si sus operaciones son KEEP / REPLACE (la prepasada ya
+    // lo dejo con el mismo valor); con INCR / DECR / INVERT se deja como estaba (escribir dos veces cambiaria el resultado)
+    d.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+    if (d.StencilEnable) {
+        auto sOk = [](D3D11_STENCIL_OP o) { return o == D3D11_STENCIL_OP_KEEP || o == D3D11_STENCIL_OP_REPLACE; };
+        auto fOk = [&](const D3D11_DEPTH_STENCILOP_DESC& f) { return sOk(f.StencilFailOp) && sOk(f.StencilDepthFailOp) && sOk(f.StencilPassOp); };
+        if (fOk(d.FrontFace) && fOk(d.BackFace)) d.StencilWriteMask = 0;
+    }
     // (08/11) cache por descripcion (statecache.cpp): antes un anillo de 4 que soltaba y recreaba estados por dibujo
     ID3D11DepthStencilState* n = CachedDSS(d); if (!n) return nullptr;
     n->AddRef(); return n;
@@ -311,6 +330,7 @@ static const int kClaimStages = 6;
 static ID3D11Buffer* s_claim = nullptr; static ID3D11UnorderedAccessView* s_claimUAV = nullptr;
 static ID3D11Buffer* s_claimStage[kClaimStages] = {}; static int s_claimTag[kClaimStages] = { -1, -1, -1, -1, -1, -1 };
 static std::atomic<int> s_emitBase{0}, s_emitGame{0};   // emisiones por origen (para el log)
+static std::atomic<int> s_ballStale1{0}, s_ballStaleN{0}, s_capEarly{0};   // (13/11 tanda 2) D10: emisiones desde la base con la pelota de hace 1-2 / mas Presents, capturas tempranas (log)
 // (27/10 l) tanda 9a: con que estados salieron las hojas (log cada 3 s): stencil de la base, RT4 sin escribir, color del suelo (copia de RT0),
 // sin ninguno (RT4 = 0: la hoja pierde la luz difusa del estadio); y dibujos del pasto del juego que no emitieron por no tener la base debajo (x299)
 static std::atomic<int> s_emitSt{0}, s_emitRt4{0}, s_emitSnap{0}, s_emitBare{0}, s_skipNoBase{0};
@@ -332,6 +352,8 @@ struct GpuTimer { ID3D11Query* dis = nullptr; ID3D11Query* ts[5] = {}; std::atom
 static GpuTimer s_tm[kTimers];
 static double s_tmSum[4] = {}, s_tmMax[4] = {}; static int s_tmN = 0, s_tmDisjoint = 0, s_tmLost = 0;   // compute, nivel 0, 1, 2 (ms)
 static std::atomic<int> s_tmState{0};   // 0 sin crear, 1 listas, 2 fallaron (sin medidor)
+static std::atomic<float> s_grassMsEma{-1.0f};   // (13/11) ms de GPU del pasto por emision (compute + 3 niveles), promedio movil: lo usa la adaptativa v2
+static std::atomic<bool> s_adaptTm{false};       // (13/11) la adaptativa v2 necesita los tiempos aunque el registro (w58) este apagado
 static std::mutex s_tmMx;
 static bool TimersReady() {   // (1/11 b) bajo llave y todo-o-nada: GrassEmit corre desde varios hilos; antes otro hilo podia tomar un juego a medio crear (End sobre null)
     int st = s_tmState.load(); if (st) return st == 1;
@@ -362,7 +384,9 @@ static void TimersRead(int f) {   // contexto inmediato
         if (!all) continue;
         t.tag = -1;
         if (d.Disjoint || d.Frequency == 0) { s_tmDisjoint++; continue; }
-        for (int i = 0; i < 4; i++) { double ms = v[i + 1] >= v[i] ? (double)(v[i + 1] - v[i]) * 1000.0 / (double)d.Frequency : 0.0; s_tmSum[i] += ms; if (ms > s_tmMax[i]) s_tmMax[i] = ms; }
+        double tot = 0.0;
+        for (int i = 0; i < 4; i++) { double ms = v[i + 1] >= v[i] ? (double)(v[i + 1] - v[i]) * 1000.0 / (double)d.Frequency : 0.0; s_tmSum[i] += ms; if (ms > s_tmMax[i]) s_tmMax[i] = ms; tot += ms; }
+        { const float e = s_grassMsEma.load(); s_grassMsEma.store(e < 0.0f ? (float)tot : e + ((float)tot - e) * 0.2f); }
         s_tmN++;
     }
 }
@@ -396,6 +420,14 @@ static bool EnsureGPU() {
             b->Release();
         }
         Log("pasto v3: %s", s_depthPS ? "PS de la prepasada de profundidad listo (w325)" : "sin PS de prepasada (shaders\\pes_grass_depth_ps.hlsl no compilo: ver Errores); w325 sin efecto");
+    }
+    if (!s_blade3dTried) {
+        s_blade3dTried = true;
+        if (ID3DBlob* b = CompileNamedShader(L"pes_grass_blade3d_ps.hlsl", "ps_5_0")) {
+            if (FAILED(g_dev.dev->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &s_blade3dPS))) s_blade3dPS = nullptr;
+            b->Release();
+        }
+        Log("pasto: %s", s_blade3dPS ? "variante de las hojas 3D lista (paso 2: PS 18afff sin el atlas de tarjetas en las hojas 3D)" : "sin variante de las hojas 3D (shaders\\pes_grass_blade3d_ps.hlsl no esta o no compilo): las hojas 3D siguen con 18afff");
     }
     if (!s_bladeTried) {
         // (11/11) malla de las hojas 3D: solo el orden de los triangulos (4 filas x borde / nervio / borde por hoja); la posicion y la uv las
@@ -486,6 +518,7 @@ static DXGI_FORMAT s_r0Fmt = DXGI_FORMAT_UNKNOWN; static UINT s_r0Mip = 0; stati
 static ID3D11Texture2D* s_r4Tex = nullptr; static ID3D11ShaderResourceView* s_r4Srv = nullptr; static D3D11_TEXTURE2D_DESC s_r4Desc = {};
 static DXGI_FORMAT s_r4Fmt = DXGI_FORMAT_UNKNOWN; static UINT s_r4Mip = 0; static bool s_r4Failed = false;
 static std::atomic<int> s_r4Copies{0}, s_r4Binds{0};
+static std::atomic<int> s_b3Draws{0};   // (14/11, paso 2) veces que las hojas 3D se dibujaron con la variante
 // (12/11 23:45) w447 SOMBRA REAL EN LAS PUNTAS: copia del t14 de la composicion (619b86cb) = RT2 de la pasada del sol, cuyo .w es la visibilidad
 // limpia del sol (e9c13 / b8a2 / 7dbbc con w447: sin pisos ni x440). Una por cuadro, despues de la composicion; las hojas (18afff) y la base de
 // la cancha (5e92 / c956) del cuadro siguiente la leen en t48 (PESSunVisGate, pes_grass.hlsli) y en la sombra apagan lo que es solo del sol
@@ -847,6 +880,7 @@ void GrassPresent() {
       { static bool lastNear = false; if (useN != lastNear) { lastNear = useN; s_adapt = s_adaptV[useN ? 1 : 0]; } }
       // (08/11 y, Agustin: "esas opciones no optimizan nada") con Calidad Ultra (x61 = 4) la adaptativa quedaba apagada sin avisar: el log no
       // tenia ninguna linea "pasto adaptativo" y mover x333 no cambiaba nada. Ahora vale en todas las calidades (x333 < 20 = apagada) y se anota
+      s_adaptTm.store(target >= 20.0f, std::memory_order_relaxed);
       if (target < 20.0f) { s_adapt = 1.0f; nextAdj = 0.0;
           if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 30.0; Log("pasto adaptativo: apagado (x333 = %.0f; hace falta 20 o mas)", target); } }
       else if (tn >= nextAdj && ema > 0.0f) { nextAdj = tn + 0.5;
@@ -855,7 +889,19 @@ void GrassPresent() {
           // quedo al minimo x0.61 y los FPS siguieron en 15) si bajar el pasto no sube los FPS el cuello de botella es otro (la luz, el
           // SSGI, la CPU): se vuelve al 100 % y la adaptativa descansa 60 s. Se mide desde que empieza a bajar (fps0 con a0)
           static float fps0 = 0.0f, a0 = 1.0f; static double t0 = 0.0, restUntil = 0.0;
+          // (13/11, Agustin: "la densidad adaptativa no funciona, se pierde calidad igual ... el pasto mas lejano carga una version de poca
+          // cantidad") ADAPTATIVA v2. Su log: el pasto medio y lejano cuesta 0.1-0.4 ms y el de cerca 2-15 ms con el cuadro en 46-75 ms; la v1
+          // recortaba SOLO el medio y el lejano (lo barato y lo que mas se ve ralo) y nunca el de cerca. Ahora: el medio y el lejano siempre al
+          // 100 %; solo se recorta el de cerca, nunca por debajo de 0.6, y solo si el pasto pesa al menos el 25 % del cuadro (si pesa menos,
+          // sacar pasto no puede llegar al objetivo: no se toca). Sin la medida de la GPU todavia, como antes pero solo el de cerca
+          floorA = (std::max)(floorA, 0.6f);
+          const float gMs = s_grassMsEma.load(), frMs = ema * 1000.0f, share = (gMs >= 0.0f && frMs > 0.0f) ? gMs / frMs : -1.0f;
+          static double nextLogS = 0.0;
           if (tn < restUntil) { a = (std::min)(1.0f, a * 1.06f); }
+          else if (fps < target * 0.97f && share >= 0.0f && share < 0.25f) {
+            a = (std::min)(1.0f, a * 1.06f); fps0 = 0.0f;
+            if (tn >= nextLogS && g_cfg.live[58][3] > 0.5f) { nextLogS = tn + 10.0; Log("pasto adaptativo v2: FPS %.0f (objetivo %.0f) pero el pasto es %.1f ms de %.1f ms del cuadro (%.0f %%): sacar pasto no llega, no se recorta", fps, target, gMs, frMs, 100.0f * share); }
+          }
           else {
             if (fps < target * 0.97f) {
               if (a >= 0.999f || fps0 <= 0.0f) { fps0 = fps; a0 = a; t0 = tn; }
@@ -868,7 +914,7 @@ void GrassPresent() {
             } else { fps0 = 0.0f; if (fps > target * 1.10f) a = (std::min)(1.0f, a * 1.06f); }   // (27/10 q) 1.03 -> 1.06: volvia al 100 % en 15 s, ahora en 8
           }
           s_adapt = a; s_adaptV[useN ? 1 : 0] = a;
-          if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 10.0; Log("pasto adaptativo (%s): FPS %.0f (objetivo %.0f) -> densidad x%.2f en los 3 niveles (minimo %.2f, calidad %d, parcelas %d/%d/%d)", useN ? "vista cercana, fila 410" : "general, fila 333", fps, target, a, floorA, (int)(g_cfg.live[61][0] + 0.5f), g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2]); } } }
+          if (tn >= nextLogA && g_cfg.live[58][3] > 0.5f) { nextLogA = tn + 10.0; Log("pasto adaptativo v2 (%s): FPS %.0f (objetivo %.0f), pasto %.1f ms (%.0f %% del cuadro) -> cerca x%.2f, medio y lejos al 100 %% (minimo %.2f, calidad %d, parcelas %d/%d/%d)", useN ? "vista cercana, fila 410" : "general, fila 333", fps, target, gMs, share >= 0.0f ? 100.0f * share : -1.0f, a, floorA, (int)(g_cfg.live[61][0] + 0.5f), g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2]); } } }
     if (s_vbState.load() == 1 && s_vbStage && g_dev.imm) {
         D3D11_MAPPED_SUBRESOURCE m;
         if (SUCCEEDED(g_dev.imm->Map(s_vbStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &m))) {
@@ -899,7 +945,7 @@ void GrassPresent() {
             Log("pasto GPU (3 s): %d emisiones medidas | compute %.2f ms (max %.2f) | nivel 0 cerca %.2f (max %.2f) | nivel 1 medio %.2f (max %.2f) | nivel 2 lejos %.2f (max %.2f) | total %.2f ms por cuadro | descartadas: reloj %d, listas sin ejecutar %d",
                 s_tmN, s_tmSum[0] / n, s_tmMax[0], s_tmSum[1] / n, s_tmMax[1], s_tmSum[2] / n, s_tmMax[2], s_tmSum[3] / n, s_tmMax[3], (s_tmSum[0] + s_tmSum[1] + s_tmSum[2] + s_tmSum[3]) / n, s_tmDisjoint, s_tmLost);
             for (int k = 0; k < 4; k++) { s_tmSum[k] = 0; s_tmMax[k] = 0; } s_tmN = 0; s_tmDisjoint = 0; s_tmLost = 0; }
-        Log("pasto v3: llamadas %d, emisiones grabadas %d (desde la base %d, desde el pasto del juego %d; en contextos diferidos %d, inmediato %d) | GPU: %d Presents, %d cuadros leidos, emisiones ejecutadas por cuadro 0:%d 1:%d 2+:%d (cuadros sin pasto del mod %d), grabacion->ejecucion 0:%d 1:%d 2+:%d Presents, x63 %s | parcelas %d (niveles %d/%d/%d, perdidas por ranura llena %d, prepasada %d niveles), malla cercana %u idx, estado: %s | v4: %d dibujos con manojos curvos | camara del compute: m11 %.2f ojo (%.1f %.1f %.1f) cb2 off %u n %u de %u B, umbrales %.0f/%.0f/%.0f px/m, dibujos del pasto sin PS de hojas %d, en pasadas de otro tamano %d (DSV %ux%u, RTVs %u) | estado guardado hace %d Presents, t5 igual %d / distinta %d | base: hasta %d dibujos por grabacion, %d despues de las hojas; emision diferida por dibujo %d / targets %d / limpieza %d / fin %d / ejecucion %d / ClearState %d, con otros targets %d, perdidas %d | estados de las hojas: stencil base %d, sin RT4 %d, color suelo %d, sin nada %d; pasto del juego sin base debajo (x299) %d",
+        Log("pasto v3: llamadas %d, emisiones grabadas %d (desde la base %d, desde el pasto del juego %d; en contextos diferidos %d, inmediato %d) | GPU: %d Presents, %d cuadros leidos, emisiones ejecutadas por cuadro 0:%d 1:%d 2+:%d (cuadros sin pasto del mod %d), grabacion->ejecucion 0:%d 1:%d 2+:%d Presents, x63 %s | parcelas %d (niveles %d/%d/%d, perdidas por ranura llena %d, prepasada %d niveles), malla cercana %u idx, estado: %s | v4: %d dibujos con manojos curvos | camara del compute: m11 %.2f ojo (%.1f %.1f %.1f) cb2 off %u n %u de %u B, umbrales %.0f/%.0f/%.0f px/m, dibujos del pasto sin PS de hojas %d, en pasadas de otro tamano %d (DSV %ux%u, RTVs %u) | estado guardado hace %d Presents, t5 igual %d / distinta %d | base: hasta %d dibujos por grabacion, %d despues de las hojas; emision diferida por dibujo %d / targets %d / limpieza %d / fin %d / ejecucion %d / ClearState %d, con otros targets %d, perdidas %d | estados de las hojas: stencil base %d, sin RT4 %d, color suelo %d, sin nada %d; pasto del juego sin base debajo (x299) %d | pelota vieja en la base: de hace 1-2 Presents %d, mas %d (capturas antes de la emision pendiente %d)",
             g_grassDbg.calls, g_grassDbg.emits, s_emitBase.exchange(0), s_emitGame.exchange(0), s_recDeferred.exchange(0), s_recImmediate.exchange(0),
             dp, fr, eh[0], eh[1], eh[2], fng, lh[0], lh[1], lh[2], s_missing.load() ? "1 (mod sin dibujar: pasto del juego entero)" : "0",
             g_grassDbg.patches, g_grassDbg.ring[0], g_grassDbg.ring[1], g_grassDbg.ring[2], g_grassDbg.lost, s_preLast.load(), g_grassDbg.lod,
@@ -907,10 +953,11 @@ void GrassPresent() {
             s_offPass.exchange(0), s_offW, s_offH, s_offRtv, age, s_t5Same.exchange(0), s_t5Diff.exchange(0),
             s_turfMaxRec.exchange(0), s_turfAfter.exchange(0), s_flushWhy[0].exchange(0), s_flushWhy[1].exchange(0), s_flushWhy[2].exchange(0), s_flushWhy[3].exchange(0),
             s_flushWhy[4].exchange(0), s_flushWhy[5].exchange(0), s_flushOther.exchange(0), s_pendLost.exchange(0),
-            s_emitSt.exchange(0), s_emitRt4.exchange(0), s_emitSnap.exchange(0), s_emitBare.exchange(0), s_skipNoBase.exchange(0));
+            s_emitSt.exchange(0), s_emitRt4.exchange(0), s_emitSnap.exchange(0), s_emitBare.exchange(0), s_skipNoBase.exchange(0),
+            s_ballStale1.exchange(0), s_ballStaleN.exchange(0), s_capEarly.exchange(0));
         { const int cp = s_r4Copies.exchange(0), bd = s_r4Binds.exchange(0);   // (11/11 j)
           Log("pasto luz del estadio en las hojas (y290 = %.0f): copias de RT4 %d, dibujos con la copia %d%s", g_cfg.live[290][1], cp, bd, s_r4Failed ? " | NO SE PUDO CREAR LA COPIA" : ""); }
-        if (s_bladeLast.load()) Log("pasto hojas 3D (z410): celdas %d, hojas por celda %d en promedio (%d hojas, %d trozos de %u), tope por celda x%.2f, umbral %.0f px/m", s_bladeCells.load(), s_bladePer.load(), s_bladeSum.load(), s_bladeChunks.load(), kBladeChunk, s_bladeScale.load(), s_bladeThrLast);
+        if (s_bladeLast.load()) Log("pasto hojas 3D (z410): celdas %d, hojas por celda %d en promedio (%d hojas, %d trozos de %u), tope por celda x%.2f, umbral %.0f px/m, con la variante %d veces", s_bladeCells.load(), s_bladePer.load(), s_bladeSum.load(), s_bladeChunks.load(), kBladeChunk, s_bladeScale.load(), s_bladeThrLast, s_b3Draws.load());
         g_grassDbg.calls = 0; g_grassDbg.emits = 0; g_grassDbg.sparseLast = g_grassDbg.sparse; g_grassDbg.sparse = 0; }
 }
 
@@ -1132,6 +1179,10 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         if (!have) { Why("todavia no se vio el pasto del juego (sin estado para emitir desde la base)"); return false; }
     }
     g_grassDbg.emits++; if (bound) s_emitGame++; else s_emitBase++;
+    // (13/11 tanda 2) D10 pelota vieja: edad en Presents de la copia de b4 (pelota) que lee el VS, en cb5[14].y. Desde el pasto del juego es
+    // su b4 vivo (0); desde la base, la copia de la ultima captura (s_cpVs4; 999 = nunca). Con 1-2 el VS extrapola la pelota, con mas no la usa
+    const int ballAgeI = bound ? 0 : (s_capPres.load() >= 0 ? (std::max)(0, (std::min)(s_frame.load() - s_capPres.load(), 999)) : 999);
+    if (!bound) { if (ballAgeI >= 1 && ballAgeI <= 2) s_ballStale1++; else if (ballAgeI > 2) s_ballStaleN++; }
     bool emitted = false;
     float T[4]; Thresholds(T);
     float tall = p59[0] > 0.05f ? p59[0] : 1.3f;
@@ -1277,10 +1328,12 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         cull[44] = narrowThr; cull[45] = narrowMul; cull[46] = (float)kBladeIpbN;
         // (26/10 d) reclamo del cuadro: la primera emision que la GPU ejecuta despues del Present se queda con el cuadro (Count[18] = 1);
         // las demas pasan por las celdas sin anotar nada y dibujan 0 instancias
-        GpuTimer* tm = (p58[3] > 0.5f && TimersReady()) ? TimerClaim(s_frame.load()) : nullptr;   // (1/11) medidor de GPU (solo con el registro prendido)
+        GpuTimer* tm = ((p58[3] > 0.5f || s_adaptTm.load(std::memory_order_relaxed)) && TimersReady()) ? TimerClaim(s_frame.load()) : nullptr;   // (1/11) medidor de GPU (con el registro prendido; (13/11) o con la adaptativa)
         if (tm) { c->Begin(tm->dis); c->End(tm->ts[0]); }
         cull[0] = 4.0f; c->UpdateSubresource(s_cullCb, 0, nullptr, cull, 0, 0); c->Dispatch(1, 1, 1);
+        const int lvOff = g_grassLevelOff.load(std::memory_order_relaxed);   // (13/11) prueba automatica: costo de cada nivel
         for (int i = 0; i < 3; i++) {
+            if (lvOff & (1 << i)) continue;   // sin su pasada, el nivel queda con 0 hojas (el contador se limpia arriba)
             UINT gw = (UINT)ceilf(2.0f * halfL / L[i].cell), gh = (UINT)ceilf(2.0f * halfW / L[i].cell);
             cull[0] = (float)i; cull[1] = L[i].cell; cull[2] = i == 2 ? loFar : T[i + 1]; cull[3] = T[i];
             if (t_editor && i == 0) cull[3] = 0.0f;   // (08/11 i) editor: nivel 0 sin tope (ver arriba)   // nivel 2: sin limite inferior (toda la cancha) salvo con cesped lejano en la base
@@ -1288,14 +1341,14 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             cull[12] = wEff0;   // ancho de la hoja en metros; (2/11 paso 10) el mismo en los 3 niveles (antes x1.6 x2 y x2 x4 por la celda: cintas a media distancia)
             cull[15] = (float)mIpc[i];
             cull[20] = i == 0 ? Dfloor : 0.0f; cull[24] = i == 0 ? fadeT0 : fadeM;
-            cull[14] = i == 0 ? 0.30f * cMul[q] * densN : cBase; cull[19] = 4.0f * cMul[q] * (i == 0 ? densN : dens);   // (11/11 l) nivel 0 sin adaptativa
+            cull[14] = i == 0 ? cBase : 0.30f * cMul[q] * densN; cull[19] = 4.0f * cMul[q] * (i == 0 ? dens : densN);   // (13/11) adaptativa v2: solo el nivel 0 (cerca, el caro); medio y lejos siempre al 100 % (antes al reves)
             c->UpdateSubresource(s_cullCb, 0, nullptr, cull, 0, 0);
             c->Dispatch((gw + 7) / 8, (gh + 7) / 8, 1);
         }
         // (11/11, Agustin: "solo de cerca siiiii", "para primerisimos primer plano nada mas") HOJAS 3D (z410, solo el natural): celdas de 0.5 m
         // que miden >= w410 px/m (1200 si 0); z408 cantidad (hojas por celda hasta 4096 x z408 y un tope total de 200000 x z408 x adaptativa, minimo 0.6)
         /* (11/11 m) cull[40..43] se llenan arriba, antes de los niveles 0..2 */ cull[40] = bladeThr; cull[41] = bladePerCell; cull[42] = 200000.0f * bladeAmt;   /* (11/11 l) sin adaptativa */   // (11/11 g) 60000 -> 200000: en la captura 13.54 habia 219 hojas por celda de 0.5 m (se veia el suelo negro entre las hojas); la adaptativa no baja de 0.6 (solo primerisimos planos) cull[43] = (float)kBladeIpb;
-        if (bladeOn) {
+        if (bladeOn && !(lvOff & 8)) {
             UINT gw = (UINT)ceilf(2.0f * halfL / 0.5f), gh = (UINT)ceilf(2.0f * halfW / 0.5f);
             cull[0] = 5.0f; cull[1] = 0.5f; cull[7] = (float)gw; cull[8] = (float)gh;
             c->UpdateSubresource(s_cullCb, 0, nullptr, cull, 0, 0); c->Dispatch((gw + 7) / 8, (gh + 7) / 8, 1);   // suma de lo pedido
@@ -1351,6 +1404,9 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             D3D11_DEPTH_STENCIL_DESC dd = DssDesc(preCur);
             if (!dd.DepthEnable || dd.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ZERO) preLevels = 0;
             else { preDss2 = PrepassDSS2(preCur);
+                   { static std::atomic<int> s_preLog{0};
+                     if (s_preLog.fetch_add(1) < 2) { char b[400] = "-"; if (preDss2) DescDSS(b, sizeof(b), preDss2, preRef);
+                       Log("pasto: segunda pasada de las hojas (tras la prepasada) %s: %s", preDss2 ? "sin escribir profundidad" : "con el mismo estado (no se pudo armar la variante)", b); } }
                    // sin la variante LESS_EQUAL la segunda pasada fallaria la profundidad contra la propia hoja: no hacer prepasada
                    if (!preDss2 && (dd.DepthFunc == D3D11_COMPARISON_LESS || dd.DepthFunc == D3D11_COMPARISON_GREATER)) preLevels = 0; }
             if (!preLevels && preCur) { preCur->Release(); preCur = nullptr; }
@@ -1369,6 +1425,9 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         for (int sl = 0; sl < kSlots; sl++) {
             int i = sl / kBins;
             if (pass == 0 && i >= preLevels) break;
+            // (14/11, Agustin: "noto que no carga el pasto completo" con el paso 1) los niveles SIN prepasada (w325 = 1: el 1 y el 2) iban con
+            // la variante sin escritura de profundidad ni de stencil: sin profundidad propia y sin la marca de la base. Vuelven al estado del juego
+            if (pass == 1 && preDss2 && preCur && i == preLevels && sl % kBins == 0) c->OMSetDepthStencilState(preCur, preRef);
             if (boundMesh != i) { ID3D11Buffer* vbs[4] = { mPos[i], svVb[1], svVb[2], mUv[i] }; UINT sts[4] = { 12, svSt[1], svSt[2], 4 }, ofs2[4] = { 0, svOf[1], svOf[2], 0 };
                 c->IASetVertexBuffers(0, 4, vbs, sts, ofs2); c->IASetIndexBuffer(mIb[i], DXGI_FORMAT_R32_UINT, 0); boundMesh = i; }
             for (int k = 0; k < 72; k++) cbq[k] = 0.f;
@@ -1389,10 +1448,15 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
             cbq[51] = (stRoute ? 1.0f : 0.0f) + (farBl ? 2.0f : 0.0f);
             cbq[52] = L[i].cell;   // (26/10 g) lado de la celda: el raleo por desgaste mira un punto al azar de la celda, no su esquina
             cbq[55] = t_editor ? 1.0f : 0.0f;   // (11/11 m) cb5[13].w = 1 editor: el VS no achica las tarjetas como relleno (ahi las hojas 3D van alrededor del jugador)
+            cbq[57] = (float)ballAgeI;   // (13/11 tanda 2) cb5[14].y: edad de la pelota (b4) en Presents (0 = de este cuadro)
             c->UpdateSubresource(s_cb, 0, nullptr, cbq, 0, 0);
             c->VSSetConstantBuffers(5, 1, &s_cb);
             c->DrawIndexedInstancedIndirect(s_args, (UINT)sl * 20);
             if (sl == kBins - 1 && bladeOn) {   // (11/11) hojas 3D (ranura 18) despues del nivel 0, con sus mismos estados; en la prepasada tambien
+                // (14/11, paso 2) en la pasada de color las hojas 3D usan la variante de 18afff (misma cuenta, sin lo que en ellas no corre)
+                ShaderBind b3Saved = {}; const bool b3 = pass == 1 && s_blade3dPS != nullptr;
+                if (b3) { b3Saved = BindShadersRaw(c, ShaderBind{}); ShaderBind v3 = b3Saved; v3.psObj = s_blade3dPS; ShaderBind tmp = BindShadersRaw(c, v3);
+                          if (tmp.vsObj) tmp.vsObj->Release(); if (tmp.psObj) tmp.psObj->Release(); s_b3Draws++; }
                 ID3D11Buffer* bvb[4] = { s_bladePos, svVb[1], svVb[2], s_bladeUv }; UINT bst[4] = { 12, svSt[1], svSt[2], 4 }, bof[4] = { 0, svOf[1], svOf[2], 0 };
                 c->IASetVertexBuffers(0, 4, bvb, bst, bof); c->IASetIndexBuffer(s_bladeIb, DXGI_FORMAT_R32_UINT, 0); boundMesh = -2;
                 cbq[32] = (float)kBladeVpb; cbq[37] = (float)(kBladeSlot * kSlotCap); cbq[52] = 0.5f; cbq[53] = 1.0f; cbq[54] = (float)kBladeChunk;   // cb5[13].y = 1: el VS arma la hoja; .z hojas por trozo (11/11 n)
@@ -1406,6 +1470,8 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
                     c->DrawIndexedInstancedIndirect(s_args, (UINT)kBladeSlotN * 20);
                     cbq[56] = 0.0f;
                 }
+                if (b3) { ShaderBind tmp = BindShadersRaw(c, b3Saved); if (tmp.vsObj) tmp.vsObj->Release(); if (tmp.psObj) tmp.psObj->Release();
+                          if (b3Saved.vsObj) b3Saved.vsObj->Release(); if (b3Saved.psObj) b3Saved.psObj->Release(); }
             }
             if (pass == 1 && tm && sl % kBins == kBins - 1) c->End(tm->ts[2 + i]);   // fin del nivel i (la prepasada cuenta dentro del nivel)
         }
@@ -1545,7 +1611,7 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntr
     // target del mismo tamano): si se emitiera ahi, las hojas del mod saldrian sin color (invisibles) y el estado guardado
     // para la base tendria un PS nulo. Solo cuenta el dibujo con el PS de hojas del G-buffer.
     if (!ps || (ps->hash != kGrassPS && RtvCount(c) < 2)) { s_skipNoPs++; if (extraOn) Why("dibujo del pasto del juego sin el PS de hojas / sin G-buffer (prepasada): se espera al del G-buffer"); return; }
-    if (ps->hash == kGrassPS) t_gameGB = true;   // (26/10 g) dibujo del pasto del juego en el G-buffer: GrassGameStates le pone los estados de las hojas
+    if (ps->hash == kGrassPS) { t_gameGB = true; g_grassSeenFrame.store(PresentNo(), std::memory_order_relaxed); }   // (13/11 sk9ema) viento bajo techo: se vio la cancha   // (26/10 g) dibujo del pasto del juego en el G-buffer: GrassGameStates le pone los estados de las hojas
     // (2/11) x178: con el mod emitiendo, el pasto del juego no se dibuja (se omite el DrawIndexed en BeforeDraw); la captura del estado,
     // la pelota, los recortes y la emision de abajo siguen igual. Se anota una vez.
     if (ps->hash == kGrassPS && g_cfg.live[178][0] > 0.5f && extraOn && !s_missing.load()) { t_skipGame = true;
@@ -1575,6 +1641,19 @@ void GrassOnDraw(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntr
     if (!RecClaim(c, &GRec::emitted)) return;
     if (!GrassEmit(c, true)) { RecUnclaim(c, &GRec::emitted); return; }
     if (c == g_dev.imm) s_recImmediate++; else s_recDeferred++;
+}
+
+// (13/11 tanda 2) D10 PELOTA VIEJA (ball_synth.md C): GRASS_FLUSH corre antes que GrassOnDraw, asi que la emision pendiente de la base (w294)
+// que dispara un dibujo del pasto del juego leia la copia de b4 (pelota) de la captura anterior (otro cuadro). hk_DrawIdx llama esto ANTES de
+// GRASS_FLUSH, con un dibujo del pasto del juego en el G-buffer (PS de las hojas): guarda el estado (CaptureState) y la pelota (PitchBallNote)
+// con los mismos reclamos de la grabacion, que GrassOnDraw ya no repite. La emision sigue con el stencil y el RT4 de la base (w294) pero con la
+// pelota de este cuadro. Las demas emisiones desde la base llevan la edad de la copia en cb5[14].y (GrassEmit)
+void GrassCaptureEarly(ID3D11DeviceContext* c, const ShaderEntry* vs, const ShaderEntry* ps) {
+    if (t_inEmit || !vs || vs->hash != kGrassVS || !vs->repl || !ps || ps->hash != kGrassPS || g_cfg.bypass || !g_dev.dev) return;
+    if (g_cfg.live[58][3] < 0.5f || !MainPass(c)) return;
+    const int f = s_frame.load();
+    if (RecClaim(c, &GRec::captured)) { CaptureState(c, vs, ps); s_capEarly++; }
+    if (RecClaim(c, &GRec::ball)) PitchBallNote(c, f);
 }
 
 // (25/10) al terminar el dibujo de la base de la cancha (PS 5e92 / c956): si en esta grabacion todavia no se emitio pasto

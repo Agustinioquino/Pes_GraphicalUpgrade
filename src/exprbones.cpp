@@ -414,6 +414,7 @@ struct Skel {
     int tkPhrase = -1; float tkT0 = 0.0f, tkDur = 0.0f, tkPause = 0.0f, tkCh[7] = {}, tkT = -1.0f; unsigned tkN = 0; int tkLast = -1;   // (08/11) hablar por palabras: frase en curso, canales suavizados
     float effort = 0.0f, brPh = 0.0f, anT = -1.0f;                 // (08/11) esfuerzo por velocidad (sube ~1 s, baja ~4 s), fase de la respiracion
    // (08/11) velocidad del jugador (cabeza en el mundo, m/s) y cuanto lleva quieto
+    int ptype = -1;   // (14/11 l) tipo de personaje de HumanList: 0 / 2 jugadores local / visitante, 1 / 3 arqueros, 4 arbitro, 5 jueces de linea
     uint32_t pid = 0; bool pKnown = false; int prof = -1; unsigned profGen = 0xffffffffu; unsigned profFrame = 0; bool profLogged = false;
 };
 static const int kMaxSkel = 48;
@@ -1224,11 +1225,19 @@ static void Secondary(Skel& S, const float* hr, float sm, float open) {
 // cara (entre los ojos y la boca, un poco adelante) y los ejes frente / arriba de la cabeza -> mundo con la matriz del nodo.
 namespace {
 struct HeadPub { const void* node = nullptr; float c[3] = {}, fw[3] = {}, up[3] = {}; double t = 0; };
-std::mutex s_hpMx; HeadPub s_hp[8];
+// (14/11 k, Agustin: "seguir rostro esta rota, no elije un solo sujeto y va cambiando") antes 8 lugares para 22+ personajes: el de la
+// cara seguida se pisaba con otro y la camara elegia otra cara. Ahora 32 lugares, el seguido nunca se pisa, y si deja de llegar un
+// rato (fuera del cuadro, LOD, pausa) se espera 3 s antes de elegir otra
+constexpr int kHpN = 32;
+std::mutex s_hpMx; HeadPub s_hp[kHpN]; const void* s_hpKeep = nullptr;
 std::atomic<int> s_hpOk{0}, s_hpFail{0};
 }
 static bool Norm3(float* v) { const float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (!(l > 1e-4f)) return false; v[0] /= l; v[1] /= l; v[2] /= l; return true; }
 static void PublishHead(const Skel& S) {
+    // (14/11 l, Agustin: "seguir rostros detecta cualquier rostro, deberia detectar solo los jugadores, los tecnicos, los jueces de linea")
+    // solo personajes que el juego armo por HumanList con tipo 0..5 (jugadores, arqueros, arbitro, jueces de linea; el log del 14/11 no
+    // mostro tecnicos: si aparece otro tipo con nombre queda en el log). Publico, alcanzapelotas y demas no se siguen
+    if (!S.pKnown || S.ptype < 0 || S.ptype > 5) return;
     if (!S.node || !S.bHead) { s_hpFail.fetch_add(1, std::memory_order_relaxed); return; }
     Xf hc; if (!ReadXf(S.bHead, hc)) { s_hpFail.fetch_add(1, std::memory_order_relaxed); return; }
     // la cabeza de un personaje (de pie, sentado o tirado) nunca esta en el origen del modelo; si lo esta, no es espacio del modelo
@@ -1246,10 +1255,11 @@ static void PublishHead(const Skel& S) {
     if (!CharNodeToWorld(nd, pm, h.c, true) || !CharNodeToWorld(nd, fm, h.fw, false) || !CharNodeToWorld(nd, um, h.up, false) || !Norm3(h.fw) || !Norm3(h.up)) {
         s_hpFail.fetch_add(1, std::memory_order_relaxed); return;
     }
+    for (int i = 0; i < 3; i++) if (!std::isfinite(h.c[i]) || !std::isfinite(h.fw[i]) || !std::isfinite(h.up[i]) || fabsf(h.c[i]) > 500.0f) { s_hpFail.fetch_add(1, std::memory_order_relaxed); return; }   // (14/11 l) nada roto a la camara
     h.t = Now();
     std::lock_guard<std::mutex> lk(s_hpMx);
     int at = 0; double oldest = 1e300;
-    for (int i = 0; i < 8; i++) { if (s_hp[i].node == S.node) { at = i; break; } if (s_hp[i].t < oldest) { oldest = s_hp[i].t; at = i; } }
+    for (int i = 0; i < kHpN; i++) { if (s_hp[i].node == S.node) { at = i; break; } if (s_hp[i].node != s_hpKeep && s_hp[i].t < oldest) { oldest = s_hp[i].t; at = i; } }
     s_hp[at] = h;
     if (s_hpOk.fetch_add(1, std::memory_order_relaxed) == 0)
         Log("camara libre: cara en el mundo desde el esqueleto (%.2f, %.2f, %.2f), frente (%.2f, %.2f, %.2f), arriba (%.2f, %.2f, %.2f); sk_head en el modelo (%.3f, %.3f, %.3f)",
@@ -1265,17 +1275,17 @@ static void PublishHead(const Skel& S) {
 // la cara a seguir: la del personaje fijado (*lock) si sigue al dia; si no, la que esta mas al centro de la vista de la camara
 bool ExprFaceAny() {   // (08/11 e) hay alguna cara con dato fresco (< 0.5 s): la usa la camara libre para saber si la recarga termino
     std::lock_guard<std::mutex> lk(s_hpMx); const double now = Now();
-    for (int i = 0; i < 8; i++) if (s_hp[i].node && now - s_hp[i].t < 0.5) return true;
+    for (int i = 0; i < kHpN; i++) if (s_hp[i].node && now - s_hp[i].t < 0.5) return true;
     return false;
 }
 bool ExprFaceFrame(const float* camPos, const float* camFwd, const void** lock, float c[3], float fw[3], float up[3], double* age) {
     std::lock_guard<std::mutex> lk(s_hpMx);
     const double now = Now();
     int best = -1;
-    if (lock && *lock) for (int i = 0; i < 8; i++) if (s_hp[i].node == *lock && now - s_hp[i].t < 0.5) { best = i; break; }
+    if (lock && *lock) for (int i = 0; i < kHpN; i++) if (s_hp[i].node == *lock && now - s_hp[i].t < 3.0) { best = i; break; }   // el fijado sigue aunque no llegue un rato
     if (best < 0) {
         float bs = -1e9f;
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < kHpN; i++) {
             if (!s_hp[i].node || now - s_hp[i].t >= 0.5) continue;
             float d[3] = { s_hp[i].c[0] - camPos[0], s_hp[i].c[1] - camPos[1], s_hp[i].c[2] - camPos[2] };
             const float l = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
@@ -1285,8 +1295,39 @@ bool ExprFaceFrame(const float* camPos, const float* camFwd, const void** lock, 
         if (best < 0) return false;
         if (lock) *lock = s_hp[best].node;
     }
+    s_hpKeep = s_hp[best].node;
     memcpy(c, s_hp[best].c, 12); memcpy(fw, s_hp[best].fw, 12); memcpy(up, s_hp[best].up, 12);
     if (age) *age = now - s_hp[best].t;
+    return true;
+}
+
+// (14/11 g, Agustin: "la opcion de seguir rostro permitirme cambiar de sujeto") cambia la cara seguida por la siguiente hacia la derecha
+// (dir > 0) o la izquierda (dir < 0) en la pantalla, dando la vuelta; true si hay otra cara a la vista
+bool ExprFaceCycle(const float* camPos, const float* camFwd, const void** lock, int dir) {
+    if (!lock || dir == 0) return false;
+    std::lock_guard<std::mutex> lk(s_hpMx);
+    const double now = Now();
+    const float r[3] = { -camFwd[2], 0.0f, camFwd[0] };
+    float ang[kHpN]; int cur = -1, n = 0;
+    for (int i = 0; i < kHpN; i++) {
+        ang[i] = 1e9f;
+        if (!s_hp[i].node || now - s_hp[i].t >= 0.5) continue;
+        const float d[3] = { s_hp[i].c[0] - camPos[0], s_hp[i].c[1] - camPos[1], s_hp[i].c[2] - camPos[2] };
+        ang[i] = atan2f(d[0] * r[0] + d[2] * r[2], d[0] * camFwd[0] + d[1] * camFwd[1] + d[2] * camFwd[2]); n++;
+        if (s_hp[i].node == *lock) cur = i;
+    }
+    if (n < 2 && cur >= 0) return false;
+    const float a0 = cur >= 0 ? ang[cur] : 0.0f;
+    int best = -1, wrap = -1;
+    for (int i = 0; i < kHpN; i++) {
+        if (ang[i] > 1e8f || i == cur) continue;
+        const float a = ang[i];
+        if (dir > 0) { if (a > a0 + 1e-4f && (best < 0 || a < ang[best])) best = i; if (wrap < 0 || a < ang[wrap]) wrap = i; }
+        else { if (a < a0 - 1e-4f && (best < 0 || a > ang[best])) best = i; if (wrap < 0 || a > ang[wrap]) wrap = i; }
+    }
+    if (best < 0) best = wrap;
+    if (best < 0) return false;
+    *lock = s_hp[best].node; s_hpKeep = *lock;
     return true;
 }
 
@@ -1298,7 +1339,9 @@ static void ProfResolve(Skel& S, unsigned fr) {
     if (S.profGen == s_profGen && (S.pKnown || fr - S.profFrame < 60)) return;
     S.profGen = s_profGen; S.profFrame = fr;
     const int slot = CharSlotForSkel(S.skel);
-    CharInfo ci; if (slot < 0 || !CharGet(slot, ci) || !ci.known) { S.pKnown = false; S.prof = -1; return; }
+    CharInfo ci; if (slot < 0 || !CharGet(slot, ci) || !ci.known) { S.pKnown = false; S.prof = -1; S.ptype = -1; return; }
+    if (ci.type != S.ptype && ci.type > 5) { static int s_tl = 0; if (s_tl++ < 12) Log("camara libre: personaje tipo %d id %u '%s': la camara no sigue su cara (solo jugadores, arbitro y jueces de linea)", ci.type, ci.id, ci.name); }
+    S.ptype = ci.type;
     const bool changed = !S.pKnown || S.pid != ci.id;
     S.pKnown = true; S.pid = ci.id;
     const int was = S.prof; S.prof = ProfFind(ci.id, ci.name);

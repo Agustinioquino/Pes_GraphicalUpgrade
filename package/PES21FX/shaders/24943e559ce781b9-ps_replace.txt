@@ -10,6 +10,8 @@
 // w velocidad de desenfoque completo (px por cuadro a 1080p; 0 = la curva lineal de antes). Con cualquier 449 > 0 y la profundidad
 // enlazada (regla srv = 2 Depth) un vecino MAS LEJANO ya no extiende su desenfoque: sin halo alrededor de un jugador quieto.
 // Menos consumo: donde no hay nada que mezclar (camara lenta, corte de camara, pixel lento) se sale antes de la B-spline.
+// (13/11 tanda 2) el ajuste de la camara (y449 / z449) lo hace la DLL una vez por cuadro (shaders\pes_mbfit_cs.hlsl, mismo codigo) y llega en
+// t3; sin esa textura (DLL vieja, compute que no compilo) o sin su marca de valido (2 x 1 y w = 4242) el PS lo hace como antes.
 cbuffer cPSObject : register(b5)
 {
   struct
@@ -39,6 +41,7 @@ Texture2D<float4> g_motionBlurBuffer : register(t0);
 Texture2D<float4> g_velocityBuffer : register(t1);
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> PesDepth : register(t2);   // (12/11) profundidad de la composicion (regla srv = 2 Depth; Z invertida: mas = mas cerca)
+Texture2D<float4> PesMBFit : register(t3);   // (13/11 tanda 2) ajuste de la camara del cuadro (pes_mbfit_cs.hlsl): (cT, cAx) | (cAy, S, 4242 = valido)
 
 float PESCoverage(float w) {
   uint q = (uint)((w + 0.05) * 100.0);
@@ -128,37 +131,47 @@ void main(
     // v(d) = t + ax * d.x + ay * d.y (d desde el centro, en altos de pantalla). Primero el ajuste cerrado (la grilla es simetrica), despues
     // una pasada robusta (los puntos que caen en jugadores o en la pelota pesan poco) con la inversa adjunta de la matriz 3x3
     float aspX = g_psSystem.m_renderBuffer.x * px.y;
-    float2 mbV[12];
-    float2 sV = 0.0, sVx = 0.0, sVy = 0.0;
-    [unroll] for (uint gi = 0; gi < 12; gi++) {
-      float2 gU = float2(0.125 + 0.25 * (float)(gi % 4u), 0.2 + 0.3 * (float)(gi / 4u));
-      float2 gD = (gU - 0.5) * float2(aspX, 1.0);
-      mbV[gi] = g_velocityBuffer.SampleLevel(g_samplerPoint_Wrap_s, gU, 0).xy;
-      sV += mbV[gi]; sVx += mbV[gi] * gD.x; sVy += mbV[gi] * gD.y;
-    }
-    float2 cT = sV / 12.0;
-    float2 cAx = sVx / max(0.9375 * aspX * aspX, 1e-4);   // suma de d.x^2 de la grilla
-    float2 cAy = sVy / 0.72;                              // suma de d.y^2
-    float S = 0.0, Sx = 0.0, Sy = 0.0, Sxx = 0.0, Sxy = 0.0, Syy = 0.0;
-    float2 B0 = 0.0, B1 = 0.0, B2 = 0.0;
-    [unroll] for (uint gj = 0; gj < 12; gj++) {
-      float2 gU = float2(0.125 + 0.25 * (float)(gj % 4u), 0.2 + 0.3 * (float)(gj / 4u));
-      float2 gD = (gU - 0.5) * float2(aspX, 1.0);
-      float2 pr = cT + cAx * gD.x + cAy * gD.y;
-      float rr = length(mbV[gj] - pr) / (1.0 + 0.25 * length(pr));
-      float wg = 1.0 / (1.0 + rr * rr);
-      S += wg; Sx += wg * gD.x; Sy += wg * gD.y;
-      Sxx += wg * gD.x * gD.x; Sxy += wg * gD.x * gD.y; Syy += wg * gD.y * gD.y;
-      B0 += wg * mbV[gj]; B1 += (wg * gD.x) * mbV[gj]; B2 += (wg * gD.y) * mbV[gj];
-    }
-    float c00 = Sxx * Syy - Sxy * Sxy, c01 = Sxy * Sy - Sx * Syy, c02 = Sx * Sxy - Sxx * Sy;
-    float c11 = S * Syy - Sy * Sy, c12 = Sx * Sy - S * Sxy, c22 = S * Sxx - Sx * Sx;
-    float det = S * c00 + Sx * c01 + Sy * c02;
-    if (det > 1e-4) {   // si no, queda el ajuste cerrado
-      float iD = 1.0 / det;
-      cT  = (c00 * B0 + c01 * B1 + c02 * B2) * iD;
-      cAx = (c01 * B0 + c11 * B1 + c12 * B2) * iD;
-      cAy = (c02 * B0 + c12 * B1 + c22 * B2) * iD;
+    float2 cT = 0.0, cAx = 0.0, cAy = 0.0;
+    float S = 0.0;
+    // (13/11 tanda 2) el ajuste del cuadro ya hecho por la DLL (t3, 2 x 1): se usa si esta y trae la marca de valido; si no, el de siempre
+    uint fitW = 0, fitH = 0; PesMBFit.GetDimensions(fitW, fitH);
+    float4 fit1 = PesMBFit.Load(int3(1, 0, 0));   // sin textura: 0
+    if (fitW == 2u && fitH == 1u && abs(fit1.w - 4242.0) < 0.5) {
+      float4 fit0 = PesMBFit.Load(int3(0, 0, 0));
+      cT = fit0.xy; cAx = fit0.zw; cAy = fit1.xy; S = fit1.z;
+    } else {
+      float2 mbV[12];
+      float2 sV = 0.0, sVx = 0.0, sVy = 0.0;
+      [unroll] for (uint gi = 0; gi < 12; gi++) {
+        float2 gU = float2(0.125 + 0.25 * (float)(gi % 4u), 0.2 + 0.3 * (float)(gi / 4u));
+        float2 gD = (gU - 0.5) * float2(aspX, 1.0);
+        mbV[gi] = g_velocityBuffer.SampleLevel(g_samplerPoint_Wrap_s, gU, 0).xy;
+        sV += mbV[gi]; sVx += mbV[gi] * gD.x; sVy += mbV[gi] * gD.y;
+      }
+      cT = sV / 12.0;
+      cAx = sVx / max(0.9375 * aspX * aspX, 1e-4);   // suma de d.x^2 de la grilla
+      cAy = sVy / 0.72;                              // suma de d.y^2
+      float Sx = 0.0, Sy = 0.0, Sxx = 0.0, Sxy = 0.0, Syy = 0.0;
+      float2 B0 = 0.0, B1 = 0.0, B2 = 0.0;
+      [unroll] for (uint gj = 0; gj < 12; gj++) {
+        float2 gU = float2(0.125 + 0.25 * (float)(gj % 4u), 0.2 + 0.3 * (float)(gj / 4u));
+        float2 gD = (gU - 0.5) * float2(aspX, 1.0);
+        float2 pr = cT + cAx * gD.x + cAy * gD.y;
+        float rr = length(mbV[gj] - pr) / (1.0 + 0.25 * length(pr));
+        float wg = 1.0 / (1.0 + rr * rr);
+        S += wg; Sx += wg * gD.x; Sy += wg * gD.y;
+        Sxx += wg * gD.x * gD.x; Sxy += wg * gD.x * gD.y; Syy += wg * gD.y * gD.y;
+        B0 += wg * mbV[gj]; B1 += (wg * gD.x) * mbV[gj]; B2 += (wg * gD.y) * mbV[gj];
+      }
+      float c00 = Sxx * Syy - Sxy * Sxy, c01 = Sxy * Sy - Sx * Syy, c02 = Sx * Sxy - Sxx * Sy;
+      float c11 = S * Syy - Sy * Sy, c12 = Sx * Sy - S * Sxy, c22 = S * Sxx - Sx * Sx;
+      float det = S * c00 + Sx * c01 + Sy * c02;
+      if (det > 1e-4) {   // si no, queda el ajuste cerrado
+        float iD = 1.0 / det;
+        cT  = (c00 * B0 + c01 * B1 + c02 * B2) * iD;
+        cAx = (c01 * B0 + c11 * B1 + c12 * B2) * iD;
+        cAy = (c02 * B0 + c12 * B1 + c22 * B2) * iD;
+      }
     }
     if (S >= 5.0) {   // con menos de ~5 puntos de cancha a la vista (primeros planos) no se separa nada
       float2 dp = (uv - 0.5) * float2(aspX, 1.0);

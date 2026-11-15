@@ -400,6 +400,7 @@ void main(
   }
   { float3 cg = o0.xyz; PESGrassColorGrade(cg); o0.xyz = saturate(cg); }   // (25/10 b) color del pasto (112): matiz, verde, contraste
   o0.xyz = saturate(PESNatShoulder(o0.xyz * PESNatGain()));   // (12/11) x433 brillo del natural: la misma ganancia que las tarjetas y las hojas 3D (pes_grass.hlsli)
+  float3 pesFl = float3(0.0, 0.0, 0.0);   // (13/11 tanda 2) mapa pes_flat (R pisadas, G pelota, B pisadas lentas), leido una vez (w329 / x448)
   { // === PES21 pasto v3 (19/10): desgaste (seco / tierra) y zonas de color, con las mismas funciones que las hojas
     float4 Q4 = IniParams.Load(int2(104,0));
     if (Q4.x > 0.5) {
@@ -420,7 +421,10 @@ void main(
       // (27/10 n) tanda 11, w329: rastro de la pelota (pes_flat.y, dura z329 s) y pisadas (x, la mitad) en el suelo: el pasto tumbado muestra el
       // enves, mas claro y palido, y brilla un poco mas (hojas acostadas). Asi el recorrido de la pelota se ve tambien de lejos, no solo en las hojas 3D
       { float4 P329 = IniParams.Load(int2(329,0));
-        if (P329.w > 0.001) { float2 f2 = PESFlatMap.Sample(g_samplerLinear_Clamp_s, v1.xy).xy;
+        float4 P448f = IniParams.Load(int2(448,0));   // (13/11 tanda 2) x448 pisadas de lejos / z448 pisadas lentas: la misma lectura del mapa
+        if (P329.w > 0.001 || P448f.x > 0.001) pesFl = PESFlatMap.Sample(g_samplerLinear_Clamp_s, v1.xy).xyz;
+        if (P329.w > 0.001) { float2 f2 = pesFl.xy;
+          float Bp = (P448f.z > 0.0) ? saturate((pesFl.z - 0.012) / 0.988) : 0.0; f2.x = max(f2.x, 0.55 * Bp);   // (13/11 tanda 2) z448: la pisada lenta (B) tambien
           float tr = saturate(max(f2.y, 0.5 * f2.x) * 1.5) * clamp(P329.w, 0.0, 2.0);
           o0.xyz = saturate(o0.xyz * lerp(float3(1.0, 1.0, 1.0), float3(1.12, 1.08, 0.94), tr)); o2.y = saturate(o2.y + 0.08 * tr); } }
       { float3 cg = o0.xyz; float sp = o2.y, rg = o2.x; PESGroundLook(cg, sp, rg, PESGround()); o0.xyz = cg; o2.y = sp; o2.x = rg; }   // suelo humedo / seco
@@ -436,9 +440,20 @@ void main(
     // (12/11 23:45) w447: en la sombra del estadio o de los jugadores (RT2.w del cuadro anterior, PESSunVisGate) la copa sin lo que es solo del sol
     float pesSvC = 1.0;
     if (IniParams.Load(int2(433,0)).y > 0.001 && PESNatOn()) pesSvC = PESSunVisGate(PESSunVisPrev, v0.xy, o3.xy, g_psSystem.m_renderBuffer.xy, pxc);
+    float3 cc0 = cc; float spc0 = spc, rgc0 = rgc;   // (13/11 tanda 2) z496: la base sin la copa debajo de las hojas 3D
     PESNatCanopy(cc, spc, rgc, pesEc / pesDc, pxc, pesSvC);
+    // (13/11 tanda 2) z496 PROFUNDIDAD DE CERCA: donde la DLL dibuja hojas 3D (misma regla que grass.cpp: bladeNat + z410, desde w410 px/m) las
+    // puntas ya son hojas de verdad: el suelo entre ellas no lleva el promedio de las puntas (los huecos parecian puntas). Tope 0.7 (pasto pelado)
+    float4 P410c = IniParams.Load(int2(410, 0)); float w410c = P410c.w >= 100.0 ? clamp(P410c.w, 100.0, 6000.0) : 1200.0;   // = grass.cpp bladeThr
+    bool on3D = IniParams.Load(int2(104, 0)).x > 0.5 && IniParams.Load(int2(407, 0)).x < 0.5 && IniParams.Load(int2(412, 0)).z < 0.5 && P410c.z > 0.5;   // = bladeNat + z410
+    float kUnder = on3D ? 0.7 * saturate(IniParams.Load(int2(496, 0)).z) * smoothstep(0.8 * w410c, 1.2 * w410c, pxc) : 0.0;   // tope 0.7 hasta ver su captura
+    if (kUnder > 0.001) { cc = lerp(cc, cc0, kUnder); spc = lerp(spc, spc0, kUnder); rgc = lerp(rgc, rgc0, kUnder); }
     float kLc = 1.0 - saturate(pesLine);
     o0.xyz = saturate(lerp(o0.xyz, cc, kLc)); o2.y = lerp(o2.y, spc, kLc); o2.x = lerp(o2.x, rgc, kLc);
+    { float4 P448c = IniParams.Load(int2(448,0));   // (13/11 tanda 2) x448 pisadas visibles de lejos (PESCrushLook, pes_grass.hlsli)
+      if (P448c.x > 0.001) { float Bp = P448c.z > 0.0 ? saturate((pesFl.z - 0.012) / 0.988) : 0.0; float3 cl = o0.xyz; float sl = o2.y;
+        PESCrushLook(cl, sl, max(pesFl.x, 0.55 * Bp), pxc, 1.0 - abs(pesEc.y) / pesDc, saturate(PESGround().x + 0.4 * IniParams.Load(int2(407,0)).y));
+        o0.xyz = saturate(cl); o2.y = saturate(sl); } }
   }
   { // === PES21 pasto v3 (25/10): cesped lejano en la base (PESFarTurf, pes_grass.hlsli). Entra donde se va el nivel medio
     // del pasto 3D (tamano en pantalla < 35 px/m / densidad) y es pleno donde ya no hay hojas. y61 fuerza, z61 matas, w61 cobertura

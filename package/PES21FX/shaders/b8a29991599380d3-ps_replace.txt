@@ -657,9 +657,10 @@ void main(
   if (pesTurf) { float rawT = rawNdotL; float wrapT = r2.x; float rawS = dot(pesNT, pesLT);
     float3 upT = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));   // arriba (cancha) en vista
     float upNL = dot(upT, normalize(pesLDir.xyz)); if (dot(upT, normalize(pesLDir.xyz)) < -0.2 && pesPG.w > 1.0) upNL = -upNL;   // (03/11) como el rebote: el sol siempre arriba
-    r3.xyz = PESTurfDiffuse(r7.xyz, rawT, wrapT, pesPG, trans, upNL);
+    float pesVisD = lerp(1.0, pesVisN, kSG);   // (13/11 tanda 2) w447: visibilidad limpia del sol (sin x440): en la sombra entera no atraviesa luz la hoja
+    r3.xyz = PESTurfDiffuse2(r7.xyz, rawT, wrapT, pesPG, trans, upNL, pesNT, normalize(pesLDir.xyz), upT, normalize(-r6.xyz), pesVisD);   // (13/11 tanda 2) x496 un solo sol
     // (04/11) z330: la luz que atraviesa la hoja hacia la camara (contraluz), fina de cerca y suave de lejos (pes_sunturf.hlsli)
-    r3.xyz += PESTurfTransmit(r7.xyz, v0.xy / v0.ww, v1.xy / v1.ww, g_DepthTexture, g_samplerPoint_Wrap_s, g_psScene.m_projectionParam,
+    r3.xyz += pesVisD * PESTurfTransmit(r7.xyz, v0.xy / v0.ww, v1.xy / v1.ww, g_DepthTexture, g_samplerPoint_Wrap_s, g_psScene.m_projectionParam,
                               g_psScene.m_cameraCenterOffset.xy, g_psSystem.m_renderBuffer.x, pesLT, rawS, trans, pesPG); }
   // PES21 (18/10): curvatura en pantalla (cuanto gira la normal por metro); fuera de los if para poder usar derivadas
   float pesCurv = 0.0;
