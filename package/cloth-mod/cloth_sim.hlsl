@@ -224,8 +224,20 @@ cbuffer Params : register(b2)
 // la correccion al dibujar (x256 = 2) queda PES_BIB_SKIN mas lejos de la piel que la camiseta.
 #define PES_BIB_VERTS0   3542     // bibs.fmdl (visto en cloth.log 15/11: 3542 vertices, 16014 indices)
 #define PES_BIB_VERTS1   0        // bibs_reserve.fmdl (0 = todavia sin dato: no se reconoce)
-#define PES_BIB_PIN      3.0      // anclaje a la pose de armado: veces mas flojo que la camiseta
-#define PES_BIB_TETHER   1.6      // correa de distancia maxima: veces mas larga
+// (15/11 b) cloth.log: la pechera quedaba a 39 / 118 / 132 mm de su pose (p50 / p90 / max; la camiseta 26-28 max) y Agustin la
+// vio "romper el modelo": casi toda es tela libre (fija 4 %, pin ~ 0), el anclaje casi no tiraba y la correa era de 25 cm.
+// Ahora por altura de la pose de armado: hombros y pecho sujetos, y de ahi para abajo cada vez mas suelta. Tope a la blandura
+// del anclaje (caida sin sosten ~ 9.8 x alfa) y a la correa. Abajo queda mas suelta que la camiseta, pero en su lugar.
+#define PES_BIB_Y_HI     1.38     // (m, pose de armado) de aca para arriba: sujeta (hombros, pecho alto)
+#define PES_BIB_Y_LO     1.08     // (m) de aca para abajo: lo mas suelta (faldon y costados)
+#define PES_BIB_ALPHA_HI 0.0003   // tope de blandura del anclaje arriba (~3 mm de caida libre)
+#define PES_BIB_ALPHA_LO 0.004    // idem abajo (~4 cm)
+#define PES_BIB_TETHER_HI 0.008   // (m) tope de la correa arriba
+#define PES_BIB_TETHER_LO 0.055   // (m) idem abajo
+#define PES_BIB_LOOSE(p) smoothstep(0.0, 1.0, saturate((PES_BIB_Y_HI - g_rest[p].posPin.y) / (PES_BIB_Y_HI - PES_BIB_Y_LO)))
+// (15/11 b, Agustin: "si bien no se rompe tanto no tiene movimiento ahora") en los menus (Editar) no hay viento ni empujes del
+// cuerpo: la tela quedaba inmovil. Brisa leve propia solo en los menus y solo si cloth.ini no trae viento ahi (wind_in_menus = 0).
+#define PES_MENU_BREEZE  1.0      // (m/s) brisa de los menus; 0 = sin brisa (tela quieta como antes)
 #define PES_BIB_DAMP     0.70     // freno relativo al cuerpo (<1 = se balancea mas tiempo)
 #define PES_BIB_HANG     0.006    // (m) cuanto cuelga la tela suelta por debajo de su pose de armado
 #define PES_BIB_AIR      0.004    // (m) aire minimo sobre su superficie de armado (lo que tiene abajo)
@@ -961,7 +973,6 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
 #endif
         float rel = (1.0 - pin) / max(pin, 1e-4);
         float alpha = g_pinCompliance * rel * rel;
-        if (PES_IS_BIB) alpha *= PES_BIB_PIN;   // (15/11) pechera: mas suelta que la camiseta
         // PES21 FX: deslizamiento por gravedad. Componente de la gravedad tangente a la superficie del cuerpo:
         // grande = la tela quiere resbalar (muslo levantado, brazo arriba). Solo tela lejos de las costuras (pin bajo).
         float pesSlide = 0.0;
@@ -1042,9 +1053,11 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
 #else
         float3 restB = rest1;
 #endif
+        if (PES_IS_BIB) alpha = min(alpha, lerp(PES_BIB_ALPHA_HI, PES_BIB_ALPHA_LO, PES_BIB_LOOSE(p)));   // (15/11 b) pechera: suelta abajo, en su lugar
         x += (restT - x) * (1.0 / (1.0 + alpha / hh));
         float3 off = x - restT;
-        float maxD0 = g_tetherRadius * (1.0 - pin) * (PES_IS_BIB ? PES_BIB_TETHER : 1.0);
+        float maxD0 = g_tetherRadius * (1.0 - pin);
+        if (PES_IS_BIB) maxD0 = min(maxD0, lerp(PES_BIB_TETHER_HI, PES_BIB_TETHER_LO, PES_BIB_LOOSE(p)));   // (15/11 b)
         float maxD = maxD0 * (1.0 + pesSlide * PES_SLIDE_TETHER) * clamp(1.0 + pesFit * 25.0, 0.7, 1.3) * (1.0 + pesLift * 0.6) * clamp(1.0 - pesLimbK * 0.6, 0.6, 1.3) / (1.0 + pesFollow * 0.5);
         float dl = length(off);
         if (dl > maxD) x = restT + off * (maxD / dl);
@@ -1538,6 +1551,9 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                           windBase = mul(transpose(W), float3(pesWU.x * pesWU.z, clamp(IniParams.Load(int2(511, 0)).x * kC, -15.0, 15.0), pesWU.y * pesWU.z));
                           s_windLen = 2.0; }
             s_pesWindOn = pesWOn; s_windHem = pesEffOk ? pesEff.z : 1.0;
+            if (s_menu && PES_MENU_BREEZE > 0.0 && length(windBase) < 0.1) {   // (15/11 b) brisa leve de los menus, con rachas lentas
+                windBase = mul(transpose(W), float3(0.92, 0.0, 0.39)) * (PES_MENU_BREEZE * (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0)));
+                s_windLen = 1.5; }
             // PES21 FX (25/10): el cuerpo real de este personaje (cuerpo.cpp): de las tablas que la DLL armo en el ultimo Present (una
             // por personaje, con la piel del cuadro anterior), la que tiene su origen en el mundo mas cerca del de la prenda
             s_bodyTab = 0xffffffffu; s_bodyTc = 0.0;

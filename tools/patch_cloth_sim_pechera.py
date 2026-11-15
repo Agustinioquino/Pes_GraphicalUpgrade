@@ -26,8 +26,20 @@ rep("struct ParticleRest { float4 posPin; float4 nrm; uint4 skin; };\n",
     "// la correccion al dibujar (x256 = 2) queda PES_BIB_SKIN mas lejos de la piel que la camiseta.\n"
     "#define PES_BIB_VERTS0   3542     // bibs.fmdl (visto en cloth.log 15/11: 3542 vertices, 16014 indices)\n"
     "#define PES_BIB_VERTS1   %d        // bibs_reserve.fmdl (0 = todavia sin dato: no se reconoce)\n"
-    "#define PES_BIB_PIN      3.0      // anclaje a la pose de armado: veces mas flojo que la camiseta\n"
-    "#define PES_BIB_TETHER   1.6      // correa de distancia maxima: veces mas larga\n"
+    "// (15/11 b) cloth.log: la pechera quedaba a 39 / 118 / 132 mm de su pose (p50 / p90 / max; la camiseta 26-28 max) y Agustin la\n"
+    "// vio \"romper el modelo\": casi toda es tela libre (fija 4 %%, pin ~ 0), el anclaje casi no tiraba y la correa era de 25 cm.\n"
+    "// Ahora por altura de la pose de armado: hombros y pecho sujetos, y de ahi para abajo cada vez mas suelta. Tope a la blandura\n"
+    "// del anclaje (caida sin sosten ~ 9.8 x alfa) y a la correa. Abajo queda mas suelta que la camiseta, pero en su lugar.\n"
+    "#define PES_BIB_Y_HI     1.38     // (m, pose de armado) de aca para arriba: sujeta (hombros, pecho alto)\n"
+    "#define PES_BIB_Y_LO     1.08     // (m) de aca para abajo: lo mas suelta (faldon y costados)\n"
+    "#define PES_BIB_ALPHA_HI 0.0003   // tope de blandura del anclaje arriba (~3 mm de caida libre)\n"
+    "#define PES_BIB_ALPHA_LO 0.004    // idem abajo (~4 cm)\n"
+    "#define PES_BIB_TETHER_HI 0.008   // (m) tope de la correa arriba\n"
+    "#define PES_BIB_TETHER_LO 0.055   // (m) idem abajo\n"
+    "#define PES_BIB_LOOSE(p) smoothstep(0.0, 1.0, saturate((PES_BIB_Y_HI - g_rest[p].posPin.y) / (PES_BIB_Y_HI - PES_BIB_Y_LO)))\n"
+    "// (15/11 b, Agustin: \"si bien no se rompe tanto no tiene movimiento ahora\") en los menus (Editar) no hay viento ni empujes del\n"
+    "// cuerpo: la tela quedaba inmovil. Brisa leve propia solo en los menus y solo si cloth.ini no trae viento ahi (wind_in_menus = 0).\n"
+    "#define PES_MENU_BREEZE  1.0      // (m/s) brisa de los menus; 0 = sin brisa (tela quieta como antes)\n"
     "#define PES_BIB_DAMP     0.70     // freno relativo al cuerpo (<1 = se balancea mas tiempo)\n"
     "#define PES_BIB_HANG     0.006    // (m) cuanto cuelga la tela suelta por debajo de su pose de armado\n"
     "#define PES_BIB_AIR      0.004    // (m) aire minimo sobre su superficie de armado (lo que tiene abajo)\n"
@@ -39,16 +51,17 @@ rep("    float damp = g_damping + g_sleeveDamping * sleeveW;\n",
     "    float damp = g_damping + g_sleeveDamping * sleeveW;\n"
     "    if (PES_IS_BIB) damp *= PES_BIB_DAMP;   // (15/11) pechera: tela liviana\n")
 
-rep("        float alpha = g_pinCompliance * rel * rel;\n",
-    "        float alpha = g_pinCompliance * rel * rel;\n"
-    "        if (PES_IS_BIB) alpha *= PES_BIB_PIN;   // (15/11) pechera: mas suelta que la camiseta\n")
+rep("        x += (restT - x) * (1.0 / (1.0 + alpha / hh));\n",
+    "        if (PES_IS_BIB) alpha = min(alpha, lerp(PES_BIB_ALPHA_HI, PES_BIB_ALPHA_LO, PES_BIB_LOOSE(p)));   // (15/11 b) pechera: suelta abajo, en su lugar\n"
+    "        x += (restT - x) * (1.0 / (1.0 + alpha / hh));\n")
 
 rep("        if (pesFit > 0.0) { float gl = length(s_grav); if (gl > 1e-4) restT += (s_grav / gl) * pesFit * PES_FIT_HANG * fitFree; }\n",
     "        if (pesFit > 0.0) { float gl = length(s_grav); if (gl > 1e-4) restT += (s_grav / gl) * pesFit * PES_FIT_HANG * fitFree; }\n"
     "        if (PES_IS_BIB) { float glb = length(s_grav); if (glb > 1e-4) restT += (s_grav / glb) * PES_BIB_HANG * fitFree; }   // (15/11) la pechera cuelga\n")
 
 rep("        float maxD0 = g_tetherRadius * (1.0 - pin);\n",
-    "        float maxD0 = g_tetherRadius * (1.0 - pin) * (PES_IS_BIB ? PES_BIB_TETHER : 1.0);\n")
+    "        float maxD0 = g_tetherRadius * (1.0 - pin);\n"
+    "        if (PES_IS_BIB) maxD0 = min(maxD0, lerp(PES_BIB_TETHER_HI, PES_BIB_TETHER_LO, PES_BIB_LOOSE(p)));   // (15/11 b)\n")
 
 rep("        float insetF = inset - min(max(pesFit, 0.0), 0.008);   // PES21 FX: delgado = la tela queda a 'fit' del cuerpo\n",
     "        float insetF = inset - min(max(pesFit, 0.0), 0.008);   // PES21 FX: delgado = la tela queda a 'fit' del cuerpo\n"
@@ -57,6 +70,12 @@ rep("        float insetF = inset - min(max(pesFit, 0.0), 0.008);   // PES21 FX:
 # pesBodyLift (la primera de las dos lineas 'float m = clamp(s_bodyPrm.y'; la de pesBodyCollide sigue con ', mp =')
 rep("    float m = clamp(s_bodyPrm.y * 0.001, 0.0, 0.03);\n    float3 y = y0;\n",
     "    float m = clamp(s_bodyPrm.y * 0.001, 0.0, 0.03) + (PES_IS_BIB ? PES_BIB_SKIN : 0.0);   // (15/11) la pechera va por fuera de la camiseta\n    float3 y = y0;\n")
+
+rep("            s_pesWindOn = pesWOn; s_windHem = pesEffOk ? pesEff.z : 1.0;\n",
+    "            s_pesWindOn = pesWOn; s_windHem = pesEffOk ? pesEff.z : 1.0;\n"
+    "            if (s_menu && PES_MENU_BREEZE > 0.0 && length(windBase) < 0.1) {   // (15/11 b) brisa leve de los menus, con rachas lentas\n"
+    "                windBase = mul(transpose(W), float3(0.92, 0.0, 0.39)) * (PES_MENU_BREEZE * (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0)));\n"
+    "                s_windLen = 1.5; }\n")
 
 if crlf: t = t.replace('\n', '\r\n')
 open(p, 'wb').write(t.encode('latin1'))
