@@ -671,14 +671,23 @@ bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
     // leyendo la camara vieja y no coincidia con lo que se dibujaba. Ahora se ESCRIBE en el CameraImpl y queda (como la camara libre); se
     // guarda la del juego (base) y lo ultimo escrito: si el juego la cambia (otra vista del visor) se toma esa como base nueva. Al volver a
     // cero (salir de Apariencia) se escribe la base una vez.
-    static unsigned char s_base[0x34], s_wrote[0x34]; static bool s_haveBase = false, s_dirty = false; static unsigned char* s_cam = nullptr;
-    if (cam != s_cam) { s_cam = cam; s_haveBase = false; s_dirty = false; }
+    // (15/11 r, videos de Agustin 16:10: el jugador saltaba de un lugar a otro cuadro a cuadro al mover la camara) el gancho recibe MAS DE
+    // UNA camara (unas 1.5 llamadas por cuadro: el visor y otro render target del Editar). Antes, al cambiar de puntero se olvidaba la base
+    // y la camara que volvia traia lo que habiamos escrito como "base nueva": se sumaba dos veces y saltaba. Ahora cada camara guarda su
+    // propia base y lo ultimo escrito (hasta 4).
+    struct VcCam { unsigned char* cam; unsigned char base[0x34], wrote[0x34]; bool haveBase, dirty; double t; };
+    static VcCam s_vc[4] = {}; static int s_vcCamLog = 0;
+    VcCam* E = nullptr; { const double tn = Now(); int old = 0;
+        for (int i = 0; i < 4; i++) { if (s_vc[i].cam == cam) { E = &s_vc[i]; break; } if (s_vc[i].t < s_vc[old].t) old = i; }
+        if (!E) { E = &s_vc[old]; E->cam = cam; E->haveBase = false; E->dirty = false; if (s_vcCamLog++ < 6) Log("mouse en menus: camara del visor: camara %p anotada (lugar %d)", (void*)cam, old); }
+        E->t = tn; }
+    unsigned char* s_base = E->base; unsigned char* s_wrote = E->wrote; bool& s_haveBase = E->haveBase; bool& s_dirty = E->dirty;
     // solo posicion y objetivo (+0x10..+0x27) son nuestros: si el juego los cambio, son la base nueva; lo demas (arriba, cerca / lejos,
     // campo de vision) se toma siempre del juego, asi un cambio parcial nunca suma lo nuestro a la base
     if (!s_haveBase || memcmp(cam + 0x10, s_wrote, 24) != 0) {   // el juego puso otra vista (p. ej. al entrar a Cara): se arranca de esa
         if (s_haveBase && s_dirty) VcReset("el juego cambio la vista del visor");
         memcpy(s_base, cam + 0x10, 24); memcpy(s_wrote, cam + 0x10, 24); s_haveBase = true; s_dirty = false; }
-    memcpy(s_base + 24, cam + 0x10 + 24, sizeof s_base - 24);
+    memcpy(s_base + 24, cam + 0x10 + 24, 0x34 - 24);
     auto Restore = [&]() { if (s_dirty) { memcpy(cam + 0x10, s_base, 24); memcpy(s_wrote, s_base, 24); s_dirty = false; Log("mouse en menus: camara del visor: vuelve a la del juego"); } };
     if (!mv) { if (s_vcMv) { VcReset("salio del visor"); s_vcMv = 0; } s_vcPlayer = false; Restore(); return false; }
     if (!s_vcPlayer.load()) { if (s_vcYawCur != 0 || s_vcPitchCur != 0 || s_vcZoomCur != 1.0f || s_vcPan[0] != 0 || s_vcPan[1] != 0 || s_vcPan[2] != 0) VcReset("fuera de Apariencia"); Restore(); return false; }
