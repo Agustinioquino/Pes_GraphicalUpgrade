@@ -623,6 +623,7 @@ static bool s_tried = false, s_okEditor = false;
 // guarda el CameraImpl tal como estaba al prender y se restaura una vez al apagar (pedido de Agustin: volver a la posicion original)
 static unsigned char s_orig[0x50]; static bool s_haveOrig = false, s_restore = false;
 
+static std::mutex s_wcMx; static float s_wc[11] = {}; static double s_wcT = 0.0;
 static void hk_SetCam(void* rt, unsigned char* cam) {
     s_editorCalls++;
     if (cam && !FreeCamActive() && s_restore) {
@@ -694,8 +695,23 @@ static void hk_SetCam(void* rt, unsigned char* cam) {
         for (int i = 0; i < 3; i++) { pos[i] = s_xPiv[i] + c[i] * s_xDist; tgt[i] = s_xPiv[i]; } up[0] = 0.0f; up[1] = 1.0f; up[2] = 0.0f;
         memcpy(cam + 0x40, &s_xFov, 4); { float cn; memcpy(&cn, cam + 0x34, 4); const float n0 = 0.05f; if (cn == cn && cn > n0) memcpy(cam + 0x34, &n0, 4); }   // sin la lente ni el cerca de la ortografica
     }
+    // (15/11 s, Agustin 19:28: "la grilla no sigue las lineas correctamente") la grilla del Motor (motorgrid.cpp) armaba su camara con
+    // la pose de la camara libre y el campo de vision PEDIDO (x345), no con lo que de verdad se le manda al visor (campo de vision ya
+    // suavizado, objetivo, arriba, aspecto +0x44): al hacer zoom o girar, las lineas y el jugador se separaban. Se guarda la camara
+    // tal cual llega al juego (solo la del visor principal, no la de la vista extra)
+    if (cam && FreeCamActive() && MotorPageActive() && rt == s_rtMain && !xb) {
+        std::lock_guard<std::mutex> lk(s_wcMx); memcpy(s_wc, cam + 0x10, 12); memcpy(s_wc + 3, cam + 0x1c, 12); memcpy(s_wc + 6, cam + 0x28, 12);
+        memcpy(s_wc + 9, cam + 0x40, 4); memcpy(s_wc + 10, cam + 0x44, 4); s_wcT = Now();
+    }
     o_setCam(rt, cam);
     if (xb) memcpy(cam + 0x10, xSave, sizeof xSave);
+}
+// para la grilla del Motor: la ultima camara que se le mando al visor (posicion, objetivo, arriba, campo de vision vertical, aspecto)
+bool FreeCamWrittenCam(float* pos, float* tgt, float* up, float* fov, float* asp) {
+    std::lock_guard<std::mutex> lk(s_wcMx);
+    if (s_wcT <= 0.0 || Now() - s_wcT > 0.5) return false;
+    memcpy(pos, s_wc, 12); memcpy(tgt, s_wc + 3, 12); memcpy(up, s_wc + 6, 12); *fov = s_wc[9]; *asp = s_wc[10];
+    return s_wc[9] == s_wc[9] && s_wc[9] > 0.001f && s_wc[9] < 3.0f;
 }
 
 static bool Readable(const void* p, size_t n) {

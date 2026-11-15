@@ -122,9 +122,11 @@ static void GridPaint(const Cam& c) {
         // ultimo 15 % del radio de 2 km
         auto fadeAt = [&](float x, float z) { const float d = sqrtf((x - px) * (x - px) + (z - pz) * (z - pz)) / fade;
             const float a = maxi ? std::clamp((1.0f - d) / 0.15f, 0.0f, 1.0f) : std::clamp(1.0f - d, 0.0f, 1.0f); return a * a * (3.0f - 2.0f * a); };
-        float rIn = 0.0f, step = cell; long long mult = 1;
+        float rIn = 0.0f, step = cell; long long mult = 1; float Rlv = Rmax;
+        auto ringFade = [&](float x, float z) { const float d = sqrtf((x - px) * (x - px) + (z - pz) * (z - pz));
+            const float a = std::clamp((Rlv - d) / (0.4f * Rlv), 0.0f, 1.0f); return a * a * (3.0f - 2.0f * a); };
         for (int lv = 0; lv < 5 && rIn < Rmax; lv++, step *= (float)M, mult *= M) {
-            const float R = maxi ? std::min(Rmax, step * 60.0f) : Rmax;
+            const float R = maxi ? std::min(Rmax, step * 60.0f) : Rmax; Rlv = R;
             for (int axis = 0; axis < 2; axis++) {          // 0: lineas de x fija (corren por z, el eje Z azul) / 1: de z fija (el eje X rojo)
                 const float pc = axis == 0 ? px : pz, po = axis == 0 ? pz : px;
                 const long long k0 = (long long)std::ceil((pc - R) / step), k1 = (long long)std::floor((pc + R) / step);
@@ -135,6 +137,11 @@ static void GridPaint(const Cam& c) {
                     const bool ax0 = kk == 0 && g_cfg.motorGridAxes != 0, maj = major > 0 && kc % major == 0;
                     const uint32_t col = ax0 ? (axis == 0 ? 0x00e08c40u : 0x005448eau) : 0x00909090u;
                     const float base = (ax0 ? 0.95f : maj ? 0.50f : 0.24f) * gain; if (base <= 0.003f) continue;
+                    // (15/11 s, Agustin 19:28: "la grilla no sigue las lineas correctamente"; video 16.20.38: en el borde de cada nivel las
+                    // lineas finas se cortaban de golpe en una curva y arriba seguian solo las gruesas, como si la grilla se partiera).
+                    // Las lineas que NO siguen en el nivel siguiente (las que no son multiplo de M) se apagan suave en el ultimo 40 % del
+                    // anillo; las que siguen (multiplo de M) pasan al nivel siguiente con la misma intensidad, sin corte
+                    const bool ringOut = maxi && R < Rmax && (kk % M) != 0;
                     for (int side = 0; side < 2; side++) {      // los dos lados del anillo (o la linea entera si no hay anillo adentro)
                         float t = side == 0 ? po - hc : po + hi; const float tEnd = side == 0 ? (hi > 0.0f ? po - hi : po + hc) : po + hc;
                         if (side == 1 && hi <= 0.0f) break;
@@ -142,6 +149,7 @@ static void GridPaint(const Cam& c) {
                             const float dist = std::fabs(dv) + std::fabs(t - po); const float sg = std::clamp(dist * 0.18f, 0.25f, 6.0f * (float)mult); const float t2 = std::min(tEnd, t + sg);
                             float a[3], b[3]; if (axis == 0) { a[0] = b[0] = v; a[2] = t; b[2] = t2; } else { a[2] = b[2] = v; a[0] = t; b[0] = t2; } a[1] = b[1] = 0.0f;
                             float fa = fadeAt(a[0], a[2]), fb = fadeAt(b[0], b[2]);
+                            if (ringOut) { fa *= ringFade(a[0], a[2]); fb *= ringFade(b[0], b[2]); }
                             if (fa > 0.003f || fb > 0.003f) {
                                 float sp = 1.0f;
                                 if (!ax0) { float m[3] = { (a[0] + b[0]) * 0.5f, 0.0f, (a[2] + b[2]) * 0.5f }; const float s1 = spacing(m, axis, step) * (maj && mult < major ? (float)major / (float)mult : 1.0f); sp = std::clamp((s1 - 2.0f) / 4.0f, 0.0f, 1.0f);
@@ -205,9 +213,26 @@ ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx) {
     c.u[0] = c.r[1] * c.f[2] - c.r[2] * c.f[1]; c.u[1] = c.r[2] * c.f[0] - c.r[0] * c.f[2]; c.u[2] = c.r[0] * c.f[1] - c.r[1] * c.f[0];
     c.th = tanf(0.5f * std::clamp(FreeCamFovNow(), 0.02f, 2.4f));
     s_asp = (g_bbW > 0 && g_bbH > 0) ? std::clamp((float)g_bbW / (float)g_bbH, 0.5f, 5.0f) : 16.0f / 9.0f;
+    // (15/11 s, Agustin 19:28: "la grilla no sigue las lineas correctamente") con jugador cargado se usa la camara tal cual se le mando
+    // al visor (freecam.cpp FreeCamWrittenCam): posicion, direccion y arriba reales, campo de vision ya suavizado y el aspecto con el
+    // que el juego proyecta al jugador; asi la grilla y el jugador salen de la MISMA proyeccion
+    {   float wp[3], wt[3], wu[3], wf = 0.0f, wa = 0.0f;
+        if (FreeCamWrittenCam(wp, wt, wu, &wf, &wa)) {
+            float f[3] = { wt[0] - wp[0], wt[1] - wp[1], wt[2] - wp[2] }; const float lf = sqrtf(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+            if (lf > 1e-5f) {
+                for (int i = 0; i < 3; i++) f[i] /= lf;
+                float r[3] = { f[1] * wu[2] - f[2] * wu[1], f[2] * wu[0] - f[0] * wu[2], f[0] * wu[1] - f[1] * wu[0] }; const float lr = sqrtf(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+                if (lr > 1e-5f) {
+                    for (int i = 0; i < 3; i++) { r[i] /= lr; c.pos[i] = wp[i]; c.f[i] = f[i]; c.r[i] = r[i]; }
+                    c.u[0] = r[1] * f[2] - r[2] * f[1]; c.u[1] = r[2] * f[0] - r[0] * f[2]; c.u[2] = r[0] * f[1] - r[1] * f[0];
+                    c.th = tanf(0.5f * std::clamp(wf, 0.02f, 2.4f));
+                    if (wa == wa && wa > 0.5f && wa < 5.0f) s_asp = wa;
+                    yaw = atan2f(f[0], f[2]); pitch = asinf(std::clamp(f[1], -1.0f, 1.0f));
+                    static int nl = 0; if (nl++ < 3) Log("motor (grilla): con la camara del visor: campo de vision %.4f, aspecto %.3f (pantalla %u x %u)", wf, s_asp, g_bbW, g_bbH);
+                } } } }
     // (15/11 o) si la camara y las opciones no cambiaron desde el ultimo dibujo, la textura ya esta bien: no se rehace
-    {   struct Key { float p[3], yaw, pitch, th, cell, asp; int on, size, alpha, major, axes; };
-        static Key s_last{}; static bool s_have = false; Key kk{}; memcpy(kk.p, c.pos, sizeof kk.p); kk.yaw = yaw; kk.pitch = pitch; kk.th = c.th; kk.cell = g_cfg.motorGridCell; kk.asp = s_asp;
+    {   struct Key { float p[3], yaw, pitch, th, cell, asp, u[3]; int on, size, alpha, major, axes; };
+        static Key s_last{}; static bool s_have = false; Key kk{}; memcpy(kk.p, c.pos, sizeof kk.p); kk.yaw = yaw; kk.pitch = pitch; kk.th = c.th; kk.cell = g_cfg.motorGridCell; kk.asp = s_asp; memcpy(kk.u, c.u, sizeof kk.u);
         kk.on = g_cfg.motorGrid; kk.size = g_cfg.motorGridSize; kk.alpha = g_cfg.motorGridAlpha; kk.major = g_cfg.motorGridMajor; kk.axes = g_cfg.motorGridAxes;
         if (s_have && memcmp(&kk, &s_last, sizeof kk) == 0) return s_srv;
         s_last = kk; s_have = true; }
