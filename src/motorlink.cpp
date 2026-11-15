@@ -39,7 +39,7 @@ struct MotorLink {
     float escala;                   // +0x2c pedido del modulo: escala de la vista de profundidad (0 = automatica)
     float escalaAct;                // +0x30 lo que rige
     uint32_t panel;                 // +0x34 (11/11) el modulo lo cambia en cada cuadro con su panel abierto: el mouse es del Motor (menumouse.cpp)
-    uint32_t res[2];                // +0x38
+    uint32_t res[2];                // +0x38 res[0] = idioma del mod (0 es, 1 en, 2 pt; 15/11)
 };
 #pragma pack(pop)
 static_assert(sizeof(MotorLink) == 64, "MotorLink debe medir 64 bytes (lo lee MotorTiempoReal.lua)");
@@ -156,6 +156,7 @@ void MotorLinkPresent() {
     if (s_ml) {
         s_ml->vistaAct = v[0]; s_ml->alambreAct = v[1]; s_ml->corteAct = v[2]; s_ml->escalaAct = v[3];
         s_ml->alambreDibujos = nd;
+        s_ml->res[0] = (uint32_t)std::clamp(g_cfg.lang, 0, 2);   // (15/11) idioma del mod: el modulo de Sider nombra la pestana del Editar con esto
         s_ml->dllSeq = s_ml->dllSeq + 1;
     }
     if (wire) {   // cada 10 s con el alambre prendido: cuantos dibujos se cambiaron (0 = ningun dibujo de G-buffer: avisar)

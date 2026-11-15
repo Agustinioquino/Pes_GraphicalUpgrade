@@ -276,7 +276,7 @@ static uintptr_t my_Build(void* page) {
     g_RowTexts(page);                                                    // nombres de las filas (ranuras 85 / 86)
     uint8_t* top = Ptr(I) ? P8(I + 0x90) : nullptr;
     void* head = Ptr(top) ? Sub(top, "headline") : nullptr;
-    if (Ptr(head)) g_Headline(head, "Motor en tiempo real");
+    if (Ptr(head)) g_Headline(head, TRS("Motor en tiempo real"));
     // (Agustin 23:12: "ni que muestres los botones abajo del mando") la barra de ayuda se arma con el texto de cada boton
     // (Impl+0x168 + 0x20 x boton, 17 botones; 0x140e73660 saca los que no tienen texto y esconde la barra si no queda ninguno).
     // Se vacian los que tienen texto; los modos de las acciones (Impl+0x120) no cambian: "volver" sigue andando

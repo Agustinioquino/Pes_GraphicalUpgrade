@@ -683,7 +683,7 @@ struct MotorSceneInfo { int scenes, objects, models, lights; };
 int MotorSceneLights(MotorLight* out, int max, MotorSceneInfo* info); bool MotorLightSetOn(const MotorLight& L, bool on);
 void MotorErr(const char* fmt, ...);   // (15/11 f) error del Motor: al registro y a un recuadro rojo en pantalla (motorgizmo.cpp)
 bool MotorUiSkipGameDraw(ID3D11DeviceContext* c, uint64_t ps); int MotorViewCount(int row); const char* MotorViewName(int row, int op); int MotorViewGet(int row); void MotorViewSet(int row, int op);   // (15/11 b)
-bool MotorUiWheel(int delta); bool MotorUiEscBusy(); bool MotorUiOn(); bool MotorUiPanel(); bool MotorUiPlayer(); void MotorUiTogglePanel(); void MotorUiTogglePlayer(); void MotorUiBack(); bool MotorUiTakeBack();                     // motorgizmo.cpp
+void* MenuLogoTex(float* aspect); bool MotorUiWheel(int delta); bool MotorUiEscBusy(); bool MotorUiOn(); bool MotorUiPanel(); bool MotorUiPlayer(); void MotorUiTogglePanel(); void MotorUiTogglePlayer(); void MotorUiBack(); bool MotorUiTakeBack();                     // motorgizmo.cpp
 bool CamHookLast(float* pos, float* tgt, int* id, int* frame);   // camhook.cpp: ultima camara aplicada por el CameraSystem
 // (27/10 c) sombra propia de la cabeza (headshadow.cpp): atlas de sombras de alta resolucion de las cabezas mas cercanas
 // (04/11 boca) mascara del interior de la boca (mouthmask.cpp): la luz de la piel no cambia la boca

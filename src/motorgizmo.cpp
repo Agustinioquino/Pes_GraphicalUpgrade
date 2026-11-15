@@ -100,7 +100,7 @@ static void SetCam(bool on);
 struct MErr { double t; char msg[220]; };
 static MErr s_err[8]; static int s_errTotal = 0; static std::mutex s_errMx;
 void MotorErr(const char* fmt, ...) {
-    char b[220]; va_list ap; va_start(ap, fmt); vsnprintf(b, sizeof b, fmt, ap); va_end(ap);
+    char b[220]; va_list ap; va_start(ap, fmt); vsnprintf(b, sizeof b, TRS(fmt), ap); va_end(ap);
     bool nuevo = true;
     {   std::lock_guard<std::mutex> lk(s_errMx);
         if (s_errTotal > 0) { MErr& u = s_err[(s_errTotal - 1) & 7]; if (strcmp(u.msg, b) == 0 && Now() - u.t < 30.0) { u.t = Now(); nuevo = false; } }
@@ -118,6 +118,12 @@ static const float kBarH = 38.0f, kLeftW = 250.0f, kRightW = 320.0f, kStatH = 26
 static const float kScales[4] = { 1.0f, 1.2f, 1.4f, 1.6f };
 static float UiK(const ImVec2& ds) { return std::max(1.0f, ds.y / 1080.0f) * std::clamp(g_cfg.motorScale, 0.8f, 2.0f); }
 static int ScaleIdx() { int b = 0; for (int i = 1; i < 4; i++) if (fabsf(kScales[i] - g_cfg.motorScale) < fabsf(kScales[b] - g_cfg.motorScale)) b = i; return b; }
+// (15/11 i) idioma del editor = idioma del menu del mod: se guarda en [PES21FX] language y se releen los textos de las tarjetas
+static void LangSet(int i) { static const char* const kKey[3] = { "es", "en", "pt" }; i = std::clamp(i, 0, 2);
+    { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.lang = i; LoadMenuLang(); }
+    SaveOption("language", kKey[i]); }
+// nombre de una vista en el idioma elegido ("Normales" ya existe en la tabla con otro sentido: se resuelve aca)
+static const char* ViewTr(int row, int op) { if (row == 0 && op == 3 && g_cfg.lang != 0) return g_cfg.lang == 2 ? "Normais" : "Normals"; return TRS(MotorViewName(row, op)); }
 static void ScaleSet(int i) { i = std::clamp(i, 0, 3); g_cfg.motorScale = kScales[i]; char b[16]; snprintf(b, sizeof b, "%.1f", kScales[i]); SaveOption("motor_escala", b); }
 // (15/11 h, Agustin 03:19: "al ingresar a veces aparece el fondo de edicion, podrias agregar una transicion al ingresar y salir")
 // al entrar: tapa oscura 0.2 s y fundido de 0.35 s; al salir (boton, menu o Esc): fundido a oscuro de 0.18 s y recien ahi se vuelve.
@@ -141,7 +147,7 @@ static char s_note[220] = ""; static double s_noteT = -1.0e9;
 struct PendL { int kind; bool on; char name[40]; }; static PendL s_pend[64]; static int s_pendN = 0; static double s_pendUntil = -1.0e9;
 struct OrigL { uintptr_t obj; bool on; }; static OrigL s_orig[64]; static int s_origN = 0;       // como estaba cada luz al entrar al Motor
 bool MotorUiEscBusy() { return MotorUiOn() && Now() - s_uiAlive.load(std::memory_order_relaxed) < 0.3; }      // con el editor a la vista Esc lo atiende el editor (cierra menu / ventana, o sale con fundido)   // menumouse.cpp: Esc cierra el menu abierto, no el Motor
-static void Note(const char* fmt, ...) { va_list ap; va_start(ap, fmt); vsnprintf(s_note, sizeof s_note, fmt, ap); va_end(ap); s_noteT = Now(); Log("motor (editor): %s", s_note); }
+static void Note(const char* fmt, ...) { va_list ap; va_start(ap, fmt); vsnprintf(s_note, sizeof s_note, TRS(fmt), ap); va_end(ap); s_noteT = Now(); Log("motor (editor): %s", s_note); }
 static const std::wstring& SceneDir() {
     if (s_scDirTried) return s_scDir;
     s_scDirTried = true; std::wstring base;
@@ -157,7 +163,7 @@ static const std::wstring& SceneDir() {
 static std::wstring ScenePath(const char* name) { std::wstring f = SceneDir(); for (const char* c = name; *c; c++) f += (wchar_t)(unsigned char)*c; return f; }
 static void SceneLabel(const char* nm, char* out, size_t cap) {
     int Y, M, D, h, m, s;
-    if (sscanf(nm, "escena_%4d%2d%2d_%2d%2d%2d", &Y, &M, &D, &h, &m, &s) == 6) snprintf(out, cap, "Escena del %02d/%02d/%04d a las %02d:%02d:%02d", D, M, Y, h, m, s);
+    if (sscanf(nm, "escena_%4d%2d%2d_%2d%2d%2d", &Y, &M, &D, &h, &m, &s) == 6) snprintf(out, cap, TRS("Escena del %02d/%02d/%04d a las %02d:%02d:%02d"), D, M, Y, h, m, s);
     else snprintf(out, cap, "%.60s", nm);
 }
 // las luces pedidas por la escena abierta: por tipo + nombre (y orden, si hay varias con el mismo nombre)
@@ -275,8 +281,8 @@ static void ToolbarDraw() {
             if (a < 0.999f) { const ImU32 al = (ImU32)((float)(v.col >> 24) * std::max(0.0f, a)); v.col = (v.col & 0x00ffffffu) | (al << 24); } } };
     int hot = -1; const int hp = s_hotPrev;
     auto hit = [&](int id, const ImVec2& a, const ImVec2& b) { if (mx >= a.x && mx <= b.x && my >= a.y && my <= b.y) hot = id; return hp == id; };
-    auto text = [&](float x, float yc, ImU32 c, const char* t, float size) { const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t); dl->AddText(font, size, ImVec2(x, yc - ts.y * 0.5f), c, t); return ts.x; };
-    auto textC = [&](const ImVec2& a, const ImVec2& b, ImU32 c, const char* t, float size) { const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t); dl->AddText(font, size, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), c, t); };
+    auto text = [&](float x, float yc, ImU32 c, const char* t, float size) { t = TRS(t); const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t); dl->AddText(font, size, ImVec2(x, yc - ts.y * 0.5f), c, t); return ts.x; };
+    auto textC = [&](const ImVec2& a, const ImVec2& b, ImU32 c, const char* t, float size) { t = TRS(t); const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t); dl->AddText(font, size, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), c, t); };
     int nz = 0;
     auto zone = [&](const ImVec2& a, const ImVec2& b) { if (nz < 6) { s_hr[nz][0].store(a.x * sx); s_hr[nz][1].store(a.y * sy); s_hr[nz][2].store(b.x * sx); s_hr[nz][3].store(b.y * sy); nz++; } };
     const bool camFree = g_cfg.live[344][0] > 0.5f, grid = g_cfg.motorGrid != 0, player = MotorUiPlayer();
@@ -293,6 +299,10 @@ static void ToolbarDraw() {
     { const int v0 = dl->VtxBuffer.Size; const ImVec2 a(0, 0), b(ds.x, barH); zone(a, b);
       dl->AddRectFilled(a, b, cHead); dl->AddLine(ImVec2(0, barH), ImVec2(ds.x, barH), cLine, 1.0f);
       float x = 0.0f;
+      // (15/11 i, Agustin 03:21: "incluye el logo nem glass ... pequeno arriba a la izquierda del todo") el mismo logo del menu del mod
+      { float asp = 1.0f; void* lg = MenuLogoTex(&asp); if (lg && asp > 0.05f) { const float lh = barH * 0.74f, lw = std::min(lh * asp, barH * 3.0f), m = 8.0f * k;
+          dl->AddImage((ImTextureID)(uintptr_t)lg, ImVec2(m, (barH - lh) * 0.5f), ImVec2(m + lw, (barH + lh) * 0.5f), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 255)); x = m + lw + m;
+          dl->AddLine(ImVec2(x, 6.0f * k), ImVec2(x, barH - 6.0f * k), IM_COL32(80, 80, 84, 255), 1.0f); } }
       { const ImVec2 p0(x, 0), p1(x + barH * 1.15f, barH); const bool hv = hit(0, p0, p1); if (hv) dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 26));
         const ImVec2 o((p0.x + p1.x) * 0.5f, barH * 0.5f); const float h2 = barH * 0.27f;
         if (s_icon[0]) dl->AddImage((ImTextureID)(uintptr_t)s_icon[0], ImVec2(o.x - h2, o.y - h2), ImVec2(o.x + h2, o.y + h2), ImVec2(0, 0), ImVec2(1, 1), ink); else IconFallback(dl, 0, o, barH * 0.95f, ink, k);
@@ -301,11 +311,11 @@ static void ToolbarDraw() {
       dl->AddLine(ImVec2(x, 6.0f * k), ImVec2(x, barH - 6.0f * k), IM_COL32(80, 80, 84, 255), 1.0f); x += 8.0f * k;
       // (15/11 g) barra de menus: cada titulo abre su lista de acciones (se dibuja al final, encima de todo)
       { const char* const mn[6] = { "Archivo", "Escena", "Ver", "Render", "Luces", "Ayuda" };
-        for (int i = 0; i < 6; i++) { const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, mn[i]); const float w = ts.x + 24.0f * k;
+        for (int i = 0; i < 6; i++) { const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, TRS(mn[i])); const float w = ts.x + 24.0f * k;
             const ImVec2 p0(x, 0), p1(x + w, barH); const bool hv = hit(600 + i, p0, p1), op = s_menuOpen == i;
             if (op) { dl->AddRectFilled(p0, p1, IM_COL32(43, 43, 46, 255)); dl->AddRectFilled(p0, ImVec2(p1.x, 2.0f * k), acc); } else if (hv) dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 24));
             textC(p0, p1, op ? IM_COL32(255, 214, 170, 255) : ink, mn[i], fs); mX[i] = x; x = p1.x; }
-        char sn[140], lb[96]; if (s_scName[0]) { SceneLabel(s_scName, lb, sizeof lb); snprintf(sn, sizeof sn, "Motor en tiempo real  \xC2\xB7  %s", lb); } else snprintf(sn, sizeof sn, "Motor en tiempo real  \xC2\xB7  escena sin guardar");
+        char sn[140], lb[96]; if (s_scName[0]) { SceneLabel(s_scName, lb, sizeof lb); snprintf(sn, sizeof sn, TRS("Motor en tiempo real  \xC2\xB7  %s"), lb); } else snprintf(sn, sizeof sn, TRS("Motor en tiempo real  \xC2\xB7  escena sin guardar"));
         const ImVec2 ts = font->CalcTextSizeA(fsS + 1.0f * k, FLT_MAX, 0.0f, sn); if (ds.x - ts.x - 14.0f * k > x + 20.0f * k) text(ds.x - ts.x - 14.0f * k, barH * 0.5f, dim, sn, fsS + 1.0f * k); }
       anim(v0, 0.0f, -(1.0f - eo) * barH, eo);
     }
@@ -341,19 +351,19 @@ static void ToolbarDraw() {
           const float yg = y0 + rowH * 5.0f, yc = yg + rowH * 0.5f; char gt[64];
           dl->AddLine(ImVec2(0, yg), ImVec2(leftW, yg), IM_COL32(60, 60, 64, 255), 1.0f);
           dl->AddTriangleFilled(ImVec2(12.0f * k, yc - 3.0f * k), ImVec2(21.0f * k, yc - 3.0f * k), ImVec2(16.5f * k, yc + 4.0f * k), dim);
-          const float w = text(28.0f * k, yc, ink, "Luces", fs); snprintf(gt, sizeof gt, "%d prendidas de %d", nOn, s_info.lights); text(28.0f * k + w + 10.0f * k, yc, dim, gt, fsS);
+          const float w = text(28.0f * k, yc, ink, "Luces", fs); snprintf(gt, sizeof gt, TRS("%d prendidas de %d"), nOn, s_info.lights); text(28.0f * k + w + 10.0f * k, yc, dim, gt, fsS);
           for (int r = 0; r < shownL && sc + r < s_nLights; r++) { const int i = sc + r; const MotorLight& L = s_lights[i]; const float y = yL0 + (float)r * rowL, yc2 = y + rowL * 0.5f; const ImVec2 p0(0, y), p1(leftW, y + rowL); const bool hv = hit(300 + i, p0, p1);
               if (s_sel != 4 + i && hv) dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 14));
               const float mxc = std::max(L.color[0], std::max(L.color[1], L.color[2])); const float inv = mxc > 1e-6f ? 1.0f / mxc : 0.0f;
               const ImU32 sw = L.on ? IM_COL32((int)(std::clamp(L.color[0] * inv, 0.0f, 1.0f) * 255.0f), (int)(std::clamp(L.color[1] * inv, 0.0f, 1.0f) * 255.0f), (int)(std::clamp(L.color[2] * inv, 0.0f, 1.0f) * 255.0f), 255) : IM_COL32(70, 70, 74, 255);
               dl->AddCircleFilled(ImVec2(40.0f * k, yc2), 4.5f * k, sw, 12); if (!L.on) dl->AddCircle(ImVec2(40.0f * k, yc2), 4.5f * k, IM_COL32(110, 110, 114, 255), 12, 1.0f);
-              char nm2[48]; if (L.name[0]) snprintf(nm2, sizeof nm2, "%.26s", L.name); else snprintf(nm2, sizeof nm2, "%s sin nombre", kKind[L.kind]);
+              char nm2[48]; if (L.name[0]) snprintf(nm2, sizeof nm2, "%.26s", L.name); else snprintf(nm2, sizeof nm2, TRS("%s sin nombre"), TRS(kKind[L.kind]));
               text(52.0f * k, yc2, L.on ? ink : dim, nm2, fsS + 1.0f * k);
               const ImVec2 e0(leftW - 34.0f * k, y + 2.0f * k), e1(leftW - 8.0f * k, y + rowL - 2.0f * k); const bool he = hit(400 + i, e0, e1);
               if (he) dl->AddRectFilled(e0, e1, IM_COL32(255, 255, 255, 30), 3.0f * k);
               const ImVec2 o((e0.x + e1.x) * 0.5f, yc2); const ImU32 c = L.on ? ink : IM_COL32(100, 100, 104, 255);
               dl->AddCircle(o, 5.0f * k, c, 14, 1.4f * k); if (L.on) dl->AddCircleFilled(o, 2.2f * k, c, 10); else dl->AddLine(ImVec2(o.x - 6.0f * k, o.y + 5.0f * k), ImVec2(o.x + 6.0f * k, o.y - 5.0f * k), c, 1.4f * k); }
-          if (s_nLights > shownL) { char mm[64]; snprintf(mm, sizeof mm, "%d a %d de %d  \xC2\xB7  rueda del mouse: ver m\xC3\xA1s", sc + 1, std::min(s_nLights, sc + shownL), s_nLights); text(34.0f * k, yL0 + (float)shownL * rowL + 11.0f * k, dim, mm, fsS);
+          if (s_nLights > shownL) { char mm[64]; snprintf(mm, sizeof mm, TRS("%d a %d de %d  \xC2\xB7  rueda del mouse: ver m\xC3\xA1s"), sc + 1, std::min(s_nLights, sc + shownL), s_nLights); text(34.0f * k, yL0 + (float)shownL * rowL + 11.0f * k, dim, mm, fsS);
               const float tr0 = yL0, tr1 = yL0 + (float)shownL * rowL, th = (tr1 - tr0) * (float)shownL / (float)s_nLights, ty0 = tr0 + (tr1 - tr0 - th) * (float)sc / (float)std::max(1, s_nLights - shownL);
               dl->AddRectFilled(ImVec2(leftW - 5.0f * k, ty0), ImVec2(leftW - 2.0f * k, ty0 + th), IM_COL32(110, 110, 114, 255), 1.5f * k); }
           if (s_info.lights == 0) text(34.0f * k, yL0 + 11.0f * k, dim, "La escena no tiene luces cargadas.", fsS);
@@ -366,7 +376,7 @@ static void ToolbarDraw() {
       dl->AddRectFilled(a, ImVec2(ds.x, y0 + rowH), cHead); text(x0 + 12.0f * k, y0 + rowH * 0.5f, dim, "INSPECTOR", fsS);
       const char* const title[4] = { "Estudio  \xC2\xB7  Render", "C\xC3\xA1mara", "Grilla de piso", "Jugador" };
       float y = y0 + rowH; dl->AddRectFilled(ImVec2(x0 + 1.0f, y), ImVec2(ds.x, y + rowH + 4.0f * k), IM_COL32(45, 45, 48, 255)); { char tl[64]; const MotorLight* SL = s_sel >= 4 && s_sel - 4 < s_nLights ? &s_lights[s_sel - 4] : nullptr;
-        if (SL) snprintf(tl, sizeof tl, "%s  \xC2\xB7  %.30s", kKind[SL->kind], SL->name[0] ? SL->name : "sin nombre"); else snprintf(tl, sizeof tl, "%s", title[std::min(s_sel, 3)]);
+        if (SL) snprintf(tl, sizeof tl, "%s  \xC2\xB7  %.30s", TRS(kKind[SL->kind]), SL->name[0] ? SL->name : TRS("sin nombre")); else snprintf(tl, sizeof tl, "%s", title[std::min(s_sel, 3)]);
         text(x0 + 12.0f * k, y + (rowH + 4.0f * k) * 0.5f, ink, tl, fs + 1.0f * k); } y += rowH + 4.0f * k + 8.0f * k;
       const float lx = x0 + 12.0f * k, fx0 = x0 + 12.0f * k, fx1 = ds.x - 12.0f * k;
       v1 = dl->VtxBuffer.Size;          // desde aca: contenido de lo marcado (fundido al cambiar)
@@ -380,9 +390,9 @@ static void ToolbarDraw() {
           for (int i = 0; i < n; i++) { const ImVec2 p0(fx0, y + (float)i * rh), p1(fx1, y + (float)(i + 1) * rh); const bool hv = hit(100 + i, p0, p1);
               if (i == cur) dl->AddRectFilled(p0, p1, IM_COL32(240, 138, 36, 60)); else if (hv) dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 18));
               const ImVec2 o(p0.x + 14.0f * k, (p0.y + p1.y) * 0.5f); dl->AddCircle(o, 5.0f * k, i == cur ? acc : IM_COL32(110, 110, 114, 255), 14, 1.4f * k); if (i == cur) dl->AddCircleFilled(o, 2.6f * k, acc, 10);
-              text(p0.x + 28.0f * k, o.y, i == cur ? IM_COL32(255, 214, 170, 255) : ink, MotorViewName(0, i), fsS + 1.5f * k); }
+              text(p0.x + 28.0f * k, o.y, i == cur ? IM_COL32(255, 214, 170, 255) : ink, ViewTr(0, i), fsS + 1.5f * k); }
           dl->AddRect(ImVec2(fx0, y), ImVec2(fx1, y + (float)n * rh), cLine, 3.0f * k); y += (float)n * rh + 12.0f * k;
-          for (int r = 1; r <= 2; r++) { label(r == 1 ? "ALAMBRE" : "PANTALLA PARTIDA"); const int m = std::min(4, MotorViewCount(r)); const char* nms[4] = { "", "", "", "" }; for (int i = 0; i < m; i++) nms[i] = MotorViewName(r, i);
+          for (int r = 1; r <= 2; r++) { label(r == 1 ? "ALAMBRE" : "PANTALLA PARTIDA"); const int m = std::min(4, MotorViewCount(r)); const char* nms[4] = { "", "", "", "" }; for (int i = 0; i < m; i++) nms[i] = ViewTr(r, i);
               if (r == 1 && m == 3) nms[2] = "Con teselaci\xC3\xB3n";
               seg(100 + r * 16, ImVec2(fx0, y), ImVec2(fx1, y + rowH), m, MotorViewGet(r), nms); y += rowH + 12.0f * k; }
           {   label("ESCENA GR\xC3\x81" "FICA DEL MOTOR"); char b1[32];      // lo que el motor tiene cargado ahora (leido de sus listas)
@@ -432,9 +442,9 @@ static void ToolbarDraw() {
     }
     // ---------------- barra de estado ----------------
     { const int v0 = dl->VtxBuffer.Size; const ImVec2 a(0, y1), b(ds.x, ds.y); zone(a, b); dl->AddRectFilled(a, b, IM_COL32(30, 30, 31, 250)); dl->AddLine(a, ImVec2(ds.x, y1), cLine, 1.0f);
-      char st[200]; snprintf(st, sizeof st, "Vista: %s    Alambre: %s    C\xC3\xA1mara: %s    Objetos: %d    Luces: %d", MotorViewName(0, MotorViewGet(0)), MotorViewName(1, MotorViewGet(1)), camFree ? "libre" : "del juego", s_info.objects, s_info.lights);
+      char st[200]; snprintf(st, sizeof st, TRS("Vista: %s    Alambre: %s    C\xC3\xA1mara: %s    Objetos: %d    Luces: %d"), ViewTr(0, MotorViewGet(0)), ViewTr(1, MotorViewGet(1)), TRS(camFree ? "libre" : "del juego"), s_info.objects, s_info.lights);
       text(12.0f * k, y1 + statH * 0.5f, dim, st, fsS);
-      char fp[32]; snprintf(fp, sizeof fp, "%.0f fps", ImGui::GetIO().Framerate); const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, fp); text(ds.x - ts.x - 12.0f * k, y1 + statH * 0.5f, dim, fp, fsS);
+      char fp[32]; snprintf(fp, sizeof fp, TRS("%.0f fps"), ImGui::GetIO().Framerate); const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, fp); text(ds.x - ts.x - 12.0f * k, y1 + statH * 0.5f, dim, fp, fsS);
       anim(v0, 0.0f, (1.0f - eo) * statH, eo); }
     {   // ---------------- errores: recuadros rojos apilados abajo a la izquierda de la vista 3D ----------------
         MErr e[8]; int total = 0; { std::lock_guard<std::mutex> lk(s_errMx); memcpy(e, s_err, sizeof e); total = s_errTotal; }
@@ -445,11 +455,11 @@ static void ToolbarDraw() {
             const ImVec2 p0(leftW + 16.0f * k + (1.0f - a) * -18.0f * k, yb - bh), p1(p0.x + bw, yb);
             dl->AddRectFilled(p0, p1, IM_COL32(128, 22, 22, (int)(238 * a)), 4.0f * k); dl->AddRect(p0, p1, IM_COL32(255, 96, 96, (int)(255 * a)), 4.0f * k, 0, 1.5f * k);
             dl->AddRectFilled(p0, ImVec2(p0.x + 5.0f * k, p1.y), IM_COL32(255, 96, 96, (int)(255 * a)), 4.0f * k);
-            dl->AddText(font, fsS + 1.0f * k, ImVec2(p0.x + pad + 4.0f * k, p0.y + pad - 2.0f * k), IM_COL32(255, 170, 170, (int)(255 * a)), "ERROR DEL MOTOR");
+            dl->AddText(font, fsS + 1.0f * k, ImVec2(p0.x + pad + 4.0f * k, p0.y + pad - 2.0f * k), IM_COL32(255, 170, 170, (int)(255 * a)), TRS("ERROR DEL MOTOR"));
             dl->AddText(font, fs, ImVec2(p0.x + pad + 4.0f * k, p0.y + pad + 18.0f * k), IM_COL32(255, 240, 240, (int)(255 * a)), m.msg, nullptr, wrap);
             yb -= bh + 8.0f * k; }
         if (total > 0) {      // cuenta en la barra de estado: clic = volver a mostrarlos
-            char eb[40]; snprintf(eb, sizeof eb, total == 1 ? "1 error" : "%d errores", total); const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, eb);
+            char eb[40]; snprintf(eb, sizeof eb, TRS(total == 1 ? "1 error" : "%d errores"), total); const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, eb);
             const ImVec2 p0(ds.x - ts.x - 110.0f * k, y1 + 3.0f * k), p1(p0.x + ts.x + 16.0f * k, ds.y - 3.0f * k); const bool hv = hit(500, p0, p1);
             dl->AddRectFilled(p0, p1, IM_COL32(150, 28, 28, hv ? 255 : 220), 3.0f * k); textC(p0, p1, IM_COL32(255, 230, 230, 255), eb, fsS); }
     }
@@ -476,21 +486,21 @@ static void ToolbarDraw() {
             for (int i = 0; i < s_scListN; i++) { const ImVec2 r0(p0.x + 8.0f * k, y + (float)i * lh), r1(p1.x - 8.0f * k, y + (float)(i + 1) * lh); const bool hv = hit(800 + i, r0, r1), cur = strcmp(s_scList[i], s_scName) == 0;
                 if (hv) dl->AddRectFilled(r0, r1, IM_COL32(240, 138, 36, 96), 3.0f * k); else if (cur) dl->AddRectFilled(r0, r1, cRow, 3.0f * k);
                 char lb[96]; SceneLabel(s_scList[i], lb, sizeof lb); text(r0.x + 10.0f * k, (r0.y + r1.y) * 0.5f, ink, lb, fs);
-                if (cur) { const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, "abierta"); text(r1.x - ts.x - 10.0f * k, (r0.y + r1.y) * 0.5f, dim, "abierta", fsS); } }
+                if (cur) { const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, TRS("abierta")); text(r1.x - ts.x - 10.0f * k, (r0.y + r1.y) * 0.5f, dim, "abierta", fsS); } }
         } else {
             const float kx = p0.x + 16.0f * k, dx = p0.x + pw * 0.33f;
             for (int i = 0; i < kHelpN; i++) { const float yc = y + (float)i * lh + lh * 0.5f; if (i == 5) dl->AddLine(ImVec2(p0.x + 10.0f * k, yc - lh * 0.5f), ImVec2(p1.x - 10.0f * k, yc - lh * 0.5f), IM_COL32(70, 70, 74, 255), 1.0f);
-                const ImVec2 ts = font->CalcTextSizeA(fsS + 1.0f * k, FLT_MAX, 0.0f, kHelp[i][0]);
+                const ImVec2 ts = font->CalcTextSizeA(fsS + 1.0f * k, FLT_MAX, 0.0f, TRS(kHelp[i][0]));
                 dl->AddRectFilled(ImVec2(kx - 6.0f * k, yc - 10.0f * k), ImVec2(kx + ts.x + 6.0f * k, yc + 10.0f * k), cField, 3.0f * k); dl->AddRect(ImVec2(kx - 6.0f * k, yc - 10.0f * k), ImVec2(kx + ts.x + 6.0f * k, yc + 10.0f * k), IM_COL32(80, 80, 84, 255), 3.0f * k);
                 text(kx, yc, IM_COL32(255, 214, 170, 255), kHelp[i][0], fsS + 1.0f * k); text(dx, yc, ink, kHelp[i][1], fsS + 1.5f * k); }
         }
-        { const char* ct = "Cerrar  (Esc)"; const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, ct); const ImVec2 c0(p1.x - ts.x - 44.0f * k, p1.y - 42.0f * k), c1(p1.x - 12.0f * k, p1.y - 12.0f * k); const bool hv = hit(899, c0, c1);
+        { const char* ct = TRS("Cerrar  (Esc)"); const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, ct); const ImVec2 c0(p1.x - ts.x - 44.0f * k, p1.y - 42.0f * k), c1(p1.x - 12.0f * k, p1.y - 12.0f * k); const bool hv = hit(899, c0, c1);
           dl->AddRectFilled(c0, c1, hv ? IM_COL32(86, 86, 92, 255) : IM_COL32(66, 66, 70, 255), 3.0f * k); dl->AddRect(c0, c1, cLine, 3.0f * k); textC(c0, c1, ink, ct, fs); }
     }
     // ---------------- menu desplegable abierto (lo ultimo: queda encima y gana el clic) ----------------
     struct MI { const char* t; const char* sc; int id; int chk; int kind; };      // kind 0 accion, 1 separador, 2 titulo de grupo, 3 en preparacion (gris); chk 1 = tilde, 3 = opcion elegida
     auto menuItems = [&](int m, MI* it) { int n = 0;
-        auto add = [&](const char* t, const char* sc, int id, int chk = -1, int kind = 0) { if (n < 28) it[n++] = MI{ t, sc, id, chk, kind }; };
+        auto add = [&](const char* t, const char* sc, int id, int chk = -1, int kind = 0) { if (n < 28) it[n++] = MI{ TRS(t), TRS(sc), id, chk, kind }; };
         if (m == 0) { add("Nueva escena", "Ctrl + N", 710); add("Abrir escena...", "Ctrl + O", 711); add("Guardar escena", "Ctrl + S", 712); add("Guardar como escena nueva", "Ctrl + Shift + S", 713); add(nullptr, "", -1, -1, 1); add("Cerrar el Motor", "Esc", 0); }
         else if (m == 1) { add(player ? "Quitar el jugador" : "Cargar el jugador", "J", 2); add("Grilla de piso", "G", 1, grid ? 1 : 0); add(nullptr, "", -1, -1, 1);
             add("Cargar animaci\xC3\xB3n (.gani)...", "en preparaci\xC3\xB3n", -1, -1, 3); add("Cargar estadio...", "en preparaci\xC3\xB3n", -1, -1, 3); add("Cinem\xC3\xA1ticas del juego...", "en preparaci\xC3\xB3n", -1, -1, 3); }
@@ -498,10 +508,13 @@ static void ToolbarDraw() {
             add("Frente", "Num 1", 232); add("Atr\xC3\xA1s", "Ctrl + Num 1", 235); add("Derecha", "Num 3", 230); add("Izquierda", "Ctrl + Num 3", 233); add("Arriba", "Num 7", 231); add("Abajo", "Ctrl + Num 7", 234);
             add(nullptr, "", -1, -1, 1); add("Volver a la pose inicial", "Num 0", 202);
             add(nullptr, "", -1, -1, 1); add("TAMA\xC3\x91O DE LA INTERFAZ", "Ctrl +  /  Ctrl -", -1, -1, 2);
-            { static const char* const sn[4] = { "Chico", "Mediano", "Grande", "Muy grande" }; const int c = ScaleIdx(); for (int i = 0; i < 4; i++) add(sn[i], "", 750 + i, c == i ? 3 : 2); } }
-        else if (m == 3) { add("VISTA", "V  /  Shift + V", -1, -1, 2); { const int c = MotorViewGet(0); for (int i = 0; i < MotorViewCount(0) && i < 16; i++) add(MotorViewName(0, i), "", 100 + i, c == i ? 3 : 2); }
-            add(nullptr, "", -1, -1, 1); add("ALAMBRE", "Z", -1, -1, 2); { const int c = MotorViewGet(1); for (int i = 0; i < MotorViewCount(1) && i < 4; i++) add(i == 2 ? "S\xC3\xAD, con teselaci\xC3\xB3n" : i == 1 ? "S\xC3\xAD" : MotorViewName(1, i), "", 116 + i, c == i ? 3 : 2); }
-            add(nullptr, "", -1, -1, 1); add("PANTALLA PARTIDA", "", -1, -1, 2); { const int c = MotorViewGet(2); for (int i = 0; i < MotorViewCount(2) && i < 4; i++) add(MotorViewName(2, i), "", 132 + i, c == i ? 3 : 2); } }
+            { static const char* const sn[4] = { "Chico", "Mediano", "Grande", "Muy grande" }; const int c = ScaleIdx(); for (int i = 0; i < 4; i++) add(sn[i], "", 750 + i, c == i ? 3 : 2); }
+            // (15/11 i, Agustin 03:22: "puedes agregar un selector de idiomas?") el mismo idioma del menu del mod ([PES21FX] language)
+            add(nullptr, "", -1, -1, 1); add("IDIOMA", "", -1, -1, 2);
+            { static const char* const ln[3] = { "Espa\xC3\xB1ol", "English", "Portugu\xC3\xAAs" }; const int c = std::clamp(g_cfg.lang, 0, 2); for (int i = 0; i < 3; i++) add(ln[i], "", 770 + i, c == i ? 3 : 2); } }
+        else if (m == 3) { add("VISTA", "V  /  Shift + V", -1, -1, 2); { const int c = MotorViewGet(0); for (int i = 0; i < MotorViewCount(0) && i < 16; i++) add(ViewTr(0, i), "", 100 + i, c == i ? 3 : 2); }
+            add(nullptr, "", -1, -1, 1); add("ALAMBRE", "Z", -1, -1, 2); { const int c = MotorViewGet(1); for (int i = 0; i < MotorViewCount(1) && i < 4; i++) add(i == 2 ? "S\xC3\xAD, con teselaci\xC3\xB3n" : i == 1 ? "S\xC3\xAD" : ViewTr(1, i), "", 116 + i, c == i ? 3 : 2); }
+            add(nullptr, "", -1, -1, 1); add("PANTALLA PARTIDA", "", -1, -1, 2); { const int c = MotorViewGet(2); for (int i = 0; i < MotorViewCount(2) && i < 4; i++) add(ViewTr(2, i), "", 132 + i, c == i ? 3 : 2); } }
         else if (m == 4) { add("Prender todas", "L", 700); add("Apagar todas", "L", 701); add("Volver a como estaban", "Shift + L", 702); }
         else { add("Controles y atajos", "F1", 730); add("Volver a mostrar los errores", "", 500); }
         return n; };
@@ -557,10 +570,10 @@ static void ToolbarDraw() {
         else if (id >= 300 && id < 364 && id - 300 < s_nLights) { s_sel = 4 + (id - 300); s_selObj = s_lights[id - 300].obj; }
         else if (id >= 400 && id < 464 && id - 400 < s_nLights) { MotorLight& L = s_lights[id - 400];
             if (!L.writable) MotorErr("La luz \"%s\" es de una clase que el Motor no conoce todav\xC3\xAD" "a: se puede ver pero no cambiar.", L.name);
-            else if (MotorLightSetOn(L, !L.on)) L.on = !L.on; else MotorErr("No se pudo %s la luz \"%s\": el juego la sac\xC3\xB3 de la escena mientras tanto.", L.on ? "apagar" : "prender", L.name); }
+            else if (MotorLightSetOn(L, !L.on)) L.on = !L.on; else MotorErr("No se pudo %s la luz \"%s\": el juego la sac\xC3\xB3 de la escena mientras tanto.", TRS(L.on ? "apagar" : "prender"), L.name); }
         else if ((id == 250 || id == 251) && s_sel >= 4 && s_sel - 4 < s_nLights) { MotorLight& L = s_lights[s_sel - 4];
             if (!L.writable) MotorErr("La luz \"%s\" es de una clase que el Motor no conoce todav\xC3\xAD" "a: se puede ver pero no cambiar.", L.name);
-            else if (MotorLightSetOn(L, id == 250)) L.on = id == 250; else MotorErr("No se pudo %s la luz \"%s\": el juego la sac\xC3\xB3 de la escena mientras tanto.", id == 250 ? "prender" : "apagar", L.name); }
+            else if (MotorLightSetOn(L, id == 250)) L.on = id == 250; else MotorErr("No se pudo %s la luz \"%s\": el juego la sac\xC3\xB3 de la escena mientras tanto.", TRS(id == 250 ? "prender" : "apagar"), L.name); }
         else if (id == 500) { int tot = 0; { std::lock_guard<std::mutex> lk(s_errMx); tot = s_errTotal; for (MErr& m : s_err) if (m.msg[0]) m.t = Now(); } if (tot == 0) Note("No hubo errores del Motor"); }
         else if (id >= 100 && id < 148) MotorViewSet((id - 100) / 16, (id - 100) % 16);
         else if (id == 200 || id == 201) SetCam(id == 200);
@@ -578,8 +591,9 @@ static void ToolbarDraw() {
         else if (id == 712 || id == 713) SceneSave(id == 713);
         else if (id == 730) s_modal = 2;
         else if (id >= 750 && id < 754) ScaleSet(id - 750);
+        else if (id >= 770 && id < 773) LangSet(id - 770);
         else if (id == 760 || id == 761) ScaleSet(ScaleIdx() + (id == 760 ? 1 : -1));
-        else if (id == 740 || id == 741) { const int n = std::max(1, MotorViewCount(0)); MotorViewSet(0, (MotorViewGet(0) + (id == 740 ? 1 : n - 1)) % n); Note("Vista: %s", MotorViewName(0, MotorViewGet(0))); }
+        else if (id == 740 || id == 741) { const int n = std::max(1, MotorViewCount(0)); MotorViewSet(0, (MotorViewGet(0) + (id == 740 ? 1 : n - 1)) % n); Note("Vista: %s", ViewTr(0, MotorViewGet(0))); }
         else if (id == 742) { const int n = std::max(1, std::min(3, MotorViewCount(1))); MotorViewSet(1, (MotorViewGet(1) + 1) % n); }
         else if (id >= 800 && id < 814) { if (id - 800 < s_scListN) SceneLoad(s_scList[id - 800]); s_modal = 0; }
         else if (id == 898 || id == 899) s_modal = 0;

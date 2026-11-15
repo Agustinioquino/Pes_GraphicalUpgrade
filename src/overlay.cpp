@@ -32,6 +32,7 @@ static std::string s_status;
 static std::string s_btnPending;   // accion de un "button =" del ini (se ejecuta fuera de g_cfgMutex)
 static ImFont* s_fontBig = nullptr; static ImFont* s_fontBold = nullptr; static ImFont* s_fontPad = nullptr;   // (14/11 n) s_fontPad: letras de los simbolos del mando
 static ID3D11ShaderResourceView* s_logo = nullptr; static float s_logoAspect = 1.0f;
+void* MenuLogoTex(float* aspect) { if (aspect) *aspect = s_logoAspect; return s_logo; }   // (15/11) el editor del Motor lo dibuja en su barra
 // (04/11) el menu se adapta a la resolucion (pedido de Agustin): letras, espacios y anchos crecen con el alto de la pantalla (1080 = 1)
 // y las letras base son mas grandes (19 -> 22 px a 1080). ui_scale queda como ajuste fino encima. Las fuentes se rasterizan al tamano
 // final (nitidas) y se rehacen si cambia la resolucion
