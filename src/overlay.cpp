@@ -3103,7 +3103,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     }
     else if (mmCur && g_cfg.menuCursor == 1) {   // (14/11 c / d, Agustin: "que se mantenga igual con el menu abierto o cerrado", "que muestre donde puede clickear")
         const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);   // el mismo dardo del menu; mano justo sobre una fila del juego
-        MvCursorDraw(ImGui::GetForegroundDrawList(), ImVec2(mmx, mmy), MenuMouseOverRow() ? 1 : 0, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, k, 1.0f, g_cfg.menuVisual);
+        MvCursorDraw(ImGui::GetForegroundDrawList(), ImVec2(mmx, mmy), MenuMouseOverRow() ? 1 : MenuViewCamHint() ? 5 : 0, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0 || (MenuViewCamHint() && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0), k, 1.0f, g_cfg.menuVisual);
     }
     else if (mmCur && g_cfg.menuCursor != 0) {   // (11/11) el juego esconde el cursor de Windows: una flecha chica donde esta el mouse (los menus son los del juego)
         ImDrawList* dl = ImGui::GetForegroundDrawList(); const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f) * MvCursorScale();
@@ -3115,7 +3115,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (mouseHintA > 0.0f && !MotorUiOn()) {   // (15/11 b: en el Motor no va, tiene su menu)   // (14/11 d) "clic izquierdo seleccionar / avanzar, clic derecho volver" en el idioma del menu
         const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
         char kb[16]; const char* kn = g_cfg.cursorKey ? KeyHudName(g_cfg.cursorKey, kb, sizeof(kb)) : nullptr;   // (15/11) + la tecla del cursor (F1)
-        hintH = MvMouseHint(ImGui::GetForegroundDrawList(), ImVec2(ds.x - 18.0f * k, ds.y - 18.0f * k), k, mouseHintA, MenuViewCamHint() ? TRS("Girar camara (rueda: zoom)") : TRS("Seleccionar / avanzar"), MenuViewCamHint() ? TRS("Mover camara / Volver") : TRS("Volver"), kn, TRS("Cursor")) + 6.0f * k;
+        const bool vc = MenuViewCamHint();   // (15/11 ythnmm) sobre el visor del Editar: girar / mover / zoom
+        hintH = MvMouseHint(ImGui::GetForegroundDrawList(), ImVec2(ds.x - 18.0f * k, ds.y - 18.0f * k), k, mouseHintA, vc ? TRS("Girar camara") : TRS("Seleccionar / avanzar"), vc ? TRS("Mover camara / Volver") : TRS("Volver"), kn, TRS("Cursor"), vc ? TRS("Zoom") : nullptr, vc) + 6.0f * k;
     }
     if (curToast) {   // (14/11 c) "Cursor apagado / prendido (F1)" chico, abajo a la derecha, en el idioma del menu; se va solo en 1.8 s
         const float t = (float)(Now() - s_curToastT), a = std::min(1.0f, std::min(t / 0.12f, (1.8f - t) / 0.35f));
