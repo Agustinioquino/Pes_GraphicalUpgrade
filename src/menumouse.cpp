@@ -582,12 +582,21 @@ static std::atomic<int> s_vcWheel{0};
 static std::atomic<bool> s_vcBackReq{false};          // clic derecho sin arrastrar fuera de las filas: "volver" al soltar
 static void* s_vcBackWin = nullptr; static double s_vcBackT = 0;
 static std::atomic<float> s_vcDYaw{0}, s_vcDPitch{0}, s_vcDPanX{0}, s_vcDPanY{0};   // pedido del mouse (lo consume MenuViewCamAdjust)
-static float s_vcYaw = 0, s_vcPitch = 0, s_vcZoom = 1.0f, s_vcZoomCur = 1.0f, s_vcPan[3] = {};
+static float s_vcYaw = 0, s_vcPitch = 0, s_vcZoom = 1.0f, s_vcZoomCur = 1.0f, s_vcPan[3] = {};   // objetivo (lo que pidio el mouse)
+static float s_vcYawCur = 0, s_vcPitchCur = 0, s_vcPanCur[3] = {};                                // lo que se ve: sigue al objetivo con un retardo corto
+// (15/11 c, Agustin 17:35: "al hacer click en una zona del cuerpo se haga un zoom ahi, al hacer doble click rapido, con un pequeno zoom
+// con animacion suave, y un brillo en la zona") DOBLE CLIC sobre el visor: la camara se corre hasta dejar ese punto en el centro y se
+// acerca (x 0.5), todo con el retardo suave; otro doble clic con el zoom puesto vuelve a la camara del juego. El brillo es un destello
+// en la pantalla (overlay.cpp, MenuViewCamPulse) que viaja con el punto hasta el centro.
+static std::atomic<int> s_vcFocusReq{0}; static std::atomic<float> s_vcFocusX{0}, s_vcFocusY{0};   // fraccion del alto de la pantalla desde el centro
+static bool s_vcFocused = false;
+static std::atomic<double> s_vcPulseT{-1.0e9}; static std::atomic<float> s_vcPulseX{0}, s_vcPulseY{0}; static std::atomic<int> s_vcPulseKind{0};
 static uintptr_t s_vcMv = 0; static double s_vcT = 0; static int s_vcLog = 0;
 static bool VcLive() { return s_ok && g_cfg.menuMouse != 0 && g_cfg.menuViewCam != 0 && Now() - s_vcLiveT.load() < 0.3; }
 static void VcReset(const char* why) {
     if (s_vcYaw != 0 || s_vcPitch != 0 || s_vcZoom != 1.0f || s_vcPan[0] != 0 || s_vcPan[1] != 0 || s_vcPan[2] != 0) Log("mouse en menus: camara del visor del Editar vuelve a la del juego (%s)", why);
     s_vcYaw = s_vcPitch = 0; s_vcZoom = s_vcZoomCur = 1.0f; s_vcPan[0] = s_vcPan[1] = s_vcPan[2] = 0;
+    s_vcYawCur = s_vcPitchCur = 0; s_vcPanCur[0] = s_vcPanCur[1] = s_vcPanCur[2] = 0; s_vcFocused = false; s_vcFocusReq = 0;
     s_vcDYaw = 0; s_vcDPitch = 0; s_vcDPanX = 0; s_vcDPanY = 0; s_vcWheel = 0;
 }
 // (15/11 b, Agustin 17:31: "lo de arrastrar que detecte el menu a la izquierda para poder seguir haciendo click en las partes del menu o
@@ -636,26 +645,46 @@ bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
     const double now = Now(); const float dt = (float)std::clamp(now - s_vcT, 0.0, 0.1); s_vcT = now;
     s_vcYaw += s_vcDYaw.exchange(0); s_vcPitch += s_vcDPitch.exchange(0);
     { const int w = s_vcWheel.exchange(0); if (w) s_vcZoom = std::clamp(s_vcZoom * powf(0.88f, (float)w / 120.0f), 0.12f, 3.0f); }
-    if (fabsf(s_vcZoomCur - s_vcZoom) > 1e-4f) s_vcZoomCur += (s_vcZoom - s_vcZoomCur) * std::clamp(12.0f * dt, 0.0f, 1.0f); else s_vcZoomCur = s_vcZoom;
     const float pitch0 = asinf(std::clamp(v[1] / d, -1.0f, 1.0f)), yaw0 = atan2f(v[0], v[2]);
     s_vcPitch = std::clamp(s_vcPitch, -1.35f - pitch0, 1.35f - pitch0);   // nunca justo arriba / abajo del jugador
-    if (s_vcYaw > 6.2831853f || s_vcYaw < -6.2831853f) s_vcYaw = fmodf(s_vcYaw, 6.2831853f);
-    const float pt = pitch0 + s_vcPitch, yw = yaw0 + s_vcYaw, dn = d * s_vcZoomCur;
+    // lo que se ve sigue al objetivo (arrastrar se siente directo; el doble clic y la vuelta se ven como un movimiento suave)
+    const bool busy = s_vcDrag.load() != 0; const float ks = std::clamp((busy ? 30.0f : 9.0f) * dt, 0.0f, 1.0f);
+    auto Go = [&](float& cur, float tgtv, float eps) { if (fabsf(cur - tgtv) > eps) cur += (tgtv - cur) * ks; else cur = tgtv; };
+    Go(s_vcYawCur, s_vcYaw, 1e-4f); Go(s_vcPitchCur, s_vcPitch, 1e-4f); Go(s_vcZoomCur, s_vcZoom, 1e-4f);
+    for (int i = 0; i < 3; i++) Go(s_vcPanCur[i], s_vcPan[i], 1e-4f);
+    while (s_vcYaw > 3.1415927f) { s_vcYaw -= 6.2831853f; s_vcYawCur -= 6.2831853f; }   // la vuelta a cero nunca da mas de media vuelta
+    while (s_vcYaw < -3.1415927f) { s_vcYaw += 6.2831853f; s_vcYawCur += 6.2831853f; }
+    const float pt = pitch0 + s_vcPitchCur, yw = yaw0 + s_vcYawCur, dn = d * s_vcZoomCur;
     const float nv[3] = { dn * cosf(pt) * sinf(yw), dn * sinf(pt), dn * cosf(pt) * cosf(yw) };
     // ejes de la camara nueva (derecha / arriba de la pantalla) para correrla en el plano de la pantalla
     const float f[3] = { -nv[0] / dn, -nv[1] / dn, -nv[2] / dn };
     float r[3] = { -f[2], 0.0f, f[0] }; { const float l = sqrtf(r[0] * r[0] + r[2] * r[2]); if (l < 1e-4f) return false; r[0] /= l; r[2] /= l; }   // f x (0,1,0)
     const float u[3] = { r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0] };
+    const float h = 2.0f * dn * tanf(fov * 0.5f), panMax = std::max(1.5f, 1.5f * d);
+    auto PanClamp = [&]() { const float pl = sqrtf(s_vcPan[0] * s_vcPan[0] + s_vcPan[1] * s_vcPan[1] + s_vcPan[2] * s_vcPan[2]); if (pl > panMax) for (float& c : s_vcPan) c *= panMax / pl; };
     { const float px = s_vcDPanX.exchange(0), py = s_vcDPanY.exchange(0);   // fraccion del alto de la pantalla
-      if (px != 0 || py != 0) { const float h = 2.0f * dn * tanf(fov * 0.5f);
-          for (int i = 0; i < 3; i++) s_vcPan[i] += (-r[i] * px + u[i] * py) * h;
-          const float pl = sqrtf(s_vcPan[0] * s_vcPan[0] + s_vcPan[1] * s_vcPan[1] + s_vcPan[2] * s_vcPan[2]), mx = std::max(1.5f, 1.5f * d);
-          if (pl > mx) for (float& c : s_vcPan) c *= mx / pl; } }
-    if (s_vcYaw == 0 && s_vcPitch == 0 && s_vcZoomCur == 1.0f && s_vcPan[0] == 0 && s_vcPan[1] == 0 && s_vcPan[2] == 0) return false;
+      if (px != 0 || py != 0) { for (int i = 0; i < 3; i++) s_vcPan[i] += (-r[i] * px + u[i] * py) * h; PanClamp(); } }
+    if (s_vcFocusReq.exchange(0)) {   // doble clic
+        if (s_vcFocused) {            // ya habia zoom a una zona: volver a la camara del juego (suave)
+            s_vcYaw = s_vcPitch = 0; s_vcZoom = 1.0f; s_vcPan[0] = s_vcPan[1] = s_vcPan[2] = 0; s_vcFocused = false; s_vcPulseKind = 0;
+            Log("mouse en menus: camara del visor: doble clic -> vuelve a la camara del juego");
+        } else {
+            const float fx = s_vcFocusX.load(), fy = s_vcFocusY.load();
+            for (int i = 0; i < 3; i++) s_vcPan[i] = s_vcPanCur[i] + (r[i] * fx - u[i] * fy) * h;   // ese punto al centro (en el plano del objetivo)
+            PanClamp(); s_vcZoom = std::clamp(s_vcZoomCur * 0.5f, 0.12f, 3.0f); s_vcFocused = true; s_vcPulseKind = 1;
+            Log("mouse en menus: camara del visor: doble clic -> zoom a la zona (%.2f, %.2f del alto desde el centro), distancia x%.2f", fx, fy, s_vcZoom);
+        }
+    }
+    if (s_vcYawCur == 0 && s_vcPitchCur == 0 && s_vcZoomCur == 1.0f && s_vcPanCur[0] == 0 && s_vcPanCur[1] == 0 && s_vcPanCur[2] == 0) return false;
     memcpy(save, cam + 0x10, 0x34);
-    float nt[3], np[3]; for (int i = 0; i < 3; i++) { nt[i] = tgt[i] + s_vcPan[i]; np[i] = nt[i] + nv[i]; }
+    float nt[3], np[3]; for (int i = 0; i < 3; i++) { nt[i] = tgt[i] + s_vcPanCur[i]; np[i] = nt[i] + nv[i]; }
     memcpy(cam + 0x10, np, 12); memcpy(cam + 0x1c, nt, 12);
     return true;
+}
+// overlay.cpp: destello del doble clic (pixeles de la ventana); kind 1 = zoom a la zona, 0 = vuelta
+bool MenuViewCamPulse(float* x, float* y, float* age, int* kind) {
+    const float a = (float)(Now() - s_vcPulseT.load()); if (a < 0.0f || a > 0.9f) return false;
+    *x = s_vcPulseX.load(); *y = s_vcPulseY.load(); *age = a; *kind = s_vcPulseKind.load(); return true;
 }
 // cada cuadro (MenuMousePresent): botones y movimiento del mouse para la camara del visor
 static void VcInput() {
@@ -668,6 +697,13 @@ static void VcInput() {
     if (!ok) { s_vcDrag = 0; return; }
     const float ch = (float)rc.bottom;
     int drag = s_vcDrag.load();
+    if (drag == 0 && lEdge && !s_over.load() && !VcInMenu(p.x)) {   // doble clic rapido (menos de 0.35 s y casi en el mismo lugar)
+        static double s_lt = -1.0e9; static POINT s_lp{}; const double t = Now();
+        if (t - s_lt < 0.35 && abs(p.x - s_lp.x) + abs(p.y - s_lp.y) < 10) {
+            s_vcFocusX.store(((float)p.x - (float)rc.right * 0.5f) / ch); s_vcFocusY.store(((float)p.y - ch * 0.5f) / ch); s_vcFocusReq = 1;
+            s_vcPulseX.store((float)p.x); s_vcPulseY.store((float)p.y); s_vcPulseT.store(t); s_lt = -1.0e9;
+        } else { s_lt = t; s_lp = p; }
+    }
     if (drag == 0 && (lEdge || rEdge) && !s_over.load() && !VcInMenu(p.x)) {
         drag = lEdge ? 1 : 2; s_vcDrag = drag; s_p0 = s_pl = p; s_t0 = Now(); s_far = false;
         static int s_nl = 0; if (s_nl++ < 6) Log("mouse en menus: camara del visor: %s desde x %d (el menu llega hasta x %.0f de %d)", drag == 1 ? "girar" : "mover", (int)p.x, s_menuRightPx.load(), (int)rc.right);

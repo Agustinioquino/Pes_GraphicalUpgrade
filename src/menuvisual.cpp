@@ -1696,32 +1696,54 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
         return;
     }
     if (kind == 5) {
-        // (15/11 ythnmm, Agustin 17:32: "que se muestre un icono pequeno de una camara con flechas pequenas") CAMARA DEL VISOR DEL EDITAR
-        // (menumouse.cpp): camarita blanca con filo oscuro y cuatro flechitas alrededor; al arrastrar las flechas se ponen verdes. El
-        // punto del mouse es el centro de la camara.
-        const float sc = k * (1.0f - 0.06f * s_dn);
+        // (15/11 ythnmm, Agustin 17:32 / 17:34: "un icono de una camara girada en perspectiva con unas flechas con un estilo 3d en 2d,
+        // pequeno") CAMARA DEL VISOR DEL EDITAR (menumouse.cpp): cajita en perspectiva (frente, techo y costado con tres tonos), lente
+        // que sale hacia adelante y un aro de giro acostado alrededor con dos puntas de flecha; el aro pasa por detras y por delante de
+        // la camara. Al arrastrar el aro y las flechas se ponen verdes. El punto del mouse es el centro.
+        const float sc = k * 1.15f * (1.0f - 0.06f * s_dn);
         const ImVec4 grn(0.20f, 0.91f, 0.50f, 1.0f);
-        const ImU32 arrow = ColA(Lerp4(ImVec4(1, 1, 1, 1), grn, 0.15f + 0.85f * s_dn), alpha);
-        const ImVec2 b0(m.x - 7.5f * sc, m.y - 4.5f * sc), b1(m.x + 7.5f * sc, m.y + 5.5f * sc);      // cuerpo
-        const ImVec2 v0(m.x - 3.0f * sc, m.y - 7.0f * sc), v1(m.x + 3.0f * sc, m.y - 4.0f * sc);      // visor de arriba
-        const ImVec2 lc(m.x, m.y + 0.6f * sc); const float lr = 3.1f * sc;                           // lente
-        dl->AddRectFilled(ImVec2(b0.x + 1.2f * k, b0.y + 1.6f * k), ImVec2(b1.x + 1.2f * k, b1.y + 1.6f * k), Col(0, 0, 0, 0.25f * alpha), 2.2f * sc);   // sombra
-        for (int pass = 0; pass < 2; pass++) {
-            const float e = pass == 0 ? 1.3f * k : 0.0f; const ImU32 c = pass == 0 ? edge : white;
-            dl->AddRectFilled(ImVec2(b0.x - e, b0.y - e), ImVec2(b1.x + e, b1.y + e), c, 2.2f * sc + e);
-            dl->AddRectFilled(ImVec2(v0.x - e, v0.y - e), ImVec2(v1.x + e, v1.y + e), c, 1.0f * sc + e);
-        }
-        dl->AddCircleFilled(lc, lr + 0.9f * k, edge, 20); dl->AddCircleFilled(lc, lr - 0.6f * k, ColA(Lerp4(ImVec4(0.10f, 0.13f, 0.16f, 1), grn, 0.25f * s_dn), alpha), 20);
-        dl->AddCircleFilled(ImVec2(lc.x - 1.0f * sc, lc.y - 1.0f * sc), 0.8f * sc, Col(1, 1, 1, 0.7f * alpha), 8);   // brillo del lente
-        // flechitas: arriba, abajo, izquierda, derecha
-        const float D = 11.5f * sc, A = 3.0f * sc, W = 2.8f * sc;
-        const ImVec2 dirs[4] = { ImVec2(0, -1), ImVec2(0, 1), ImVec2(-1, 0), ImVec2(1, 0) };
-        for (const ImVec2& d : dirs) {
-            const ImVec2 o(lc.x + d.x * (D + 1.5f * sc), m.y + 0.5f * sc + d.y * D);
-            const ImVec2 tip(o.x + d.x * A, o.y + d.y * A), l(o.x - d.y * W, o.y + d.x * W), r(o.x + d.y * W, o.y - d.x * W);
-            dl->AddTriangleFilled(ImVec2(tip.x + d.x * 1.2f * k, tip.y + d.y * 1.2f * k), ImVec2(l.x - d.y * 1.1f * k - d.x * 0.8f * k, l.y + d.x * 1.1f * k - d.y * 0.8f * k), ImVec2(r.x + d.y * 1.1f * k - d.x * 0.8f * k, r.y - d.x * 1.1f * k - d.y * 0.8f * k), edge);
-            dl->AddTriangleFilled(tip, l, r, arrow);
-        }
+        const ImU32 arr = ColA(Lerp4(ImVec4(0.92f, 0.94f, 0.96f, 1), grn, s_dn), alpha), arrD = ColA(Lerp4(ImVec4(0.47f, 0.51f, 0.55f, 1), ImVec4(0.10f, 0.55f, 0.29f, 1), s_dn), alpha);
+        const ImU32 shadow = Col(0, 0, 0, 0.28f * alpha); const float lw = std::max(1.0f, 0.9f * k);
+        auto P = [&](float x, float y) { return ImVec2(m.x + x * sc, m.y + y * sc); };
+        auto Quad = [&](const float q[4][2], ImU32 fill, bool line) { const ImVec2 a = P(q[0][0], q[0][1]), b = P(q[1][0], q[1][1]), c = P(q[2][0], q[2][1]), d = P(q[3][0], q[3][1]);
+            dl->AddQuadFilled(a, b, c, d, fill); if (line) dl->AddQuad(a, b, c, d, edge, lw); };
+        auto Band = [&](float t0, float t1) {   // tramo del aro: elipse 13 x 4.5 con centro (0, 2.5), con canto (3D)
+            const int n = 14; ImVec2 top[n + 1];
+            for (int i = 0; i <= n; i++) { const float t = t0 + (t1 - t0) * (float)i / (float)n; top[i] = P(13.0f * cosf(t), 2.5f + 4.5f * sinf(t)); }
+            for (int i = 0; i < n; i++) {
+                const ImVec2 a = top[i], b = top[i + 1]; const float e = 0.9f * sc, th = 0.55f * sc;
+                dl->AddQuadFilled(ImVec2(a.x, a.y + e), ImVec2(b.x, b.y + e), ImVec2(b.x, b.y + e + 1.4f * sc), ImVec2(a.x, a.y + e + 1.4f * sc), shadow);
+                dl->AddQuadFilled(a, b, ImVec2(b.x, b.y + e), ImVec2(a.x, a.y + e), arrD);
+                dl->AddQuadFilled(a, b, ImVec2(b.x, b.y + th), ImVec2(a.x, a.y + th), arr);
+            }
+        };
+        auto Head = [&](float t, float dir) {   // punta de flecha en el extremo del aro
+            const float x = 13.0f * cosf(t), y = 2.5f + 4.5f * sinf(t); float tx = -13.0f * sinf(t) * dir, ty = 4.5f * cosf(t) * dir;
+            const float L = sqrtf(tx * tx + ty * ty); tx /= L; ty /= L; const float nx = -ty, ny = tx;
+            const ImVec2 tip = P(x + tx * 3.4f, y + ty * 3.4f + 0.4f), a = P(x + nx * 2.4f, y + ny * 2.4f + 0.4f), b = P(x - nx * 2.4f, y - ny * 2.4f + 0.4f);
+            dl->AddTriangleFilled(ImVec2(tip.x, tip.y + 0.9f * sc), ImVec2(a.x, a.y + 0.9f * sc), ImVec2(b.x, b.y + 0.9f * sc), shadow);
+            dl->AddTriangleFilled(tip, a, b, arrD); dl->AddTriangleFilled(tip, a, P(x, y + 0.1f), arr);
+            dl->AddTriangle(tip, a, b, edge, lw);
+        };
+        Band(3.1415927f * 1.08f, 3.1415927f * 1.92f);                    // el aro por detras
+        static const float F[4][2] = { { -6.5f, -2.5f }, { 3.5f, -2.5f }, { 3.5f, 5.5f }, { -6.5f, 5.5f } };             // frente
+        static const float T[4][2] = { { -6.5f, -2.5f }, { 3.5f, -2.5f }, { 6.7f, -5.1f }, { -3.3f, -5.1f } };           // techo
+        static const float R[4][2] = { { 3.5f, -2.5f }, { 6.7f, -5.1f }, { 6.7f, 2.9f }, { 3.5f, 5.5f } };               // costado
+        static const float S[4][2] = { { -5.9f, 6.4f }, { 4.1f, 6.4f }, { 7.3f, 3.8f }, { 7.3f, -4.2f } };               // sombra
+        dl->AddTriangleFilled(P(S[0][0], S[0][1]), P(S[1][0], S[1][1]), P(S[2][0], S[2][1]), shadow);
+        Quad(R, Col(0.66f, 0.70f, 0.75f, alpha), true); Quad(T, white, true); Quad(F, Col(0.91f, 0.93f, 0.95f, alpha), true);
+        static const float V0[4][2] = { { -3.2f, -2.5f }, { -3.2f, -3.8f }, { 0.2f, -3.8f }, { 0.2f, -2.5f } };          // visor: frente
+        static const float V1[4][2] = { { -3.2f, -3.8f }, { 0.2f, -3.8f }, { 1.6f, -5.0f }, { -1.8f, -5.0f } };          // visor: techo
+        Quad(V0, Col(0.91f, 0.93f, 0.95f, alpha), true); Quad(V1, white, true);
+        // lente: un tubo oscuro que sale hacia adelante (abajo a la izquierda)
+        const ImVec2 l0 = P(-1.5f, 1.5f), l1 = P(-3.0f, 2.8f); const float lr = 2.9f * sc; const ImU32 tube = Col(0.24f, 0.26f, 0.30f, alpha);
+        dl->AddCircleFilled(l0, lr + lw * 0.6f, edge, 20); dl->AddCircleFilled(l1, lr + lw * 0.6f, edge, 20);
+        dl->AddCircleFilled(l0, lr, tube, 20); dl->AddLine(l0, l1, tube, lr * 2.0f); dl->AddCircleFilled(l1, lr, Col(0.16f, 0.18f, 0.22f, alpha), 20);
+        dl->AddCircleFilled(l1, lr * 0.62f, ColA(Lerp4(ImVec4(0.10f, 0.16f, 0.19f, 1), ImVec4(0.08f, 0.30f, 0.18f, 1), s_dn), alpha), 16);
+        dl->AddCircleFilled(ImVec2(l1.x - 0.8f * sc, l1.y - 0.8f * sc), 0.6f * sc, Col(1, 1, 1, 0.8f * alpha), 8);
+        dl->AddCircleFilled(P(2.2f, -0.9f), 0.6f * sc, Col(0.90f, 0.24f, 0.24f, alpha), 8);          // lucecita roja
+        Band(-0.05f * 3.1415927f, 1.05f * 3.1415927f);                   // el aro por delante
+        Head(-0.05f * 3.1415927f, -1.0f); Head(1.05f * 3.1415927f, 1.0f);
         return;
     }
     (void)style; (void)grey;
@@ -1799,56 +1821,81 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
 // sin escalar) y una tercera guia: la tecla del cursor (F1) y "Cursor".
 static ImFont* s_guideFont = nullptr;
 void MvSetGuideFont(ImFont* f) { s_guideFont = f; }
-float MvMouseHint(ImDrawList* dl, ImVec2 br, float k, float alpha, const char* left, const char* right, const char* keyName, const char* keyLabel, const char* wheel, bool drag) {
+float MvMouseHint(ImDrawList* dl, ImVec2 br, float k, float alpha, const char* left, const char* right, const char* keyName, const char* keyLabel, const char* wheel, bool drag, const char* dbl) {
+    // (15/11 ythnmm, Agustin 17:34: "hace mas linda la interfaz de los controles de abajo") barra de vidrio oscuro con sombra, filo claro
+    // y una linea verde abajo; cada control separado por una rayita; el boton que se usa va en verde con un brillo suave; lo que va
+    // despues de " / " (la segunda funcion del boton) se escribe mas tenue; la tecla es una teclita con canto. Sobre el visor del
+    // Editar: flechitas de "arrastrar", la rueda (zoom) y el doble clic (zoom a la zona).
     if (alpha <= 0.01f) return 0.0f;
     const ImVec4 acc = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
     ImFont* f = s_guideFont ? s_guideFont : ImGui::GetFont();
     const float fs = s_guideFont ? s_guideFont->FontSize : ImGui::GetFontSize() * 0.95f * std::max(1.0f, k * 0.9f);
-    const float mw = 17.0f * k, mh = 25.0f * k, gap = 8.0f * k, sep = 22.0f * k, pad = 12.0f * k;
-    const ImVec2 tl = f->CalcTextSizeA(fs, FLT_MAX, 0, left), tr = f->CalcTextSizeA(fs, FLT_MAX, 0, right);
+    const float mw = 17.0f * k, mh = 25.0f * k, gap = 9.0f * k, sep = 26.0f * k, pad = 16.0f * k, dw = 14.0f * k, bw = 15.0f * k;
+    struct Seg { int btn; const char* txt; bool drag; bool x2; float w; };
+    Seg segs[4]; int ns = 0;
+    auto Add = [&](int btn, const char* t, bool dg, bool x2) { if (t && t[0] && ns < 4) { segs[ns] = { btn, t, dg, x2, f->CalcTextSizeA(fs, FLT_MAX, 0, t).x }; ns++; } };
+    Add(0, left, drag, false); Add(1, right, drag, false); Add(2, wheel, false, false); Add(0, dbl, false, true);
     const bool key = keyName && keyName[0] && keyLabel && keyLabel[0];
-    const ImVec2 kn = key ? f->CalcTextSizeA(fs * 0.80f, FLT_MAX, 0, keyName) : ImVec2(0, 0), kl = key ? f->CalcTextSizeA(fs, FLT_MAX, 0, keyLabel) : ImVec2(0, 0);
-    const float kw = key ? std::max(mh, kn.x + 12.0f * k) : 0.0f;
-    // (15/11 ythnmm, Agustin 17:32: "que se cambien la interfaz visual que muestra los controles abajo tambien") sobre el visor del Editar:
-    // flechitas de "arrastrar" al lado de cada boton y la rueda con su texto (zoom)
-    const bool wh = wheel && wheel[0]; const ImVec2 tw = wh ? f->CalcTextSizeA(fs, FLT_MAX, 0, wheel) : ImVec2(0, 0);
-    const float dw = drag ? 13.0f * k : 0.0f;
-    const float h = std::max(mh, fs) + pad * 1.2f, w = pad * 2 + mw * 2 + gap * 2 + tl.x + tr.x + sep + dw * 2 + (wh ? sep + mw + gap + tw.x : 0.0f) + (key ? sep + kw + gap + kl.x : 0.0f);
+    const ImVec2 kn = key ? f->CalcTextSizeA(fs * 0.78f, FLT_MAX, 0, keyName) : ImVec2(0, 0), kl = key ? f->CalcTextSizeA(fs, FLT_MAX, 0, keyLabel) : ImVec2(0, 0);
+    const float kw = key ? std::max(mh * 1.25f, kn.x + 14.0f * k) : 0.0f;
+    float w = pad * 2.0f; for (int i = 0; i < ns; i++) w += mw + (segs[i].drag ? dw : 0.0f) + (segs[i].x2 ? bw : 0.0f) + gap + segs[i].w + (i ? sep : 0.0f);
+    if (key) w += sep + kw + gap + kl.x;
+    const float h = std::max(mh, fs) + pad * 1.25f, rr = 11.0f * k;
     const ImVec2 a(br.x - w, br.y - h);
-    dl->AddRectFilled(a, br, Col(0.05f, 0.07f, 0.09f, 0.55f * alpha), 7.0f * k);
-    const ImU32 line = Col(0.85f, 0.88f, 0.92f, 0.85f * alpha);
+    for (int i = 5; i >= 1; i--) dl->AddRectFilled(ImVec2(a.x - (float)i * 1.2f * k, a.y + 3.0f * k - (float)i * 0.6f * k), ImVec2(br.x + (float)i * 1.2f * k, br.y + 3.0f * k + (float)i * 1.6f * k), Col(0, 0, 0, 0.055f * alpha), rr + (float)i * 1.4f * k);   // sombra
+    dl->AddRectFilled(a, br, Col(0.035f, 0.05f, 0.065f, 0.66f * alpha), rr);
+    dl->AddRectFilled(ImVec2(a.x + k, a.y + k), ImVec2(br.x - k, a.y + h * 0.5f), Col(1, 1, 1, 0.04f * alpha), rr - k, ImDrawFlags_RoundCornersTop);       // brillo de arriba
+    dl->AddRect(a, br, Col(1, 1, 1, 0.14f * alpha), rr, 0, 1.2f * k);
+    dl->AddRectFilled(ImVec2(a.x + 14.0f * k, br.y - 2.4f * k), ImVec2(br.x - 14.0f * k, br.y - 0.9f * k), ColA(acc, 0.60f * alpha), 1.0f * k);             // linea verde
+    const ImU32 line = Col(0.88f, 0.91f, 0.94f, 0.92f * alpha), thin = Col(0.88f, 0.91f, 0.94f, 0.60f * alpha), accU = ColA(acc, 0.95f * alpha);
+    const ImU32 tc = Col(0.94f, 0.96f, 0.98f, 0.96f * alpha), tdim = Col(0.94f, 0.96f, 0.98f, 0.58f * alpha);
+    const float cy = a.y + h * 0.5f - 1.0f * k;
     auto Mouse = [&](float x, int btn) {
-        const ImVec2 p0(x, a.y + (h - mh) * 0.5f), p1(x + mw, p0.y + mh); const float r = mw * 0.5f;
-        dl->AddRectFilled(p0, p1, Col(1, 1, 1, 0.12f * alpha), r);
-        const float my = p0.y + mh * 0.42f, cx = x + mw * 0.5f;
-        if (btn == 0) dl->AddRectFilled(p0, ImVec2(cx - 0.5f * k, my), ColA(acc, 0.9f * alpha), r, ImDrawFlags_RoundCornersTopLeft);
-        else if (btn == 1) dl->AddRectFilled(ImVec2(cx + 0.5f * k, p0.y), ImVec2(p1.x, my), ColA(acc, 0.9f * alpha), r, ImDrawFlags_RoundCornersTopRight);
+        const ImVec2 p0(x, cy - mh * 0.5f), p1(x + mw, cy + mh * 0.5f); const float r = mw * 0.5f;
+        const float my = p0.y + mh * 0.42f, cx = x + mw * 0.5f, gx = btn == 0 ? cx - mw * 0.25f : btn == 1 ? cx + mw * 0.25f : cx;
+        for (int i = 4; i >= 1; i--) dl->AddCircleFilled(ImVec2(gx, p0.y + mh * 0.2f), (3.0f + (float)i * 2.4f) * k, ColA(acc, 0.05f * alpha), 20);   // brillo del boton
+        dl->AddRectFilled(p0, p1, Col(0.12f, 0.14f, 0.17f, 0.92f * alpha), r);
+        if (btn == 0) dl->AddRectFilled(p0, ImVec2(cx - 0.6f * k, my), accU, r, ImDrawFlags_RoundCornersTopLeft);
+        else if (btn == 1) dl->AddRectFilled(ImVec2(cx + 0.6f * k, p0.y), ImVec2(p1.x, my), accU, r, ImDrawFlags_RoundCornersTopRight);
         else {   // rueda: ruedita verde en el medio + flechitas arriba / abajo
-            const float wy0 = p0.y + mh * 0.12f, wy1 = my - mh * 0.04f;
-            dl->AddRectFilled(ImVec2(cx - 1.8f * k, wy0), ImVec2(cx + 1.8f * k, wy1), ColA(acc, 0.95f * alpha), 1.8f * k);
-            dl->AddTriangleFilled(ImVec2(cx, p0.y - 4.5f * k), ImVec2(cx - 2.6f * k, p0.y - 1.5f * k), ImVec2(cx + 2.6f * k, p0.y - 1.5f * k), ColA(acc, 0.9f * alpha));
-            dl->AddTriangleFilled(ImVec2(cx, p1.y + 4.5f * k), ImVec2(cx + 2.6f * k, p1.y + 1.5f * k), ImVec2(cx - 2.6f * k, p1.y + 1.5f * k), ColA(acc, 0.9f * alpha));
+            dl->AddRectFilled(ImVec2(cx - 2.0f * k, p0.y + 3.0f * k), ImVec2(cx + 2.0f * k, my - 1.0f * k), accU, 2.0f * k);
+            dl->AddTriangleFilled(ImVec2(cx, p0.y - 5.0f * k), ImVec2(cx - 3.0f * k, p0.y - 1.6f * k), ImVec2(cx + 3.0f * k, p0.y - 1.6f * k), accU);
+            dl->AddTriangleFilled(ImVec2(cx, p1.y + 5.0f * k), ImVec2(cx + 3.0f * k, p1.y + 1.6f * k), ImVec2(cx - 3.0f * k, p1.y + 1.6f * k), accU);
         }
-        dl->AddRect(p0, p1, line, r, 0, 1.4f * k);
-        dl->AddLine(ImVec2(p0.x, my), ImVec2(p1.x, my), Col(0.85f, 0.88f, 0.92f, 0.6f * alpha), 1.2f * k);
-        if (btn != 2) dl->AddLine(ImVec2(cx, p0.y), ImVec2(cx, my), Col(0.85f, 0.88f, 0.92f, 0.6f * alpha), 1.2f * k);
+        dl->AddRect(p0, p1, line, r, 0, 1.5f * k);
+        dl->AddLine(ImVec2(p0.x + k, my), ImVec2(p1.x - k, my), thin, 1.1f * k);
+        if (btn != 2) dl->AddLine(ImVec2(cx, p0.y + k), ImVec2(cx, my), thin, 1.1f * k);
     };
-    auto Drag = [&](float x) {   // cuatro flechitas = arrastrar
-        const ImVec2 c(x + dw * 0.5f, a.y + h * 0.5f); const float D = 4.6f * k, A = 2.2f * k, W = 2.0f * k;
+    auto Drag = [&](float x) {   // cuatro flechitas con un punto verde = arrastrar
+        const ImVec2 c(x + dw * 0.5f, cy); const float D = 4.8f * k, A = 2.4f * k, W = 2.2f * k;
         const ImVec2 dirs[4] = { ImVec2(0, -1), ImVec2(0, 1), ImVec2(-1, 0), ImVec2(1, 0) };
         for (const ImVec2& d : dirs) { const ImVec2 o(c.x + d.x * D, c.y + d.y * D);
             dl->AddTriangleFilled(ImVec2(o.x + d.x * A, o.y + d.y * A), ImVec2(o.x - d.y * W, o.y + d.x * W), ImVec2(o.x + d.y * W, o.y - d.x * W), line); }
+        dl->AddCircleFilled(c, 1.3f * k, accU, 8);
     };
-    float x = a.x + pad; const float ty = a.y + (h - tl.y) * 0.5f; const ImU32 tc = Col(0.92f, 0.94f, 0.97f, 0.95f * alpha);
-    Mouse(x, 0); x += mw; if (drag) { Drag(x + 1.0f * k); x += dw; } x += gap; dl->AddText(f, fs, ImVec2(x, ty), tc, left); x += tl.x + sep;
-    Mouse(x, 1); x += mw; if (drag) { Drag(x + 1.0f * k); x += dw; } x += gap; dl->AddText(f, fs, ImVec2(x, ty), tc, right); x += tr.x;
-    if (wh) { x += sep; Mouse(x, 2); x += mw + gap; dl->AddText(f, fs, ImVec2(x, ty), tc, wheel); x += tw.x; }
-    if (key) {   // tecla como un teclita: borde claro, letra adentro
-        x += sep; const ImVec2 k0(x, a.y + (h - mh) * 0.5f), k1(x + kw, k0.y + mh);
-        dl->AddRectFilled(k0, k1, Col(1, 1, 1, 0.12f * alpha), 4.0f * k);
-        dl->AddRect(k0, k1, line, 4.0f * k, 0, 1.4f * k);
-        dl->AddText(f, fs * 0.80f, ImVec2(x + (kw - kn.x) * 0.5f, k0.y + (mh - kn.y) * 0.5f), tc, keyName);
-        x += kw + gap; dl->AddText(f, fs, ImVec2(x, a.y + (h - kl.y) * 0.5f), tc, keyLabel);
+    auto Sep = [&](float x) { dl->AddLine(ImVec2(x + sep * 0.5f, cy - mh * 0.38f), ImVec2(x + sep * 0.5f, cy + mh * 0.38f), Col(1, 1, 1, 0.16f * alpha), 1.0f * k); };
+    float x = a.x + pad;
+    for (int i = 0; i < ns; i++) {
+        const Seg& sg = segs[i];
+        if (i) { Sep(x); x += sep; }
+        Mouse(x, sg.btn); x += mw;
+        if (sg.drag) { Drag(x + 1.0f * k); x += dw; }
+        if (sg.x2) {   // "x2" chico en verde = doble clic
+            const float f2 = fs * 0.66f; const ImVec2 t2 = f->CalcTextSizeA(f2, FLT_MAX, 0, "x2");
+            dl->AddText(f, f2, ImVec2(x + 2.5f * k, cy - mh * 0.5f - 1.0f * k), accU, "x2"); (void)t2; x += bw; }
+        x += gap;
+        const char* sl = strstr(sg.txt, " / "); const float ty = cy - f->CalcTextSizeA(fs, FLT_MAX, 0, sg.txt).y * 0.5f;
+        if (sl) { dl->AddText(f, fs, ImVec2(x, ty), tc, sg.txt, sl); dl->AddText(f, fs, ImVec2(x + f->CalcTextSizeA(fs, FLT_MAX, 0, sg.txt, sl).x, ty), tdim, sl); }
+        else dl->AddText(f, fs, ImVec2(x, ty), tc, sg.txt);
+        x += sg.w;
+    }
+    if (key) {   // teclita con canto
+        Sep(x); x += sep; const float kh = mh * 0.84f; const ImVec2 k0(x, cy - kh * 0.5f), k1(x + kw, cy + kh * 0.5f);
+        dl->AddRectFilled(ImVec2(k0.x, k0.y + 2.2f * k), ImVec2(k1.x, k1.y + 2.2f * k), Col(0, 0, 0, 0.6f * alpha), 5.0f * k);
+        dl->AddRectFilled(k0, k1, Col(0.17f, 0.20f, 0.24f, 0.96f * alpha), 5.0f * k);
+        dl->AddRect(k0, k1, line, 5.0f * k, 0, 1.4f * k);
+        dl->AddText(f, fs * 0.78f, ImVec2(x + (kw - kn.x) * 0.5f, cy - kn.y * 0.5f - 0.5f * k), tc, keyName);
+        x += kw + gap; dl->AddText(f, fs, ImVec2(x, cy - kl.y * 0.5f), tc, keyLabel);
     }
     return h;
 }
