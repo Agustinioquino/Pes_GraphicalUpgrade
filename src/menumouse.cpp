@@ -590,7 +590,33 @@ static void VcReset(const char* why) {
     s_vcYaw = s_vcPitch = 0; s_vcZoom = s_vcZoomCur = 1.0f; s_vcPan[0] = s_vcPan[1] = s_vcPan[2] = 0;
     s_vcDYaw = 0; s_vcDPitch = 0; s_vcDPanX = 0; s_vcDPanY = 0; s_vcWheel = 0;
 }
-bool MenuViewCamHint() { return VcLive() && !s_over.load(); }   // overlay.cpp: la guia de abajo muestra girar / mover / zoom
+// (15/11 b, Agustin 17:31: "lo de arrastrar que detecte el menu a la izquierda para poder seguir haciendo click en las partes del menu o
+// volver avanzar") ZONA DEL MENU: todo lo que esta a la izquierda del borde derecho de las filas visibles (mas 32 px) es del menu, aunque
+// no haya una fila justo debajo: ahi los clics y la rueda siguen como siempre (elegir, aceptar, volver, mover la lista). La camara solo se
+// maneja a la derecha de esa franja. Cada ventana del cuadro suma sus filas (Step); el valor se renueva cada 0.15 s.
+static std::atomic<float> s_menuRightPx{-1.0f}; static std::atomic<double> s_menuRightT{-1.0e9};
+static void VcMenuExtent(uint8_t* I, double now) {
+    uint8_t* root = P8(I + 0x98); if (!Ptr(root)) return;
+    const float cw = s_m.cw, ch = s_m.ch; if (cw < 160.0f || ch < 90.0f) return;
+    float sw = cw, sh = ch, ox = 0, oy = 0;
+    if (cw * 9.0f > ch * 16.0f) { sw = ch * 16.0f / 9.0f; ox = (cw - sw) * 0.5f; } else if (cw * 9.0f < ch * 16.0f) { sh = cw * 9.0f / 16.0f; oy = (ch - sh) * 0.5f; }
+    (void)oy; (void)sh;
+    float right = -1.0f; int n = 0;
+    const uint32_t ng = std::min<uint32_t>(U32(I + 0xa4), 64);
+    for (uint32_t g = 0; g < ng; g++) { uint8_t* grp = Child(root, g); if (!Ptr(grp)) continue; const uint32_t nr = std::min<uint32_t>(ChildCount(grp), 512);
+        for (uint32_t r = 0; r < nr; r++) { uint8_t* nd = Child(grp, r); if (!Ptr(nd) || !NodeFlag(nd, 0x0c)) continue; void** v = *(void***)nd; if (!Ptr(v) || !RowClass(v)) continue;
+            float pos[2] = { 0, 0 }, size[2] = { 0, 0 }; if (((PFN_NodeVec2)v[0xa0 / 8])(nd, pos) < 0) continue; ((PFN_NodeVec2)v[0xc0 / 8])(nd, size);
+            float x = pos[0], w = size[0], dy = 0, dw = 0, dh = 0; if (DrawnRect(nd, x, dy, dw, dh) && dw > 0) w = dw; else x = pos[0];
+            if (!(x == x) || !(w == w) || w <= 0 || x + w < 0 || x > 1920.0f) continue;
+            right = std::max(right, x + w); n++; } }
+    if (n == 0) return;
+    const float px = ox + right * sw / 1920.0f + 32.0f;
+    const bool fresh = now - s_menuRightT.load() > 0.15;
+    if (fresh || px > s_menuRightPx.load()) s_menuRightPx.store(px);
+    if (fresh) s_menuRightT.store(now);
+}
+static bool VcInMenu(int x) { return Now() - s_menuRightT.load() < 0.5 && (float)x < s_menuRightPx.load(); }
+bool MenuViewCamHint() { return VcLive() && !s_over.load() && !VcInMenu(s_curX.load()); }   // overlay.cpp: la guia de abajo muestra girar / mover / zoom
 // lo llama freecam.cpp hk_SetCam antes de mandar la camara; save = 0x34 bytes desde +0x10 (lo devuelve despues)
 bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
     if (!s_ok || g_cfg.menuMouse == 0 || g_cfg.menuViewCam == 0 || g_menuOpen.load(std::memory_order_relaxed)) return false;
@@ -642,8 +668,9 @@ static void VcInput() {
     if (!ok) { s_vcDrag = 0; return; }
     const float ch = (float)rc.bottom;
     int drag = s_vcDrag.load();
-    if (drag == 0 && (lEdge || rEdge) && !s_over.load()) {
+    if (drag == 0 && (lEdge || rEdge) && !s_over.load() && !VcInMenu(p.x)) {
         drag = lEdge ? 1 : 2; s_vcDrag = drag; s_p0 = s_pl = p; s_t0 = Now(); s_far = false;
+        static int s_nl = 0; if (s_nl++ < 6) Log("mouse en menus: camara del visor: %s desde x %d (el menu llega hasta x %.0f de %d)", drag == 1 ? "girar" : "mover", (int)p.x, s_menuRightPx.load(), (int)rc.right);
     }
     if (drag != 0) {
         const float dx = (float)(p.x - s_pl.x), dy = (float)(p.y - s_pl.y); s_pl = p;
@@ -682,7 +709,8 @@ static void Step(void* win) {
     if (s_vcBackReq.load() && (win == s_vcBackWin || now - s_vcBackT > 1.0)) {   // (15/11) clic derecho sin arrastrar sobre el visor: volver
         s_vcBackReq = false; s_vcBackWin = nullptr; s_pendWin = win; s_pendAction = 1; s_moveT.store(now); return;
     }
-    if (s_vcDrag.load() != 0 || (VcLive() && !s_over.load() && (s_m.lEdge || s_m.rEdge))) {   // (15/11) el mouse esta moviendo la camara del visor: no elige filas
+    if (VcLive()) VcMenuExtent(I, now);
+    if (s_vcDrag.load() != 0 || (VcLive() && !s_over.load() && !VcInMenu(s_m.p.x) && (s_m.lEdge || s_m.rEdge))) {   // (15/11) el mouse esta moviendo la camara del visor: no elige filas
         if (s_m.rEdge && (!s_vcBackWin || now - s_vcBackT > 0.1)) { s_vcBackWin = win; s_vcBackT = now; }
         s_m.lEdge = s_m.rEdge = false; s_moveT.store(now); return;
     }
@@ -1008,7 +1036,7 @@ static void Install() {
 
 void MenuMouseWheel(int delta) {
     if (!s_ok || g_cfg.menuMouse == 0) return;
-    if (VcLive() && !s_over.load()) { s_vcWheel.fetch_add(delta, std::memory_order_relaxed); return; }   // (15/11) rueda sobre el jugador del Editar = zoom
+    if (VcLive() && !s_over.load() && !VcInMenu(s_curX.load())) { s_vcWheel.fetch_add(delta, std::memory_order_relaxed); return; }   // (15/11) rueda sobre el jugador del Editar = zoom
     s_wheel.fetch_add(delta, std::memory_order_relaxed);
 }
 
