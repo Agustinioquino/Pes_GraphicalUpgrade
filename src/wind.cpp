@@ -28,10 +28,12 @@ WindNow g_windNow;
 WindHeight g_windHeight;
 // cuanto viento hay a la altura h (m) respecto del de 1.8 m: perfil logaritmico ln(h / z0) / ln(1.8 / z0), z0 = 3 cm (pasto),
 // mezclado con parejo segun hp.prof, con piso hp.ground abajo y tope hp.top arriba
+// (15/11, Agustin: "y altura general del viento mejor?") hp.ref = la altura del viento (z500, m): a esa altura sopla lo que dice la
+// fila 494; mas abajo llega menos y mas arriba mas. De fabrica 1.8 m (la cabeza), que es lo que habia fijo hasta ahora.
 float WindHeightK(const WindHeight& hp, float h) {
-    const float z0 = 0.03f, lg = logf((std::max)(h, z0 * 1.05f) / z0) / logf(1.8f / z0);
+    const float z0 = 0.03f, ref = std::clamp(hp.ref, 0.2f, 20.0f), lg = logf((std::max)(h, z0 * 1.05f) / z0) / logf(ref / z0);
     float f = 1.0f + (lg - 1.0f) * hp.prof;
-    return h < 1.8f ? (std::max)(f, hp.ground) : (std::min)(f, hp.top);
+    return h < ref ? (std::max)(f, hp.ground) : (std::min)(f, hp.top);
 }
 namespace {
 double Hash1(long long i, unsigned seed) {
@@ -115,7 +117,8 @@ void WindFrame(float (*p)[4], double tReal) {
     // cosa recibe K(altura): pasto 8 cm, ropa 1.2 m, red (cada punto, redes.cpp), banderas arriba. x508 = cuanto perfil (0 parejo,
     // 1 real), y508 = minimo al ras del suelo, z508 = tope arriba. La fila 509 (la escribe la DLL, nunca se guarda: c.live es lo
     // que se guarda, por eso no se toca la 503) lleva x pasto = z503 x K(0.08), y ropa = w503 x K(1.2), z borde = w508, w = 1
-    const WindHeight hp{ std::clamp(P(508, 0, 0.5f), 0.0f, 1.0f), std::clamp(P(508, 1, 0.3f), 0.0f, 1.0f), std::clamp(P(508, 2, 2.0f), 1.0f, 3.0f) };
+    const float hRef = c.live[500][2] < 0.05f ? 1.8f : std::clamp(c.live[500][2], 0.2f, 10.0f);   // (15/11) z500 altura del viento; sin la clave (0) = 1.8 m
+    const WindHeight hp{ std::clamp(P(508, 0, 0.5f), 0.0f, 1.0f), std::clamp(P(508, 1, 0.3f), 0.0f, 1.0f), std::clamp(P(508, 2, 2.0f), 1.0f, 3.0f), hRef };
     g_windHeight = hp;
     p[509][0] = std::clamp(P(503, 2, 1.0f), 0.0f, 3.0f) * WindHeightK(hp, 0.08f);
     p[509][1] = std::clamp(P(503, 3, 1.0f), 0.0f, 3.0f) * WindHeightK(hp, 1.2f);
