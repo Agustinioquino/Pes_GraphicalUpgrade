@@ -798,6 +798,17 @@ static void hk_Dirs(void* win, int* dx, int* dy, unsigned char* trig) {
     const int w = ts ? 0 : s_wheel.exchange(0);
     void* const optWin = s_pendDxWin; s_pendDxWin = nullptr;
     if (!Enabled() || !dx || !dy) { s_wheelAcc = 0; return; }
+    {   // (15/11 05:39 cierre al entrar a Editar jugadores, 0xc0000005 en 0x1408ec1c0 < 0x140e69a94 < 0x140e3cc9b, RAX = FFFFFFFF)
+        // el juego mueve la seleccion con 0x140e3e8c0 -> 0x140e3cbd0, que lee el puntero numero Impl+0x114 SIN mirar si es valido
+        // (0x140e69a70: base + 0x94 + n * 0x58). El juego solo llega ahi con un mando de verdad (0x140e3e6b0 sale si
+        // 0x141b57c60(Impl+0x114) no da mando); si la pagina no tiene mando (Impl+0x114 = -1) la rueda / el clic sobre un selector
+        // NO pueden mandar direcciones: se descartan.
+        uint8_t* I = P8((uint8_t*)win + 0x88);
+        if (!Ptr(I) || U32(I + 0x114) >= 8u) {
+            if (optWin == win || std::abs(s_wheelAcc + w) >= 120) { static int s_n = 0; if (s_n++ < 6) Log("mouse en menus: pagina sin mando (Impl+0x114 = %d, vtable %p): rueda / selector descartados", Ptr(I) ? (int)U32(I + 0x114) : -2, *(void**)win); }
+            s_wheelAcc = 0; return;
+        }
+    }
     if (optWin && optWin == win && *dx == 0 && *dy == 0) {               // (v3) clic sobre un selector: lo mismo que apretar derecha / izquierda
         *dx = s_pendDx > 0 ? 1 : -1; if (trig) *trig = 1;                 // 1 = recien apretado: al llegar a la ultima opcion da la vuelta
         s_wheelAcc = 0; s_moveT.store(Now());
