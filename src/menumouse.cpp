@@ -573,7 +573,15 @@ static void Step(void* win) {
                         g, r, pos[0], pos[1], size[0], size[1], pr, dk ? "si" : "no", d[0], d[1], d[2], d[3], (int)NodeFlag(nd, 0x0c), (int)NodeFlag(nd, 0x10), (int)sh, why, chain); } }
         }
     }
-    if (I[0x44]) return;                              // pagina con puntero propio del juego: no se toca (por ahora)
+    if (I[0x44]) {                                    // pagina con puntero propio: el mouse mueve ese puntero (FeedOwnPointer); aca solo los clics
+        if (g_cfg.menuMouseOwnPtr == 0) return;
+        if (s_m.lEdge) { s_m.lEdge = false; s_pendWin = win; s_pendAction = 0; s_moveT.store(now); }      // clic = aceptar (como X / A)
+        else if (s_m.rEdge && !FreeCamActive()) {                                                         // derecho = volver
+            bool given = false; for (int i = 0; i < s_rN; i++) if (s_rGiven[i] == win) given = true;
+            if (!given && s_rN < 8) { s_rGiven[s_rN++] = win; s_pendWin = win; s_pendAction = 1; }
+        }
+        return;
+    }
     // (15/11, Agustin: "si se selecciona un partido y detecta el mouse moverse al momento de cargar se abre el menu que permite cambiarse
     // de local o visitante") la pantalla de elegir lado (menu::SideSelect 0x14267c718 / menu::SideSelectEach 0x14271ecf8) sigue armada
     // durante la carga: el log del 14/11 22:16:24 muestra al mouse eligiendo su fila 2 con 16330 cuadros de menu (carga). Ahi el mouse solo
@@ -652,7 +660,40 @@ static void Step(void* win) {
     }
 }
 
+// (15/11 ythnmm) paginas con puntero propio del juego (Impl+0x44: Plan de juego, myClub, paleta de colores). El juego mueve ese
+// puntero con el analogico: menusystem::PointingCursor (singleton 0x143707fe8, vtable 0x1427c8500, 8 punteros de 0x58 bytes desde +0x80;
+// +0x10 estado 0..2 = a la vista, +0x14 posicion x / y en el escenario de 1920 x 1080, +0x3c cuadros de "salto" animado, +0x48 limites
+// propios en +0x2c, si no los generales en +0x70). La prueba nativa de 0x140e400d0 lee esa posicion (FUN_140e69a70) y elige la fila;
+// se salta si +0x3c no es 0 (FUN_140e69ea0). Aca, ANTES de esa prueba, el mouse escribe la posicion cuando se movio: el juego elige
+// la fila como con el analogico y el analogico sigue desde donde quedo.
+static const uintptr_t kPtrMgr = 0x143707fe8ull, kPtrMgrVt = 0x1427c8500ull;
+static void FeedOwnPointer(void* win) {
+    static POINT s_last[8]; static bool s_have[8] = {}; static int s_nLog = 0;
+    if (!s_ok || !Ptr(win) || g_cfg.menuMouseOwnPtr == 0 || !Enabled()) return;
+    uint8_t* I = P8((uint8_t*)win + 0x88); if (!Ptr(I) || !I[0x44] || (!I[0x45] && !I[0x46])) return;
+    const uint32_t idx = U32(I + 0x114); if (idx >= 8) return;
+    uint8_t* mgr = *(uint8_t**)kPtrMgr; if (!Ptr(mgr) || *(uintptr_t*)mgr != kPtrMgrVt) return;
+    uint8_t* c = mgr + 0x80 + (size_t)idx * 0x58;
+    HWND h = OverlayHwnd(); POINT p{}; RECT rc{};
+    if (!h || GetForegroundWindow() != h || !GetCursorPos(&p) || !ScreenToClient(h, &p) || !GetClientRect(h, &rc)) { s_have[idx] = false; return; }
+    const float cw = (float)(rc.right - rc.left), ch = (float)(rc.bottom - rc.top);
+    if (cw < 160.0f || ch < 90.0f || p.x < 0 || p.y < 0 || (float)p.x >= cw || (float)p.y >= ch) return;
+    const bool moved = s_have[idx] && (p.x != s_last[idx].x || p.y != s_last[idx].y);
+    s_last[idx] = p; s_have[idx] = true;
+    if (!moved || c[0x10] > 2) return;                // sin moverse no se pisa el analogico; puntero escondido: la pagina no lo usa
+    float sw = cw, sh = ch, ox = 0, oy = 0;
+    if (cw * 9.0f > ch * 16.0f) { sw = ch * 16.0f / 9.0f; ox = (cw - sw) * 0.5f; } else if (cw * 9.0f < ch * 16.0f) { sh = cw * 9.0f / 16.0f; oy = (ch - sh) * 0.5f; }
+    float mx = ((float)p.x - ox) * 1920.0f / sw, my = ((float)p.y - oy) * 1080.0f / sh;
+    float b[4]; memcpy(b, c[0x48] ? c + 0x2c : mgr + 0x70, sizeof b);
+    if (b[2] > 1.0f && b[3] > 1.0f && b[2] < 10000.0f && b[3] < 10000.0f) { mx = std::clamp(mx, b[0], b[0] + b[2]); my = std::clamp(my, b[1], b[1] + b[3]); }
+    memcpy(c + 0x14, &mx, 4); memcpy(c + 0x18, &my, 4);
+    *(uint32_t*)(c + 0x3c) = 0;
+    s_moveT.store(Now());
+    if (s_nLog < 10) { s_nLog++; Log("mouse en menus: puntero propio %u de la pagina (vtable %p) -> %.0f %.0f (limites %.0f %.0f %.0f x %.0f)", idx, *(void**)win, mx, my, b[0], b[1], b[2], b[3]); }
+}
+
 static void hk_Hover(void* win) {
+    FeedOwnPointer(win);
     o_hover(win);
     MotorPageSeen(win);     // motorpage.cpp: para saber si el estudio del Motor esta abierto (icono de la ultima tecla)
     Step(win);

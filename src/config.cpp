@@ -155,6 +155,7 @@ static bool LoadConfigLocked() {
             else if (kl == "mouse_elegir_equipo") c.menuMouseTeamSel = atoi(v.c_str()) != 0 ? 1 : 0;
             else if (kl == "mouse_oculta_botones") c.menuMouseHideGuide = atoi(v.c_str()) != 0 ? 1 : 0;
             else if (kl == "mouse_mando_reinicia") c.menuMousePadReset = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 g)
+            else if (kl == "mouse_puntero_propio") c.menuMouseOwnPtr = atoi(v.c_str()) != 0 ? 1 : 0;   // (15/11)
             else if (kl == "ayuda_mouse") c.mouseHint = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 d) botones del mouse abajo a la derecha
             else if (kl == "camara_share") c.camShareHold = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 j)
             else if (kl == "camara_sin_dof") c.camNoDof = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 h)
