@@ -508,6 +508,44 @@ static bool TeamSelStep(void* win, uint8_t* I, float mx, float my, double now) {
     return true;
 }
 
+// (15/11 ythnmm, Agustin 04:12: "un boton sobre game settings que permita cerrar el juego, y que se pueda elegir con el mouse",
+// "que solo se muestre en la pantalla principal, el menu previo a elegir el modo") boton "Salir del juego" sobre la pestana de mas
+// a la derecha de la fila de arriba del menu principal (menu::TopModeSelect 0x142676ea8; en el Dream Patch es GAME SETTINGS),
+// solo con esa pagina activa y en su primer nivel (ventana+0x98 == 0: las tarjetas que abren otra lista lo suben a 1, vf49
+// 0x140ab0830). Cerrar = lo mismo que la X de la ventana: el bucle principal sigue mientras [0x143713268]+0xfc sea 0 (0x1403a6ac0;
+// la X de la ventana y el nodo de flujo ProcExit, 0x141265760, ponen 1). Primer clic: "Salir? clic otra vez"; segundo clic
+// (dentro de 4 s) cierra. [PES21FX] mouse_boton_salir = 0 lo saca.
+static const uintptr_t kTopModeVt = 0x142676ea8ull, kGameRoot = 0x143713268ull;
+static std::atomic<double> s_exitShowT{-1.0e9}, s_exitArmT{-1.0e9};
+static std::atomic<float> s_exitX{0}, s_exitY{0}, s_exitW{0}, s_exitH{0};
+static std::atomic<bool> s_exitHover{false};
+static bool ExitTabRect(uint8_t* I, float r[4]) {      // pestana de arriba de todo y mas a la derecha del grupo 0 (rect del juego en x / y; ancho dibujado si se puede)
+    uint8_t* root = P8(I + 0x98); uint8_t* grp = Ptr(root) ? Child(root, 0) : nullptr; if (!Ptr(grp)) return false;
+    const uint32_t n = std::min<uint32_t>(ChildCount(grp), 64);
+    float px[64], py[64], pw[64], ph[64]; int m = 0;
+    for (uint32_t i = 0; i < n; i++) { uint8_t* nd = Child(grp, i); if (!Ptr(nd)) continue; void** vt = *(void***)nd; if (!Ptr(vt) || !RowClass(vt)) continue;
+        if (!NodeFlag(nd, 0x0c)) continue;
+        float pos[2] = { 0, 0 }, size[2] = { 0, 0 }; if (((PFN_NodeVec2)vt[0xa0 / 8])(nd, pos) < 0) continue; ((PFN_NodeVec2)vt[0xc0 / 8])(nd, size);
+        float d[4]; const bool dk = DrawnRect(nd, d[0], d[1], d[2], d[3]);
+        if (!(pos[0] > -100.0f && pos[0] < 2000.0f && pos[1] > -100.0f && pos[1] < 1100.0f)) continue;
+        px[m] = pos[0]; py[m] = pos[1]; pw[m] = dk && d[2] > size[0] ? d[2] : size[0]; ph[m] = dk && d[3] > 8.0f ? d[3] : size[1]; m++; }
+    if (m < 2) return false;
+    float top = 1e9f; for (int i = 0; i < m; i++) top = std::min(top, py[i]);
+    int best = -1, cnt = 0; float prevX = -1e9f;
+    for (int i = 0; i < m; i++) if (py[i] < top + 12.0f) { cnt++; if (best < 0 || px[i] > px[best]) best = i; }
+    if (best < 0 || cnt < 2) return false;                // tiene que haber una fila de pestanas (2 o mas a la misma altura)
+    for (int i = 0; i < m; i++) if (i != best && py[i] < top + 12.0f && px[i] > prevX) prevX = px[i];
+    float w = pw[best]; const float pitch = px[best] - prevX;
+    if (pitch > 40.0f && (w < pitch * 0.6f || w > pitch * 1.4f)) w = pitch - 12.0f;   // tamano del juego que no es el dibujado (126 x 126 en el Dream Patch)
+    r[0] = px[best]; r[1] = py[best]; r[2] = std::clamp(w, 120.0f, 700.0f); r[3] = ph[best]; return true;
+}
+bool MenuExitButton(float* x, float* y, float* w, float* h, int* state) {   // overlay.cpp lo dibuja (pixeles de la ventana)
+    if (!s_ok || g_cfg.menuMouse == 0 || g_cfg.menuExitBtn == 0 || Now() - s_exitShowT.load() > 0.25) return false;
+    *x = s_exitX.load(); *y = s_exitY.load(); *w = s_exitW.load(); *h = s_exitH.load();
+    *state = Now() - s_exitArmT.load() < 4.0 ? 2 : (s_exitHover.load() ? 1 : 0);
+    return *w > 4.0f && *h > 4.0f;
+}
+
 static void Step(void* win) {
     const double now = Now();
     const bool fresh = now - s_stepT > 0.25;      // primer paso de un menu despues de un rato sin menus
@@ -604,6 +642,27 @@ static void Step(void* win) {
     const float cw = s_m.cw, ch = s_m.ch; float sw = cw, sh = ch, ox = 0, oy = 0;
     if (cw * 9.0f > ch * 16.0f) { sw = ch * 16.0f / 9.0f; ox = (cw - sw) * 0.5f; } else if (cw * 9.0f < ch * 16.0f) { sh = cw * 9.0f / 16.0f; oy = (ch - sh) * 0.5f; }
     const float mx = ((float)s_m.p.x - ox) * 1920.0f / sw, my = ((float)s_m.p.y - oy) * 1080.0f / sh;
+    if (g_cfg.menuExitBtn != 0 && pageVt == kTopModeVt) {                  // (15/11) boton "Salir del juego" del menu principal
+        float r[4];
+        if (((I[9] >> 1) & 1) != 0 && *(int32_t*)((uint8_t*)win + 0x98) == 0 && ExitTabRect(I, r)) {
+            const float bh = 44.0f, gap = 10.0f, bx = r[0], bw = r[2], by = std::max(4.0f, r[1] - gap - bh);
+            s_exitX.store(ox + bx * sw / 1920.0f); s_exitY.store(oy + by * sh / 1080.0f); s_exitW.store(bw * sw / 1920.0f); s_exitH.store(bh * sh / 1080.0f);
+            s_exitShowT.store(now);
+            const bool over = mx >= bx && mx < bx + bw && my >= by && my < by + bh;
+            s_exitHover.store(over);
+            if (s_m.lEdge && over) {
+                s_m.lEdge = false; s_moveT.store(now);
+                if (now - s_exitArmT.load() < 4.0) {
+                    uint8_t* gr = *(uint8_t**)kGameRoot;
+                    if (Ptr(gr)) { gr[0xfc] = 1; Log("mouse en menus: boton Salir del juego -> se cierra el juego (como la X de la ventana)"); }
+                    s_exitArmT.store(-1.0e9);
+                } else { s_exitArmT.store(now); Log("mouse en menus: boton Salir del juego: primer clic (falta confirmar)"); }
+                return;
+            }
+            if (s_m.lEdge) s_exitArmT.store(-1.0e9);                        // clic en otro lado: se desarma
+            if (over) { s_overB = true; s_over.store(true); return; }        // sobre el boton: no elige filas del menu (mano del dardo)
+        }
+    }
     if (g_cfg.menuMouseTeamSel != 0 && IsTeamSel(win) && TeamSelStep(win, I, mx, my, now)) return;
     if (s_extraAct >= 0) {   // (14/11 ythnmm) accion pedida: la ventana bajo el mouse que tenga esa accion; si ninguna, la primera que la tenga
         if (now - s_extraT > 0.5) s_extraAct = -1;

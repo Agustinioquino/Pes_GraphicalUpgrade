@@ -2994,6 +2994,23 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (lightIcons) DrawEditorLightIcons();
     if (sunCompass && !g_menuOpen) DrawSunCompass();
     if (g_cfg.live[426][0] > 0.5f) DrawSkeletonView();   // (09/11 f) vista del esqueleto (Diagnostico)
+    {   // (15/11) boton "Salir del juego" del menu principal (menumouse.cpp MenuExitButton: lugar, mouse encima, primer clic)
+        float bx, by, bw, bh; int st = 0;
+        if (!g_menuOpen && MenuExitButton(&bx, &by, &bw, &bh, &st)) {
+            ImDrawList* dl = ImGui::GetForegroundDrawList(); const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);
+            const ImVec2 a0(bx, by), b0(bx + bw, by + bh);
+            const ImU32 fill = st == 2 ? IM_COL32(150, 28, 32, 225) : (st == 1 ? IM_COL32(40, 60, 92, 230) : IM_COL32(12, 22, 40, 190));
+            dl->AddRectFilled(a0, b0, fill, 6.0f * k);
+            dl->AddRect(a0, b0, st ? IM_COL32(255, 255, 255, 235) : IM_COL32(170, 190, 215, 150), 6.0f * k, 0, (st ? 2.0f : 1.2f) * k);
+            const char* txt = TRS(st == 2 ? "Salir? Clic otra vez" : "Salir del juego");
+            const ImVec2 ts = ImGui::CalcTextSize(txt); const float r = std::min(bh * 0.18f, 8.0f * k);   // icono de apagar a la izquierda del texto
+            const float tw = ts.x + r * 2.0f + 10.0f * k, tx = bx + (bw - tw) * 0.5f, cy = by + bh * 0.5f;
+            const ImU32 fg = IM_COL32(240, 244, 248, 255);
+            dl->PathArcTo(ImVec2(tx + r, cy + r * 0.12f), r, -3.14159f * 0.5f + 0.75f, 3.14159f * 1.5f - 0.75f, 16); dl->PathStroke(fg, 0, 1.8f * k);
+            dl->AddLine(ImVec2(tx + r, cy - r * 1.05f), ImVec2(tx + r, cy - r * 0.05f), fg, 1.8f * k);
+            dl->AddText(ImVec2(tx + r * 2.0f + 10.0f * k, cy - ts.y * 0.5f), fg, txt);
+        }
+    }
     if (gizmo) MotorGizmoDraw();   // (15/11 h, Agustin 03:17: "el cursor parece estar atras") el editor del Motor se dibuja ANTES que el cursor, asi la flecha queda arriba de los paneles
     if (mmCur && g_cfg.menuCursor == 1) {   // (14/11 c / d, Agustin: "que se mantenga igual con el menu abierto o cerrado", "que muestre donde puede clickear")
         const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);   // el mismo dardo del menu; mano justo sobre una fila del juego
