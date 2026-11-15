@@ -293,6 +293,7 @@ groupshared uint gBodyCnt[3];  // diagnostico: puntos con piel cerca, empujes, m
 RWBuffer<uint>                  g_bodyDiag  : register(u8);
 #endif
 static bool   s_bodyWant;
+static bool   s_bodySel = false;   // (15/11) la tabla del cuerpo se eligio en este cuadro (correccion al dibujar)
 static uint   s_bodyTab;      // tabla del cuerpo de esta prenda (0xffffffff = ninguna)
 static float  s_bodyTc;       // 0 = la piel es del cuadro anterior (comienzo de la interpolacion), 1 = de este cuadro
 static float4 s_bodyPrm;      // fila 256
@@ -933,8 +934,9 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
     if (pin < 0.999) {
         float3 x = gx[p];
 #if PES_BODY
-        if (s == 0) pesBodyQuery(p, k, x, rest1);   // (25/10) la piel cercana, una vez por cuadro
-        bool pesBodyHas = ((s_bv[k][0].y | s_bv[k][1].y) & 0x10000u) != 0;
+        // (15/11) x256 = 2 (correccion al dibujar): la fisica no usa la piel real
+        if (s == 0 && s_bodyPrm.x < 1.5) pesBodyQuery(p, k, x, rest1);   // (25/10) la piel cercana, una vez por cuadro
+        bool pesBodyHas = s_bodyPrm.x < 1.5 && ((s_bv[k][0].y | s_bv[k][1].y) & 0x10000u) != 0;
 #if PES_BODY_DIAG
         if (s == 0 && pesBodyHas) { uint dg; InterlockedAdd(gBodyCnt[0], 1u, dg); }
 #endif
@@ -1528,7 +1530,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             if (gi < P && pinOf(gi) < 0.5) InterlockedMin(gHemLow, asuint(g_rest[gi].posPin.y + 10.0));
             if (gi + THREADS < P && pinOf(gi + THREADS) < 0.5) InterlockedMin(gHemLow, asuint(g_rest[gi + THREADS].posPin.y + 10.0));
             uint bodyKey = 0;
-            s_bodyWant = PES_BODY && s_bodyPrm.x > 0.5 && s_bodyPrm.x < 1.5 && g_legCount == 0;   // (15/11) x256 = 2: la fisica no usa la piel (correccion al dibujar)
+            s_bodyWant = PES_BODY && s_bodyPrm.x > 0.5 && g_legCount == 0;
             if (s_bodyWant && gi < PES_BODY_TABLES) {
                 uint S = (uint)(IniParams.Load(int2(257, 0)).x + 0.5);
                 uint tb = gi * PES_BODY_STRIDE;
@@ -1548,6 +1550,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             GroupMemoryBarrierWithGroupSync();
             s_bodyTab = gBodyIdx;
             s_bodyTc = 0.0;
+            s_bodySel = true;
             s_hemLow = asfloat(gHemLow) - 10.0;   // (15/11) sin puntos sueltos queda enorme: pesHemOf da 0 igual (pin alto)
 #if PES_BODY_DIAG
             if (gi == 0 && s_bodyWant) {
@@ -1825,44 +1828,21 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             DeviceMemoryBarrierWithGroupSync();
         }
 #if PES_BODY
-        // PES21 FX (15/11, Agustin: la ropa choca con el cuerpo real hacia temblar las mangas): correccion al dibujar (x256 = 2).
-        // La fisica ya guardo su estado sin saber de la piel real; aca, solo para la copia que se dibuja, el punto de tela que
-        // quedo a menos de y256 mm de la piel (o adentro) se saca afuera por el plano de la piel. No vuelve a la fisica: no
-        // puede realimentarse ni temblar. Tambien corre en los cuadros sin paso de fisica (reinicio, pausa).
-        s_bodyPrm = IniParams.Load(int2(256, 0));
-        if (s_bodyPrm.x > 1.5 && g_legCount == 0) {
-            if (gi == 0) { gBodyKey = 0; gBodyIdx = 0xffffffffu; }
-            s_bv[0][0] = uint2(0, 0); s_bv[0][1] = uint2(0, 0); s_bv[1][0] = uint2(0, 0); s_bv[1][1] = uint2(0, 0);
-            GroupMemoryBarrierWithGroupSync();
-            uint bodyKeyD = 0;
-            if (gi < PES_BODY_TABLES) {
-                uint S = (uint)(IniParams.Load(int2(257, 0)).x + 0.5);
-                uint tb = gi * PES_BODY_STRIDE;
-                uint st = g_bodyTab[tb], nrec = g_bodyTab[tb + 1], nvt = g_bodyTab[tb + 2], okT = g_bodyTab[tb + 3];
-                float3 wt = asfloat(uint3(g_bodyTab[tb + 4], g_bodyTab[tb + 5], g_bodyTab[tb + 6]));
-                float dd = distance(wt, float3(me.world[0].w, me.world[1].w, me.world[2].w));
-                if (okT == 1 && st == S && nvt > 0 && nrec > 0 && all(isfinite(wt)) && dd < PES_BODY_MATCH)
-                    bodyKeyD = 0xFFFFFFFFu - (uint)min(dd * 1.0e6, 4.0e9);
-                InterlockedMax(gBodyKey, bodyKeyD);
-            }
-            GroupMemoryBarrierWithGroupSync();
-            if (bodyKeyD != 0 && bodyKeyD == gBodyKey) InterlockedMin(gBodyIdx, gi);
-            GroupMemoryBarrierWithGroupSync();
-            s_bodyTab = gBodyIdx;
-            s_bodyTc = 0.0;
-            if (s_bodyTab != 0xffffffffu) {
-                [loop] for (uint kd = 0; kd < 2; ++kd) {
-                    uint pd = gi + kd * THREADS;
-                    if (pd < P && pinOf(pd) < 0.999) {
-                        float3 rd, nd;
-                        restAtC(pd, rd, nd);
-                        pesBodyQuery(pd, kd, gx[pd], rd);
-                        float3 xd = pesBodyLift(pd, kd, 1.0, gx[pd]);
-                        if (all(isfinite(xd))) gx[pd] = xd;
-                    }
+        // PES21 FX (15/11, Agustin: con la ropa chocando con el cuerpo real en la fisica las mangas temblaban): correccion al dibujar
+        // (x256 = 2). La fisica ya guardo su estado sin saber de la piel real; aca, solo para la copia que se dibuja, el punto de
+        // tela que quedo a menos de y256 mm de la piel (o adentro) se saca afuera por el plano de la piel. No vuelve a la fisica:
+        // no puede realimentarse ni temblar. La tabla del cuerpo se eligio en el paso de fisica de este cuadro (s_bodySel).
+        if (s_bodySel && s_bodyPrm.x > 1.5 && s_bodyTab != 0xffffffffu) {
+            [loop] for (uint kd = 0; kd < 2; ++kd) {
+                uint pd = gi + kd * THREADS;
+                if (pd < P && pinOf(pd) < 0.999) {
+                    float3 rd, nd;
+                    restAtC(pd, rd, nd);
+                    pesBodyQuery(pd, kd, gx[pd], rd);
+                    float3 xd = pesBodyLift(pd, kd, 1.0, gx[pd]);
+                    if (all(isfinite(xd))) gx[pd] = xd;
                 }
             }
-            GroupMemoryBarrierWithGroupSync();
         }
 #endif
         if (g_mapped) {
@@ -1871,8 +1851,8 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                 restAtC(q, rp, rn);
                 gx[q] -= rp;
             }
-            GroupMemoryBarrierWithGroupSync();
         }
+        GroupMemoryBarrierWithGroupSync();   // (15/11) siempre: la correccion al dibujar tambien escribe gx
         uint pEnd = min(g_partStart + g_partCount, g_vertexCount);
         for (uint i = gi; i < g_vertexCount && !(s_flags & (2 << 12)); i += THREADS) {
             float3 v  = asfloat(g_bindPos.Load3(i * 12));
