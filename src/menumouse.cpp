@@ -618,10 +618,14 @@ static int VcPageKind(void* win) {   // 1 jugador, 2 comun / ajena, 3 otra del E
         }
     }
     if (nm && strncmp(nm, ".?AVMenuEdit", 12) == 0) {
+        // (15/11 f, Agustin 18:45: "al salir del menu de apariencia, que es el que tiene que permitir mover la camara, la camara tendria
+        // que volver a donde esta por default") solo Apariencia y lo que cuelga de ella (cara, pelo, montaje, cuerpo, accesorios)
         const char* r = nm + 12;
-        kind = strncmp(r, "Pl", 2) == 0 ? 1 : strncmp(r, "Cmn", 3) == 0 ? 2 : 3;
+        static const char* kAp[] = { "PlAppearance", "PlFaceType", "PlHairstyle", "PlMontage", "PlBody", "PlAccessory" };
+        kind = strncmp(r, "Cmn", 3) == 0 ? 2 : 3;
+        for (const char* a : kAp) if (strncmp(r, a, strlen(a)) == 0) kind = 1;
     }
-    if (s_n < 64) { s_vt[s_n] = vt; s_kind[s_n] = (int8_t)kind; s_n++; Log("mouse en menus: pagina %s (vtable %p) -> camara del visor %s", nm ? nm : "(sin RTTI)", (void*)vt, kind == 1 ? "si (Editar jugador)" : kind == 3 ? "no (otra parte del Editar)" : "sin cambio"); }
+    if (s_n < 64) { s_vt[s_n] = vt; s_kind[s_n] = (int8_t)kind; s_n++; Log("mouse en menus: pagina %s (vtable %p) -> camara del visor %s", nm ? nm : "(sin RTTI)", (void*)vt, kind == 1 ? "si (Apariencia del jugador)" : kind == 3 ? "no (otra parte del Editar: vuelve a la del juego)" : "sin cambio"); }
     return kind;
 }
 static bool VcLive() { return s_ok && g_cfg.menuMouse != 0 && g_cfg.menuViewCam != 0 && s_vcPlayer.load() && Now() - s_vcLiveT.load() < 0.3; }
@@ -662,11 +666,25 @@ bool MenuViewCamHint() { return VcLive() && !s_over.load() && !VcInMenu(s_curX.l
 bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
     if (!s_ok || g_cfg.menuMouse == 0 || g_cfg.menuViewCam == 0 || g_menuOpen.load(std::memory_order_relaxed)) return false;
     const uintptr_t mv = Readable((const void*)kModelView, 8) ? *(const uintptr_t*)kModelView : 0;
-    if (!mv) { if (s_vcMv) { VcReset("salio del visor"); s_vcMv = 0; } s_vcPlayer = false; return false; }
-    if (!s_vcPlayer.load()) { if (s_vcYawCur != 0 || s_vcPitchCur != 0 || s_vcZoomCur != 1.0f || s_vcPan[0] != 0 || s_vcPan[1] != 0 || s_vcPan[2] != 0) VcReset("fuera de Editar jugador"); return false; }
+    // (15/11 f, Agustin 18:45: "al mover la camara con el mouse se ven errores graficos") antes la camara corrida iba solo en la copia que
+    // se manda al render target y despues se devolvia la del juego: el resto del juego (recorte de objetos, sombras, nivel de detalle) seguia
+    // leyendo la camara vieja y no coincidia con lo que se dibujaba. Ahora se ESCRIBE en el CameraImpl y queda (como la camara libre); se
+    // guarda la del juego (base) y lo ultimo escrito: si el juego la cambia (otra vista del visor) se toma esa como base nueva. Al volver a
+    // cero (salir de Apariencia) se escribe la base una vez.
+    static unsigned char s_base[0x34], s_wrote[0x34]; static bool s_haveBase = false, s_dirty = false; static unsigned char* s_cam = nullptr;
+    if (cam != s_cam) { s_cam = cam; s_haveBase = false; s_dirty = false; }
+    // solo posicion y objetivo (+0x10..+0x27) son nuestros: si el juego los cambio, son la base nueva; lo demas (arriba, cerca / lejos,
+    // campo de vision) se toma siempre del juego, asi un cambio parcial nunca suma lo nuestro a la base
+    if (!s_haveBase || memcmp(cam + 0x10, s_wrote, 24) != 0) {   // el juego puso otra vista (p. ej. al entrar a Cara): se arranca de esa
+        if (s_haveBase && s_dirty) VcReset("el juego cambio la vista del visor");
+        memcpy(s_base, cam + 0x10, 24); memcpy(s_wrote, cam + 0x10, 24); s_haveBase = true; s_dirty = false; }
+    memcpy(s_base + 24, cam + 0x10 + 24, sizeof s_base - 24);
+    auto Restore = [&]() { if (s_dirty) { memcpy(cam + 0x10, s_base, 24); memcpy(s_wrote, s_base, 24); s_dirty = false; Log("mouse en menus: camara del visor: vuelve a la del juego"); } };
+    if (!mv) { if (s_vcMv) { VcReset("salio del visor"); s_vcMv = 0; } s_vcPlayer = false; Restore(); return false; }
+    if (!s_vcPlayer.load()) { if (s_vcYawCur != 0 || s_vcPitchCur != 0 || s_vcZoomCur != 1.0f || s_vcPan[0] != 0 || s_vcPan[1] != 0 || s_vcPan[2] != 0) VcReset("fuera de Apariencia"); Restore(); return false; }
     if (mv != s_vcMv) { VcReset("visor nuevo"); s_vcMv = mv; }
-    int proj; memcpy(&proj, cam + 0x3c, 4); if (proj != 0) return false;
-    float pos[3], tgt[3], fov; memcpy(pos, cam + 0x10, 12); memcpy(tgt, cam + 0x1c, 12); memcpy(&fov, cam + 0x40, 4);
+    int proj; memcpy(&proj, s_base + 0x2c, 4); if (proj != 0) return false;
+    float pos[3], tgt[3], fov; memcpy(pos, s_base + 0x00, 12); memcpy(tgt, s_base + 0x0c, 12); memcpy(&fov, s_base + 0x30, 4);   // la camara del juego (base)
     for (float f : pos) if (!(f == f) || fabsf(f) > 1.0e5f) return false;
     for (float f : tgt) if (!(f == f) || fabsf(f) > 1.0e5f) return false;
     if (!(fov > 0.005f && fov < 3.0f)) return false;
@@ -703,16 +721,48 @@ bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
             s_vcYaw = s_vcPitch = 0; s_vcZoom = 1.0f; s_vcPan[0] = s_vcPan[1] = s_vcPan[2] = 0; s_vcFocused = false; s_vcPulseKind = 0;
             Log("mouse en menus: camara del visor: doble clic -> vuelve a la camara del juego");
         } else {
+            // (15/11 g, Agustin 18:46: "el doble click debe ser por zonas del jugador o dependiendo del jugador") ZONAS DEL CUERPO: el rayo
+            // del mouse (camara que se ve ahora) corta el plano vertical que pasa por la cara del jugador (esqueleto: exprbones.cpp, sk_head);
+            // la altura del corte respecto de la cara (piso = y 0 del visor) dice la zona: cabeza, torso, piernas o pies. La camara va al
+            // punto de esa zona sobre el eje del jugador (la cabeza: el centro de la cara de verdad) y se acerca segun la zona.
             const float fx = s_vcFocusX.load(), fy = s_vcFocusY.load();
-            for (int i = 0; i < 3; i++) s_vcPan[i] = s_vcPanCur[i] + (r[i] * fx - u[i] * fy) * h;   // ese punto al centro (en el plano del objetivo)
-            PanClamp(); s_vcZoom = std::clamp(s_vcZoomCur * 0.5f, 0.12f, 3.0f); s_vcFocused = true; s_vcPulseKind = 1;
-            Log("mouse en menus: camara del visor: doble clic -> zoom a la zona (%.2f, %.2f del alto desde el centro), distancia x%.2f", fx, fy, s_vcZoom);
+            float cp[3]; for (int i = 0; i < 3; i++) cp[i] = tgt[i] + s_vcPanCur[i] + nv[i];          // camara que se ve
+            const void* lk = nullptr; float fc[3], ffw[3], fup[3]; double age = 99.0;
+            const bool face = ExprFaceFrame(cp, f, &lk, fc, ffw, fup, &age) && age < 1.0 && fc[1] > 0.6f && fc[1] < 2.6f;
+            bool zoned = false;
+            if (face) {
+                const float th = 2.0f * tanf(fov * 0.5f);
+                float dir[3]; for (int i = 0; i < 3; i++) dir[i] = f[i] + (r[i] * fx - u[i] * fy) * th;
+                float n[3] = { f[0], 0.0f, f[2] }; const float nl = sqrtf(n[0] * n[0] + n[2] * n[2]);
+                if (nl > 1e-3f) { n[0] /= nl; n[2] /= nl;
+                    const float den = dir[0] * n[0] + dir[2] * n[2];
+                    if (fabsf(den) > 1e-4f) {
+                        const float tt = ((fc[0] - cp[0]) * n[0] + (fc[2] - cp[2]) * n[2]) / den;
+                        if (tt > 0.0f) {
+                            const float hy = cp[1] + dir[1] * tt, H = fc[1], rel = hy / H;   // 1 = altura de la cara, 0 = piso
+                            static const char* kZn[4] = { "cabeza", "torso", "piernas", "pies" };
+                            const int z = rel > 0.86f ? 0 : rel > 0.55f ? 1 : rel > 0.22f ? 2 : 3;
+                            const float yz[4] = { fc[1], H * 0.74f, H * 0.42f, H * 0.07f }, zz[4] = { 0.20f, 0.42f, 0.48f, 0.32f };
+                            const float P[3] = { fc[0], yz[z], fc[2] };
+                            for (int i = 0; i < 3; i++) s_vcPan[i] = P[i] - tgt[i];
+                            PanClamp(); s_vcZoom = std::clamp(zz[z], 0.12f, 3.0f); s_vcFocused = true; s_vcPulseKind = 1; zoned = true;
+                            Log("mouse en menus: camara del visor: doble clic -> zona %s (corte a %.2f m, cara a %.2f m), distancia x%.2f", kZn[z], hy, H, s_vcZoom);
+                        }
+                    }
+                }
+            }
+            if (!zoned) {   // sin dato del esqueleto: el punto de la pantalla
+                for (int i = 0; i < 3; i++) s_vcPan[i] = s_vcPanCur[i] + (r[i] * fx - u[i] * fy) * h;   // ese punto al centro (en el plano del objetivo)
+                PanClamp(); s_vcZoom = std::clamp(s_vcZoomCur * 0.5f, 0.12f, 3.0f); s_vcFocused = true; s_vcPulseKind = 1;
+                Log("mouse en menus: camara del visor: doble clic sin esqueleto (%s) -> punto de la pantalla (%.2f, %.2f), distancia x%.2f", face ? "corte fuera" : "sin cara", fx, fy, s_vcZoom);
+            }
         }
     }
-    if (s_vcYawCur == 0 && s_vcPitchCur == 0 && s_vcZoomCur == 1.0f && s_vcPanCur[0] == 0 && s_vcPanCur[1] == 0 && s_vcPanCur[2] == 0) return false;
-    memcpy(save, cam + 0x10, 0x34);
+    (void)save;
+    if (s_vcYawCur == 0 && s_vcPitchCur == 0 && s_vcZoomCur == 1.0f && s_vcPanCur[0] == 0 && s_vcPanCur[1] == 0 && s_vcPanCur[2] == 0) { Restore(); return false; }
     float nt[3], np[3]; for (int i = 0; i < 3; i++) { nt[i] = tgt[i] + s_vcPanCur[i]; np[i] = nt[i] + nv[i]; }
     memcpy(cam + 0x10, np, 12); memcpy(cam + 0x1c, nt, 12);
+    memcpy(s_wrote, cam + 0x10, 24); s_dirty = true;
     return true;
 }
 // overlay.cpp: destello del doble clic (pixeles de la ventana); kind 1 = zoom a la zona, 0 = vuelta
@@ -721,6 +771,7 @@ bool MenuViewCamPulse(float* x, float* y, float* age, int* kind) {
     *x = s_vcPulseX.load(); *y = s_vcPulseY.load(); *age = a; *kind = s_vcPulseKind.load(); return true;
 }
 bool MenuViewCamCenter(float* x, float* y) { *x = s_vcCx.load(); *y = s_vcCy.load(); return *x > 0; }   // centro del visor (pixeles)
+bool MenuViewCamWantsHead() { return VcLive(); }   // (15/11 g) exprbones.cpp publica la cara mientras el visor de Apariencia esta a mano
 bool MenuViewCamDragging() { return VcLive() && s_vcDrag.load() != 0; }   // (15/11 e) flechas solo mientras se arrastra
 // cada cuadro (MenuMousePresent): botones y movimiento del mouse para la camara del visor
 static void VcInput() {
