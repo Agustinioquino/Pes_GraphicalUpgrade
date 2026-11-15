@@ -184,6 +184,7 @@ struct Config {
     int menuMouseHideGuide = 1;                // (14/11 e) esconder la barra de botones del juego mientras se usa el mouse ([PES21FX] mouse_oculta_botones)
     int menuMousePadReset = 1;                 // (14/11 g) al usar el mando despues del mouse vuelve la seleccion que tenia el mando ([PES21FX] mouse_mando_reinicia)
     int menuMouseOwnPtr = 1;                   // (15/11) paginas con puntero propio (Plan de juego, myClub): el mouse mueve ese puntero ([PES21FX] mouse_puntero_propio)
+    int menuViewCam = 1;                       // (15/11) camara del visor del Editar con el mouse fuera de las filas: arrastrar = girar, derecho arrastrado = mover, rueda = zoom ([PES21FX] mouse_camara_editar)
     int menuExitBtn = 1;                       // (15/11) boton "Salir del juego" sobre la pestana de la derecha del menu principal ([PES21FX] mouse_boton_salir)
     int mouseHint = 1;                         // (14/11 d) [PES21FX] ayuda_mouse: clic izq. / der. abajo a la derecha al usar el mouse en los menus del juego
     int camShareHold = 1;                      // (14/11 j) [PES21FX] camara_share: mantener SHARE / SELECT = camara libre en la repeticion
@@ -804,7 +805,7 @@ void KeyBlockInstall();
 // (11/11 3icxbh) mouse en los menus nativos del juego (menumouse.cpp): ganchos en el primer Present; la rueda llega por la ventana; cursor para overlay.cpp
 void MotorPagePresent();   // (11/11) motorpage.cpp: filas nativas del Motor en el estudio 3D
 void MotorPageSeen(void* win); bool MotorPageActive(); bool MotorPageIs(void* win); bool MotorPageDrag(void* win, float mx, float my, bool down, bool edge, float tx, float ty, float tw);   // el estudio del Motor esta abierto (lo confirma menumouse.cpp en cada cuadro)
-void MenuMousePresent(); void MenuMouseWheel(int delta); bool MenuMouseCursor(float* x, float* y); bool MenuMouseOverRow(); bool MenuExitButton(float* x, float* y, float* w, float* h, int* state); HWND OverlayHwnd(); bool MotorPanelOpen();
+void MenuMousePresent(); void MenuMouseWheel(int delta); bool MenuMouseCursor(float* x, float* y); bool MenuMouseOverRow(); bool MenuExitButton(float* x, float* y, float* w, float* h, int* state); bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save); bool MenuViewCamHint(); HWND OverlayHwnd(); bool MotorPanelOpen();
 extern std::atomic<int> g_replacedCount, g_failedCount;
 extern std::vector<std::string> g_compileErrors;
 extern std::mutex g_errMutex;

@@ -3115,7 +3115,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (mouseHintA > 0.0f && !MotorUiOn()) {   // (15/11 b: en el Motor no va, tiene su menu)   // (14/11 d) "clic izquierdo seleccionar / avanzar, clic derecho volver" en el idioma del menu
         const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
         char kb[16]; const char* kn = g_cfg.cursorKey ? KeyHudName(g_cfg.cursorKey, kb, sizeof(kb)) : nullptr;   // (15/11) + la tecla del cursor (F1)
-        hintH = MvMouseHint(ImGui::GetForegroundDrawList(), ImVec2(ds.x - 18.0f * k, ds.y - 18.0f * k), k, mouseHintA, TRS("Seleccionar / avanzar"), TRS("Volver"), kn, TRS("Cursor")) + 6.0f * k;
+        hintH = MvMouseHint(ImGui::GetForegroundDrawList(), ImVec2(ds.x - 18.0f * k, ds.y - 18.0f * k), k, mouseHintA, MenuViewCamHint() ? TRS("Girar camara (rueda: zoom)") : TRS("Seleccionar / avanzar"), MenuViewCamHint() ? TRS("Mover camara / Volver") : TRS("Volver"), kn, TRS("Cursor")) + 6.0f * k;
     }
     if (curToast) {   // (14/11 c) "Cursor apagado / prendido (F1)" chico, abajo a la derecha, en el idioma del menu; se va solo en 1.8 s
         const float t = (float)(Now() - s_curToastT), a = std::min(1.0f, std::min(t / 0.12f, (1.8f - t) / 0.35f));
