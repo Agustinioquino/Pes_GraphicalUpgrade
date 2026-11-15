@@ -566,7 +566,12 @@ static void PitchFlatPresent() {
         // que el BORDE del mapa siga a la zona viva del VS de las hojas. El reconocimiento de la pelota (0.3 m, 6 cm) y la prueba del piso no cambian
         const float zS = GrassLive(446, 1) > 0.5f ? std::clamp(GrassLive(446, 0), 1.f, 2.f) : 1.f;
         // (27/10 n) pique: la pelota venia del aire (> 40 cm) y toca el piso: marca redonda mas fuerte
-        if (onGround > 0.5f && s_ballPrev[1] > 0.4f && nb < kMaxPlayers) {
+        // (15/11, Agustin: el aro sin pasto alrededor de la pelota "solo pasa cuando la camara esta en pausa") con el reloj del juego quieto
+        // (pausa, repeticion en pausa) llegaban lecturas nuevas de la pelota quieta y cada cuadro estampaba el rastro con la fuerza fija
+        // 0.04 (no dependia de dt) mientras el mapa no se recupera (fB = exp(-dt / tau) = 1): el disco aplastado crecia hasta saturar.
+        // Ahora sin tiempo de juego la pelota no marca nada (ni rastro ni pique), como los jugadores
+        const bool ballClk = dt > 1e-5f;
+        if (ballClk && onGround > 0.5f && s_ballPrev[1] > 0.4f && nb < kMaxPlayers) {
             brush[nb][0] = s_ball[0] / 140.f + 0.5f; brush[nb][1] = s_ball[2] / 79.f + 0.5f; brush[nb][2] = 0.6f * k * (F[3] > 0.f ? F[3] : 1.0f) / zS; brush[nb][3] = 0.26f * zS; nb++;
         }
         float dx = s_ball[0] - s_ballPrev[0], dz = s_ball[2] - s_ballPrev[2]; float dist = sqrtf(dx * dx + dz * dz);
@@ -601,7 +606,7 @@ static void PitchFlatPresent() {
               if (mins < 0.01f) { wearEma *= 0.99f; lineEma *= 0.99f; }
               for (float& v : s_stain) v = std::clamp(v, 0.f, 1.f);
           } else s_stain[0] = s_stain[1] = s_stain[2] = 0.f; }
-        for (int sIdx = 0; sIdx < steps && nb < kMaxPlayers && segK > 0.f; sIdx++) {
+        for (int sIdx = 0; ballClk && sIdx < steps && nb < kMaxPlayers && segK > 0.f; sIdx++) {
             float a = steps > 1 ? (float)sIdx / (steps - 1) : 1.0f;
             float bx = s_ballPrev[0] + dx * a, bz = s_ballPrev[2] + dz * a;
             brush[nb][0] = bx / 140.f + 0.5f; brush[nb][1] = bz / 79.f + 0.5f; brush[nb][2] = std::min(0.2f, 0.04f + 2.5f * dt) * kb * segK / zS; brush[nb][3] = 0.21f * zS; nb++;   // (2/11) Agustin: que marque mas al rodar. (2/11 c) antes 0.12 + 9 dt (~0.27 por cuadro): saturaba el rastro y el pasto quedaba 'aplastado todo el tiempo'

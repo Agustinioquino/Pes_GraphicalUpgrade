@@ -618,9 +618,15 @@ static void UploadParams() {
 struct CtxState { const ShaderEntry* ps = nullptr; const ShaderEntry* vs = nullptr; ID3D11Device* dev = nullptr; bool devKnown = false; ID3D11Buffer* lastHairCB = nullptr; uint64_t lastFace = 0; bool clothCS = false; ID3D11DepthStencilView* shadowDSV = nullptr; bool gameShadow = false; SpCtx sp; };   // shadowDSV: (27/10 c) el DSV puesto es el shadow map del sol del juego (sombra de la cabeza)   // clothCS: el CS puesto es el simulador del mod de ropa (diagnostico en Dispatch)   // lastHairCB: b11 de la ultima cara dibujada en este contexto (la boca la hereda)
 static std::unordered_map<ID3D11DeviceContext*, CtxState> s_ctx;
 static std::shared_mutex s_ctxMutex;
+// (14/11 0kygek) ~30 llamadas por dibujo: el ultimo contexto de cada hilo queda en cache (sin candado ni busqueda). Seguro porque
+// unordered_map no mueve sus nodos al crecer y s_ctx nunca borra entradas: la referencia sigue valida para siempre
 static CtxState& Ctx(ID3D11DeviceContext* c) {
-    { std::shared_lock<std::shared_mutex> lk(s_ctxMutex); auto it = s_ctx.find(c); if (it != s_ctx.end()) return it->second; }
-    std::unique_lock<std::shared_mutex> lk(s_ctxMutex); return s_ctx[c];
+    thread_local ID3D11DeviceContext* t_lastC = nullptr; thread_local CtxState* t_lastS = nullptr;
+    if (c == t_lastC && t_lastS) return *t_lastS;
+    CtxState* s;
+    { std::shared_lock<std::shared_mutex> lk(s_ctxMutex); auto it = s_ctx.find(c); s = it != s_ctx.end() ? &it->second : nullptr; }
+    if (!s) { std::unique_lock<std::shared_mutex> lk(s_ctxMutex); s = &s_ctx[c]; }
+    t_lastC = c; t_lastS = s; return *s;
 }
 
 // ---------------------------------------------------------------- originales

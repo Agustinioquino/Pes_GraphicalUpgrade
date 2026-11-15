@@ -17,6 +17,7 @@ from fmdl import Fmdl
 from make_fpk_sin_short import entries
 
 A16 = lambda n: (n + 15) & ~15
+HANDS_FLAT = os.environ.get('PUBLICO_MANOS_LOOP') != '1'   # (14/11) PUBLICO_MANOS_LOOP=1 = como el 08/11 (para comparar)
 
 # ------------------------------------------------------------------ lectura cruda de una malla (todos los atributos)
 def read_mesh(F, m):
@@ -48,7 +49,7 @@ def read_mesh(F, m):
         vi += nf
     ib = [b for b in bufs if b[0] == 1][0]
     faces = np.frombuffer(d, '<u2', fcount, base + ib[2] + 2 * first).astype(np.int64).reshape(-1, 3)
-    return dict(entry=e, fidx=fidx, nvert=nvert, first=first, fcount=fcount, streams=streams, vfs=vfs, faces=faces)
+    return dict(entry=e, bgroup=bgroup, fidx=fidx, nvert=nvert, first=first, fcount=fcount, streams=streams, vfs=vfs, faces=faces)
 
 SIZE = {1: 12, 6: 8, 7: 4, 8: 4, 9: 4}
 
@@ -70,7 +71,7 @@ def encode(vf, v):
     return np.clip(np.rint(v), 0, 255).astype(np.uint8)
 
 # ------------------------------------------------------------------ subdivision
-def subdivide(M, strength):
+def subdivide(M, strength, hand_local=()):
     V = M['nvert']; T = M['faces']
     attrs = {}
     for vf in M['vfs']:
@@ -98,11 +99,20 @@ def subdivide(M, strength):
     nface = np.bincount(pos_in, minlength=len(uw))
     Pw = P[weld]
     boundary = nface != 2
+    # (14/11 0kygek, Agustin: "mejorar las manos de los aficionados") las manos son una punta de pocos triangulos: el suavizado de Loop
+    # las afinaba hasta parecer garras. Donde pesa el hueso de la mano (sk_hand_l / _r) la subdivision queda plana (sin achicar)
+    hw = np.zeros(V)
+    kw0 = [k for k in attrs if k[0] == 1]; ki0 = [k for k in attrs if k[0] == 7]
+    if hand_local and kw0 and ki0:
+        w0 = attrs[kw0[0]][1]; i0 = attrs[ki0[0]][1].astype(np.int64)
+        hw = (w0 * np.isin(i0, list(hand_local))).sum(1) / 255.0
+    hw_w = np.zeros(W); np.maximum.at(hw_w, inv, np.clip(hw, 0.0, 1.0))
+    sv = strength * (1.0 - np.clip(hw_w * 1.5, 0.0, 1.0))   # algo de mano (>= 2/3) = plano
     # posicion de la arista soldada (Loop): 3/8 extremos + 1/8 opuestos; borde: punto medio
     opp_sum = np.zeros((len(uw), 3)); np.add.at(opp_sum, pos_in, Pw[opp])
     mid = 0.5 * (Pw[uw[:, 0]] + Pw[uw[:, 1]])
     loop_e = np.where(boundary[:, None], mid, 0.75 * mid + 0.125 * opp_sum)
-    Ep = mid + strength * (loop_e - mid)
+    Ep = mid + np.minimum(sv[uw[:, 0]], sv[uw[:, 1]])[:, None] * (loop_e - mid)
     # vertices viejos (Loop): interior beta; borde: 3/4 + 1/8 vecinos de borde
     nb_sum = np.zeros((W, 3)); nb_n = np.zeros(W)
     for a, b in ((0, 1), (1, 0)):
@@ -117,7 +127,7 @@ def subdivide(M, strength):
     loop_vb = 0.75 * Pw + 0.125 * bnd_sum
     loop_v = np.where((bnd_n == 2)[:, None], loop_vb, loop_v)
     loop_v = np.where((on_b & (bnd_n != 2))[:, None], Pw, loop_v)   # esquinas raras: fijas
-    Vp = Pw + strength * (loop_v - Pw)
+    Vp = Pw + sv[:, None] * (loop_v - Pw)
     newP_old = Vp[inv]
     newP_edge = Ep[wcount_inv]
     # atributos
@@ -257,7 +267,9 @@ def process_fmdl(blob, strength, tmp):
     F = Fmdl(tmp)
     m = biggest_mesh(F)
     M = read_mesh(F, m)
-    NV, NT, streams = subdivide(M, strength)
+    grp = F.groups[M['bgroup']] if M['bgroup'] < len(F.groups) else []
+    hand = tuple(i for i, b in enumerate(grp) if b < len(F.bones) and F.bones[b]['name'] in ('sk_hand_l', 'sk_hand_r'))
+    NV, NT, streams = subdivide(M, strength, hand if HANDS_FLAT else ())
     out = rebuild(F, {m: (NV, NT, streams)})
     return out, (m, M['nvert'], len(M['faces']), NV, len(NT))
 
