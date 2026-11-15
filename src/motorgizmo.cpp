@@ -90,6 +90,7 @@ bool MotorGizmoOver(float px, float py);
 static void SetCam(bool on);
 static std::atomic<float> s_hr[4][4];                // zonas que tapan el clic (pixeles de la ventana): barra, escena, inspector, estado
 static std::atomic<int> s_hrN{0};
+static float s_openA = 0.0f, s_selY = -1.0f, s_inspA = 1.0f; static double s_uiT = -1.0e9; static int s_selWas = 0;   // (15/11 d) animaciones
 static int s_sel = 0, s_hotPrev = -1;                // fila marcada del arbol (0 render, 1 camara, 2 grilla, 3 jugador)
 static const float kBarH = 38.0f, kLeftW = 250.0f, kRightW = 320.0f, kStatH = 26.0f;
 static void ToolbarDraw() {
@@ -104,6 +105,17 @@ static void ToolbarDraw() {
     const ImU32 cPanel = IM_COL32(37, 37, 38, 244), cHead = IM_COL32(51, 51, 55, 255), cLine = IM_COL32(14, 14, 15, 255), cRow = IM_COL32(62, 62, 66, 255),
                 ink = IM_COL32(222, 222, 222, 255), dim = IM_COL32(142, 142, 146, 255), acc = IM_COL32(240, 138, 36, 255), cField = IM_COL32(27, 27, 28, 255);
     const float barH = kBarH * k, leftW = kLeftW * k, rightW = kRightW * k, statH = kStatH * k, fs = 15.0f * k, fsS = 12.5f * k, rowH = 28.0f * k;
+    // (15/11 d, Agustin 02:37: "lindo y tambien con animaciones") al abrir, los paneles entran deslizando desde su borde; la marca
+    // del arbol se desliza de una fila a otra; el contenido del inspector entra con un fundido corto al cambiar de fila. Se hace
+    // moviendo / atenuando los vertices ya emitidos de cada parte (la lista de dibujo no tiene transformaciones).
+    { const double now = Now(); const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
+      if (now - s_uiT > 0.4) { s_openA = 0.0f; s_selY = -1.0f; s_inspA = 1.0f; }
+      s_uiT = now; s_openA = std::min(1.0f, s_openA + dt / 0.28f); s_inspA = std::min(1.0f, s_inspA + dt / 0.16f);
+      if (s_sel != s_selWas) { s_selWas = s_sel; s_inspA = 0.0f; } }
+    const float eo = 1.0f - (1.0f - s_openA) * (1.0f - s_openA) * (1.0f - s_openA);      // salida suave
+    auto anim = [&](int from, float dx, float dy, float a) {
+        for (int i = from; i < dl->VtxBuffer.Size; i++) { ImDrawVert& v = dl->VtxBuffer[i]; v.pos.x += dx; v.pos.y += dy;
+            if (a < 0.999f) { const ImU32 al = (ImU32)((float)(v.col >> 24) * std::max(0.0f, a)); v.col = (v.col & 0x00ffffffu) | (al << 24); } } };
     int hot = -1; const int hp = s_hotPrev;
     auto hit = [&](int id, const ImVec2& a, const ImVec2& b) { if (mx >= a.x && mx <= b.x && my >= a.y && my <= b.y) hot = id; return hp == id; };
     auto text = [&](float x, float yc, ImU32 c, const char* t, float size) { const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t); dl->AddText(font, size, ImVec2(x, yc - ts.y * 0.5f), c, t); return ts.x; };
@@ -120,7 +132,7 @@ static void ToolbarDraw() {
         dl->AddRect(a, b, cLine, 3.0f * k);
     };
     // ---------------- barra de herramientas ----------------
-    { const ImVec2 a(0, 0), b(ds.x, barH); zone(a, b);
+    { const int v0 = dl->VtxBuffer.Size; const ImVec2 a(0, 0), b(ds.x, barH); zone(a, b);
       dl->AddRectFilled(a, b, cHead); dl->AddLine(ImVec2(0, barH), ImVec2(ds.x, barH), cLine, 1.0f);
       float x = 0.0f;
       { const ImVec2 p0(x, 0), p1(x + barH * 1.15f, barH); const bool hv = hit(0, p0, p1); if (hv) dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 26));
@@ -137,15 +149,18 @@ static void ToolbarDraw() {
           const ImVec2 o(p0.x + 17.0f * k, barH * 0.5f); const float h2 = 8.5f * k; const ImU32 c = on[i] ? IM_COL32(255, 190, 120, 255) : ink;
           if (s_icon[ic[i]]) dl->AddImage((ImTextureID)(uintptr_t)s_icon[ic[i]], ImVec2(o.x - h2, o.y - h2), ImVec2(o.x + h2, o.y + h2), ImVec2(0, 0), ImVec2(1, 1), c); else IconFallback(dl, ic[i], o, 28.0f * k, c, k);
           text(p0.x + 32.0f * k, barH * 0.5f, c, tn[i], fs); x = p1.x + 4.0f * k; }
+      anim(v0, 0.0f, -(1.0f - eo) * barH, eo);
     }
     // ---------------- arbol de escena ----------------
     const float y0 = barH + 1.0f, y1 = ds.y - statH;
-    { const ImVec2 a(0, y0), b(leftW, y1); zone(a, b);
+    { const int v0 = dl->VtxBuffer.Size; const ImVec2 a(0, y0), b(leftW, y1); zone(a, b);
       dl->AddRectFilled(a, b, cPanel); dl->AddLine(ImVec2(leftW, y0), ImVec2(leftW, y1), cLine, 1.0f);
       dl->AddRectFilled(a, ImVec2(leftW, y0 + rowH), cHead); text(12.0f * k, y0 + rowH * 0.5f, dim, "ESCENA", fsS);
       const char* const nm[4] = { "Estudio", "C\xC3\xA1mara", "Grilla de piso", "Jugador" }; const char* const st[4] = { "", camFree ? "libre" : "del juego", grid ? "" : "oculta", player ? "" : "sin cargar" };
+      { const float ty = y0 + rowH + (float)s_sel * rowH; if (s_selY < 0.0f) s_selY = ty; s_selY += (ty - s_selY) * std::min(1.0f, ImGui::GetIO().DeltaTime * 18.0f); if (fabsf(ty - s_selY) < 0.5f) s_selY = ty;
+        dl->AddRectFilled(ImVec2(0, s_selY), ImVec2(leftW, s_selY + rowH), cRow); dl->AddRectFilled(ImVec2(0, s_selY), ImVec2(3.0f * k, s_selY + rowH), acc); }
       for (int i = 0; i < 4; i++) { const float y = y0 + rowH + (float)i * rowH; const ImVec2 p0(0, y), p1(leftW, y + rowH); const bool hv = hit(10 + i, p0, p1);
-          if (s_sel == i) { dl->AddRectFilled(p0, p1, cRow); dl->AddRectFilled(p0, ImVec2(3.0f * k, p1.y), acc); } else if (hv) dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 14));
+          if (s_sel != i && hv) dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 14));
           const float ind = i == 0 ? 12.0f * k : 34.0f * k; const float yc = y + rowH * 0.5f;
           if (i == 0) { dl->AddTriangleFilled(ImVec2(ind, yc - 3.0f * k), ImVec2(ind + 9.0f * k, yc - 3.0f * k), ImVec2(ind + 4.5f * k, yc + 4.0f * k), dim); }
           else dl->AddRectFilled(ImVec2(ind - 12.0f * k, yc - 1.0f), ImVec2(ind - 4.0f * k, yc), IM_COL32(90, 90, 94, 255));
@@ -158,14 +173,16 @@ static void ToolbarDraw() {
               const ImVec2 o((e0.x + e1.x) * 0.5f, yc); const ImU32 c = off ? IM_COL32(100, 100, 104, 255) : ink;
               dl->AddCircle(o, 6.0f * k, c, 16, 1.5f * k); if (!off) dl->AddCircleFilled(o, 2.6f * k, c, 10); else dl->AddLine(ImVec2(o.x - 7.0f * k, o.y + 6.0f * k), ImVec2(o.x + 7.0f * k, o.y - 6.0f * k), c, 1.5f * k);
           } }
+      anim(v0, -(1.0f - eo) * leftW, 0.0f, eo);
     }
     // ---------------- inspector ----------------
-    { const float x0 = ds.x - rightW; const ImVec2 a(x0, y0), b(ds.x, y1); zone(a, b);
+    { const int v0 = dl->VtxBuffer.Size; int v1 = v0; const float x0 = ds.x - rightW; const ImVec2 a(x0, y0), b(ds.x, y1); zone(a, b);
       dl->AddRectFilled(a, b, cPanel); dl->AddLine(ImVec2(x0, y0), ImVec2(x0, y1), cLine, 1.0f);
       dl->AddRectFilled(a, ImVec2(ds.x, y0 + rowH), cHead); text(x0 + 12.0f * k, y0 + rowH * 0.5f, dim, "INSPECTOR", fsS);
       const char* const title[4] = { "Estudio  \xC2\xB7  Render", "C\xC3\xA1mara", "Grilla de piso", "Jugador" };
       float y = y0 + rowH; dl->AddRectFilled(ImVec2(x0 + 1.0f, y), ImVec2(ds.x, y + rowH + 4.0f * k), IM_COL32(45, 45, 48, 255)); text(x0 + 12.0f * k, y + (rowH + 4.0f * k) * 0.5f, ink, title[s_sel], fs + 1.0f * k); y += rowH + 4.0f * k + 8.0f * k;
       const float lx = x0 + 12.0f * k, fx0 = x0 + 12.0f * k, fx1 = ds.x - 12.0f * k;
+      v1 = dl->VtxBuffer.Size;          // desde aca: contenido de lo marcado (fundido al cambiar)
       auto label = [&](const char* t) { text(lx, y + 9.0f * k, dim, t, fsS); y += 20.0f * k; };
       auto value = [&](const char* nmv, const char* v) { text(lx, y + rowH * 0.5f, dim, nmv, fsS + 1.0f * k); const ImVec2 p0(x0 + rightW * 0.42f, y + 3.0f * k), p1(fx1, y + rowH - 3.0f * k); dl->AddRectFilled(p0, p1, cField, 3.0f * k); text(p0.x + 8.0f * k, y + rowH * 0.5f, ink, v, fsS + 1.0f * k); y += rowH; };
       auto button = [&](int id, const char* t) { const ImVec2 p0(fx0, y + 4.0f * k), p1(fx1, y + rowH + 6.0f * k); const bool hv = hit(id, p0, p1); dl->AddRectFilled(p0, p1, hv ? IM_COL32(86, 86, 92, 255) : IM_COL32(66, 66, 70, 255), 3.0f * k); dl->AddRect(p0, p1, cLine, 3.0f * k); textC(p0, p1, ink, t, fs); y += rowH + 14.0f * k; };
@@ -204,12 +221,15 @@ static void ToolbarDraw() {
           button(220, player ? "Quitar de la escena" : "Cargar en la escena");
           text(lx, y + 8.0f * k, dim, "Es el \xC3\xBAltimo jugador que abriste en Editar.", fsS);
       }
+      anim(v1, (1.0f - s_inspA) * 14.0f * k, 0.0f, s_inspA);
+      anim(v0, (1.0f - eo) * rightW, 0.0f, eo);
     }
     // ---------------- barra de estado ----------------
-    { const ImVec2 a(0, y1), b(ds.x, ds.y); zone(a, b); dl->AddRectFilled(a, b, IM_COL32(30, 30, 31, 250)); dl->AddLine(a, ImVec2(ds.x, y1), cLine, 1.0f);
+    { const int v0 = dl->VtxBuffer.Size; const ImVec2 a(0, y1), b(ds.x, ds.y); zone(a, b); dl->AddRectFilled(a, b, IM_COL32(30, 30, 31, 250)); dl->AddLine(a, ImVec2(ds.x, y1), cLine, 1.0f);
       char st[160]; snprintf(st, sizeof st, "Vista: %s    Alambre: %s    C\xC3\xA1mara: %s", MotorViewName(0, MotorViewGet(0)), MotorViewName(1, MotorViewGet(1)), camFree ? "libre" : "del juego");
       text(12.0f * k, y1 + statH * 0.5f, dim, st, fsS);
-      char fp[32]; snprintf(fp, sizeof fp, "%.0f fps", ImGui::GetIO().Framerate); const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, fp); text(ds.x - ts.x - 12.0f * k, y1 + statH * 0.5f, dim, fp, fsS); }
+      char fp[32]; snprintf(fp, sizeof fp, "%.0f fps", ImGui::GetIO().Framerate); const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, fp); text(ds.x - ts.x - 12.0f * k, y1 + statH * 0.5f, dim, fp, fsS);
+      anim(v0, 0.0f, (1.0f - eo) * statH, eo); }
     s_hrN.store(nz);
     // ---------------- clic (al soltar, sobre lo mismo que se apreto) ----------------
     const bool lNow = front && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0; const bool lEdge = lNow && !s_tlWas, lUp = !lNow && s_tlWas; s_tlWas = lNow;
