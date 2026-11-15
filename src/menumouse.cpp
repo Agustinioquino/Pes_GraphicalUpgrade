@@ -591,6 +591,11 @@ static float s_vcYawCur = 0, s_vcPitchCur = 0, s_vcPanCur[3] = {};              
 static std::atomic<int> s_vcFocusReq{0}; static std::atomic<float> s_vcFocusX{0}, s_vcFocusY{0};   // fraccion del alto de la pantalla desde el centro
 static bool s_vcFocused = false;
 static std::atomic<double> s_vcPulseT{-1.0e9}; static std::atomic<float> s_vcPulseX{0}, s_vcPulseY{0}; static std::atomic<int> s_vcPulseKind{0};
+// (15/11 e, Agustin 18:40: "el zoom al hacer doble click no es preciso") la imagen del visor NO ocupa toda la ventana: el juego la dibuja
+// en el clip loaderTex (edit::ModelView +0x9c / +0xa0, ~1238 x 1080 del escenario, graficos-niveles-visor-tamano) pegado a la derecha,
+// con la relacion de aspecto de la camara (+0x44). El centro de la camara es el centro de ESE rectangulo, no el de la ventana: el punto
+// del doble clic se mide desde ahi y en altos de ese rectangulo. INFERIDO: alto completo y pegado a la derecha (lo dice el log).
+static std::atomic<float> s_vcAspect{0.0f}, s_vcCx{0}, s_vcCy{0};
 static uintptr_t s_vcMv = 0; static double s_vcT = 0; static int s_vcLog = 0;
 // (15/11 d, Agustin 17:56: "unicamente en el menu editar jugador y sus submenus, pero no en el resto de menus y no en el motor") la
 // camara a mano solo vale dentro de Editar > Jugadores. La clase de cada pagina sale del RTTI del exe (vtable[-1] -> localizador ->
@@ -668,6 +673,7 @@ bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
     const float v[3] = { pos[0] - tgt[0], pos[1] - tgt[1], pos[2] - tgt[2] };
     const float d = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (d < 0.01f) return false;
     s_vcLiveT.store(Now());
+    { float asp; memcpy(&asp, cam + 0x44, 4); if (asp == asp && asp > 0.2f && asp < 5.0f) s_vcAspect.store(asp); }
     if (s_vcLog < 2) { s_vcLog++; Log("mouse en menus: camara del visor del Editar a mano (camara del juego a %.2f m, campo de vision %.3f): arrastrar = girar, derecho = mover, rueda = zoom", d, fov); }
     // pedido del mouse
     const double now = Now(); const float dt = (float)std::clamp(now - s_vcT, 0.0, 0.1); s_vcT = now;
@@ -714,6 +720,8 @@ bool MenuViewCamPulse(float* x, float* y, float* age, int* kind) {
     const float a = (float)(Now() - s_vcPulseT.load()); if (a < 0.0f || a > 0.9f) return false;
     *x = s_vcPulseX.load(); *y = s_vcPulseY.load(); *age = a; *kind = s_vcPulseKind.load(); return true;
 }
+bool MenuViewCamCenter(float* x, float* y) { *x = s_vcCx.load(); *y = s_vcCy.load(); return *x > 0; }   // centro del visor (pixeles)
+bool MenuViewCamDragging() { return VcLive() && s_vcDrag.load() != 0; }   // (15/11 e) flechas solo mientras se arrastra
 // cada cuadro (MenuMousePresent): botones y movimiento del mouse para la camara del visor
 static void VcInput() {
     static bool s_l = true, s_r = true; static POINT s_p0{}, s_pl{}; static double s_t0 = 0; static bool s_far = false;
@@ -728,7 +736,15 @@ static void VcInput() {
     if (drag == 0 && lEdge && !s_over.load() && !VcInMenu(p.x)) {   // doble clic rapido (menos de 0.35 s y casi en el mismo lugar)
         static double s_lt = -1.0e9; static POINT s_lp{}; const double t = Now();
         if (t - s_lt < 0.35 && abs(p.x - s_lp.x) + abs(p.y - s_lp.y) < 10) {
-            s_vcFocusX.store(((float)p.x - (float)rc.right * 0.5f) / ch); s_vcFocusY.store(((float)p.y - ch * 0.5f) / ch); s_vcFocusReq = 1;
+            const float cw = (float)rc.right; float sw = cw, sh = ch, ox = 0, oy = 0;   // escenario 16:9 centrado
+            if (cw * 9.0f > ch * 16.0f) { sw = ch * 16.0f / 9.0f; ox = (cw - sw) * 0.5f; } else if (cw * 9.0f < ch * 16.0f) { sh = cw * 9.0f / 16.0f; oy = (ch - sh) * 0.5f; }
+            const float asp = s_vcAspect.load(); const float vw = asp > 0.2f ? std::min(sw, asp * sh) : sw;   // rectangulo del visor: alto completo, pegado a la derecha
+            const float vx0 = ox + sw - vw, vcx = vx0 + vw * 0.5f, vcy = oy + sh * 0.5f;
+            s_vcCx.store(vcx); s_vcCy.store(vcy);
+            s_vcFocusX.store(((float)p.x - vcx) / sh); s_vcFocusY.store(((float)p.y - vcy) / sh); s_vcFocusReq = 1;
+            { static int s_nl = 0; if (s_nl++ < 8) { const uintptr_t mv = Readable((const void*)kModelView, 8) ? *(const uintptr_t*)kModelView : 0; int mw = 0, mh = 0;
+                if (mv && Readable((const void*)(mv + 0x9c), 8)) { memcpy(&mw, (const void*)(mv + 0x9c), 4); memcpy(&mh, (const void*)(mv + 0xa0), 4); }
+                Log("mouse en menus: doble clic en (%d, %d) de %.0f x %.0f; visor %.0f..%.0f (aspecto %.3f, centro %.0f, %.0f); ModelView tamano %d x %d", (int)p.x, (int)p.y, cw, ch, vx0, vx0 + vw, asp, vcx, vcy, mw, mh); } }
             s_vcPulseX.store((float)p.x); s_vcPulseY.store((float)p.y); s_vcPulseT.store(t); s_lt = -1.0e9;
         } else { s_lt = t; s_lp = p; }
     }
