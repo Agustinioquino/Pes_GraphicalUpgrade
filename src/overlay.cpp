@@ -2050,7 +2050,7 @@ static void DrawSettingsPage() {
         if (ImGui::Checkbox(TRS("Repeticion en camara lenta"), &rs)) { g_cfg.replaySlow = rs ? 1 : 0; SaveOption("repeticion_lenta", rs ? "1" : "0"); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("La reproduccion normal de la repeticion (despues de despausar) va a la velocidad lenta de la flecha derecha del visor: la de SlowMoServer si esta prendido, si no la mitad."));
     }
-    { static const char* kH[3] = { "Escondido", "Se apaga solo (3 s sin tocar nada)", "Siempre completo" };   // (14/11) HUD de la camara libre / modo foto
+    { static const char* kH[3] = { "Escondido", "Se apaga solo (3 s sin tocar nada)", "Siempre a la vista (SHARE corto o H la esconden)" };   // (14/11) HUD de la camara libre / modo foto; (15/11) 2 de fabrica
       int hv = std::clamp(g_cfg.camHud, 0, 2); ImGui::SetNextItemWidth(280.0f * UIK());
       if (ImGui::BeginCombo(TRS("HUD de la camara libre"), TRS(kH[hv]))) { for (int i = 0; i < 3; i++) if (ImGui::Selectable(TRS(kH[i]), hv == i)) { g_cfg.camHud = i; SaveOption("camara_hud", std::to_string(i).c_str()); } ImGui::EndCombo(); } }
     if (ImGui::Checkbox(TRS("L3 + R3 abre y cierra el menu"), &g_cfg.menuPadOpen)) SaveOption("menu_mando_abrir", g_cfg.menuPadOpen ? "1" : "0");
@@ -2941,6 +2941,9 @@ void OverlayPresent(IDXGISwapChain* sc) {
     }
     else if (hint) DrawPhysiqueHint();
     if (camHud && camFree) {   // (14/11, Agustin: "interfaz o hud adaptable, y mostrar lo mas posible de la pantalla del propio juego")
+        // (15/11, Agustin: "la idea es que ese menu de barra de abajo se muestre siempre y pueda ocultarlo presionando rapido share")
+        // camara_hud 2 de fabrica: a la vista siempre (al prender la camara vuelve aunque la vez anterior se haya escondido); SHARE
+        // corto o H la esconden / muestran. Lo de abajo (14/11 g / i) sigue valiendo para camara_hud 0 y 1
         // (14/11 g, Agustin: "al presionar las flechas del control se muestra un menu raro abajo ... no me gusta") solo con la camara libre
         // (no con la camara lenta sola), ESCONDIDO de fabrica (camara_hud 0): CREATE / SHARE o H lo muestran; la cruceta no lo despierta
         // HUD fino abajo; sin tocar nada 3 s se achica a una pastilla en la esquina (camara_hud = 1); CREATE / SHARE o H lo esconden
