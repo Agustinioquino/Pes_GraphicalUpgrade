@@ -64,6 +64,15 @@ static void BuildFonts(float H) {
             s_fontPad = io.Fonts->AddFontFromFileTTF(bold.c_str(), std::round(19.0f * k * up * 0.70f), &pc, kPadRanges);
             MvSetPadFont(s_fontPad);
         }
+        {   // (15/11, Agustin 04:28) letra de la guia del mouse de abajo a la derecha: Lack (la que mando), a su tamano; si no esta, la del menu
+            ImFont* gf = nullptr;
+            if (GetFileAttributesW((g_cfg.baseDir + L"textures\\pes_guia.ttf").c_str()) != INVALID_FILE_ATTRIBUTES) {
+                ImFontConfig gc; gc.OversampleH = 3; gc.OversampleV = 2;
+                gf = io.Fonts->AddFontFromFileTTF((dir + "textures\\pes_guia.ttf").c_str(), std::round(21.0f * k), &gc, io.Fonts->GetGlyphRangesDefault());
+            }
+            MvSetGuideFont(gf);
+            Log("menu: guia del mouse con %s", gf ? "textures\\pes_guia.ttf" : "la letra del menu (falta textures\\pes_guia.ttf)");
+        }
         Log("menu: letra %s", ui ? "Saira Semi Condensed (textures\\pes_ui.ttf)" : "Segoe UI");
     }
     {   // (04/11 n) iconos del menu (Font Awesome Free, recortado): se mezclan en la letra normal y en la negrita
@@ -3035,7 +3044,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
     float hintH = 0.0f;
     if (mouseHintA > 0.0f && !MotorUiOn()) {   // (15/11 b: en el Motor no va, tiene su menu)   // (14/11 d) "clic izquierdo seleccionar / avanzar, clic derecho volver" en el idioma del menu
         const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
-        hintH = MvMouseHint(ImGui::GetForegroundDrawList(), ImVec2(ds.x - 18.0f * k, ds.y - 18.0f * k), k, mouseHintA, TRS("Seleccionar / avanzar"), TRS("Volver")) + 6.0f * k;
+        char kb[16]; const char* kn = g_cfg.cursorKey ? KeyHudName(g_cfg.cursorKey, kb, sizeof(kb)) : nullptr;   // (15/11) + la tecla del cursor (F1)
+        hintH = MvMouseHint(ImGui::GetForegroundDrawList(), ImVec2(ds.x - 18.0f * k, ds.y - 18.0f * k), k, mouseHintA, TRS("Seleccionar / avanzar"), TRS("Volver"), kn, TRS("Cursor")) + 6.0f * k;
     }
     if (curToast) {   // (14/11 c) "Cursor apagado / prendido (F1)" chico, abajo a la derecha, en el idioma del menu; se va solo en 1.8 s
         const float t = (float)(Now() - s_curToastT), a = std::min(1.0f, std::min(t / 0.12f, (1.8f - t) / 0.35f));

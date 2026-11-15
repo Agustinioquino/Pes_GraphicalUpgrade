@@ -1738,28 +1738,45 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
 // (14/11 d, Agustin: "al usar el mouse que se muestre un pequeno texto ... abajo a la derecha en pequeno los botones del mouse: clic
 // izquierdo seleccionar / avanzar, clic derecho volver") Dos mouses chicos con el boton que corresponde en verde y su texto. br = esquina
 // de abajo a la derecha. Devuelve el alto usado (para apilar otro aviso arriba).
-float MvMouseHint(ImDrawList* dl, ImVec2 br, float k, float alpha, const char* left, const char* right) {
+// (15/11, Agustin 04:28: "aumentarle un poco el tamano y la definicion y cambiarle la fuente ... agregar el boton f1 como guia que
+// prende o enciende el cursor") mas grande, con la letra que mando (Lack, textures\pes_guia.ttf, rasterizada a su tamano: nitida,
+// sin escalar) y una tercera guia: la tecla del cursor (F1) y "Cursor".
+static ImFont* s_guideFont = nullptr;
+void MvSetGuideFont(ImFont* f) { s_guideFont = f; }
+float MvMouseHint(ImDrawList* dl, ImVec2 br, float k, float alpha, const char* left, const char* right, const char* keyName, const char* keyLabel) {
     if (alpha <= 0.01f) return 0.0f;
     const ImVec4 acc = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
-    const float fs = ImGui::GetFontSize() * 0.82f * std::max(1.0f, k * 0.9f); ImFont* f = ImGui::GetFont();
-    const float mw = 13.0f * k, mh = 19.0f * k, gap = 6.0f * k, sep = 16.0f * k, pad = 9.0f * k;   // (14/11 f) iconos mas grandes (pedido de Agustin)
+    ImFont* f = s_guideFont ? s_guideFont : ImGui::GetFont();
+    const float fs = s_guideFont ? s_guideFont->FontSize : ImGui::GetFontSize() * 0.95f * std::max(1.0f, k * 0.9f);
+    const float mw = 17.0f * k, mh = 25.0f * k, gap = 8.0f * k, sep = 22.0f * k, pad = 12.0f * k;
     const ImVec2 tl = f->CalcTextSizeA(fs, FLT_MAX, 0, left), tr = f->CalcTextSizeA(fs, FLT_MAX, 0, right);
-    const float h = std::max(mh, fs) + pad * 1.2f, w = pad * 2 + mw * 2 + gap * 2 + tl.x + tr.x + sep;
+    const bool key = keyName && keyName[0] && keyLabel && keyLabel[0];
+    const ImVec2 kn = key ? f->CalcTextSizeA(fs * 0.80f, FLT_MAX, 0, keyName) : ImVec2(0, 0), kl = key ? f->CalcTextSizeA(fs, FLT_MAX, 0, keyLabel) : ImVec2(0, 0);
+    const float kw = key ? std::max(mh, kn.x + 12.0f * k) : 0.0f;
+    const float h = std::max(mh, fs) + pad * 1.2f, w = pad * 2 + mw * 2 + gap * 2 + tl.x + tr.x + sep + (key ? sep + kw + gap + kl.x : 0.0f);
     const ImVec2 a(br.x - w, br.y - h);
-    dl->AddRectFilled(a, br, Col(0.05f, 0.07f, 0.09f, 0.55f * alpha), 6.0f * k);
+    dl->AddRectFilled(a, br, Col(0.05f, 0.07f, 0.09f, 0.55f * alpha), 7.0f * k);
+    const ImU32 line = Col(0.85f, 0.88f, 0.92f, 0.85f * alpha);
     auto Mouse = [&](float x, int btn) {
         const ImVec2 p0(x, a.y + (h - mh) * 0.5f), p1(x + mw, p0.y + mh); const float r = mw * 0.5f;
         dl->AddRectFilled(p0, p1, Col(1, 1, 1, 0.12f * alpha), r);
         const float my = p0.y + mh * 0.42f, cx = x + mw * 0.5f;
         if (btn == 0) dl->AddRectFilled(p0, ImVec2(cx - 0.5f * k, my), ColA(acc, 0.9f * alpha), r, ImDrawFlags_RoundCornersTopLeft);
         else dl->AddRectFilled(ImVec2(cx + 0.5f * k, p0.y), ImVec2(p1.x, my), ColA(acc, 0.9f * alpha), r, ImDrawFlags_RoundCornersTopRight);
-        dl->AddRect(p0, p1, Col(0.85f, 0.88f, 0.92f, 0.85f * alpha), r, 0, 1.0f * k);
-        dl->AddLine(ImVec2(p0.x, my), ImVec2(p1.x, my), Col(0.85f, 0.88f, 0.92f, 0.6f * alpha), 1.0f * k);
-        dl->AddLine(ImVec2(cx, p0.y), ImVec2(cx, my), Col(0.85f, 0.88f, 0.92f, 0.6f * alpha), 1.0f * k);
+        dl->AddRect(p0, p1, line, r, 0, 1.4f * k);
+        dl->AddLine(ImVec2(p0.x, my), ImVec2(p1.x, my), Col(0.85f, 0.88f, 0.92f, 0.6f * alpha), 1.2f * k);
+        dl->AddLine(ImVec2(cx, p0.y), ImVec2(cx, my), Col(0.85f, 0.88f, 0.92f, 0.6f * alpha), 1.2f * k);
     };
-    float x = a.x + pad; const float ty = a.y + (h - fs) * 0.5f; const ImU32 tc = Col(0.90f, 0.93f, 0.96f, 0.92f * alpha);
+    float x = a.x + pad; const float ty = a.y + (h - tl.y) * 0.5f; const ImU32 tc = Col(0.92f, 0.94f, 0.97f, 0.95f * alpha);
     Mouse(x, 0); x += mw + gap; dl->AddText(f, fs, ImVec2(x, ty), tc, left); x += tl.x + sep;
-    Mouse(x, 1); x += mw + gap; dl->AddText(f, fs, ImVec2(x, ty), tc, right);
+    Mouse(x, 1); x += mw + gap; dl->AddText(f, fs, ImVec2(x, ty), tc, right); x += tr.x;
+    if (key) {   // tecla como un teclita: borde claro, letra adentro
+        x += sep; const ImVec2 k0(x, a.y + (h - mh) * 0.5f), k1(x + kw, k0.y + mh);
+        dl->AddRectFilled(k0, k1, Col(1, 1, 1, 0.12f * alpha), 4.0f * k);
+        dl->AddRect(k0, k1, line, 4.0f * k, 0, 1.4f * k);
+        dl->AddText(f, fs * 0.80f, ImVec2(x + (kw - kn.x) * 0.5f, k0.y + (mh - kn.y) * 0.5f), tc, keyName);
+        x += kw + gap; dl->AddText(f, fs, ImVec2(x, a.y + (h - kl.y) * 0.5f), tc, keyLabel);
+    }
     return h;
 }
 
