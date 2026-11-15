@@ -1696,54 +1696,60 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
         return;
     }
     if (kind == 5) {
-        // (15/11 ythnmm, Agustin 17:32 / 17:34: "un icono de una camara girada en perspectiva con unas flechas con un estilo 3d en 2d,
-        // pequeno") CAMARA DEL VISOR DEL EDITAR (menumouse.cpp): cajita en perspectiva (frente, techo y costado con tres tonos), lente
-        // que sale hacia adelante y un aro de giro acostado alrededor con dos puntas de flecha; el aro pasa por detras y por delante de
-        // la camara. Al arrastrar el aro y las flechas se ponen verdes. El punto del mouse es el centro.
-        const float sc = k * 1.15f * (1.0f - 0.06f * s_dn);
+        // (15/11 ythnmm, Agustin 17:32 / 17:34 / 17:41: "un icono de una camara girada en perspectiva con unas flechas con un estilo 3d en
+        // 2d, pequeno", "la camara al reves y como si fuera una camara de cine, le faltan unas lineas en vertical") CAMARA DE CINE DEL
+        // VISOR DEL EDITAR (menumouse.cpp): cuerpo en perspectiva (costado, techo y fondo en tres tonos), dos rollos arriba, lente con
+        // parasol hacia la derecha; alrededor un aro acostado y otro parado, cada uno con dos puntas de flecha, que pasan por detras y
+        // por delante de la camara. Al arrastrar los aros se ponen verdes. El punto del mouse es el centro.
+        const float sc = k * 1.05f * (1.0f - 0.06f * s_dn);
         const ImVec4 grn(0.20f, 0.91f, 0.50f, 1.0f);
         const ImU32 arr = ColA(Lerp4(ImVec4(0.92f, 0.94f, 0.96f, 1), grn, s_dn), alpha), arrD = ColA(Lerp4(ImVec4(0.47f, 0.51f, 0.55f, 1), ImVec4(0.10f, 0.55f, 0.29f, 1), s_dn), alpha);
         const ImU32 shadow = Col(0, 0, 0, 0.28f * alpha); const float lw = std::max(1.0f, 0.9f * k);
+        const ImU32 cFront = Col(0.91f, 0.93f, 0.95f, alpha), cDark = Col(0.24f, 0.26f, 0.30f, alpha), cDarker = Col(0.16f, 0.18f, 0.22f, alpha), cGrey = Col(0.59f, 0.62f, 0.67f, alpha), cSide = Col(0.66f, 0.70f, 0.75f, alpha);
         auto P = [&](float x, float y) { return ImVec2(m.x + x * sc, m.y + y * sc); };
-        auto Quad = [&](const float q[4][2], ImU32 fill, bool line) { const ImVec2 a = P(q[0][0], q[0][1]), b = P(q[1][0], q[1][1]), c = P(q[2][0], q[2][1]), d = P(q[3][0], q[3][1]);
-            dl->AddQuadFilled(a, b, c, d, fill); if (line) dl->AddQuad(a, b, c, d, edge, lw); };
-        auto Band = [&](float t0, float t1) {   // tramo del aro: elipse 13 x 4.5 con centro (0, 2.5), con canto (3D)
-            const int n = 14; ImVec2 top[n + 1];
-            for (int i = 0; i <= n; i++) { const float t = t0 + (t1 - t0) * (float)i / (float)n; top[i] = P(13.0f * cosf(t), 2.5f + 4.5f * sinf(t)); }
-            for (int i = 0; i < n; i++) {
-                const ImVec2 a = top[i], b = top[i + 1]; const float e = 0.9f * sc, th = 0.55f * sc;
-                dl->AddQuadFilled(ImVec2(a.x, a.y + e), ImVec2(b.x, b.y + e), ImVec2(b.x, b.y + e + 1.4f * sc), ImVec2(a.x, a.y + e + 1.4f * sc), shadow);
-                dl->AddQuadFilled(a, b, ImVec2(b.x, b.y + e), ImVec2(a.x, a.y + e), arrD);
-                dl->AddQuadFilled(a, b, ImVec2(b.x, b.y + th), ImVec2(a.x, a.y + th), arr);
-            }
+        auto Q = [&](float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy, ImU32 fill, bool line) {
+            const ImVec2 a = P(ax, ay), b = P(bx, by), c = P(cx, cy), d = P(dx, dy); dl->AddQuadFilled(a, b, c, d, fill); if (line) dl->AddQuad(a, b, c, d, edge, lw); };
+        auto Circ = [&](float x, float y, float r, ImU32 fill, bool line) { dl->AddCircleFilled(P(x, y), r * sc, fill, 20); if (line) dl->AddCircle(P(x, y), r * sc, edge, 20, lw); };
+        auto RP = [&](bool hz, float t) { return hz ? ImVec2(13.0f * cosf(t), 2.5f + 4.5f * sinf(t)) : ImVec2(4.2f * cosf(t), 0.5f + 12.5f * sinf(t)); };
+        auto Band = [&](bool hz, float t0, float t1) {   // tramo de un aro, con canto (3D)
+            const int n = 16; ImVec2 q[n + 1]; for (int i = 0; i <= n; i++) q[i] = RP(hz, t0 + (t1 - t0) * (float)i / (float)n);
+            const float ex = hz ? 0.0f : 0.9f, ey = hz ? 0.9f : 0.0f, tx = hz ? 0.0f : 0.5f, ty = hz ? 0.5f : 0.0f;
+            for (int i = 0; i < n; i++) { const ImVec2 a = q[i], b = q[i + 1];
+                Q(a.x, a.y, b.x, b.y, b.x + ex, b.y + ey, a.x + ex, a.y + ey, arrD, false);
+                Q(a.x, a.y, b.x, b.y, b.x + tx, b.y + ty, a.x + tx, a.y + ty, arr, false); }
         };
-        auto Head = [&](float t, float dir) {   // punta de flecha en el extremo del aro
-            const float x = 13.0f * cosf(t), y = 2.5f + 4.5f * sinf(t); float tx = -13.0f * sinf(t) * dir, ty = 4.5f * cosf(t) * dir;
-            const float L = sqrtf(tx * tx + ty * ty); tx /= L; ty /= L; const float nx = -ty, ny = tx;
-            const ImVec2 tip = P(x + tx * 3.4f, y + ty * 3.4f + 0.4f), a = P(x + nx * 2.4f, y + ny * 2.4f + 0.4f), b = P(x - nx * 2.4f, y - ny * 2.4f + 0.4f);
-            dl->AddTriangleFilled(ImVec2(tip.x, tip.y + 0.9f * sc), ImVec2(a.x, a.y + 0.9f * sc), ImVec2(b.x, b.y + 0.9f * sc), shadow);
-            dl->AddTriangleFilled(tip, a, b, arrD); dl->AddTriangleFilled(tip, a, P(x, y + 0.1f), arr);
-            dl->AddTriangle(tip, a, b, edge, lw);
+        auto Head = [&](bool hz, float t, float dir) {
+            const ImVec2 o = RP(hz, t), o2 = RP(hz, t + 1e-3f * dir); float tx = o2.x - o.x, ty = o2.y - o.y; const float L = sqrtf(tx * tx + ty * ty); tx /= L; ty /= L;
+            const float nx = -ty, ny = tx; const ImVec2 tip = P(o.x + tx * 3.3f, o.y + ty * 3.3f), a = P(o.x + nx * 2.3f, o.y + ny * 2.3f), b = P(o.x - nx * 2.3f, o.y - ny * 2.3f);
+            const ImVec2 sh(0.5f * sc, 0.8f * sc);
+            dl->AddTriangleFilled(ImVec2(tip.x + sh.x, tip.y + sh.y), ImVec2(a.x + sh.x, a.y + sh.y), ImVec2(b.x + sh.x, b.y + sh.y), shadow);
+            dl->AddTriangleFilled(tip, a, b, arrD); dl->AddTriangleFilled(tip, a, P(o.x, o.y), arr); dl->AddTriangle(tip, a, b, edge, lw);
         };
-        Band(3.1415927f * 1.08f, 3.1415927f * 1.92f);                    // el aro por detras
-        static const float F[4][2] = { { -6.5f, -2.5f }, { 3.5f, -2.5f }, { 3.5f, 5.5f }, { -6.5f, 5.5f } };             // frente
-        static const float T[4][2] = { { -6.5f, -2.5f }, { 3.5f, -2.5f }, { 6.7f, -5.1f }, { -3.3f, -5.1f } };           // techo
-        static const float R[4][2] = { { 3.5f, -2.5f }, { 6.7f, -5.1f }, { 6.7f, 2.9f }, { 3.5f, 5.5f } };               // costado
-        static const float S[4][2] = { { -5.9f, 6.4f }, { 4.1f, 6.4f }, { 7.3f, 3.8f }, { 7.3f, -4.2f } };               // sombra
-        dl->AddTriangleFilled(P(S[0][0], S[0][1]), P(S[1][0], S[1][1]), P(S[2][0], S[2][1]), shadow);
-        Quad(R, Col(0.66f, 0.70f, 0.75f, alpha), true); Quad(T, white, true); Quad(F, Col(0.91f, 0.93f, 0.95f, alpha), true);
-        static const float V0[4][2] = { { -3.2f, -2.5f }, { -3.2f, -3.8f }, { 0.2f, -3.8f }, { 0.2f, -2.5f } };          // visor: frente
-        static const float V1[4][2] = { { -3.2f, -3.8f }, { 0.2f, -3.8f }, { 1.6f, -5.0f }, { -1.8f, -5.0f } };          // visor: techo
-        Quad(V0, Col(0.91f, 0.93f, 0.95f, alpha), true); Quad(V1, white, true);
-        // lente: un tubo oscuro que sale hacia adelante (abajo a la izquierda)
-        const ImVec2 l0 = P(-1.5f, 1.5f), l1 = P(-3.0f, 2.8f); const float lr = 2.9f * sc; const ImU32 tube = Col(0.24f, 0.26f, 0.30f, alpha);
-        dl->AddCircleFilled(l0, lr + lw * 0.6f, edge, 20); dl->AddCircleFilled(l1, lr + lw * 0.6f, edge, 20);
-        dl->AddCircleFilled(l0, lr, tube, 20); dl->AddLine(l0, l1, tube, lr * 2.0f); dl->AddCircleFilled(l1, lr, Col(0.16f, 0.18f, 0.22f, alpha), 20);
-        dl->AddCircleFilled(l1, lr * 0.62f, ColA(Lerp4(ImVec4(0.10f, 0.16f, 0.19f, 1), ImVec4(0.08f, 0.30f, 0.18f, 1), s_dn), alpha), 16);
-        dl->AddCircleFilled(ImVec2(l1.x - 0.8f * sc, l1.y - 0.8f * sc), 0.6f * sc, Col(1, 1, 1, 0.8f * alpha), 8);
-        dl->AddCircleFilled(P(2.2f, -0.9f), 0.6f * sc, Col(0.90f, 0.24f, 0.24f, alpha), 8);          // lucecita roja
-        Band(-0.05f * 3.1415927f, 1.05f * 3.1415927f);                   // el aro por delante
-        Head(-0.05f * 3.1415927f, -1.0f); Head(1.05f * 3.1415927f, 1.0f);
+        const float PI = 3.1415927f;
+        Band(true, PI * 1.08f, PI * 1.92f); Band(false, -PI * 0.42f, PI * 0.42f);              // los aros por detras
+        // cuerpo: costado (de frente al que mira) -6..4 x -1.5..4.5, fondo hacia atras a la izquierda (-2.6, -2.2)
+        dl->AddQuadFilled(P(4.6f, -0.6f), P(4.6f, 5.4f), P(-5.4f, 5.4f), P(-8.0f, 3.2f), shadow);
+        Q(-6.0f, -1.5f, -8.6f, -3.7f, -8.6f, 2.3f, -6.0f, 4.5f, cSide, true);                   // fondo
+        Q(-6.0f, -1.5f, 4.0f, -1.5f, 1.4f, -3.7f, -8.6f, -3.7f, white, true);                  // techo
+        Q(-6.0f, -1.5f, 4.0f, -1.5f, 4.0f, 4.5f, -6.0f, 4.5f, cFront, true);                   // costado
+        // rollos de pelicula arriba
+        const float RC[2][3] = { { -3.6f, -5.4f, 2.7f }, { 1.3f, -5.7f, 3.0f } };
+        for (const auto& rc : RC) {
+            const float x = rc[0], y = rc[1], r = rc[2];
+            Q(x - 0.6f, y + r * 0.6f, x + 0.6f, y + r * 0.6f, x + 0.6f, -1.9f, x - 0.6f, -1.9f, Col(0.78f, 0.81f, 0.84f, alpha), true);
+            Circ(x + 0.5f, y, r, cGrey, true); Circ(x, y, r, Col(0.94f, 0.95f, 0.97f, alpha), true); Circ(x, y, r * 0.33f, cDark, false);
+            for (int q = 0; q < 3; q++) { const float a = (float)q * 2.094f + 0.5f; Circ(x + cosf(a) * r * 0.62f, y + sinf(a) * r * 0.62f, r * 0.18f, cGrey, false); }
+        }
+        Q(-6.0f, 0.2f, -8.2f, 0.6f, -8.2f, 2.4f, -6.0f, 2.6f, cDark, true);                     // visor de atras
+        Circ(1.8f, 0.3f, 0.55f, Col(0.90f, 0.24f, 0.24f, alpha), false);                        // lucecita roja
+        dl->AddLine(P(-4.5f, 3.0f), P(2.5f, 3.0f), cSide, lw);
+        // lente y parasol hacia la derecha
+        Q(4.0f, 0.0f, 6.8f, 0.2f, 6.8f, 3.6f, 4.0f, 3.8f, cDark, true);
+        Q(6.8f, -0.8f, 9.6f, -2.2f, 9.6f, 6.0f, 6.8f, 4.6f, cDarker, true);
+        Q(9.6f, -2.2f, 10.4f, -2.0f, 10.4f, 5.8f, 9.6f, 6.0f, Col(0.10f, 0.12f, 0.15f, alpha), true);
+        dl->AddEllipseFilled(P(9.95f, 1.9f), ImVec2(0.55f * sc, 1.9f * sc), ColA(Lerp4(ImVec4(0.10f, 0.16f, 0.19f, 1), ImVec4(0.08f, 0.30f, 0.18f, 1), s_dn), alpha), 0.0f, 16);
+        Band(true, -0.05f * PI, 1.05f * PI); Band(false, PI * 0.58f, PI * 1.42f);              // los aros por delante
+        Head(true, -0.05f * PI, -1.0f); Head(true, 1.05f * PI, 1.0f); Head(false, PI * 0.58f, -1.0f); Head(false, PI * 1.42f, 1.0f);
         return;
     }
     (void)style; (void)grey;
