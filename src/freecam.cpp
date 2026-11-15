@@ -370,6 +370,12 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     }
     {
         const int wheel = s_wheel.exchange(0);
+        // (15/11 c, Agustin 02:29: "funciones de vista de motor moderno permitir mover la camara, rotar, panear, zoom") en el Motor la
+        // rueda ACERCA la camara al pivote (como un editor), no cambia el campo de vision; fuera del Motor sigue siendo el zoom
+        if (wheel != 0 && front && motor && s_pivotOk && !s_follow) {
+            float d[3] = { s_pivot[0] - s_pos[0], s_pivot[1] - s_pos[1], s_pivot[2] - s_pos[2] }; const float dist = Len3(d);
+            if (dist > 1e-3f) { const float nd = std::clamp(dist * powf(0.88f, (float)wheel / 120.0f), 0.3f, 80.0f); for (int i = 0; i < 3; i++) s_pos[i] = s_pivot[i] - d[i] / dist * nd; }
+        } else
         if (wheel != 0 && front) s_zoomTarget *= powf(0.92f, (float)wheel / 120.0f);   // cada muesca: 8 % mas cerca (o mas lejos)
         s_zoomTarget = std::clamp(s_zoomTarget, kZoomMin, 3.0f);
         float z = g_cfg.live[344][2];
@@ -411,6 +417,18 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     float f[3] = { cp * sinf(s_yaw), sp, cp * cosf(s_yaw) };
     // derecha: el mundo del juego es diestro (mirando a -z la derecha es +x); Agustin 1/11: con la version anterior A / D iban al reves
     float r[3] = { -f[2], 0.0f, f[0] }; float rl = Len3(r); if (rl > 1e-5f) { r[0] /= rl; r[2] /= rl; } else { r[0] = 1; r[2] = 0; }
+    if (motor && !s_follow) {   // (15/11 c) navegacion de editor en el Motor: boton del medio = panear, Alt + clic izquierdo = orbitar el pivote
+        static bool navWas = false;
+        const bool ok = front && !g_menuOpen.load(), mid = ok && Key(VK_MBUTTON), alt = ok && Key(VK_MENU) && Key(VK_LBUTTON);
+        const float mdx = (float)(m.x - s_mouse.x), mdy = (float)(m.y - s_mouse.y);
+        if (navWas && mid) {
+            float d[3] = { s_pivot[0] - s_pos[0], s_pivot[1] - s_pos[1], s_pivot[2] - s_pos[2] };
+            const float sc = (s_pivotOk ? std::clamp(Len3(d), 0.3f, 80.0f) : 3.0f) * 0.0016f;
+            const float u[3] = { r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0] };   // arriba de la pantalla
+            for (int i = 0; i < 3; i++) { const float dl = (-r[i] * mdx + u[i] * mdy) * sc; s_pos[i] += dl; if (s_pivotOk) s_pivot[i] += dl; }
+        } else if (navWas && alt && s_pivotOk && (mdx != 0.0f || mdy != 0.0f)) FreeCamGizmoOrbit(-mdx * 0.005f, -mdy * 0.005f);   // se cumple en el cuadro que sigue
+        navWas = mid || alt;
+    }
     // --- seguir la cara: el centro de la cara es el objetivo; la camara va fija al rostro (1) u orbita en el mundo (2) ---
     const int mode = std::clamp((int)(g_cfg.live[346][0] + 0.5f), 0, 2);
     const bool wantFollow = mode >= 1;

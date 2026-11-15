@@ -37,7 +37,6 @@ bool MotorGizmoPoll() { return (g_cfg.motorGizmo != 0 || MotorUiOn()) && MotorPa
 // se cambian sin recompilar); si falta alguno va un dibujo simple hecho por la DLL. Sider no puede dibujar fuera de su propio
 // overlay, por eso el dibujo en pantalla lo hace la DLL.
 static const char* const kIconFile[4] = { "volver", "vista", "jugador", "grilla" };
-static const char* const kIconTip[4] = { "Volver", "Vista y render", "Jugador", "Grilla" };
 static ID3D11ShaderResourceView* s_icon[4] = {}; static bool s_iconTried = false;
 static bool s_tlWas = false; static int s_tPress = -1;
 
@@ -82,15 +81,17 @@ static void IconFallback(ImDrawList* dl, int i, const ImVec2& o, float s, ImU32 
         }
     }
 }
-// (15/11 b) Agustin 02:21 / 02:23: "no me gusta la forma de los menus", "quiero menus nuevos ... con formas nuevas, funciones
-// nuevas". Forma nueva, sin nada del Editar: boton redondo Volver arriba a la izquierda, una CAPSULA flotante abajo al centro
-// con Vista / Jugador / Grilla (icono + nombre) y, al tocar Vista, una TARJETA flotante encima de la capsula con las vistas del
-// render como pastillas (se elige con un clic, sin listas ni flechas izquierda / derecha), Alambre y Pantalla partida como
-// selectores partidos. La lista nativa del Editar ya no se muestra nunca (motorpage.cpp UiTick).
+// (15/11 c) Agustin 02:21..02:28: "no me gusta la forma de los menus", "quiero menus nuevos ... con formas nuevas, funciones
+// nuevas", "aspecto de motor real, como si fuera el motor fox engine en tiempo real", "funciones de un motor de juego real".
+// Distribucion de EDITOR DE MOTOR (PROVISORIA dibujada por la DLL hasta tener la pantalla propia del juego, ver memoria
+// motor-menu-nativo-propio): barra de herramientas arriba, arbol de ESCENA a la izquierda, INSPECTOR a la derecha con las
+// propiedades de lo marcado en el arbol, barra de estado abajo. Solo muestra cosas que existen y funcionan (nada de adorno).
 bool MotorGizmoOver(float px, float py);
-static std::atomic<float> s_hr[3][4];                // zonas que tapan el clic: 0 volver, 1 capsula, 2 tarjeta (pixeles de la ventana)
+static void SetCam(bool on);
+static std::atomic<float> s_hr[4][4];                // zonas que tapan el clic (pixeles de la ventana): barra, escena, inspector, estado
 static std::atomic<int> s_hrN{0};
-static float s_cardA = 0.0f;                         // 0..1: aparicion de la tarjeta
+static int s_sel = 0, s_hotPrev = -1;                // fila marcada del arbol (0 render, 1 camara, 2 grilla, 3 jugador)
+static const float kBarH = 38.0f, kLeftW = 250.0f, kRightW = 320.0f, kStatH = 26.0f;
 static void ToolbarDraw() {
     if (!s_iconTried) IconsLoad();
     ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
@@ -100,113 +101,141 @@ static void ToolbarDraw() {
       if (h && GetForegroundWindow() == h && GetCursorPos(&p) && ScreenToClient(h, &p) && GetClientRect(h, &rc) && rc.right > rc.left && rc.bottom > rc.top) {
           sx = (float)(rc.right - rc.left) / ds.x; sy = (float)(rc.bottom - rc.top) / ds.y; mx = (float)p.x / sx; my = (float)p.y / sy; front = true; } }
     ImFont* font = ImGui::GetFont();
-    const ImU32 ink = IM_COL32(236, 239, 244, 255), dim = IM_COL32(150, 158, 172, 255), acc = IM_COL32(86, 156, 255, 255);
-    auto in = [&](const ImVec2& a, const ImVec2& b) { return mx >= a.x && mx <= b.x && my >= a.y && my <= b.y; };
+    const ImU32 cPanel = IM_COL32(37, 37, 38, 244), cHead = IM_COL32(51, 51, 55, 255), cLine = IM_COL32(14, 14, 15, 255), cRow = IM_COL32(62, 62, 66, 255),
+                ink = IM_COL32(222, 222, 222, 255), dim = IM_COL32(142, 142, 146, 255), acc = IM_COL32(240, 138, 36, 255), cField = IM_COL32(27, 27, 28, 255);
+    const float barH = kBarH * k, leftW = kLeftW * k, rightW = kRightW * k, statH = kStatH * k, fs = 15.0f * k, fsS = 12.5f * k, rowH = 28.0f * k;
+    int hot = -1; const int hp = s_hotPrev;
+    auto hit = [&](int id, const ImVec2& a, const ImVec2& b) { if (mx >= a.x && mx <= b.x && my >= a.y && my <= b.y) hot = id; return hp == id; };
+    auto text = [&](float x, float yc, ImU32 c, const char* t, float size) { const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t); dl->AddText(font, size, ImVec2(x, yc - ts.y * 0.5f), c, t); return ts.x; };
+    auto textC = [&](const ImVec2& a, const ImVec2& b, ImU32 c, const char* t, float size) { const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t); dl->AddText(font, size, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), c, t); };
     int nz = 0;
-    auto zone = [&](const ImVec2& a, const ImVec2& b) { if (nz < 3) { s_hr[nz][0].store(a.x * sx); s_hr[nz][1].store(a.y * sy); s_hr[nz][2].store(b.x * sx); s_hr[nz][3].store(b.y * sy); nz++; } };
-    int hot = -1;                                    // 0 volver, 1..3 capsula, 100 + fila * 16 + opcion = pastilla de la tarjeta
-    // --- Volver: boton redondo + titulo ---
-    const float br = 23.0f * k; const ImVec2 bc(34.0f * k + br, 30.0f * k + br);
-    const ImVec2 b0(bc.x - br, bc.y - br), b1(bc.x + br, bc.y + br); zone(b0, b1);
-    if (in(b0, b1)) hot = 0;
-    // --- capsula ---
-    const float cw = 104.0f * k, ch = 70.0f * k, padx = 10.0f * k; const float W = cw * 3.0f + padx * 2.0f;
-    const ImVec2 d0((ds.x - W) * 0.5f, ds.y - 34.0f * k - ch), d1(d0.x + W, d0.y + ch); zone(d0, d1);
-    ImVec2 c0[4], c1[4];
-    for (int i = 1; i < 4; i++) { c0[i] = ImVec2(d0.x + padx + (float)(i - 1) * cw, d0.y + 6.0f * k); c1[i] = ImVec2(c0[i].x + cw, d1.y - 6.0f * k); if (in(c0[i], c1[i])) hot = i; }
-    // --- tarjeta de vistas ---
-    const bool open = MotorUiPanel();
-    { const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime); s_cardA = open ? std::min(1.0f, s_cardA + dt * 9.0f) : std::max(0.0f, s_cardA - dt * 12.0f); }
-    struct Chip { ImVec2 a, b; int row, op; }; Chip chips[24]; int nchip = 0;
-    const float cardW = 620.0f * k, cpad = 22.0f * k, chipH = 36.0f * k, cgap = 8.0f * k, secH = 30.0f * k;
-    const int nV = MotorViewCount(0), nA = MotorViewCount(1), nC = MotorViewCount(2), cols = 3, rowsV = (nV + cols - 1) / cols;
-    const float cardH = cpad + secH + (float)rowsV * (chipH + cgap) + 8.0f * k + secH + chipH + 14.0f * k + secH + chipH + cpad;
-    const float rise = (1.0f - s_cardA) * 14.0f * k;
-    const ImVec2 k0((ds.x - cardW) * 0.5f, d0.y - 18.0f * k - cardH + rise), k1(k0.x + cardW, k0.y + cardH);
-    float yV = 0, yA = 0, yC = 0;
-    if (s_cardA > 0.0f) {
-        if (open) zone(k0, k1);
-        float y = k0.y + cpad; yV = y; y += secH;
-        const float cwv = (cardW - cpad * 2.0f - cgap * (float)(cols - 1)) / (float)cols;
-        for (int i = 0; i < nV && nchip < 24; i++) { const int cx = i % cols, cy = i / cols; const ImVec2 a(k0.x + cpad + (float)cx * (cwv + cgap), y + (float)cy * (chipH + cgap)); chips[nchip++] = { a, ImVec2(a.x + cwv, a.y + chipH), 0, i }; }
-        y += (float)rowsV * (chipH + cgap) + 8.0f * k; yA = y; y += secH;
-        for (int r = 1; r <= 2; r++) { const int n = r == 1 ? nA : nC; const float w = (cardW - cpad * 2.0f) / (float)std::max(1, n);
-            for (int i = 0; i < n && nchip < 24; i++) { const ImVec2 a(k0.x + cpad + (float)i * w, y); chips[nchip++] = { a, ImVec2(a.x + w, a.y + chipH), r, i }; }
-            if (r == 1) { y += chipH + 14.0f * k; yC = y; y += secH; } }
-        if (open) for (int i = 0; i < nchip; i++) if (in(chips[i].a, chips[i].b)) hot = 100 + chips[i].row * 16 + chips[i].op;
+    auto zone = [&](const ImVec2& a, const ImVec2& b) { if (nz < 4) { s_hr[nz][0].store(a.x * sx); s_hr[nz][1].store(a.y * sy); s_hr[nz][2].store(b.x * sx); s_hr[nz][3].store(b.y * sy); nz++; } };
+    const bool camFree = g_cfg.live[344][0] > 0.5f, grid = g_cfg.motorGrid != 0, player = MotorUiPlayer();
+    // selector partido: n opciones en una caja; devuelve nada, anota hot = id0 + i
+    auto seg = [&](int id0, const ImVec2& a, const ImVec2& b, int n, int cur, const char* const* names) {
+        dl->AddRectFilled(a, b, cField, 3.0f * k); const float w = (b.x - a.x) / (float)std::max(1, n);
+        for (int i = 0; i < n; i++) { const ImVec2 p0(a.x + (float)i * w, a.y), p1(a.x + (float)(i + 1) * w, b.y); const bool hv = hit(id0 + i, p0, p1);
+            if (i == cur) dl->AddRectFilled(ImVec2(p0.x + 1.0f, p0.y + 1.0f), ImVec2(p1.x - 1.0f, p1.y - 1.0f), acc, 2.0f * k); else if (hv) dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 22), 2.0f * k);
+            textC(p0, p1, i == cur ? IM_COL32(20, 20, 20, 255) : hv ? ink : IM_COL32(190, 190, 192, 255), names[i], fsS + 1.0f * k); }
+        dl->AddRect(a, b, cLine, 3.0f * k);
+    };
+    // ---------------- barra de herramientas ----------------
+    { const ImVec2 a(0, 0), b(ds.x, barH); zone(a, b);
+      dl->AddRectFilled(a, b, cHead); dl->AddLine(ImVec2(0, barH), ImVec2(ds.x, barH), cLine, 1.0f);
+      float x = 0.0f;
+      { const ImVec2 p0(x, 0), p1(x + barH * 1.15f, barH); const bool hv = hit(0, p0, p1); if (hv) dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 26));
+        const ImVec2 o((p0.x + p1.x) * 0.5f, barH * 0.5f); const float h2 = barH * 0.27f;
+        if (s_icon[0]) dl->AddImage((ImTextureID)(uintptr_t)s_icon[0], ImVec2(o.x - h2, o.y - h2), ImVec2(o.x + h2, o.y + h2), ImVec2(0, 0), ImVec2(1, 1), ink); else IconFallback(dl, 0, o, barH * 0.95f, ink, k);
+        x = p1.x; dl->AddLine(ImVec2(x, 6.0f * k), ImVec2(x, barH - 6.0f * k), IM_COL32(80, 80, 84, 255), 1.0f); }
+      x += 14.0f * k; x += text(x, barH * 0.5f, acc, "FOX ENGINE", fs) + 10.0f * k; x += text(x, barH * 0.5f, ink, "Motor en tiempo real", fs) + 22.0f * k;
+      dl->AddLine(ImVec2(x, 6.0f * k), ImVec2(x, barH - 6.0f * k), IM_COL32(80, 80, 84, 255), 1.0f); x += 8.0f * k;
+      const char* const tn[3] = { "Grilla", "Jugador", "C\xC3\xA1mara libre" }; const bool on[3] = { grid, player, camFree }; const int ic[3] = { 3, 2, 1 };
+      for (int i = 0; i < 3; i++) { const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, tn[i]); const float w = ts.x + 46.0f * k;
+          const ImVec2 p0(x, 5.0f * k), p1(x + w, barH - 5.0f * k); const bool hv = hit(1 + i, p0, p1);
+          if (on[i]) dl->AddRectFilled(p0, p1, IM_COL32(240, 138, 36, 48), 3.0f * k); else if (hv) dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 24), 3.0f * k);
+          if (on[i]) dl->AddRectFilled(ImVec2(p0.x, p1.y - 2.0f * k), p1, acc);
+          const ImVec2 o(p0.x + 17.0f * k, barH * 0.5f); const float h2 = 8.5f * k; const ImU32 c = on[i] ? IM_COL32(255, 190, 120, 255) : ink;
+          if (s_icon[ic[i]]) dl->AddImage((ImTextureID)(uintptr_t)s_icon[ic[i]], ImVec2(o.x - h2, o.y - h2), ImVec2(o.x + h2, o.y + h2), ImVec2(0, 0), ImVec2(1, 1), c); else IconFallback(dl, ic[i], o, 28.0f * k, c, k);
+          text(p0.x + 32.0f * k, barH * 0.5f, c, tn[i], fs); x = p1.x + 4.0f * k; }
     }
+    // ---------------- arbol de escena ----------------
+    const float y0 = barH + 1.0f, y1 = ds.y - statH;
+    { const ImVec2 a(0, y0), b(leftW, y1); zone(a, b);
+      dl->AddRectFilled(a, b, cPanel); dl->AddLine(ImVec2(leftW, y0), ImVec2(leftW, y1), cLine, 1.0f);
+      dl->AddRectFilled(a, ImVec2(leftW, y0 + rowH), cHead); text(12.0f * k, y0 + rowH * 0.5f, dim, "ESCENA", fsS);
+      const char* const nm[4] = { "Estudio", "C\xC3\xA1mara", "Grilla de piso", "Jugador" }; const char* const st[4] = { "", camFree ? "libre" : "del juego", grid ? "" : "oculta", player ? "" : "sin cargar" };
+      for (int i = 0; i < 4; i++) { const float y = y0 + rowH + (float)i * rowH; const ImVec2 p0(0, y), p1(leftW, y + rowH); const bool hv = hit(10 + i, p0, p1);
+          if (s_sel == i) { dl->AddRectFilled(p0, p1, cRow); dl->AddRectFilled(p0, ImVec2(3.0f * k, p1.y), acc); } else if (hv) dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 14));
+          const float ind = i == 0 ? 12.0f * k : 34.0f * k; const float yc = y + rowH * 0.5f;
+          if (i == 0) { dl->AddTriangleFilled(ImVec2(ind, yc - 3.0f * k), ImVec2(ind + 9.0f * k, yc - 3.0f * k), ImVec2(ind + 4.5f * k, yc + 4.0f * k), dim); }
+          else dl->AddRectFilled(ImVec2(ind - 12.0f * k, yc - 1.0f), ImVec2(ind - 4.0f * k, yc), IM_COL32(90, 90, 94, 255));
+          const bool off = (i == 2 && !grid) || (i == 3 && !player);
+          const float tx = (i == 0 ? ind + 16.0f * k : ind) ; const float w = text(tx, yc, off ? dim : ink, nm[i], fs);
+          if (st[i][0]) text(tx + w + 10.0f * k, yc, dim, st[i], fsS);
+          if (i >= 2) {      // ojo: visible / oculto
+              const ImVec2 e0(leftW - 34.0f * k, y + 3.0f * k), e1(leftW - 8.0f * k, y + rowH - 3.0f * k); const bool he = hit(18 + i, e0, e1);
+              if (he) dl->AddRectFilled(e0, e1, IM_COL32(255, 255, 255, 30), 3.0f * k);
+              const ImVec2 o((e0.x + e1.x) * 0.5f, yc); const ImU32 c = off ? IM_COL32(100, 100, 104, 255) : ink;
+              dl->AddCircle(o, 6.0f * k, c, 16, 1.5f * k); if (!off) dl->AddCircleFilled(o, 2.6f * k, c, 10); else dl->AddLine(ImVec2(o.x - 7.0f * k, o.y + 6.0f * k), ImVec2(o.x + 7.0f * k, o.y - 6.0f * k), c, 1.5f * k);
+          } }
+    }
+    // ---------------- inspector ----------------
+    { const float x0 = ds.x - rightW; const ImVec2 a(x0, y0), b(ds.x, y1); zone(a, b);
+      dl->AddRectFilled(a, b, cPanel); dl->AddLine(ImVec2(x0, y0), ImVec2(x0, y1), cLine, 1.0f);
+      dl->AddRectFilled(a, ImVec2(ds.x, y0 + rowH), cHead); text(x0 + 12.0f * k, y0 + rowH * 0.5f, dim, "INSPECTOR", fsS);
+      const char* const title[4] = { "Estudio  \xC2\xB7  Render", "C\xC3\xA1mara", "Grilla de piso", "Jugador" };
+      float y = y0 + rowH; dl->AddRectFilled(ImVec2(x0 + 1.0f, y), ImVec2(ds.x, y + rowH + 4.0f * k), IM_COL32(45, 45, 48, 255)); text(x0 + 12.0f * k, y + (rowH + 4.0f * k) * 0.5f, ink, title[s_sel], fs + 1.0f * k); y += rowH + 4.0f * k + 8.0f * k;
+      const float lx = x0 + 12.0f * k, fx0 = x0 + 12.0f * k, fx1 = ds.x - 12.0f * k;
+      auto label = [&](const char* t) { text(lx, y + 9.0f * k, dim, t, fsS); y += 20.0f * k; };
+      auto value = [&](const char* nmv, const char* v) { text(lx, y + rowH * 0.5f, dim, nmv, fsS + 1.0f * k); const ImVec2 p0(x0 + rightW * 0.42f, y + 3.0f * k), p1(fx1, y + rowH - 3.0f * k); dl->AddRectFilled(p0, p1, cField, 3.0f * k); text(p0.x + 8.0f * k, y + rowH * 0.5f, ink, v, fsS + 1.0f * k); y += rowH; };
+      auto button = [&](int id, const char* t) { const ImVec2 p0(fx0, y + 4.0f * k), p1(fx1, y + rowH + 6.0f * k); const bool hv = hit(id, p0, p1); dl->AddRectFilled(p0, p1, hv ? IM_COL32(86, 86, 92, 255) : IM_COL32(66, 66, 70, 255), 3.0f * k); dl->AddRect(p0, p1, cLine, 3.0f * k); textC(p0, p1, ink, t, fs); y += rowH + 14.0f * k; };
+      if (s_sel == 0) {
+          label("VISTA DEL RENDER");
+          const int n = MotorViewCount(0), cur = MotorViewGet(0); const float rh = 25.0f * k;
+          dl->AddRectFilled(ImVec2(fx0, y), ImVec2(fx1, y + (float)n * rh), cField, 3.0f * k);
+          for (int i = 0; i < n; i++) { const ImVec2 p0(fx0, y + (float)i * rh), p1(fx1, y + (float)(i + 1) * rh); const bool hv = hit(100 + i, p0, p1);
+              if (i == cur) dl->AddRectFilled(p0, p1, IM_COL32(240, 138, 36, 60)); else if (hv) dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 18));
+              const ImVec2 o(p0.x + 14.0f * k, (p0.y + p1.y) * 0.5f); dl->AddCircle(o, 5.0f * k, i == cur ? acc : IM_COL32(110, 110, 114, 255), 14, 1.4f * k); if (i == cur) dl->AddCircleFilled(o, 2.6f * k, acc, 10);
+              text(p0.x + 28.0f * k, o.y, i == cur ? IM_COL32(255, 214, 170, 255) : ink, MotorViewName(0, i), fsS + 1.5f * k); }
+          dl->AddRect(ImVec2(fx0, y), ImVec2(fx1, y + (float)n * rh), cLine, 3.0f * k); y += (float)n * rh + 12.0f * k;
+          for (int r = 1; r <= 2; r++) { label(r == 1 ? "ALAMBRE" : "PANTALLA PARTIDA"); const int m = std::min(4, MotorViewCount(r)); const char* nms[4] = { "", "", "", "" }; for (int i = 0; i < m; i++) nms[i] = MotorViewName(r, i);
+              if (r == 1 && m == 3) nms[2] = "Con teselaci\xC3\xB3n";
+              seg(100 + r * 16, ImVec2(fx0, y), ImVec2(fx1, y + rowH), m, MotorViewGet(r), nms); y += rowH + 12.0f * k; }
+      } else if (s_sel == 1) {
+          label("MODO"); { const char* const nms[2] = { "Libre", "Del juego" }; seg(200, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, camFree ? 0 : 1, nms); y += rowH + 12.0f * k; }
+          float pos[3] = {}, yaw = 0, pitch = 0; char b1[48];
+          if (camFree && FreeCamGetPose(pos, &yaw, &pitch)) {
+              label("TRANSFORMACI\xC3\x93N");
+              snprintf(b1, sizeof b1, "%.2f m", pos[0]); value("Posici\xC3\xB3n X", b1); snprintf(b1, sizeof b1, "%.2f m", pos[1]); value("Posici\xC3\xB3n Y", b1); snprintf(b1, sizeof b1, "%.2f m", pos[2]); value("Posici\xC3\xB3n Z", b1);
+              snprintf(b1, sizeof b1, "%.1f\xC2\xB0", yaw * 57.29578f); value("Giro", b1); snprintf(b1, sizeof b1, "%.1f\xC2\xB0", pitch * 57.29578f); value("Inclinaci\xC3\xB3n", b1);
+              y += 8.0f * k; label("LENTE"); snprintf(b1, sizeof b1, "%.1f\xC2\xB0", FreeCamFovNow() * 57.29578f); value("Campo de visi\xC3\xB3n", b1);
+              y += 8.0f * k; label("MIRAR DESDE");
+              { const char* const v1[3] = { "Derecha", "Arriba", "Frente" }; const char* const v2[3] = { "Izquierda", "Abajo", "Atr\xC3\xA1s" };
+                seg(230, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 3, -1, v1); y += rowH + 4.0f * k; seg(233, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 3, -1, v2); y += rowH + 10.0f * k; }
+              button(202, "Volver a la pose inicial");
+              const char* const ay[4] = { "Bot\xC3\xB3n derecho: mirar y volar (W A S D)", "Bot\xC3\xB3n del medio: panear", "Alt + clic izquierdo: orbitar", "Rueda: acercar y alejar" };
+              for (int i = 0; i < 4; i++) text(lx, y + 8.0f * k + (float)i * 17.0f * k, dim, ay[i], fsS);
+          } else text(lx, y + 10.0f * k, dim, "La c\xC3\xA1mara la maneja el juego.", fsS + 1.0f * k);
+      } else if (s_sel == 2) {
+          label("VISIBLE"); { const char* const nms[2] = { "S\xC3\xAD", "No" }; seg(210, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, grid ? 0 : 1, nms); y += rowH + 12.0f * k; }
+          label("MEDIDAS"); value("Celda", "1 m"); value("L\xC3\xADnea fuerte", "cada 5 m"); value("Eje X", "rojo"); value("Eje Z", "azul");
+      } else {
+          label("ESTADO"); value("Modelo", player ? "cargado" : "sin cargar"); y += 6.0f * k;
+          button(220, player ? "Quitar de la escena" : "Cargar en la escena");
+          text(lx, y + 8.0f * k, dim, "Es el \xC3\xBAltimo jugador que abriste en Editar.", fsS);
+      }
+    }
+    // ---------------- barra de estado ----------------
+    { const ImVec2 a(0, y1), b(ds.x, ds.y); zone(a, b); dl->AddRectFilled(a, b, IM_COL32(30, 30, 31, 250)); dl->AddLine(a, ImVec2(ds.x, y1), cLine, 1.0f);
+      char st[160]; snprintf(st, sizeof st, "Vista: %s    Alambre: %s    C\xC3\xA1mara: %s", MotorViewName(0, MotorViewGet(0)), MotorViewName(1, MotorViewGet(1)), camFree ? "libre" : "del juego");
+      text(12.0f * k, y1 + statH * 0.5f, dim, st, fsS);
+      char fp[32]; snprintf(fp, sizeof fp, "%.0f fps", ImGui::GetIO().Framerate); const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, fp); text(ds.x - ts.x - 12.0f * k, y1 + statH * 0.5f, dim, fp, fsS); }
     s_hrN.store(nz);
-    // --- clic (al soltar, sobre lo mismo que se apreto) ---
+    // ---------------- clic (al soltar, sobre lo mismo que se apreto) ----------------
     const bool lNow = front && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0; const bool lEdge = lNow && !s_tlWas, lUp = !lNow && s_tlWas; s_tlWas = lNow;
     if (lEdge) s_tPress = hot;
-    if (lUp) {
-        if (s_tPress >= 0 && s_tPress == hot) {
-            if (hot == 0) MotorUiBack();
-            else if (hot == 1) MotorUiTogglePanel();
-            else if (hot == 2) MotorUiTogglePlayer();
-            else if (hot == 3) g_cfg.motorGrid = g_cfg.motorGrid ? 0 : 1;
-            else if (hot >= 100) MotorViewSet((hot - 100) / 16, (hot - 100) % 16);
-            if (hot < 100) Log("motor (menu): clic en %s", kIconTip[hot]);
-        } else if (s_tPress < 0 && hot < 0 && open && !MotorGizmoOver(mx * sx, my * sy)) MotorUiTogglePanel();      // clic afuera: cierra la tarjeta
-        s_tPress = -1;
+    if (lUp && s_tPress >= 0 && s_tPress == hot) {
+        if (hot == 0) MotorUiBack();
+        else if (hot == 1 || hot == 20) g_cfg.motorGrid = grid ? 0 : 1;
+        else if (hot == 2 || hot == 21 || hot == 220) MotorUiTogglePlayer();
+        else if (hot == 3) SetCam(!camFree);
+        else if (hot >= 10 && hot < 14) s_sel = hot - 10;
+        else if (hot >= 100 && hot < 148) MotorViewSet((hot - 100) / 16, (hot - 100) % 16);
+        else if (hot == 200 || hot == 201) SetCam(hot == 200);
+        else if (hot == 202) FreeCamGizmoHome();
+        else if (hot >= 230 && hot < 236) { static const int kAx[6] = { 0, 2, 4, 1, 3, 5 }; FreeCamGizmoAxis(kAx[hot - 230]); }   // +X, +Y, +Z / -X, -Y, -Z
+        else if (hot == 210 || hot == 211) g_cfg.motorGrid = hot == 210 ? 1 : 0;
+        static int nl = 0; if (nl++ < 60) Log("motor (editor): clic %d", hot);
     }
     if (!lNow) s_tPress = -1;
-    // --- dibujo: Volver ---
-    dl->AddCircleFilled(bc, br, IM_COL32(20, 23, 30, hot == 0 ? 245 : 215), 40);
-    dl->AddCircle(bc, br, IM_COL32(255, 255, 255, hot == 0 ? 150 : 40), 40, 1.2f * k);
-    if (s_icon[0]) { const float h2 = br * 0.62f; dl->AddImage((ImTextureID)(uintptr_t)s_icon[0], ImVec2(bc.x - h2, bc.y - h2), ImVec2(bc.x + h2, bc.y + h2), ImVec2(0, 0), ImVec2(1, 1), ink); }
-    else IconFallback(dl, 0, bc, br * 2.0f, ink, k);
-    {   const char* t = "Motor en tiempo real"; const float fs = 21.0f * k; const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, t);
-        const ImVec2 tp(b1.x + 14.0f * k, bc.y - ts.y * 0.5f);
-        dl->AddText(font, fs, ImVec2(tp.x + 1.0f, tp.y + 1.0f), IM_COL32(0, 0, 0, 170), t); dl->AddText(font, fs, tp, IM_COL32(236, 239, 244, 235), t); }
-    // --- dibujo: capsula ---
-    dl->AddRectFilled(ImVec2(d0.x, d0.y + 3.0f * k), ImVec2(d1.x, d1.y + 5.0f * k), IM_COL32(0, 0, 0, 70), ch * 0.5f);
-    dl->AddRectFilled(d0, d1, IM_COL32(20, 23, 30, 232), ch * 0.5f);
-    dl->AddRect(d0, d1, IM_COL32(255, 255, 255, 34), ch * 0.5f, 0, 1.2f * k);
-    const bool act[4] = { false, open, MotorUiPlayer(), g_cfg.motorGrid != 0 };
-    for (int i = 1; i < 4; i++) {
-        const bool hov = hot == i, down = hov && s_tPress == i; const float rr = (c1[i].y - c0[i].y) * 0.5f;
-        if (hov || act[i]) dl->AddRectFilled(c0[i], c1[i], act[i] ? IM_COL32(86, 156, 255, down ? 70 : hov ? 56 : 40) : IM_COL32(255, 255, 255, down ? 34 : 20), rr);
-        const ImU32 col = act[i] ? acc : hov ? ink : IM_COL32(206, 212, 222, 255);
-        const ImVec2 o((c0[i].x + c1[i].x) * 0.5f, c0[i].y + 22.0f * k); const float h2 = 13.0f * k;
-        if (s_icon[i]) dl->AddImage((ImTextureID)(uintptr_t)s_icon[i], ImVec2(o.x - h2, o.y - h2), ImVec2(o.x + h2, o.y + h2), ImVec2(0, 0), ImVec2(1, 1), col);
-        else IconFallback(dl, i, o, 44.0f * k, col, k);
-        const char* t = i == 1 ? "Vista" : kIconTip[i]; const float fs = 13.5f * k; const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, t);
-        dl->AddText(font, fs, ImVec2(o.x - ts.x * 0.5f, c1[i].y - ts.y - 7.0f * k), col, t);
-    }
-    // --- dibujo: tarjeta ---
-    if (s_cardA > 0.0f) {
-        const float A = s_cardA; auto al = [&](ImU32 c, float m = 1.0f) { const int a = (int)((float)(c >> 24) * A * m); return (c & 0x00ffffffu) | ((ImU32)a << 24); };
-        const float rad = 20.0f * k;
-        dl->AddRectFilled(ImVec2(k0.x, k0.y + 5.0f * k), ImVec2(k1.x, k1.y + 8.0f * k), al(IM_COL32(0, 0, 0, 80)), rad);
-        dl->AddRectFilled(k0, k1, al(IM_COL32(20, 23, 30, 240)), rad);
-        dl->AddRect(k0, k1, al(IM_COL32(255, 255, 255, 34)), rad, 0, 1.2f * k);
-        { const float tx = (c0[1].x + c1[1].x) * 0.5f, tw = 10.0f * k; dl->AddTriangleFilled(ImVec2(tx - tw, k1.y - 1.0f), ImVec2(tx + tw, k1.y - 1.0f), ImVec2(tx, k1.y + tw), al(IM_COL32(20, 23, 30, 240))); }
-        const float fsS = 12.5f * k, fsC = 15.0f * k;
-        const float ys[3] = { yV, yA, yC };
-        for (int r = 0; r < 3; r++) { char up[40]; const char* nm = MotorViewName(r, -1); int q = 0; for (; nm[q] && q < 38; q++) up[q] = (char)toupper((unsigned char)nm[q]); up[q] = 0;
-            dl->AddText(font, fsS, ImVec2(k0.x + cpad + 2.0f * k, ys[r] + 6.0f * k), al(dim), up); }
-        // fondo comun de los selectores partidos
-        for (int r = 1; r <= 2; r++) { ImVec2 a(0, 0), b(0, 0); bool any = false; for (int i = 0; i < nchip; i++) if (chips[i].row == r) { if (!any) { a = chips[i].a; any = true; } b = chips[i].b; }
-            if (any) dl->AddRectFilled(a, b, al(IM_COL32(255, 255, 255, 14)), chipH * 0.5f); }
-        const int cur[3] = { MotorViewGet(0), MotorViewGet(1), MotorViewGet(2) };
-        for (int i = 0; i < nchip; i++) {
-            const Chip& c = chips[i]; const int id = 100 + c.row * 16 + c.op; const bool on = cur[c.row] == c.op, hov = hot == id, down = hov && s_tPress == id;
-            const ImVec2 a(c.a.x + (c.row ? 3.0f * k : 0.0f), c.a.y + (c.row ? 3.0f * k : 0.0f)), b(c.b.x - (c.row ? 3.0f * k : 0.0f), c.b.y - (c.row ? 3.0f * k : 0.0f)); const float rr = (b.y - a.y) * 0.5f;
-            if (on) dl->AddRectFilled(a, b, al(IM_COL32(86, 156, 255, down ? 255 : 235)), rr);
-            else if (c.row == 0) { dl->AddRectFilled(a, b, al(IM_COL32(255, 255, 255, down ? 40 : hov ? 28 : 12)), rr); if (hov) dl->AddRect(a, b, al(IM_COL32(255, 255, 255, 70)), rr, 0, 1.0f * k); }
-            else if (hov) dl->AddRectFilled(a, b, al(IM_COL32(255, 255, 255, down ? 40 : 24)), rr);
-            const char* t = MotorViewName(c.row, c.op); const ImVec2 ts = font->CalcTextSizeA(fsC, FLT_MAX, 0.0f, t);
-            dl->AddText(font, fsC, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), al(on ? IM_COL32(255, 255, 255, 255) : hov ? ink : IM_COL32(206, 212, 222, 255)), t);
-        }
-    }
+    s_hotPrev = hot;
 }
 
 // (px, py) en pixeles de la ventana del juego
 bool MotorGizmoOver(float px, float py) {
     if (Now() - s_drawT.load(std::memory_order_relaxed) > 0.3) return false;
     if (s_dragging.load(std::memory_order_relaxed)) return true;
-    if (MotorUiOn()) { const int n = s_hrN.load(); for (int i = 0; i < n && i < 3; i++) if (px >= s_hr[i][0].load() && px <= s_hr[i][2].load() && py >= s_hr[i][1].load() && py <= s_hr[i][3].load()) return true; }   // menu propio: volver, capsula, tarjeta
+    if (MotorUiOn()) { const int n = s_hrN.load(); for (int i = 0; i < n && i < 4; i++) if (px >= s_hr[i][0].load() && px <= s_hr[i][2].load() && py >= s_hr[i][1].load() && py <= s_hr[i][3].load()) return true; }   // menu propio: volver, capsula, tarjeta
     const float dx = px - s_cx.load(), dy = py - s_cy.load(), r = s_rad.load() * 1.22f;
     if (dx * dx + dy * dy <= r * r) return true;
     return px >= s_bx0.load() && px <= s_bx1.load() && py >= s_by0.load() && py <= s_by1.load();
@@ -222,7 +251,8 @@ void MotorGizmoDraw() {
     if (g_cfg.motorGizmo == 0) { s_drawT.store(Now()); return; }
     ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
     const float k = std::max(1.0f, ds.y / 1080.0f), R = 54.0f * k, mg = 30.0f * k;
-    const ImVec2 C(ds.x - mg - R, mg + R);
+    const bool ui_ = MotorUiOn();      // (15/11 c) con el editor a la vista el gizmo va dentro de la vista 3D: a la izquierda del inspector y debajo de la barra
+    const ImVec2 C(ds.x - mg - R - (ui_ ? kRightW * k : 0.0f), mg + R + (ui_ ? kBarH * k : 0.0f));
     // mouse (pixeles de la ventana, llevados al tamano del dibujo)
     float mx = -1.0e6f, my = -1.0e6f; bool front = false;
     { HWND h = OverlayHwnd(); POINT p{}; RECT rc{};
