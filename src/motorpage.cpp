@@ -396,9 +396,16 @@ static void UiTick(void* win) {
     if (!wantPanel || s_uiPanelApplied != 1) PanelShow(win, wantPanel);      // escondido: se sostiene en cada cuadro
     const bool wantPlayer = s_uiPlayer.load(std::memory_order_relaxed);
     if (wantPlayer != s_uiPlayerShown) {
+        static double askT = -1.0;
         if (wantPlayer) {
-            if (my_ReadyPlayer(win)) { s_uiPlayerShown = true; Log("motor (pagina): menu propio: jugador pedido al visor"); }
+            if (askT < 0.0) askT = Now();
+            if (my_ReadyPlayer(win)) { s_uiPlayerShown = true; askT = -1.0; Log("motor (pagina): menu propio: jugador pedido al visor"); }
+            else if (Now() - askT > 4.0) {      // (15/11 f) 4 s sin que el visor lo acepte: se avisa y se deja de pedir
+                askT = -1.0; s_uiPlayer.store(false);
+                MotorErr("El jugador no se pudo cargar: el visor de modelos del Editar no acept\xC3\xB3 el pedido en 4 segundos (no est\xC3\xA1 listo o est\xC3\xA1 cargando otra cosa). Prob\xC3\xA1 de nuevo en unos segundos.");
+            }
         } else {
+            askT = -1.0;
             uint8_t* mv = (uint8_t*)g_GetMv();
             if (Ptr(mv) && Readable(mv, 0x118) && *(uintptr_t*)mv == kVtMv) { g_MvShow(mv, 0); Log("motor (pagina): menu propio: jugador quitado de la vista"); }
             s_uiPlayerShown = false;

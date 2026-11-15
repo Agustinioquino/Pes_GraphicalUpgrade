@@ -16,6 +16,9 @@
 #include <string>
 #include <cctype>
 #include <cstring>
+#include <cstdarg>
+#include <cstdio>
+#include <mutex>
 #include <atomic>
 #include <cmath>
 #include <algorithm>
@@ -89,6 +92,20 @@ static void IconFallback(ImDrawList* dl, int i, const ImVec2& o, float s, ImU32 
 // propiedades de lo marcado en el arbol, barra de estado abajo. Solo muestra cosas que existen y funcionan (nada de adorno).
 bool MotorGizmoOver(float px, float py);
 static void SetCam(bool on);
+// (15/11 f, Agustin 02:44: "que tenga un log para los errores y se muestren en un recuadro rojo con texto explicando como pasa
+// en unreal") errores del Motor: cualquier parte (hilo del juego o de Present) llama MotorErr("que paso y por que"); quedan en
+// el registro (PES21FX.log, "motor (ERROR)") y se muestran 10 s en un recuadro rojo dentro de la vista 3D; la barra de estado
+// lleva la cuenta y con un clic los vuelve a mostrar.
+struct MErr { double t; char msg[220]; };
+static MErr s_err[8]; static int s_errTotal = 0; static std::mutex s_errMx;
+void MotorErr(const char* fmt, ...) {
+    char b[220]; va_list ap; va_start(ap, fmt); vsnprintf(b, sizeof b, fmt, ap); va_end(ap);
+    bool nuevo = true;
+    {   std::lock_guard<std::mutex> lk(s_errMx);
+        if (s_errTotal > 0) { MErr& u = s_err[(s_errTotal - 1) & 7]; if (strcmp(u.msg, b) == 0 && Now() - u.t < 30.0) { u.t = Now(); nuevo = false; } }
+        if (nuevo) { MErr& e = s_err[s_errTotal & 7]; e.t = Now(); memcpy(e.msg, b, sizeof b); s_errTotal++; } }
+    if (nuevo) Log("motor (ERROR): %s", b);
+}
 static std::atomic<float> s_hr[4][4];                // zonas que tapan el clic (pixeles de la ventana): barra, escena, inspector, estado
 static std::atomic<int> s_hrN{0};
 static float s_openA = 0.0f, s_selY = -1.0f, s_inspA = 1.0f; static double s_uiT = -1.0e9; static int s_selWas = 0;   // (15/11 d) animaciones
@@ -120,6 +137,7 @@ static void ToolbarDraw() {
     if (Now() - s_sceneT > 0.25) { s_sceneT = Now();
         static MotorLight tmp[64]; MotorSceneInfo si{}; const int n = MotorSceneLights(tmp, 64, &si);
         if (n >= 0) { memcpy(s_lights, tmp, sizeof(MotorLight) * (size_t)n); s_nLights = n; s_info = si; }
+        else MotorErr("No se pudo leer la escena del motor: el juego estaba cambiando sus listas de objetos. Se reintenta solo; si este aviso sigue, sal\xC3\xAD del Motor y volv\xC3\xA9 a entrar.");
         if (s_sel >= 4) { int f = -1; for (int i = 0; i < s_nLights; i++) if (s_lights[i].obj == s_selObj) f = i; if (f < 0) { s_sel = 0; s_selObj = 0; } else s_sel = 4 + f; } }
     static const char* const kKind[5] = { "Luz", "Sol", "Local", "Punto", "Foco" };
     auto anim = [&](int from, float dx, float dy, float a) {
@@ -282,6 +300,23 @@ static void ToolbarDraw() {
       text(12.0f * k, y1 + statH * 0.5f, dim, st, fsS);
       char fp[32]; snprintf(fp, sizeof fp, "%.0f fps", ImGui::GetIO().Framerate); const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, fp); text(ds.x - ts.x - 12.0f * k, y1 + statH * 0.5f, dim, fp, fsS);
       anim(v0, 0.0f, (1.0f - eo) * statH, eo); }
+    {   // ---------------- errores: recuadros rojos apilados abajo a la izquierda de la vista 3D ----------------
+        MErr e[8]; int total = 0; { std::lock_guard<std::mutex> lk(s_errMx); memcpy(e, s_err, sizeof e); total = s_errTotal; }
+        const double now = Now(); const float bw = std::min(620.0f * k, ds.x - leftW - rightW - 32.0f * k), pad = 12.0f * k; float yb = y1 - 14.0f * k;
+        for (int j = 0; j < 8 && j < total && bw > 200.0f * k; j++) { const MErr& m = e[(total - 1 - j) & 7]; const float age = (float)(now - m.t); if (age > 10.0f) continue;
+            const float a = std::min(1.0f, std::min(age / 0.18f, (10.0f - age) / 0.5f)); const float wrap = bw - pad * 2.0f;
+            const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, wrap, m.msg); const float bh = ts.y + pad * 2.0f + 20.0f * k;
+            const ImVec2 p0(leftW + 16.0f * k + (1.0f - a) * -18.0f * k, yb - bh), p1(p0.x + bw, yb);
+            dl->AddRectFilled(p0, p1, IM_COL32(128, 22, 22, (int)(238 * a)), 4.0f * k); dl->AddRect(p0, p1, IM_COL32(255, 96, 96, (int)(255 * a)), 4.0f * k, 0, 1.5f * k);
+            dl->AddRectFilled(p0, ImVec2(p0.x + 5.0f * k, p1.y), IM_COL32(255, 96, 96, (int)(255 * a)), 4.0f * k);
+            dl->AddText(font, fsS + 1.0f * k, ImVec2(p0.x + pad + 4.0f * k, p0.y + pad - 2.0f * k), IM_COL32(255, 170, 170, (int)(255 * a)), "ERROR DEL MOTOR");
+            dl->AddText(font, fs, ImVec2(p0.x + pad + 4.0f * k, p0.y + pad + 18.0f * k), IM_COL32(255, 240, 240, (int)(255 * a)), m.msg, nullptr, wrap);
+            yb -= bh + 8.0f * k; }
+        if (total > 0) {      // cuenta en la barra de estado: clic = volver a mostrarlos
+            char eb[40]; snprintf(eb, sizeof eb, total == 1 ? "1 error" : "%d errores", total); const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, eb);
+            const ImVec2 p0(ds.x - ts.x - 110.0f * k, y1 + 3.0f * k), p1(p0.x + ts.x + 16.0f * k, ds.y - 3.0f * k); const bool hv = hit(500, p0, p1);
+            dl->AddRectFilled(p0, p1, IM_COL32(150, 28, 28, hv ? 255 : 220), 3.0f * k); textC(p0, p1, IM_COL32(255, 230, 230, 255), eb, fsS); }
+    }
     s_hrN.store(nz);
     // ---------------- clic (al soltar, sobre lo mismo que se apreto) ----------------
     const bool lNow = front && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0; const bool lEdge = lNow && !s_tlWas, lUp = !lNow && s_tlWas; s_tlWas = lNow;
@@ -293,8 +328,13 @@ static void ToolbarDraw() {
         else if (hot == 3) SetCam(!camFree);
         else if (hot >= 10 && hot < 14) { s_sel = hot - 10; s_selObj = 0; }
         else if (hot >= 300 && hot < 364 && hot - 300 < s_nLights) { s_sel = 4 + (hot - 300); s_selObj = s_lights[hot - 300].obj; }
-        else if (hot >= 400 && hot < 464 && hot - 400 < s_nLights) { MotorLight& L = s_lights[hot - 400]; if (L.writable && MotorLightSetOn(L, !L.on)) L.on = !L.on; }
-        else if ((hot == 250 || hot == 251) && s_sel >= 4 && s_sel - 4 < s_nLights) { MotorLight& L = s_lights[s_sel - 4]; if (L.writable && MotorLightSetOn(L, hot == 250)) L.on = hot == 250; }
+        else if (hot >= 400 && hot < 464 && hot - 400 < s_nLights) { MotorLight& L = s_lights[hot - 400];
+            if (!L.writable) MotorErr("La luz \"%s\" es de una clase que el Motor no conoce todav\xC3\xAD" "a: se puede ver pero no cambiar.", L.name);
+            else if (MotorLightSetOn(L, !L.on)) L.on = !L.on; else MotorErr("No se pudo %s la luz \"%s\": el juego la sac\xC3\xB3 de la escena mientras tanto.", L.on ? "apagar" : "prender", L.name); }
+        else if ((hot == 250 || hot == 251) && s_sel >= 4 && s_sel - 4 < s_nLights) { MotorLight& L = s_lights[s_sel - 4];
+            if (!L.writable) MotorErr("La luz \"%s\" es de una clase que el Motor no conoce todav\xC3\xAD" "a: se puede ver pero no cambiar.", L.name);
+            else if (MotorLightSetOn(L, hot == 250)) L.on = hot == 250; else MotorErr("No se pudo %s la luz \"%s\": el juego la sac\xC3\xB3 de la escena mientras tanto.", hot == 250 ? "prender" : "apagar", L.name); }
+        else if (hot == 500) { std::lock_guard<std::mutex> lk(s_errMx); for (MErr& m : s_err) if (m.msg[0]) m.t = Now(); }
         else if (hot >= 100 && hot < 148) MotorViewSet((hot - 100) / 16, (hot - 100) % 16);
         else if (hot == 200 || hot == 201) SetCam(hot == 200);
         else if (hot == 202) FreeCamGizmoHome();
