@@ -258,6 +258,7 @@ cbuffer Params : register(b2)
 // (15/11 c, Agustin: "revisa los calculos del short que parece que siguen alto") con la brisa de los menus el short (mas
 // corto y mas libre abajo) se abria hasta 47-53 mm de su pose: al short le llega una parte de la brisa
 #define PES_MENU_BREEZE_SHORTS 0.35
+#define PES_MENU_JUMP    3.0      // (m/s) en menus, mas rapido que esto = salto de pose: la tela viaja con el cuerpo
 struct ParticleRest { float4 posPin; float4 nrm; uint4 skin; };
 struct Capsule      { float4 a; float4 b; };
 ByteAddressBuffer               g_bindPos   : register(t0);
@@ -679,7 +680,8 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
     float3 vBody = (rest1 - restPrev) / h;
     if (pin >= 0.999) { gx[p] = rest1; vel = vBody; return; }
     // cloth-mod 0.9.9: salto del cuerpo (> 50 m/s, teletransporte / cambio de pose): la tela viaja con el cuerpo, sin velocidad
-    if (dot(vBody, vBody) > 50.0 * 50.0) {
+    const float pesJump = s_menu ? PES_MENU_JUMP : 50.0;   // (15/11 c) en menus, un cambio de pose de golpe no es movimiento
+    if (dot(vBody, vBody) > pesJump * pesJump) {
         gx[p] += rest1 - restPrev;
         xPrev = gx[p];
         vel = 0;

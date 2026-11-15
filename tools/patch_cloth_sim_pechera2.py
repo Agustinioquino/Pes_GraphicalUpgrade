@@ -67,6 +67,17 @@ rep("        if (legTracked) {\n",
 rep("* (PES_MENU_BREEZE * (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0)));\n",
     "* (PES_MENU_BREEZE * (g_legCount > 0 ? PES_MENU_BREEZE_SHORTS : 1.0) * (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0)));\n")
 
+# (15/11 c, Agustin: "el short ... se recargaba muchas veces") cloth.log 16:45 local: en Apariencia el short saltaba cada ~2.5 s
+# a 85 mm de su pose y volvia, con escala de huesos 0.60 en esos cuadros (el esqueleto que llega cambia de golpe). 85 mm en un
+# cuadro son ~5 m/s, por debajo del salto de 50 m/s: la tela lo tomaba como movimiento real, quedaba atras y rebotaba. En los
+# menus el jugador casi no se mueve: ahi mas de PES_MENU_JUMP m/s es un cambio de pose y la tela viaja con el cuerpo.
+rep("    if (dot(vBody, vBody) > 50.0 * 50.0) {\n",
+    "    const float pesJump = s_menu ? PES_MENU_JUMP : 50.0;   // (15/11 c) en menus, un cambio de pose de golpe no es movimiento\n"
+    "    if (dot(vBody, vBody) > pesJump * pesJump) {\n")
+rep("#define PES_MENU_BREEZE_SHORTS 0.35\n",
+    "#define PES_MENU_BREEZE_SHORTS 0.35\n"
+    "#define PES_MENU_JUMP    3.0      // (m/s) en menus, mas rapido que esto = salto de pose: la tela viaja con el cuerpo\n")
+
 if crlf: t = t.replace('\n', '\r\n')
 open(p, 'wb').write(t.encode('latin1'))
 print('ok', p)
