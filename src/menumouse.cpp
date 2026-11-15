@@ -673,8 +673,13 @@ bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
     // cero (salir de Apariencia) se escribe la base una vez.
     static unsigned char s_base[0x34], s_wrote[0x34]; static bool s_haveBase = false, s_dirty = false; static unsigned char* s_cam = nullptr;
     if (cam != s_cam) { s_cam = cam; s_haveBase = false; s_dirty = false; }
-    if (!s_haveBase || memcmp(cam + 0x10, s_wrote, sizeof s_wrote) != 0) { memcpy(s_base, cam + 0x10, sizeof s_base); memcpy(s_wrote, s_base, sizeof s_wrote); s_haveBase = true; }
-    auto Restore = [&]() { if (s_dirty) { memcpy(cam + 0x10, s_base, sizeof s_base); memcpy(s_wrote, s_base, sizeof s_wrote); s_dirty = false; Log("mouse en menus: camara del visor: vuelve a la del juego"); } };
+    // solo posicion y objetivo (+0x10..+0x27) son nuestros: si el juego los cambio, son la base nueva; lo demas (arriba, cerca / lejos,
+    // campo de vision) se toma siempre del juego, asi un cambio parcial nunca suma lo nuestro a la base
+    if (!s_haveBase || memcmp(cam + 0x10, s_wrote, 24) != 0) {   // el juego puso otra vista (p. ej. al entrar a Cara): se arranca de esa
+        if (s_haveBase && s_dirty) VcReset("el juego cambio la vista del visor");
+        memcpy(s_base, cam + 0x10, 24); memcpy(s_wrote, cam + 0x10, 24); s_haveBase = true; s_dirty = false; }
+    memcpy(s_base + 24, cam + 0x10 + 24, sizeof s_base - 24);
+    auto Restore = [&]() { if (s_dirty) { memcpy(cam + 0x10, s_base, 24); memcpy(s_wrote, s_base, 24); s_dirty = false; Log("mouse en menus: camara del visor: vuelve a la del juego"); } };
     if (!mv) { if (s_vcMv) { VcReset("salio del visor"); s_vcMv = 0; } s_vcPlayer = false; Restore(); return false; }
     if (!s_vcPlayer.load()) { if (s_vcYawCur != 0 || s_vcPitchCur != 0 || s_vcZoomCur != 1.0f || s_vcPan[0] != 0 || s_vcPan[1] != 0 || s_vcPan[2] != 0) VcReset("fuera de Apariencia"); Restore(); return false; }
     if (mv != s_vcMv) { VcReset("visor nuevo"); s_vcMv = mv; }
@@ -757,7 +762,7 @@ bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
     if (s_vcYawCur == 0 && s_vcPitchCur == 0 && s_vcZoomCur == 1.0f && s_vcPanCur[0] == 0 && s_vcPanCur[1] == 0 && s_vcPanCur[2] == 0) { Restore(); return false; }
     float nt[3], np[3]; for (int i = 0; i < 3; i++) { nt[i] = tgt[i] + s_vcPanCur[i]; np[i] = nt[i] + nv[i]; }
     memcpy(cam + 0x10, np, 12); memcpy(cam + 0x1c, nt, 12);
-    memcpy(s_wrote, cam + 0x10, sizeof s_wrote); s_dirty = true;
+    memcpy(s_wrote, cam + 0x10, 24); s_dirty = true;
     return true;
 }
 // overlay.cpp: destello del doble clic (pixeles de la ventana); kind 1 = zoom a la zona, 0 = vuelta
