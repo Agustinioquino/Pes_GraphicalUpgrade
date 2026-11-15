@@ -119,9 +119,10 @@ static const float kScales[4] = { 1.0f, 1.2f, 1.4f, 1.6f };
 static float UiK(const ImVec2& ds) { return std::max(1.0f, ds.y / 1080.0f) * std::clamp(g_cfg.motorScale, 0.8f, 2.0f); }
 static int ScaleIdx() { int b = 0; for (int i = 1; i < 4; i++) if (fabsf(kScales[i] - g_cfg.motorScale) < fabsf(kScales[b] - g_cfg.motorScale)) b = i; return b; }
 // (15/11 i) idioma del editor = idioma del menu del mod: se guarda en [PES21FX] language y se releen los textos de las tarjetas
-static void LangSet(int i) { static const char* const kKey[3] = { "es", "en", "pt" }; i = std::clamp(i, 0, 2);
-    { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.lang = i; LoadMenuLang(); }
-    SaveOption("language", kKey[i]); }
+static void LangSet(int i) { static const char* const kKey[3] = { "es", "en", "pt" }; i = std::clamp(i, 0, 3);
+    if (i == 3) { g_cfg.langAuto = 1; SaveOption("idioma_auto", "1"); return; }      // como el juego (motorlink.cpp GameLangPoll)
+    { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.langAuto = 0; g_cfg.lang = i; LoadMenuLang(); }
+    SaveOption("idioma_auto", "0"); SaveOption("language", kKey[i]); }
 // nombre de una vista en el idioma elegido ("Normales" ya existe en la tabla con otro sentido: se resuelve aca)
 static const char* ViewTr(int row, int op) { if (row == 0 && op == 3 && g_cfg.lang != 0) return g_cfg.lang == 2 ? "Normais" : "Normals"; return TRS(MotorViewName(row, op)); }
 static void ScaleSet(int i) { i = std::clamp(i, 0, 3); g_cfg.motorScale = kScales[i]; char b[16]; snprintf(b, sizeof b, "%.1f", kScales[i]); SaveOption("motor_escala", b); }
@@ -511,7 +512,7 @@ static void ToolbarDraw() {
             { static const char* const sn[4] = { "Chico", "Mediano", "Grande", "Muy grande" }; const int c = ScaleIdx(); for (int i = 0; i < 4; i++) add(sn[i], "", 750 + i, c == i ? 3 : 2); }
             // (15/11 i, Agustin 03:22: "puedes agregar un selector de idiomas?") el mismo idioma del menu del mod ([PES21FX] language)
             add(nullptr, "", -1, -1, 1); add("IDIOMA", "", -1, -1, 2);
-            { static const char* const ln[3] = { "Espa\xC3\xB1ol", "English", "Portugu\xC3\xAAs" }; const int c = std::clamp(g_cfg.lang, 0, 2); for (int i = 0; i < 3; i++) add(ln[i], "", 770 + i, c == i ? 3 : 2); } }
+            { static const char* const ln[3] = { "Espa\xC3\xB1ol", "English", "Portugu\xC3\xAAs" }; const int c = std::clamp(g_cfg.lang, 0, 2); for (int i = 0; i < 3; i++) add(ln[i], "", 770 + i, !g_cfg.langAuto && c == i ? 3 : 2); add("Como el juego (autom\xC3\xA1tico)", "", 773, g_cfg.langAuto ? 3 : 2); } }
         else if (m == 3) { add("VISTA", "V  /  Shift + V", -1, -1, 2); { const int c = MotorViewGet(0); for (int i = 0; i < MotorViewCount(0) && i < 16; i++) add(ViewTr(0, i), "", 100 + i, c == i ? 3 : 2); }
             add(nullptr, "", -1, -1, 1); add("ALAMBRE", "Z", -1, -1, 2); { const int c = MotorViewGet(1); for (int i = 0; i < MotorViewCount(1) && i < 4; i++) add(i == 2 ? "S\xC3\xAD, con teselaci\xC3\xB3n" : i == 1 ? "S\xC3\xAD" : ViewTr(1, i), "", 116 + i, c == i ? 3 : 2); }
             add(nullptr, "", -1, -1, 1); add("PANTALLA PARTIDA", "", -1, -1, 2); { const int c = MotorViewGet(2); for (int i = 0; i < MotorViewCount(2) && i < 4; i++) add(ViewTr(2, i), "", 132 + i, c == i ? 3 : 2); } }
@@ -591,7 +592,7 @@ static void ToolbarDraw() {
         else if (id == 712 || id == 713) SceneSave(id == 713);
         else if (id == 730) s_modal = 2;
         else if (id >= 750 && id < 754) ScaleSet(id - 750);
-        else if (id >= 770 && id < 773) LangSet(id - 770);
+        else if (id >= 770 && id < 774) LangSet(id - 770);
         else if (id == 760 || id == 761) ScaleSet(ScaleIdx() + (id == 760 ? 1 : -1));
         else if (id == 740 || id == 741) { const int n = std::max(1, MotorViewCount(0)); MotorViewSet(0, (MotorViewGet(0) + (id == 740 ? 1 : n - 1)) % n); Note("Vista: %s", ViewTr(0, MotorViewGet(0))); }
         else if (id == 742) { const int n = std::max(1, std::min(3, MotorViewCount(1))); MotorViewSet(1, (MotorViewGet(1) + 1) % n); }

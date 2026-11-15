@@ -196,6 +196,8 @@ static bool LoadConfigLocked() {
             else if (kl == "menu_autoguardar") c.menuAutoSave = std::clamp(atoi(v.c_str()), 0, 2);    // (08/11) guardado automatico de los cambios del menu
             else if (kl == "menu_letra") c.menuFont = atoi(v.c_str()) != 0;                       // (08/11) letra Saira (textures\pes_ui.ttf)
             else if (kl == "language" || kl == "idioma") { const std::string lv = Lower(v); c.lang = (lv == "en" || lv == "english" || v == "1") ? 1 : (lv == "pt" || lv == "portugues" || lv == "portuguese" || v == "2") ? 2 : 0; }
+            else if (kl == "idioma_auto") c.langAuto = atoi(v.c_str()) != 0;                     // (15/11) el menu sigue el idioma de textos del juego
+            else if (kl == "idioma_juego_ids") { int a = -1, b = -1, d = -1; if (sscanf(v.c_str(), "%d , %d , %d", &a, &b, &d) >= 1) { c.langGame[0] = a; c.langGame[1] = b; c.langGame[2] = d; } }   // (15/11) numeros del juego para es, en, pt
             else if (kl == "auto_captura") c.autoCap = atoi(v.c_str()) != 0;
             else if (kl == "auto_captura_seg") c.autoCapSec = std::clamp((float)atof(v.c_str()), 3.0f, 600.0f);
             else if (kl == "auto_captura_max") c.autoCapMax = std::clamp(atoi(v.c_str()), 1, 2000);

@@ -109,7 +109,42 @@ void MotorWireEnd(ID3D11DeviceContext* c, ID3D11RasterizerState* prev) {
 // ---------------------------------------------------------------- una vez por cuadro (antes de subir t120)
 static float Limpio(float v, float lo, float hi) { return (v >= lo && v <= hi) ? v : 0.0f; }   // NaN o fuera de rango = 0
 
+// ---------------------------------------------------------------- (15/11, Agustin 03:29) idioma de textos del juego
+// CONFIRMADO en el C (menu::LanguageSelectText::vf75 0x140b22e80): al elegir idioma de textos el juego guarda su numero en
+// *(*(0x143714240) + 0x50) + 0x13024 (u32). Que numero es cada idioma NO se saco del exe: se anota en el registro cada vez que
+// cambia y la tabla numero -> es / en / pt va en el ini ([PES21FX] idioma_juego_ids = es,en,pt). Con idioma_auto = 1 y un numero
+// conocido el menu pasa a ese idioma; elegir un idioma a mano apaga idioma_auto.
+static bool RdOk(const void* p, size_t n) {
+    MEMORY_BASIC_INFORMATION mi{};
+    if (!p || !VirtualQuery(p, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return false;
+    return (const uint8_t*)p + n <= (const uint8_t*)mi.BaseAddress + mi.RegionSize;
+}
+int GameTextLang() {
+    static int ok = -1;
+    if (ok < 0) { const HMODULE m = GetModuleHandleW(nullptr); ok = 0;
+        if ((uintptr_t)m == 0x140000000ull) { const auto* dos = (const IMAGE_DOS_HEADER*)m; const auto* nt = (const IMAGE_NT_HEADERS*)((const uint8_t*)m + dos->e_lfanew);
+            if (nt->FileHeader.TimeDateStamp == 0x62787C6Au) ok = 1; }
+        if (!ok) Log("idioma del juego: exe distinto, no se lee"); }
+    if (!ok) return -1;
+    const void* const* g = (const void* const*)0x143714240ull;
+    if (!RdOk(g, 8) || !*g) return -1;
+    const uint8_t* a = (const uint8_t*)*g;
+    if (!RdOk(a + 0x50, 8)) return -1;
+    const uint8_t* b = *(const uint8_t* const*)(a + 0x50);
+    if (!b || !RdOk(b + 0x13024, 4)) return -1;
+    return (int)*(const uint32_t*)(b + 0x13024);
+}
+static void GameLangPoll() {
+    static double t = 0; if (Now() - t < 1.0) return; t = Now();
+    static int last = -2; const int id = GameTextLang();
+    if (id < 0) return;
+    if (id != last) { last = id; static int n = 0; if (n++ < 40) Log("idioma del juego: textos = numero %d (idioma_auto %d, tabla es %d en %d pt %d)", id, g_cfg.langAuto, g_cfg.langGame[0], g_cfg.langGame[1], g_cfg.langGame[2]); }
+    if (!g_cfg.langAuto) return;
+    for (int i = 0; i < 3; i++) if (g_cfg.langGame[i] == id && g_cfg.lang != i) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.lang = i; LoadMenuLang(); Log("idioma del menu: sigue al juego -> %d", i); }
+}
+
 void MotorLinkPresent() {
+    GameLangPoll();
     static bool tried = false;
     if (!tried) {
         tried = true;

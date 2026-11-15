@@ -1942,12 +1942,15 @@ static void DrawSettingsPage() {
     const float lw = 230.0f * UIK();
     auto row = [&](const char* label) { ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(label); ImGui::SameLine(lw); };
     {   // (27/10) idioma del menu: se guarda en [PES21FX] language
-        static const char* const kLangs[3] = { "Espa\xC3\xB1ol", "English", "Portugu\xC3\xAAs" };
+        const char* const kLangs[4] = { "Espa\xC3\xB1ol", "English", "Portugu\xC3\xAAs", TRS("Como el juego (autom\xC3\xA1tico)") };
         static const char* const kLangKey[3] = { "es", "en", "pt" };
-        int lg = (g_cfg.lang >= 0 && g_cfg.lang <= 2) ? g_cfg.lang : 0;
+        int lg = g_cfg.langAuto ? 3 : (g_cfg.lang >= 0 && g_cfg.lang <= 2) ? g_cfg.lang : 0;
         row("Idioma / Language / Idioma");
         ImGui::SetNextItemWidth(200 * UIK());
-        if (ImGui::Combo("##idioma", &lg, kLangs, 3)) { g_cfg.lang = lg; SaveOption("language", kLangKey[lg]); LoadMenuLang(); }
+        if (ImGui::Combo("##idioma", &lg, kLangs, 4)) {      // (15/11) elegir un idioma a mano apaga el automatico
+            if (lg == 3) { g_cfg.langAuto = 1; SaveOption("idioma_auto", "1"); }
+            else { g_cfg.langAuto = 0; g_cfg.lang = lg; SaveOption("idioma_auto", "0"); SaveOption("language", kLangKey[lg]); LoadMenuLang(); } }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("'Como el juego' usa el idioma de textos que elegiste en el juego. Si el juego est\xC3\xA1 en un idioma que el men\xC3\xBA no tiene, queda el \xC3\xBAltimo elegido."));
     }
     {   // (31/10) que el juego no reciba las teclas mientras se escribe en el menu: [PES21FX] bloquear_teclado
         const char* kBlk[3] = { TRS("Siempre"), TRS("No mientras escribo"), TRS("No con el menu abierto") };

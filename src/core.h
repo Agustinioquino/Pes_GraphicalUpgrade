@@ -197,6 +197,7 @@ struct Config {
     int blockPad = 1; bool menuPadOpen = true; int menuCursor = 1; int camPad = 1; int camHud = 1;   // (14/11 k: a la vista de fabrica otra vez) camara_hud: 0 escondido, 1 se apaga solo a los 3 s, 2 siempre completo; camara_mando: el mando mueve la camara libre (modo foto)
       // menu_cursor: 0 sin cursor, 1 cursor nuevo, 2 el clasico de ImGui   // (14/11) [PES21FX] bloquear_mando 0 nunca / 1 con el menu abierto; menu_mando_abrir: L3 + R3 abre y cierra el menu
     int blockKeys = 1;                         // (31/10) teclas del juego con el menu: 0 nunca se bloquean, 1 al escribir en un campo, 2 con el menu abierto ([PES21FX] bloquear_teclado)
+    int langAuto = 0; int langGame[3] = { -1, -1, -1 };   // (15/11 3icxbh) idioma_auto: seguir el idioma de textos del juego; idioma_juego_ids = numero del juego para es, en, pt
     int lang = 0;                              // (27/10) idioma del menu: 0 espanol, 1 ingles ([PES21FX] language = es / en)
     bool autoCap = false; float autoCapSec = 20.0f; int autoCapMax = 150; bool autoCapAB = false; bool exeDump = true; bool motorPatch = true; bool motorSunFix = true; int motorShadowFix = 1; int motorShadowRes = 0; float motorCascadeScale = 0.0f;   // [Motor]: parches en memoria (exepatch.cpp)   // exe_dump: volcado del exe desempaquetado (una vez por version)   // auto_captura_ab: pares A (todo) / B (un grupo del menu apagado 3 cuadros)
     int aniso = 16; float mipBias = 0.0f;   // 20/10: filtrado anisotropico forzado (1 = el del juego) y sesgo de mip global ([PES21FX] aniso, mip_bias)   // 19/10: captura automatica en partido ([PES21FX] auto_captura, auto_captura_seg, auto_captura_max)
@@ -683,7 +684,7 @@ struct MotorSceneInfo { int scenes, objects, models, lights; };
 int MotorSceneLights(MotorLight* out, int max, MotorSceneInfo* info); bool MotorLightSetOn(const MotorLight& L, bool on);
 void MotorErr(const char* fmt, ...);   // (15/11 f) error del Motor: al registro y a un recuadro rojo en pantalla (motorgizmo.cpp)
 bool MotorUiSkipGameDraw(ID3D11DeviceContext* c, uint64_t ps); int MotorViewCount(int row); const char* MotorViewName(int row, int op); int MotorViewGet(int row); void MotorViewSet(int row, int op);   // (15/11 b)
-void* MenuLogoTex(float* aspect); bool MotorUiWheel(int delta); bool MotorUiEscBusy(); bool MotorUiOn(); bool MotorUiPanel(); bool MotorUiPlayer(); void MotorUiTogglePanel(); void MotorUiTogglePlayer(); void MotorUiBack(); bool MotorUiTakeBack();                     // motorgizmo.cpp
+void* MenuLogoTex(float* aspect); int GameTextLang(); bool MotorUiWheel(int delta); bool MotorUiEscBusy(); bool MotorUiOn(); bool MotorUiPanel(); bool MotorUiPlayer(); void MotorUiTogglePanel(); void MotorUiTogglePlayer(); void MotorUiBack(); bool MotorUiTakeBack();                     // motorgizmo.cpp
 bool CamHookLast(float* pos, float* tgt, int* id, int* frame);   // camhook.cpp: ultima camara aplicada por el CameraSystem
 // (27/10 c) sombra propia de la cabeza (headshadow.cpp): atlas de sombras de alta resolucion de las cabezas mas cercanas
 // (04/11 boca) mascara del interior de la boca (mouthmask.cpp): la luz de la piel no cambia la boca
