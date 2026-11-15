@@ -128,6 +128,8 @@ static int s_pDrag = 0; static float s_pA[2] = { -1.0f, -1.0f }; static float s_
 // s_mv: 0 nada, 1 / 2 = panel agarrado (+1); s_mvOn = ya se movio (antes de 5 puntos es un clic); s_rsz 1 / 2 = esquina; s_spl = division
 static int s_mvId = 0, s_rsz = 0; static bool s_mvOn = false, s_spl = false; static float s_mvGX = 0, s_mvGY = 0, s_mvW = 0, s_mvH = 0, s_mvPX = 0, s_mvPY = 0;
 static int s_dropDock = -1, s_dropTop = 0; static float s_dropR[4] = {};
+// (15/11 q) ventanita de la vista extra (motorextra.cpp): posicion y ancho en puntos de 1080p; s_xvDrag 1 mover, 2 girar la camara extra, 3 tamano
+static float s_xv[3] = { -1.0f, -1.0f, 420.0f }, s_xvPx = 0, s_xvPy = 0, s_xvGX = 0, s_xvGY = 0, s_xvLX = 0, s_xvLY = 0; static int s_xvDrag = 0;
 static void DockSave() { char b[160]; snprintf(b, sizeof b, "%d,%d", g_cfg.motorDock[0], g_cfg.motorDock[1]); SaveOption("motor_panel_lugar", b);
     snprintf(b, sizeof b, "%.2f", g_cfg.motorSplit); SaveOption("motor_panel_division", b); SaveOption("motor_panel_arriba", g_cfg.motorStackTop ? "1" : "0");
     const float (&f)[2][4] = g_cfg.motorFloat; snprintf(b, sizeof b, "%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f", f[0][0], f[0][1], f[0][2], f[0][3], f[1][0], f[1][1], f[1][2], f[1][3]); SaveOption("motor_panel_flotante", b); }
@@ -292,6 +294,7 @@ static const char* const kHelp[][2] = {
     { "Num 1  /  3  /  7", "mirar de frente  /  derecha  /  arriba (con Ctrl, el lado opuesto)" },
     { "Num 0", "volver a la pose inicial de la c\xC3\xA1mara" },
     { "Num 5", "perspectiva u ortogr\xC3\xA1" "fica" },
+    { "X", "vista extra con otra c\xC3\xA1mara (en su ventanita: arrastrar = girar, Shift = acercar)" },
     { "Ctrl +  /  Ctrl -", "agrandar  /  achicar la interfaz" },
     { "T  /  N", "mostrar u ocultar el panel Escena  /  Inspector" },
     { "Borde de un panel", "arrastrarlo cambia su ancho" },
@@ -974,6 +977,30 @@ static void ToolbarDraw() {
         const int top = std::clamp(g_cfg.motorStackTop, 0, 1); const float ym = P[top].yb, x0 = P[top].x, x1 = P[top].x + P[top].W; const ImVec2 h0(x0, ym - 4.0f * k), h1(x1, ym + 4.0f * k); zone(h0, h1);
         const bool hv = hit(989, h0, h1) || s_spl; dl->AddLine(ImVec2(x0, ym), ImVec2(x1, ym), cLine, 2.0f * k);
         if (hv) { for (int g = 3; g >= 1; g--) { const float e = (1.5f + (float)g * 1.6f) * k; dl->AddRectFilled(ImVec2(x0, ym - e), ImVec2(x1, ym + e), IM_COL32(240, 138, 36, s_spl ? 20 : 12)); } dl->AddRectFilled(ImVec2(x0, ym - 1.5f * k), ImVec2(x1, ym + 1.5f * k), s_spl ? acc : IM_COL32(240, 138, 36, 190)); } }
+    // (15/11 q, Agustin 17:27 / 17:39) VISTA EXTRA: ventanita flotante con la imagen de la camara extra (cuadros alternados)
+    if (FreeCamExtra() && s_openA > 0.5f) {
+        float asp = 1.7778f; void* srv = MotorExtraSRV(&asp); asp = std::clamp(asp, 0.5f, 4.0f);
+        const float w = std::clamp(s_xv[2], 220.0f, 1400.0f) * k, th = rowH, h = w / asp;
+        if (s_xv[0] < 0.0f) { s_xv[0] = (ds.x - rightV) / k - s_xv[2] - 24.0f; s_xv[1] = (y1 - h - th) / k - 24.0f; }
+        const float x = std::clamp(s_xv[0] * k, 0.0f, std::max(0.0f, ds.x - w)), y = std::clamp(s_xv[1] * k, y0, std::max(y0, y1 - h - th)); s_xvPx = x; s_xvPy = y;
+        const ImVec2 a(x, y), b(x + w, y + th + h); zone(a, b);
+        dl->AddRectFilled(ImVec2(a.x + 4.0f * k, a.y + 6.0f * k), ImVec2(b.x + 6.0f * k, b.y + 8.0f * k), IM_COL32(0, 0, 0, 90), 6.0f * k);      // sombra
+        dl->AddRectFilled(a, ImVec2(b.x, a.y + th), cHead, 5.0f * k, ImDrawFlags_RoundCornersTop);
+        { const bool hv = hit(960, a, ImVec2(b.x, a.y + th)) || s_xvDrag == 1; if (hv) dl->AddRectFilled(a, ImVec2(b.x, a.y + th), IM_COL32(255, 255, 255, 12), 5.0f * k, ImDrawFlags_RoundCornersTop); }
+        text(x + 10.0f * k, y + th * 0.5f, dim, "VISTA EXTRA", fsS);
+        { float bx = x + 10.0f * k + font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, TRS("VISTA EXTRA")).x + 14.0f * k;
+          const char* const bn[4] = { "Frente", "Costado", "Arriba", "Intercambiar" };
+          for (int q = 0; q < 4; q++) { const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, TRS(bn[q])); const ImVec2 p0(bx, y + 4.0f * k), p1(bx + ts.x + 14.0f * k, y + th - 4.0f * k);
+              if (p1.x > b.x - 30.0f * k) break; const bool hv = hit(962 + q, p0, p1);
+              dl->AddRectFilled(p0, p1, hv ? IM_COL32(86, 86, 92, 255) : IM_COL32(62, 62, 66, 255), 3.0f * k); textC(p0, p1, hv ? ink : IM_COL32(200, 200, 204, 255), bn[q], fsS); bx = p1.x + 6.0f * k; } }
+        xBtn(966, b.x - 14.0f * k, y + th * 0.5f);
+        const ImVec2 i0(x, y + th), i1(b.x, b.y);
+        if (srv) dl->AddImage((ImTextureID)(uintptr_t)srv, i0, i1); else { dl->AddRectFilled(i0, i1, IM_COL32(20, 20, 21, 255)); textC(i0, i1, dim, "Esperando la primera imagen...", fsS + 1.0f * k); }
+        { const bool hv = hit(961, i0, i1) || s_xvDrag == 2; if (hv) text(x + 10.0f * k, b.y - 14.0f * k, IM_COL32(230, 230, 232, 220), "Arrastr\xC3\xA1 para girar  \xC2\xB7  con Shift: acercar o alejar", fsS - 0.5f * k); }
+        dl->AddRect(a, b, s_xvDrag ? acc : IM_COL32(80, 80, 86, 255), 5.0f * k, 0, 1.0f);
+        { const float g = 16.0f * k; const ImVec2 c0(b.x - g, b.y - g); const bool hv = hit(967, c0, b) || s_xvDrag == 3; const ImU32 c = hv ? acc : IM_COL32(150, 150, 156, 255);
+          for (int q = 1; q <= 3; q++) { const float o = (float)q * 4.0f * k; dl->AddLine(ImVec2(b.x - o, b.y - 2.0f * k), ImVec2(b.x - 2.0f * k, b.y - o), c, 1.2f * k); } }
+    }
     // panel agarrado: recuadro naranja donde va a caer
     if (s_mvOn && s_dropDock >= 0) { const ImVec2 r0(s_dropR[0] + 3.0f * k, s_dropR[1] + 3.0f * k), r1(s_dropR[2] - 3.0f * k, s_dropR[3] - 3.0f * k);
         dl->AddRectFilled(r0, r1, IM_COL32(240, 138, 36, 34), 4.0f * k); dl->AddRect(r0, r1, IM_COL32(240, 138, 36, 200), 4.0f * k, 0, 2.0f * k);
@@ -1148,6 +1175,7 @@ static void ToolbarDraw() {
         else if (m == 2) { add("C\xC3\xA1mara libre", "C", 3, camFree ? 1 : 0); add(nullptr, "", -1, -1, 1); add("MIRAR DESDE", "", -1, -1, 2);
             add("Frente", "Num 1", 232); add("Atr\xC3\xA1s", "Ctrl + Num 1", 235); add("Derecha", "Num 3", 230); add("Izquierda", "Ctrl + Num 3", 233); add("Arriba", "Num 7", 231); add("Abajo", "Ctrl + Num 7", 234);
             add(nullptr, "", -1, -1, 1); add("PROYECCI\xC3\x93N", "Num 5", -1, -1, 2); add("Perspectiva", "", 237, FreeCamOrtho() ? 2 : 3); add("Ortogr\xC3\xA1" "fica", "", 238, FreeCamOrtho() ? 3 : 2);
+            add(nullptr, "", -1, -1, 1); add("Vista extra (otra c\xC3\xA1mara)", "X", 968, FreeCamExtra() ? 1 : 0);
             add(nullptr, "", -1, -1, 1); add("Volver a la pose inicial", "Num 0", 202);
             add(nullptr, "", -1, -1, 1); add("TAMA\xC3\x91O DE LA INTERFAZ", "Ctrl +  /  Ctrl -", -1, -1, 2);
             { static const char* const sn[4] = { "Chico", "Mediano", "Grande", "Muy grande" }; const int c = ScaleIdx(); for (int i = 0; i < 4; i++) add(sn[i], "", 750 + i, c == i ? 3 : 2); }
@@ -1240,6 +1268,10 @@ static void ToolbarDraw() {
         else if (id == 202) { if (camFree) FreeCamGizmoHome(); else Note("La pose inicial es de la c\xC3\xA1mara libre: Ver > C\xC3\xA1mara libre (C)"); }
         else if (id >= 230 && id < 236) { static const int kAx[6] = { 0, 2, 4, 1, 3, 5 };      // +X, +Y, +Z / -X, -Y, -Z
             if (camFree) FreeCamGizmoAxis(kAx[id - 230]); else Note("Mirar desde un lado es de la c\xC3\xA1mara libre: Ver > C\xC3\xA1mara libre (C)"); }
+        else if (id == 968) { const int on = !FreeCamExtra(); if (on && !camFree) SetCam(true); FreeCamExtraSet(on); Note(on ? "Vista extra prendida (cada vista se renueva a la mitad de los cuadros)" : "Vista extra apagada"); }
+        else if (id >= 962 && id <= 964) { static const int kp[3] = { 0, 1, 2 }; FreeCamExtraPreset(kp[id - 962]); }
+        else if (id == 965) { FreeCamExtraSwap(); Note("Cuadros de la vista extra intercambiados"); }
+        else if (id == 966) { FreeCamExtraSet(0); Note("Vista extra apagada"); }
         else if (id == 236 || id == 237 || id == 238) {      // (15/11 q, Agustin 17:28) perspectiva / ortografica (Num 5); 237 / 238 = elegir una
             const int on = id == 236 ? !FreeCamOrtho() : id == 238; if (on && !camFree) SetCam(true); FreeCamOrthoSet(on); Note(on ? "Vista ortogr\xC3\xA1" "fica" : "Vista en perspectiva"); }
         else if (id == 210 || id == 211) g_cfg.motorGrid = id == 210 ? 1 : 0;
@@ -1293,7 +1325,7 @@ static void ToolbarDraw() {
                  tN = tap('N'), tO = tap('O'), tS = tap('S'), tG = tap('G'), tJ = tap('J'), tC = tap('C'), tV = tap('V'), tZ = tap('Z'), tY = tap('Y'), tL = tap('L'),
                  t0 = tap(VK_NUMPAD0), t1 = tap(VK_NUMPAD1), t3 = tap(VK_NUMPAD3), t5 = tap(VK_NUMPAD5), t7 = tap(VK_NUMPAD7),
                  tPa = tap(VK_OEM_PLUS), tPb = tap(VK_ADD), tMa = tap(VK_OEM_MINUS), tMb = tap(VK_SUBTRACT), tPl = tPa || tPb, tMi = tMa || tMb,
-                 tT = tap('T'), tCm = tap(VK_OEM_COMMA), tDot = tap(VK_OEM_PERIOD), tDec = tap(VK_DECIMAL), tBk = tap(VK_BACK);
+                 tT = tap('T'), tX = tap('X'), tCm = tap(VK_OEM_COMMA), tDot = tap(VK_OEM_PERIOD), tDec = tap(VK_DECIMAL), tBk = tap(VK_BACK);
       // (15/11 o) numeros para escribir en un campo: los de arriba y los del teclado numerico (los de este ya se miraron arriba)
       int dig = -1; for (int d = 0; d <= 9; d++) if (tap('0' + d)) dig = d;
       { const bool np[10] = { t0, t1, tap(VK_NUMPAD2), t3, tap(VK_NUMPAD4), t5, tap(VK_NUMPAD6), t7, tap(VK_NUMPAD8), tap(VK_NUMPAD9) }; for (int d = 0; d <= 9; d++) if (np[d]) dig = d; }
@@ -1301,7 +1333,7 @@ static void ToolbarDraw() {
       // para el cuadrito de teclas (overlay.cpp KeyHudDraw lo pone arriba de las teclas)
       auto kact = [&](int id) { static const struct { int id; const char* t; } kN[] = {
               { 0, "Salir del Motor" }, { 1, "Grilla de piso" }, { 2, "Jugador" }, { 3, "C\xC3\xA1mara libre o del juego" }, { 202, "Pose inicial de la c\xC3\xA1mara" },
-              { 230, "Mirar desde la derecha" }, { 231, "Mirar desde arriba" }, { 232, "Mirar de frente" }, { 233, "Mirar desde la izquierda" }, { 234, "Mirar desde abajo" }, { 235, "Mirar desde atr\xC3\xA1s" }, { 236, "Perspectiva u ortogr\xC3\xA1" "fica" },
+              { 230, "Mirar desde la derecha" }, { 231, "Mirar desde arriba" }, { 232, "Mirar de frente" }, { 233, "Mirar desde la izquierda" }, { 234, "Mirar desde abajo" }, { 235, "Mirar desde atr\xC3\xA1s" }, { 236, "Perspectiva u ortogr\xC3\xA1" "fica" }, { 968, "Vista extra" },
               { 700, "Prender todas las luces" }, { 701, "Apagar todas las luces" }, { 702, "Luces como estaban" }, { 710, "Escena nueva" }, { 711, "Abrir escena" }, { 712, "Guardar escena" },
               { 713, "Guardar como escena nueva" }, { 722, "Preferencias" }, { 730, "Controles y atajos" }, { 740, "Vista siguiente" }, { 741, "Vista anterior" }, { 742, "Alambre" },
               { 760, "Agrandar la interfaz" }, { 761, "Achicar la interfaz" }, { 794, "Panel Escena" }, { 795, "Panel Inspector" } };
@@ -1331,7 +1363,7 @@ static void ToolbarDraw() {
       else if (ctrl && !alt) { if (tZ) kundo(shift); else if (tY) kundo(true); else if (tCm) kact(722); else if (tN) kact(710); else if (tO) kact(711); else if (tS) kact(shift ? 713 : 712); else if (tPl) kact(760); else if (tMi) kact(761); else if (t1) kact(235); else if (t3) kact(233); else if (t7) kact(234); }
       else if (!alt) {
           if (tG) kact(1); else if (tJ) kact(2); else if (tC) kact(3); else if (tV) kact(shift ? 741 : 740); else if (tZ) kact(742);
-          else if (tT) kact(794); else if (tN) kact(795);
+          else if (tT) kact(794); else if (tN) kact(795); else if (tX) kact(968);
           else if (tL) { bool any = false; for (int i = 0; i < s_nLights; i++) if (s_lights[i].on) any = true; kact(shift ? 702 : any ? 701 : 700); }
           else if (t1) kact(232); else if (t3) kact(230); else if (t7) kact(231); else if (t0) kact(202); else if (t5) kact(236); }
     }
@@ -1369,11 +1401,18 @@ static void ToolbarDraw() {
         if (lNow) { F[2] = std::max(160.0f, (mx - P[i].x) / k); F[3] = std::max(120.0f, (my - P[i].ya) / k); if (i == 0) g_cfg.motorPanelLW = std::clamp(F[2], 160.0f, 900.0f); else g_cfg.motorPanelRW = std::clamp(F[2], 200.0f, 900.0f); F[2] = i == 0 ? g_cfg.motorPanelLW : g_cfg.motorPanelRW; }
         else { DockSave(); char b[16]; snprintf(b, sizeof b, "%.0f", i == 0 ? g_cfg.motorPanelLW : g_cfg.motorPanelRW); SaveOption(i == 0 ? "motor_panel_izq" : "motor_panel_der", b); s_rsz = 0; s_tPress = -1; } }
     if (lEdge && !menuWas && hot == 989) s_spl = true;
+    // (15/11 q) ventanita de la vista extra: mover por el titulo, girar la camara extra arrastrando la imagen (Shift = acercar), esquina = tamano
+    if (lEdge && !menuWas && (hot == 960 || hot == 961 || hot == 967)) { s_xvDrag = hot == 960 ? 1 : hot == 961 ? 2 : 3; s_xvGX = mx - s_xvPx; s_xvGY = my - s_xvPy; s_xvLX = mx; s_xvLY = my; }
+    if (s_xvDrag) { if (lNow) { const float ddx = mx - s_xvLX, ddy = my - s_xvLY; s_xvLX = mx; s_xvLY = my;
+            if (s_xvDrag == 1) { s_xv[0] = (mx - s_xvGX) / k; s_xv[1] = (my - s_xvGY) / k; }
+            else if (s_xvDrag == 2) { if (GetAsyncKeyState(VK_SHIFT) & 0x8000) FreeCamExtraZoom(powf(1.006f, ddy / k)); else FreeCamExtraOrbit(-ddx * 0.008f / k, ddy * 0.008f / k); }
+            else s_xv[2] = std::clamp((mx - s_xvPx) / k, 220.0f, 1400.0f); }
+        else { s_xvDrag = 0; s_tPress = -1; } }
     if (s_spl) { if (lNow) g_cfg.motorSplit = std::clamp((my - y0) / std::max(1.0f, y1 - y0), 0.15f, 0.85f); else { DockSave(); s_spl = false; s_tPress = -1; } }
     if (lUp && s_tPress >= 0 && s_tPress == hot) {
         if (hot >= 600 && hot < 607) { s_menuOpen = s_menuOpen == hot - 600 ? -1 : hot - 600; s_menuA = 0.0f; s_menuKb = -1; }
         else if (hot >= 1000 && hot < 1032) { const int a = hot - 1000 < s_miN ? s_miAct[hot - 1000] : -1; s_menuOpen = -1; if (a >= 0) act(a); }
-        else if (hot != 699 && hot != 897 && !(hot >= 985 && hot <= 991) && !(hot >= 2000 && hot < 3000)) act(hot);
+        else if (hot != 699 && hot != 897 && hot != 960 && hot != 961 && hot != 967 && !(hot >= 985 && hot <= 991) && !(hot >= 2000 && hot < 3000)) act(hot);
         static int nl = 0; if (nl++ < 60) Log("motor (editor): clic %d", hot);
     }
     if (!lNow) s_tPress = -1;

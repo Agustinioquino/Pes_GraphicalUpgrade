@@ -201,6 +201,22 @@ void FreeCamGizmoHome() { s_gzHome.store(1); }
 static std::atomic<int> s_orthoWant{ 0 }; static float s_orthoA = 0.0f, s_posOut[3] = {}; static bool s_posOutOk = false; static std::atomic<float> s_orthoFar{ 0.0f };
 void FreeCamOrthoSet(int on) { s_orthoWant.store(on ? 1 : 0); }
 bool FreeCamOrtho() { return s_orthoWant.load() != 0; }
+// (15/11 q, Agustin 17:27: "permitirme crear una vista extra, con otra camara"; 17:39 eligio probar alternando cuadros) VISTA EXTRA:
+// el juego dibuja una sola camara por cuadro, asi que en los cuadros "B" el visor recibe la camara extra (orbita alrededor del mismo
+// pivote que la camara libre) y motorextra.cpp guarda esa imagen y vuelve a poner en pantalla la del cuadro anterior. Cada vista se
+// renueva la mitad de las veces. s_xOff = intercambiar (si el juego dibuja la camara un cuadro despues de recibirla).
+static std::atomic<int> s_xOn{ 0 }, s_xOff{ 0 }; static std::atomic<unsigned> s_xFrame{ 0 };
+static std::mutex s_xMx; static float s_xYaw = 0.0f, s_xPitch = 0.25f, s_xDist = 3.0f; static bool s_xInit = false;
+void FreeCamExtraSet(int on) { s_xOn.store(on ? 1 : 0); if (!on) { std::lock_guard<std::mutex> lk(s_xMx); s_xInit = false; } }
+bool FreeCamExtra() { return s_xOn.load() != 0; }
+void FreeCamExtraSwap() { s_xOff.store(s_xOff.load() ^ 1); }
+void FreeCamExtraTick() { s_xFrame.fetch_add(1); }
+bool FreeCamExtraBFrame() { return s_xOn.load() != 0 && ((s_xFrame.load() + (unsigned)s_xOff.load()) & 1u) != 0; }
+void FreeCamExtraOrbit(float dyaw, float dpitch) { std::lock_guard<std::mutex> lk(s_xMx); s_xYaw += dyaw; s_xPitch = std::clamp(s_xPitch + dpitch, -1.45f, 1.45f); }
+void FreeCamExtraZoom(float f) { std::lock_guard<std::mutex> lk(s_xMx); s_xDist = std::clamp(s_xDist * f, 0.3f, 120.0f); }
+void FreeCamExtraPreset(int p) { std::lock_guard<std::mutex> lk(s_xMx);      // 0 frente, 1 costado derecho, 2 arriba, 3 atras, 4 costado izquierdo
+    static const float kY[5] = { 0.0f, 1.5707963f, 0.0f, 3.1415927f, -1.5707963f }, kP[5] = { 0.12f, 0.12f, 1.45f, 0.12f, 0.12f };
+    const int q = std::clamp(p, 0, 4); s_xYaw = kY[q]; s_xPitch = kP[q]; }
 static double s_headLostT = -1.0;   // (08/11 e) cuando se perdio el dato de la cabeza siguiendo la cara (-1 = no)
 static bool FreeCamHeadLost() {   // se pidio seguir la cara, se estaba siguiendo y el dato se corto: se suelta hasta que vuelva
     if (s_headLostT < 0.0) return false;
@@ -660,8 +676,21 @@ static void hk_SetCam(void* rt, unsigned char* cam) {
     // juego, asi el CameraImpl del visor no acumula nada y al salir queda la camara de siempre. Nunca con la camara libre ni en el Motor.
     unsigned char vcSave[0x34];
     const bool vc = cam && !FreeCamActive() && !MotorPageActive() && MenuViewCamAdjust(cam, vcSave);
+    // (15/11 q) vista extra: en los cuadros B se manda la camara extra y despues se deja la de siempre en el visor
+    unsigned char xSave[0x34]; bool xb = false;
+    if (cam && FreeCamActive() && MotorPageActive() && s_pivotOk && rt == s_rtMain && FreeCamExtraBFrame()) {
+        std::lock_guard<std::mutex> lk(s_xMx);
+        if (!s_xInit) { const float d[3] = { s_pos[0] - s_pivot[0], s_pos[1] - s_pivot[1], s_pos[2] - s_pivot[2] }; const float l = Len3(d);
+            s_xDist = std::clamp(l, 0.3f, 120.0f); s_xYaw = atan2f(d[0], d[2]) + 1.5707963f; s_xPitch = 0.15f; s_xInit = true;
+            Log("motor: vista extra prendida (alternando cuadros), camara extra a %.2f m del pivote, de costado", s_xDist); }
+        memcpy(xSave, cam + 0x10, sizeof xSave); xb = true;
+        const float cp = cosf(s_xPitch); const float c[3] = { cp * sinf(s_xYaw), sinf(s_xPitch), cp * cosf(s_xYaw) };
+        float* pos = (float*)(cam + 0x10); float* tgt = (float*)(cam + 0x1c); float* up = (float*)(cam + 0x28);
+        for (int i = 0; i < 3; i++) { pos[i] = s_pivot[i] + c[i] * s_xDist; tgt[i] = s_pivot[i]; } up[0] = 0.0f; up[1] = 1.0f; up[2] = 0.0f;
+    }
     o_setCam(rt, cam);
     if (vc) memcpy(cam + 0x10, vcSave, sizeof vcSave);
+    if (xb) memcpy(cam + 0x10, xSave, sizeof xSave);
 }
 
 static bool Readable(const void* p, size_t n) {

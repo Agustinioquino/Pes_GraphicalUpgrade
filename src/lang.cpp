@@ -1595,6 +1595,17 @@ static const char* const kPt[][2] = {
 
 // (15/11 3icxbh) textos del editor del Motor en tiempo real: castellano, ingles, portugues
 static const char* const kMotor[][3] = {
+    { "VISTA EXTRA", "EXTRA VIEW", "VISTA EXTRA" },
+    { "Vista extra", "Extra view", "Vista extra" },
+    { "Costado", "Side", "Lado" },
+    { "Intercambiar", "Swap", "Trocar" },
+    { "Esperando la primera imagen...", "Waiting for the first image...", "Aguardando a primeira imagem..." },
+    { "Arrastr\303\241 para girar  \302\267  con Shift: acercar o alejar", "Drag to orbit  \302\267  with Shift: zoom in or out", "Arraste para girar  \302\267  com Shift: aproximar ou afastar" },
+    { "Vista extra (otra c\303\241mara)", "Extra view (another camera)", "Vista extra (outra c\303\242mera)" },
+    { "Vista extra prendida (cada vista se renueva a la mitad de los cuadros)", "Extra view on (each view refreshes at half the frame rate)", "Vista extra ligada (cada vista se renova na metade dos quadros)" },
+    { "Vista extra apagada", "Extra view off", "Vista extra desligada" },
+    { "Cuadros de la vista extra intercambiados", "Extra view frames swapped", "Quadros da vista extra trocados" },
+    { "vista extra con otra c\303\241mara (en su ventanita: arrastrar = girar, Shift = acercar)", "extra view with another camera (in its window: drag = orbit, Shift = zoom)", "vista extra com outra c\303\242mera (na janelinha: arrastar = girar, Shift = aproximar)" },
     { "IMAGEN", "IMAGE", "IMAGEM" },
     { "Resoluci\303\263n del visor", "Viewer resolution", "Resolu\303\247\303\243o do visor" },
     { "El Motor dibuja la escena a este tanto de la resoluci\303\263n de tu pantalla (100 % = n\303\255tida). Editar = el tama\303\261o chico del recuadro del Editar. M\303\241s de 100 % suaviza los bordes y pide m\303\241s a la placa.", "The Engine draws the scene at this share of your screen resolution (100 % = sharp). Edit = the small size of the Edit box. Above 100 % smooths edges and asks more of the graphics card.", "O Motor desenha a cena nesta parte da resolu\303\247\303\243o da sua tela (100 % = n\303\255tida). Editar = o tamanho pequeno do quadro do Editar. Acima de 100 % suaviza as bordas e exige mais da placa." },
