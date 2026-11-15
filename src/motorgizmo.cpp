@@ -126,7 +126,7 @@ static void LangSet(int i) { static const char* const kKey[3] = { "es", "en", "p
     SaveOption("idioma_auto", "0"); SaveOption("language", kKey[i]); }
 // nombre de una vista en el idioma elegido ("Normales" ya existe en la tabla con otro sentido: se resuelve aca)
 static const char* ViewTr(int row, int op) { if (row == 0 && op == 3 && g_cfg.lang != 0) return g_cfg.lang == 2 ? "Normais" : "Normals"; return TRS(MotorViewName(row, op)); }
-static void ScaleSet(int i) { i = std::clamp(i, 0, 3); g_cfg.motorScale = kScales[i]; char b[16]; snprintf(b, sizeof b, "%.1f", kScales[i]); SaveOption("motor_escala", b); }
+static void ScaleSet(int i) { i = std::clamp(i, 0, 3); g_cfg.motorScale = kScales[i]; char b[16]; snprintf(b, sizeof b, "%.1f", kScales[i]); SaveOption("motor_escala", b); MenuFontsDirty(); }   // la letra del editor se rehace a su tamano
 // (15/11 h, Agustin 03:19: "al ingresar a veces aparece el fondo de edicion, podrias agregar una transicion al ingresar y salir")
 // al entrar: tapa oscura 0.2 s y fundido de 0.35 s; al salir (boton, menu o Esc): fundido a oscuro de 0.18 s y recien ahi se vuelve.
 static double s_enterT = -1.0e9, s_exitT = -1.0, s_coverEnd = -1.0; static bool s_exitSent = false, s_sceneOnce = false;
@@ -318,7 +318,7 @@ void MotorGlitchCover(float a, float side) {
     if (la > 0.0f) {
         const float cx = ds.x * 0.5f, cy = ds.y * 0.5f - 14.0f * k;
         const float j = Hash1(tick * 11u) > 0.7f ? (Hash1(tick * 3u + 1u) - 0.5f) * 6.0f * k : 0.0f;
-        float asp = 1.0f; void* lg = MenuLogoTex(&asp); ImFont* font = ImGui::GetFont();
+        float asp = 1.0f; void* lg = MenuLogoTex(&asp); ImFont* font = MotorFont(0);
         if (lg && asp > 0.05f) {
             const float lh = 70.0f * k, lw = std::min(lh * asp, ds.x * 0.5f); const ImVec2 p0(cx - lw * 0.5f, cy - lh * 0.5f - 6.0f * k), p1(p0.x + lw, p0.y + lh);
             dl->AddImage((ImTextureID)(uintptr_t)lg, ImVec2(p0.x - 3.0f * k + j, p0.y), ImVec2(p1.x - 3.0f * k + j, p1.y), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(186, 255, 92, (int)(110.0f * la)));
@@ -330,11 +330,11 @@ void MotorGlitchCover(float a, float side) {
             dl->AddText(font, fsz, ImVec2(o.x + 3.0f * k - j, o.y), IM_COL32(52, 232, 128, (int)(130.0f * la)), t);
             dl->AddText(font, fsz, o, IM_COL32(235, 235, 238, (int)(255.0f * la)), t);
         }
-        { const char* t = TRS("MOTOR EN TIEMPO REAL"); const float fsz = 11.0f * k; const ImVec2 ts = font->CalcTextSizeA(fsz, FLT_MAX, 0.0f, t);
-          dl->AddText(font, fsz, ImVec2(cx - ts.x * 0.5f, cy + 40.0f * k - ts.y * 0.5f), IM_COL32(130, 196, 158, (int)(255.0f * la)), t); }
+        { const char* t = TRS("MOTOR EN TIEMPO REAL"); ImFont* fl = MotorFont(2); const float fsz = 16.0f * k; const ImVec2 ts = fl->CalcTextSizeA(fsz, FLT_MAX, 0.0f, t);
+          dl->AddText(fl, fsz, ImVec2(cx - ts.x * 0.5f, cy + 44.0f * k - ts.y * 0.5f), IM_COL32(190, 255, 215, (int)(255.0f * la)), t); }   // letra de contorno (Lack UA Line)
         // (15/11 m, Agustin 04:20: "una barra de cuanto lleva cargado") la barra sigue la carga real (MotorCoverLoad): boton aceptado,
         // pagina armada, escena leida, iconos; abajo la etapa y el porcentaje
-        const float bw = 220.0f * k, bh = 4.0f * k, by = cy + 56.0f * k, bx0 = cx - bw * 0.5f; const float u = s_cvShown;
+        const float bw = 220.0f * k, bh = 4.0f * k, by = cy + 62.0f * k, bx0 = cx - bw * 0.5f; const float u = s_cvShown;
         dl->AddRectFilled(ImVec2(bx0, by), ImVec2(bx0 + bw, by + bh), IM_COL32(22, 48, 33, (int)(255.0f * la)), 2.0f * k);
         const float fx = bx0 + bw * std::clamp(u, 0.0f, 1.0f);
         if (fx > bx0 + 0.5f) {
@@ -387,7 +387,7 @@ static void ToolbarDraw() {
     { HWND h = OverlayHwnd(); POINT p{}; RECT rc{};
       if (h && GetForegroundWindow() == h && GetCursorPos(&p) && ScreenToClient(h, &p) && GetClientRect(h, &rc) && rc.right > rc.left && rc.bottom > rc.top) {
           sx = (float)(rc.right - rc.left) / ds.x; sy = (float)(rc.bottom - rc.top) / ds.y; mx = (float)p.x / sx; my = (float)p.y / sy; front = true; } }
-    ImFont* font = ImGui::GetFont();
+    ImFont* font = MotorFont(0);                 // (15/11 m) letra Lack UA (overlay.cpp); sin el archivo, la del menu
     const ImU32 cPanel = IM_COL32(37, 37, 38, 244), cHead = IM_COL32(51, 51, 55, 255), cLine = IM_COL32(14, 14, 15, 255), cRow = IM_COL32(62, 62, 66, 255),
                 ink = IM_COL32(222, 222, 222, 255), dim = IM_COL32(142, 142, 146, 255), acc = IM_COL32(240, 138, 36, 255), cField = IM_COL32(27, 27, 28, 255);
     const float barH = kBarH * k, leftW = kLeftW * k, rightW = kRightW * k, statH = kStatH * k, fs = 15.0f * k, fsS = 12.5f * k, rowH = 28.0f * k;
@@ -440,7 +440,8 @@ static void ToolbarDraw() {
         const ImVec2 o((p0.x + p1.x) * 0.5f, barH * 0.5f); const float h2 = barH * 0.27f;
         if (s_icon[0]) dl->AddImage((ImTextureID)(uintptr_t)s_icon[0], ImVec2(o.x - h2, o.y - h2), ImVec2(o.x + h2, o.y + h2), ImVec2(0, 0), ImVec2(1, 1), ink); else IconFallback(dl, 0, o, barH * 0.95f, ink, k);
         x = p1.x; dl->AddLine(ImVec2(x, 6.0f * k), ImVec2(x, barH - 6.0f * k), IM_COL32(80, 80, 84, 255), 1.0f); }
-      x += 14.0f * k; x += text(x, barH * 0.5f, acc, "FOX ENGINE", fs) + 14.0f * k;      // el nombre largo y la escena abierta van a la derecha de la barra
+      x += 14.0f * k; { ImFont* fi = MotorFont(1); const ImVec2 ts = fi->CalcTextSizeA(fs, FLT_MAX, 0.0f, "FOX ENGINE");   // cursiva
+        dl->AddText(fi, fs, ImVec2(x, barH * 0.5f - ts.y * 0.5f), acc, "FOX ENGINE"); x += ts.x + 14.0f * k; }      // el nombre largo y la escena abierta van a la derecha de la barra
       dl->AddLine(ImVec2(x, 6.0f * k), ImVec2(x, barH - 6.0f * k), IM_COL32(80, 80, 84, 255), 1.0f); x += 8.0f * k;
       // (15/11 g) barra de menus: cada titulo abre su lista de acciones (se dibuja al final, encima de todo)
       { const char* const mn[6] = { "Archivo", "Escena", "Ver", "Render", "Luces", "Ayuda" };
@@ -875,7 +876,7 @@ void MotorGizmoDraw() {
     if (inBall || s_dragging.load()) dl->AddCircleFilled(C, R * 1.2f, IM_COL32(255, 255, 255, 34), 48);
     static const ImU32 kCol[3] = { IM_COL32(234, 72, 84, 255), IM_COL32(126, 196, 46, 255), IM_COL32(64, 140, 240, 255) };
     static const char* const kNom[3] = { "X", "Y", "Z" };
-    ImFont* font = ImGui::GetFont(); const float fs = 15.0f * k;
+    ImFont* font = MotorFont(0); const float fs = 15.0f * k;
     for (int i = 0; i < 6; i++) {
         const int a = pt[i].idx / 2; const bool pos = (pt[i].idx & 1) == 0; const bool h = hot == pt[i].idx;
         ImU32 c = kCol[a]; c = (c & 0x00ffffffu) | ((ImU32)A(pos ? 255 : 150) << 24);

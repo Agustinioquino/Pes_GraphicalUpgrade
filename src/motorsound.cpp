@@ -7,7 +7,7 @@
 // Como esta hecho (las mismas cuentas en los dos): se corta en pedacitos de 9 a 34 ms; cada pedacito es un tono cuadrado del barrido,
 // un golpe de ruido, una repeticion del pedacito anterior (tartamudeo) o un hueco corto. Despues pasa por reduccion de bits y de
 // muestras (la distorsion digital), un golpe grave al principio y una saturacion suave. Siempre sale igual (semilla fija).
-// [PES21FX] motor_sonido = 1 (0 lo apaga), motor_sonido_volumen = 0..100 (70 de fabrica).
+// [PES21FX] motor_sonido = 1 (0 lo apaga), motor_sonido_volumen = 0..100 (55 de fabrica; Agustin 04:29 "bajale el volumen a el 55").
 #ifndef MOTORSOUND_TEST
 #include "core.h"
 #endif

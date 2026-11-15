@@ -30,6 +30,7 @@ static ID3D11RenderTargetView* s_rtv = nullptr;
 static bool s_keyWas = false;
 static std::string s_status;
 static std::string s_btnPending;   // accion de un "button =" del ini (se ejecuta fuera de g_cfgMutex)
+static ImFont* s_motorFont[3] = {};   // (15/11 m) letra del editor del Motor (Lack UA): 0 normal, 1 cursiva, 2 de contorno
 static ImFont* s_fontBig = nullptr; static ImFont* s_fontBold = nullptr; static ImFont* s_fontPad = nullptr;   // (14/11 n) s_fontPad: letras de los simbolos del mando
 static ID3D11ShaderResourceView* s_logo = nullptr; static float s_logoAspect = 1.0f;
 void* MenuLogoTex(float* aspect) { if (aspect) *aspect = s_logoAspect; return s_logo; }   // (15/11) el editor del Motor lo dibuja en su barra
@@ -66,6 +67,31 @@ static void BuildFonts(float H) {
         }
         Log("menu: letra %s", ui ? "Saira Semi Condensed (textures\\pes_ui.ttf)" : "Segoe UI");
     }
+    {   // (15/11 m) letra del editor del Motor: Lack UA (Agustin 04:29: "para el motor podes usar esta fuente?"), textures\pes_motor*.ttf.
+        // Se arma al tamano de las letras del editor (15 px x escala del editor, como UiK de motorgizmo.cpp) para que quede nitida; la de
+        // contorno al tamano del subtitulo de la transicion (16 x alto / 540). Si falta un archivo, MotorFont da la normal o la del menu.
+        // Cambiar el tamano del editor (Ver > Tamano) rehace las letras (MenuFontsDirty). [PES21FX] motor_letra = 0 la apaga.
+        s_motorFont[0] = s_motorFont[1] = s_motorFont[2] = nullptr;
+        if (g_cfg.motorFont) {
+            int len = WideCharToMultiByte(CP_UTF8, 0, g_cfg.baseDir.c_str(), -1, nullptr, 0, nullptr, nullptr);
+            std::string dir(len > 0 ? len - 1 : 0, '\0');
+            if (len > 1) WideCharToMultiByte(CP_UTF8, 0, g_cfg.baseDir.c_str(), -1, &dir[0], len, nullptr, nullptr);
+            const float km = std::max(1.0f, H / 1080.0f) * std::clamp(g_cfg.motorScale, 0.8f, 2.0f);
+            static const char* const kFile[3] = { "textures\\pes_motor.ttf", "textures\\pes_motor_italic.ttf", "textures\\pes_motor_line.ttf" };
+            const float px[3] = { std::round(15.0f * km), std::round(15.0f * km), std::round(16.0f * H / 540.0f) };
+            int n = 0;
+            for (int i = 0; i < 3; i++) {
+                const std::string p = dir + kFile[i];
+                int wl = MultiByteToWideChar(CP_UTF8, 0, p.c_str(), -1, nullptr, 0); std::wstring w(wl > 0 ? wl - 1 : 0, L'\0');
+                if (wl > 1) MultiByteToWideChar(CP_UTF8, 0, p.c_str(), -1, &w[0], wl);
+                if (GetFileAttributesW(w.c_str()) == INVALID_FILE_ATTRIBUTES) continue;
+                ImFontConfig fc; fc.OversampleH = 2; fc.OversampleV = 2;
+                s_motorFont[i] = io.Fonts->AddFontFromFileTTF(p.c_str(), std::max(8.0f, px[i]), &fc, io.Fonts->GetGlyphRangesDefault());
+                if (s_motorFont[i]) n++;
+            }
+            Log("motor: letra Lack UA, %d de 3 archivos (textures\\pes_motor*.ttf)%s", n, n ? "" : ": se usa la del menu");
+        }
+    }
     {   // (04/11 n) iconos del menu (Font Awesome Free, recortado): se mezclan en la letra normal y en la negrita
         static const ImWchar kIcoRanges[] = { 0xe000, 0xf8ff, 0 };
         int len = WideCharToMultiByte(CP_UTF8, 0, g_cfg.baseDir.c_str(), -1, nullptr, 0, nullptr, nullptr);
@@ -90,6 +116,8 @@ static void BuildFonts(float H) {
     s_fontsH = H;
     Log("menu: letras para %.0f px de alto (x%.2f)", H, k);
 }
+ImFont* MotorFont(int i) { i = std::clamp(i, 0, 2); return s_motorFont[i] ? s_motorFont[i] : s_motorFont[0] ? s_motorFont[0] : ImGui::GetFont(); }
+void MenuFontsDirty() { s_fontsH = -1.0f; }   // (15/11 m) las letras se rehacen en el proximo cuadro (antes del NewFrame)
 
 
 // ---------------------------------------------------------------- (11/11) ultima tecla apretada
