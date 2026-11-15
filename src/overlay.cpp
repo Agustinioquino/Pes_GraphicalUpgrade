@@ -3103,7 +3103,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     }
     else if (mmCur && g_cfg.menuCursor == 1) {   // (14/11 c / d, Agustin: "que se mantenga igual con el menu abierto o cerrado", "que muestre donde puede clickear")
         const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);   // el mismo dardo del menu; mano justo sobre una fila del juego
-        MvCursorDraw(ImGui::GetForegroundDrawList(), ImVec2(mmx, mmy), MenuMouseOverRow() ? 1 : MenuViewCamHint() ? 5 : 0, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0 || (MenuViewCamHint() && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0), k, 1.0f, g_cfg.menuVisual);
+        MvCursorDraw(ImGui::GetForegroundDrawList(), ImVec2(mmx, mmy), MenuViewCamDragging() ? 5 : MenuMouseOverRow() ? 1 : 0, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0 || (MenuViewCamDragging() && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0), k, 1.0f, g_cfg.menuVisual);
     }
     else if (mmCur && g_cfg.menuCursor != 0) {   // (11/11) el juego esconde el cursor de Windows: una flecha chica donde esta el mouse (los menus son los del juego)
         ImDrawList* dl = ImGui::GetForegroundDrawList(); const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f) * MvCursorScale();
@@ -3115,7 +3115,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
         float px, py, age; int kind;
         if (!g_menuOpen && MenuViewCamPulse(&px, &py, &age, &kind)) {
             ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
-            const float e = kind == 1 ? expf(-9.0f * age) : 1.0f; const ImVec2 c(ds.x * 0.5f + (px - ds.x * 0.5f) * e, ds.y * 0.5f + (py - ds.y * 0.5f) * e);
+            float vcx = ds.x * 0.5f, vcy = ds.y * 0.5f; MenuViewCamCenter(&vcx, &vcy);   // (15/11 e) viaja al centro del visor, no al de la ventana
+            const float e = kind == 1 ? expf(-9.0f * age) : 1.0f; const ImVec2 c(vcx + (px - vcx) * e, vcy + (py - vcy) * e);
             const float t = age / 0.9f, fade = (1.0f - t) * (1.0f - t); const ImVec4 g = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
             for (int i = 7; i >= 1; i--) dl->AddCircleFilled(c, (10.0f + (float)i * 9.0f) * k * (0.7f + 0.6f * t), ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 0.035f * fade)), 40);   // brillo suave
             dl->AddCircle(c, (16.0f + 70.0f * t) * k, ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 0.55f * fade)), 48, 2.0f * k);                                       // aro que se abre
