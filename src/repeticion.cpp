@@ -259,7 +259,8 @@ void RepeticionDraw(bool cursorShown) {
     const ImVec2 ds = ImGui::GetIO().DisplaySize;
     const float dur = (float)std::clamp(g_cfg.replayCutMs, 100, 1000) / 1000.0f;
     // 1) desenfoque de movimiento del corte: el cuadro nuevo barrido + el viejo que se va barrido para el otro lado
-    if (g_cfg.replayCut && s_haveOld && s_srv[0] && now - s_cutT < dur) {
+    // (15/11) con la camara libre y camara_sin_desenfoque_mov (L3 / M) tampoco: el corte queda seco
+    if (g_cfg.replayCut && s_haveOld && s_srv[0] && now - s_cutT < dur && !(g_cfg.camNoMblur && FreeCamActive())) {
         ImDrawList* bg = ImGui::GetBackgroundDrawList();
         const float t = (float)((now - s_cutT) / dur), e = Ease(t);
         const int N = 8;

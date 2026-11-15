@@ -99,6 +99,7 @@ struct MvCamIn {
     float* sens = nullptr;      // w344 mouse
     float* follow = nullptr;    // x346 0 no, 1 fija al rostro, 2 orbitar
     float* smooth = nullptr;    // y346
+    float* vert = nullptr;      // (15/11) camara_vertical: subir / bajar = la velocidad x esto (0.1 .. 5)
     bool active = false, replay = false;   // la camara libre esta volando ahora / hay repeticion
     bool keys[8] = {};          // W A S D Q E Shift Ctrl apretadas (para iluminar el dibujo)
     bool rmb = false;           // boton derecho del mouse
@@ -131,6 +132,7 @@ struct MvHudIn {
     float speed = 1.0f, zoom = 1.0f; bool follow = false;
     float clock = 1.0f; bool photo = false, paused = false, adv = false; int step = -1; const float* steps = nullptr; int nSteps = 0;
     bool replay = false, dofOff = false;       // (14/11 i) ayudas segun lo que hace cada boton de verdad
+    bool mblurOff = false;                      // (15/11) sin desenfoque de movimiento (L3 / M)
     float compact = 0.0f;                       // 0 barra completa, 1 pastilla
     float k = 1.0f, alpha = 1.0f; bool anim = true; double now = 0.0;
 };

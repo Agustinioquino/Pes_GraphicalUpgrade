@@ -285,6 +285,8 @@ static bool s_rail = false;                       // barra lateral solo con icon
 static bool s_slim = false;                       // botones de arriba solo con iconos (ventana muy angosta)
 static int s_winReq = -1;                         // 0 ventana, 1 grande, 2 panel a la derecha: se aplica al proximo Begin
 static MvPad s_pad;                               // (14/11) el mando de este cuadro (menuvisual.cpp)
+static double s_shareTapT = -1.0;                 // (15/11) ultimo toque CORTO de SHARE, medido desde que se apreto de verdad (HUD de la camara libre)
+static bool s_hudFresh = false, s_hudNewCam = false;   // (15/11) el HUD de la camara libre recien aparece (camara prendida o menu cerrado) / la camara recien se prendio
 // (14/11, Agustin: "el menu debe reconocer si esta usando mando o teclado para adaptarse con lo ultimo tocado") 0 teclado / mouse, 1 mando
 static int s_lastDev = 0;
 static bool PadUi() { return s_lastDev == 1 && s_pad.connected; }
@@ -1149,9 +1151,13 @@ static void DrawGroup(MenuGroup& g, int gid) {
         ci.rmb = front && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
         ci.anim = Anim(); ci.k = UIK(); ci.now = Now();
         ci.pad = s_pad; ci.padOn = &g_cfg.camPad; ci.padFly = FreeCamPadWanted() && s_pad.connected; ci.padGiven = FreeCamPadState().given; ci.padUi = PadUi();   // (14/11) iconos del mando con su funcion
+        ci.vert = &g_cfg.camVert;   // (15/11) subir / bajar mas rapido o mas lento
         const int padWas = g_cfg.camPad;
         if (MvCamWidget(ci)) PushRecent(g.title);
         if (g_cfg.camPad != padWas) { SaveOption("camara_mando", g_cfg.camPad ? "1" : "0"); if (g_cfg.camPad) FreeCamPadTake(); }
+        {   // (15/11) camara_vertical va al ini al soltar el mouse (no en cada cuadro del arrastre); SaveOption lee y reescribe el ini
+            static float s_vSaved = -1.0f; if (s_vSaved < 0.0f) s_vSaved = g_cfg.camVert;
+            if (fabsf(g_cfg.camVert - s_vSaved) > 1e-4f && !ImGui::IsMouseDown(0)) { s_vSaved = g_cfg.camVert; char vb[24]; snprintf(vb, sizeof vb, "%.3f", g_cfg.camVert); SaveOption("camara_vertical", vb); Log("camara libre: subir / bajar x%.2f de la velocidad", g_cfg.camVert); } }
     }
     if (Anim() && g.id == "CamaraLenta") {
         ImGui::Spacing();
@@ -2036,6 +2042,10 @@ static void DrawSettingsPage() {
         if (ImGui::Checkbox(TRS("Camara libre sin desenfoque de profundidad"), &nd)) { g_cfg.camNoDof = nd ? 1 : 0; SaveOption("camara_sin_dof", nd ? "1" : "0"); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con la camara libre prendida se apaga el desenfoque de profundidad del juego (fondo y primer plano) y el bokeh: todo queda nitido."));
     }
+    {   bool nm = g_cfg.camNoMblur != 0;   // (15/11, Agustin: "permitirme apagar o prender el desenfoque de movimiento")
+        if (ImGui::Checkbox(TRS("Camara libre sin desenfoque de movimiento"), &nm)) { g_cfg.camNoMblur = nm ? 1 : 0; SaveOption("camara_sin_desenfoque_mov", nm ? "1" : "0"); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con la camara libre prendida no hay desenfoque de movimiento (ni el barrido de los cortes de la repeticion): al moverla todo queda nitido. Con el mando L3, con el teclado M."));
+    }
     {   bool rs = g_cfg.replaySlow != 0;   // (14/11 g) la repeticion normal en camara lenta (velocidad de la flecha derecha / SlowMoServer)
         if (ImGui::Checkbox(TRS("Repeticion en camara lenta"), &rs)) { g_cfg.replaySlow = rs ? 1 : 0; SaveOption("repeticion_lenta", rs ? "1" : "0"); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("La reproduccion normal de la repeticion (despues de despausar) va a la velocidad lenta de la flecha derecha del visor: la de SlowMoServer si esta prendido, si no la mitad."));
@@ -2752,19 +2762,24 @@ void OverlayPresent(IDXGISwapChain* sc) {
     {   // (14/11 j, Agustin: "al mantener presionado el boton select o share, se habilite directamente la camara libre en el modo
         // repeticion") SHARE / SELECT mantenido 0.6 s: x344 = 3 (camara libre solo en la repeticion: si ya esta en la repeticion vuela
         // enseguida); otra vez mantenido: vuelve a lo que habia. Apretarlo corto sigue mostrando / escondiendo el HUD
-        static double s_shT = -1.0; static bool s_shDone = false; static float s_shPrev = 0.0f; static MvPad s_sp;
+        static double s_shT = -1.0; static bool s_shDone = false; static float s_shPrev = 0.0f; static MvPad s_sp; static uint32_t s_shCnt = 0; static bool s_shCntOk = false;
         // (14/11 n) en la repeticion el juego no ve SHARE mantenido (su barra no se esconde al prender la camara libre): keyblock.cpp
         g_shareMask = g_cfg.camShareHold && !g_menuOpen && !MotorPageActive() && GetForegroundWindow() == s_hwnd && (ReplayViewerCalled() || ReplayNow());
         if (g_cfg.camShareHold && !g_menuOpen && !MotorPageActive() && GetForegroundWindow() == s_hwnd && MvPadPoll(s_sp) && s_sp.connected) {
             const double tn = Now();
-            if (!s_sp.b[kPadShare]) { s_shT = -1.0; s_shDone = false; }
+            // (15/11, Agustin: "al activar la camara libre con el mando no se muestra ese menu que me gustaba de dll abajo") el HUD media el
+            // toque desde que EL veia SHARE (recien con la camara prendida, 0.6 s despues de apretarlo): soltar SHARE al prenderla contaba
+            // como toque corto y lo escondia. El toque corto se mide aca, desde que se apreto de verdad (tambien uno que cae entre dos
+            // cuadros: la cuenta de MvPadPresses), y el HUD solo mira s_shareTapT
+            uint32_t pc[kPadCount]; MvPadPresses(pc); const bool cnt = s_shCntOk && pc[kPadShare] != s_shCnt; s_shCnt = pc[kPadShare]; s_shCntOk = true;
+            if (!s_sp.b[kPadShare]) { if ((s_shT >= 0.0 && !s_shDone && tn - s_shT < 0.5) || (s_shT < 0.0 && cnt)) s_shareTapT = tn; s_shT = -1.0; s_shDone = false; }
             else { if (s_shT < 0.0) s_shT = tn;
                    if (!s_shDone && tn - s_shT > 0.6) { s_shDone = true;
                        std::lock_guard<std::mutex> lk(g_cfgMutex);
                        if (g_cfg.live[344][0] > 2.5f || FreeCamActive()) { g_cfg.live[344][0] = s_shPrev > 2.5f ? 0.0f : s_shPrev; s_toastMsg = TRS("Camara libre apagada"); }
                        else { s_shPrev = g_cfg.live[344][0]; g_cfg.live[344][0] = 1.0f; FreeCamPadTake(); s_toastMsg = TRS(ReplayNow() ? "Camara libre en la repeticion" : "Camara libre prendida"); }   // (14/11 k, Agustin: "al no estar activa el modo repeticion funcione normal con sus botones") x344 = 1: en la repeticion los controles del visor, fuera de ella los de siempre
                        s_curToastT = tn; Log("camara libre: SHARE mantenido, x344 = %.0f", g_cfg.live[344][0]); } }
-        } else { s_shT = -1.0; s_shDone = false; }
+        } else { s_shT = -1.0; s_shDone = false; s_shCntOk = false; }
     }
     const bool curToast = Now() - s_curToastT < 1.8;
     float mouseHintA = 0.0f;
@@ -2777,6 +2792,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     RastroReplayHookEnsure();   // (14/11 g) gancho del visor de repeticiones si la camara libre / lenta van solo en la repeticion
     const bool camFree = FreeCamActive() && !MotorPageActive(); const float camSlow = TiempoFactor();   // (1/11) aviso en pantalla
     const bool camHud = !g_menuOpen && camFree;   // (14/11 g) la camara lenta sola ya no muestra nada abajo
+    { static bool s_hudRan = false, s_camWas = false; if (camHud && !s_hudRan) s_hudFresh = true; if (camFree && !s_camWas) s_hudNewCam = true; s_hudRan = camHud; s_camWas = camFree; }   // (15/11) antes de las salidas tempranas
     const bool lightIcons = g_cfg.live[319][0] > 0.5f && g_cfg.live[297][0] > 0.5f && g_cfg.live[378][2] < 0.5f && SSSSEditorLightAge() < 0.5;   // (08/11) con la luz fija al mundo (z378) el icono (relativo a la camara) mentiria: no se dibuja   // (1/11) iconos de la luz del editor
     const bool sunCompass = g_cfg.live[175][0] > 0.5f && g_cfg.live[93][3] > 0.5f;   // (2/11) brujula del sol, solo en partido
     {   // (08/11) el menu aparece y se desvanece en ~0.16 s
@@ -2933,6 +2949,15 @@ void OverlayPresent(IDXGISwapChain* sc) {
         const double tn = Now(); const float dth = (float)std::clamp(tn - s_hudLast, 0.0, 0.1); s_hudLast = tn;
         const FreeCamPadInfo pi = FreeCamPadState();
         const bool front = GetForegroundWindow() == s_hwnd;
+        static double s_tapSeen = -1.0;
+        if (s_hudFresh) {   // (15/11) camara recien prendida (o menu recien cerrado): se ve 3 s aunque no se toque nada. Antes quedaba la hora
+            // del ultimo uso (se apagaba enseguida). Al PRENDER la camara tambien se olvida lo escondido con SHARE / H la vez anterior
+            // (camara_hud 0 sigue escondido hasta SHARE / H); al cerrar el menu queda como estaba
+            s_hudFresh = false; s_hudT = tn; s_tapSeen = s_shareTapT;
+            s_shWas = pi.flying && s_pad.b[kPadShare]; s_hWas = front && (GetAsyncKeyState('H') & 0x8000) != 0;
+            if (s_hudNewCam) { s_hudNewCam = false; s_hudHide = g_cfg.camHud == 0;
+                Log("camara libre: HUD %s", s_hudHide ? "escondido al prenderla (camara_hud 0: SHARE corto o H lo muestran)" : g_cfg.camHud == 2 ? "a la vista al prenderla (siempre)" : "a la vista al prenderla (se apaga a los 3 s sin tocar nada)"); }
+        }
         bool input = false;
         if (pi.flying && s_pad.connected) { input = fabsf(s_pad.lx) + fabsf(s_pad.ly) + fabsf(s_pad.rx) + fabsf(s_pad.ry) > 0.15f || s_pad.l2 > 0.1f || s_pad.r2 > 0.1f;   // sticks, gatillos y botones; la cruceta no
                                             for (int i = 0; i < kPadUp; i++) if (i != kPadShare) input |= s_pad.b[i]; }
@@ -2941,7 +2966,10 @@ void OverlayPresent(IDXGISwapChain* sc) {
         if (input || s_hudT == 0.0) s_hudT = tn;
         { const bool sh = pi.flying && s_pad.b[kPadShare], hk = front && camFree && (GetAsyncKeyState('H') & 0x8000) != 0;
           static double s_shDown = 0.0; if (sh && !s_shWas) s_shDown = tn;   // (14/11 j) SHARE: al soltarlo y solo si fue corto (mantenido = camara libre)
-          if ((!sh && s_shWas && tn - s_shDown < 0.5) || (hk && !s_hWas)) { s_hudHide = !s_hudHide; s_hudT = tn; Log("camara libre: HUD %s", s_hudHide ? "escondido" : "a la vista"); }
+          // (15/11) con SHARE mantenido = camara libre (camara_share 1) el toque lo mide el bloque de SHARE desde que se apreto de verdad
+          const bool shTap = g_cfg.camShareHold ? s_shareTapT != s_tapSeen && pi.flying : !sh && s_shWas && tn - s_shDown < 0.5;
+          s_tapSeen = s_shareTapT;
+          if (shTap || (hk && !s_hWas)) { s_hudHide = !s_hudHide; s_hudT = tn; Log("camara libre: HUD %s", s_hudHide ? "escondido" : "a la vista"); }
           s_shWas = sh; s_hWas = hk; }
         // (14/11 i, Agustin: "que el menu se apague de la camara libre con mando pasados unos tres segundos sin presionar nada")
         // 3 s sin tocar nada: se APAGA del todo (antes se achicaba). camara_hud 1 vuelve al tocar algo; camara_hud 0 (mostrado con
@@ -2954,7 +2982,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
             MvHudIn h; h.pad = s_pad; h.padMode = PadUi(); h.freeCam = camFree;
             h.status = TRS(ReplayNow() ? "REPETICION" : "EN VIVO"); h.speed = g_cfg.live[344][1]; h.zoom = g_cfg.live[344][2]; h.follow = g_cfg.live[346][2] > 0.5f;
             h.photo = pi.scale > 0.0f; h.clock = pi.scale > 0.0f ? pi.scale : camSlow; h.paused = pi.paused; h.adv = pi.advancing; h.step = pi.step; h.steps = FreeCamPhotoSteps(&h.nSteps);
-            h.replay = ReplayNow(); h.dofOff = g_cfg.camNoDof != 0; h.compact = s_hudC; h.k = UIK(); h.alpha = s_hudA; h.anim = Anim(); h.now = tn;
+            h.replay = ReplayNow(); h.dofOff = g_cfg.camNoDof != 0; h.mblurOff = g_cfg.camNoMblur != 0; h.compact = s_hudC; h.k = UIK(); h.alpha = s_hudA; h.anim = Anim(); h.now = tn;
             const ImGuiViewport* vp = ImGui::GetMainViewport();
             MvPhotoHud(ImGui::GetForegroundDrawList(), vp->Pos, ImVec2(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y), h);
         }

@@ -158,6 +158,8 @@ static bool LoadConfigLocked() {
             else if (kl == "ayuda_mouse") c.mouseHint = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 d) botones del mouse abajo a la derecha
             else if (kl == "camara_share") c.camShareHold = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 j)
             else if (kl == "camara_sin_dof") c.camNoDof = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 h)
+            else if (kl == "camara_sin_desenfoque_mov") c.camNoMblur = atoi(v.c_str()) != 0 ? 1 : 0;   // (15/11)
+            else if (kl == "camara_vertical") c.camVert = std::clamp((float)atof(v.c_str()), 0.1f, 5.0f);   // (15/11)
             else if (kl == "repeticion_lenta") c.replaySlow = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 g)
             else if (kl == "tecla_cursor") c.cursorKey = (v == "0" || v.empty()) ? 0 : VkFromName(v);   // (14/11 c) F1 de fabrica
             else if (kl == "tecla_mouse_menus") c.menuMouseKey = (v == "0" || v.empty()) ? 0 : VkFromName(v);

@@ -577,6 +577,9 @@ static void UploadParams() {
         if (p[139][0] > 0.5f) p[104][0] = 1.0f;   // (20/10) pasto v5: necesita el pasto v3 (x104) prendido en la GPU
         p[258][0] = (g_cfg.motorPatch && g_cfg.motorSunFix && g_cfg.motorShadowFix == 0) ? 1.0f : 0.0f;   // (02/11) x258: la luz esta corregida y el shadow map no (los shaders del sol no miden grosor con el)
         if (g_cfg.camNoDof && FreeCamActive()) { p[41][3] = 2.0f; p[137][0] = 0.0f; }   // (14/11 h) camara libre sin desenfoque: w41 = 2 deja el CoC en 0 (993cea4b), sin bokeh
+        // (15/11, Agustin: "permitirme apagar o prender el desenfoque de movimiento") camara libre sin desenfoque de movimiento: el PS de la
+        // composicion del desenfoque (24943e55, nuestro reemplazo) con x138 = 1 e y138 = 0 escribe cero = nada que mezclar. Solo en la GPU: el ini no cambia
+        if (g_cfg.camNoMblur && FreeCamActive()) { p[138][0] = 1.0f; p[138][1] = 0.0f; }
         p[147][3] = 1.0f;   // (20/10) w147: esta DLL iguala la cabeza de las caras genericas con la cara (reglas PS + VS)
         p[393][3] = g_tlClock;   // (10/11) fase guardada del ciclo (solluz.cpp) x periodo; antes el reloj (s mod 3600)   // (09/11) w393: reloj en segundos (vuelve a 0 cada hora) para el ciclo de dia y noche de la luz del editor (w392)
         p[393][2] = g_solRealActivo;   // (09/11) z393 = 1: el sol real del motor esta prendido en el editor (el shader deja de imitarlo)

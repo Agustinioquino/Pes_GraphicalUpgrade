@@ -186,6 +186,8 @@ struct Config {
     int mouseHint = 1;                         // (14/11 d) [PES21FX] ayuda_mouse: clic izq. / der. abajo a la derecha al usar el mouse en los menus del juego
     int camShareHold = 1;                      // (14/11 j) [PES21FX] camara_share: mantener SHARE / SELECT = camara libre en la repeticion
     int camNoDof = 1;                          // (14/11 h) [PES21FX] camara_sin_dof: con la camara libre prendida no hay desenfoque de profundidad (w41 = 2, x137 = 0)
+    int camNoMblur = 1;                        // (15/11) [PES21FX] camara_sin_desenfoque_mov: con la camara libre no hay desenfoque de movimiento (x138 = 1, y138 = 0 en 24943e55 ni barrido en los cortes); L3 / M lo prenden o apagan
+    float camVert = 1.0f;                      // (15/11) [PES21FX] camara_vertical: subir / bajar (Q / E, L2 / R2) va a la velocidad de vuelo x esto (0.1 .. 5)
     int replaySlow = 1;                        // (14/11 g) [PES21FX] repeticion_lenta: la repeticion normal va a la velocidad lenta del visor (SlowMoServer)
     int cursorKey = VK_F1;                     // (14/11 c) tecla que prende / apaga el cursor ([PES21FX] tecla_cursor = F1, 0 = ninguna)
     int menuMouseKey = 0;                      // (11/11 v2) tecla que saca / pone el mouse en los menus (0 = ninguna, de fabrica: Agustin 22:23 no la necesita) ([PES21FX] tecla_mouse_menus = F8...)
@@ -503,6 +505,7 @@ struct FreeCamPadInfo { bool wanted = false, flying = false, paused = false, adv
 FreeCamPadInfo FreeCamPadState();
 int FreeCamReplayDpad();
 void FreeCamDofToggle(const char* how);
+void FreeCamMblurToggle(const char* how);   // (15/11) desenfoque de movimiento con la camara libre si / no (camara_sin_desenfoque_mov)
 void FreeCamPhotoPause(bool on);   // (14/11 i) R3 / B                          // (14/11 g) cruceta izq. / der. mantenida volando con el mando: -1 / 0 / 1
 void FreeCamPadTake();                            // la tarjeta prendio el mando: si se lo habia devuelto al juego, lo vuelve a tomar
 // (31/10) camara lenta (tiempo.cpp): gancho al reloj de juego del motor (0x14035dcb0), 343 (ini: x velocidad, y prendida; DLL: z, w)

@@ -2038,6 +2038,22 @@ bool MvCamWidget(MvCamIn& in) {
               const ImVec2 ts = ImGui::CalcTextSize(kPn[i]); dl->AddText(ImVec2(q.x + (pw - ts.x) * 0.5f, q.y + (20.0f * k - ts.y) * 0.5f), cur ? Col(1, 1, 1, 1) : Col(0.80f, 0.83f, 0.88f, 1), kPn[i]);
               ImGui::PopID(); }
           ImGui::Dummy(ImVec2(0, 2.0f * k)); }
+      if (in.vert) {   // (15/11, Agustin: "le falta una opcion para que la camara baja mas rapido o mas lento") Q / E y L2 / R2 = velocidad x esto
+          const bool qe = in.keys[4] || in.keys[5] || in.pad.l2 > 0.1f || in.pad.r2 > 0.1f;
+          if (in.speed) ImGui::Text("%s  x%.2f   %.2f m/s", TRS("Subir / bajar"), *in.vert, *in.speed * *in.vert); else ImGui::Text("%s  x%.2f", TRS("Subir / bajar"), *in.vert);
+          if (qe) { ImGui::SameLine(0, 8.0f * k); ImGui::TextColored(acc, "%s", TRS("ahora")); }
+          static const ImVec4 gV[3] = { ImVec4(0.25f, 0.55f, 0.85f, 1), ImVec4(0.30f, 0.80f, 0.55f, 1), ImVec4(1.0f, 0.70f, 0.30f, 1) };
+          if (LogStrip("##camvert", in.vert, 0.1f, 5.0f, sw, k, gV, 3, ImVec4(), in.anim)) changed = true;
+          static const float kVv[6] = { 0.25f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f }; static const char* kVn[6] = { "0.25", "0.5", "1", "1.5", "2", "3" };
+          const float pw = (sw - 5 * 4.0f * k) / 6.0f;
+          for (int i = 0; i < 6; i++) { if (i) ImGui::SameLine(0, 4.0f * k); ImGui::PushID(i + 90); const ImVec2 q = ImGui::GetCursorScreenPos();
+              if (ImGui::InvisibleButton("##vv", ImVec2(pw, 20.0f * k))) { *in.vert = kVv[i]; changed = true; }
+              const bool cur = fabsf(*in.vert - kVv[i]) < kVv[i] * 0.02f, hv = ImGui::IsItemHovered();
+              if (hv) ImGui::SetTooltip("%s", TRS(kVv[i] < 1.0f ? "subir / bajar mas lento que el vuelo" : kVv[i] > 1.0f ? "subir / bajar mas rapido que el vuelo" : "igual que el vuelo"));
+              dl->AddRectFilled(q, ImVec2(q.x + pw, q.y + 20.0f * k), cur ? ColA(acc, 0.45f) : Col(1, 1, 1, hv ? 0.14f : 0.07f), 10.0f * k);
+              const ImVec2 ts = ImGui::CalcTextSize(kVn[i]); dl->AddText(ImVec2(q.x + (pw - ts.x) * 0.5f, q.y + (20.0f * k - ts.y) * 0.5f), cur ? Col(1, 1, 1, 1) : Col(0.80f, 0.83f, 0.88f, 1), kVn[i]);
+              ImGui::PopID(); }
+          ImGui::Dummy(ImVec2(0, 2.0f * k)); }
       if (in.sens) { ImGui::Text("%s  %.2f", TRS("Sensibilidad del mouse"), *in.sens);
           if (Strip("##camsens", in.sens, 0.1f, 5.0f, sw, k, nullptr, 0, acc, in.anim)) changed = true; }
       ImGui::EndGroup();
@@ -2068,6 +2084,7 @@ bool MvCamWidget(MvCamIn& in) {
                 { kLgDpadLR, "Velocidad", "de a 10 %, mantener sigue" }, { kLgL1, "Preciso", "todo a 1/4, para apuntar fino" },
                 { kLgR1, "Rapido", "x3 mientras se mantiene" }, { kPadTriangle, "Volver", "a la camara del juego" },
                 { kPadShare, "HUD", "mostrar / esconder" }, { kPadOptions, "Soltar", "el juego vuelve a ver el mando" },
+                { kPadR3, "Desenf. profundidad", "prender / apagar" }, { kPadL3, "Desenf. movimiento", "prender / apagar" },   // (15/11)
                 { kLgL3R3, "Menu", "abrir y cerrar el Insert" } };
             const int n = (int)(sizeof kIt / sizeof kIt[0]); LgItem it[16];
             for (int i = 0; i < n; i++) { it[i] = kIt[i]; it[i].label = TRS(kIt[i].label); it[i].sub = TRS(kIt[i].sub); }
@@ -2077,7 +2094,8 @@ bool MvCamWidget(MvCamIn& in) {
             static const LgItem kIt[] = {
                 { -1, "Moverse", "", "W A S D" }, { -1, "Bajar / subir", "", "Q E" }, { -1, "Mirar", "mantener y mover el mouse", "Clic der." },
                 { -1, "Zoom", "o Re Pag / Av Pag", "Rueda" }, { -1, "Velocidad", "de a 10 %", "[ ]" }, { -1, "Rapido / lento", "mientras se mantiene", "Shift / Ctrl" },
-                { -1, "Volver", "a la camara del juego", "Inicio" }, { -1, "HUD", "mostrar / esconder", "H" } };
+                { -1, "Volver", "a la camara del juego", "Inicio" }, { -1, "HUD", "mostrar / esconder", "H" },
+                { -1, "Desenf. profundidad", "prender / apagar", "B" }, { -1, "Desenf. movimiento", "prender / apagar", "M" } };   // (15/11)
             const int n = (int)(sizeof kIt / sizeof kIt[0]); LgItem it[16];
             for (int i = 0; i < n; i++) { it[i] = kIt[i]; it[i].label = TRS(kIt[i].label); it[i].sub = TRS(kIt[i].sub); }
             LgGrid(it, n, in.pad, cols, k, acc, in.anim, false);
@@ -2132,13 +2150,14 @@ void MvPhotoHud(ImDrawList* dl, ImVec2 m0, ImVec2 m1, const MvHudIn& in) {
     // (14/11 i, Agustin: "que las opciones funcionen en realidad") cada ayuda dice lo que hace el boton AHORA: en la repeticion la
     // cruceta izq / der es atras / adelante del visor (no la velocidad); R3 / B desenfoque si / no; circulo / N reloj normal
     const char* dofT = in.dofOff ? "Desenfoque: no" : "Desenfoque: si";
+    const char* mbT = in.mblurOff ? "Desenf. mov.: no" : "Desenf. mov.: si";   // (15/11) L3 / M
     const char* lrT = in.replay ? "Atras / adelante" : "Velocidad";
     const Hint kPadH[] = { { kLgStickL, nullptr, "Mover" }, { kLgStickR, nullptr, "Mirar" }, { kLgL2R2, nullptr, "Bajar / subir" }, { kPadCross, nullptr, "Pausa" },
-                           { kPadSquare, nullptr, "Avanzar" }, { kLgDpadLR, nullptr, lrT }, { kPadR3, nullptr, dofT }, { kLgL1DpadLR, nullptr, "Reloj" }, { kLgDpadUD, nullptr, "Zoom" },
+                           { kPadSquare, nullptr, "Avanzar" }, { kLgDpadLR, nullptr, lrT }, { kPadR3, nullptr, dofT }, { kPadL3, nullptr, mbT }, { kLgL1DpadLR, nullptr, "Reloj" }, { kLgDpadUD, nullptr, "Zoom" },
                            { kPadCircle, nullptr, "Reloj normal" }, { kPadTriangle, nullptr, "Volver" }, { kPadShare, nullptr, "HUD" }, { kPadOptions, nullptr, "Soltar" } };
     const Hint kKbH[] = { { -1, "W A S D", "Mover" }, { -1, "Q E", "Bajar / subir" }, { -1, "Clic der.", "Mirar" }, { -1, "P", "Pausa" },
                           in.replay ? Hint{ -1, "I  O", lrT } : Hint{ -1, "O", "Avanzar" },   // (14/11 n) en la repeticion: I atras / O adelante lento
-                          { -1, "B", dofT }, { -1, ", .", "Reloj" }, { -1, "N", "Reloj normal" }, { -1, "[ ]", "Velocidad" }, { -1, "Inicio", "Volver" }, { -1, "H", "HUD" } };
+                          { -1, "B", dofT }, { -1, "M", mbT }, { -1, ", .", "Reloj" }, { -1, "N", "Reloj normal" }, { -1, "[ ]", "Velocidad" }, { -1, "Inicio", "Volver" }, { -1, "H", "HUD" } };
     const Hint* H = in.padMode ? kPadH : kKbH; const int nH = in.padMode ? (int)(sizeof kPadH / sizeof kPadH[0]) : (int)(sizeof kKbH / sizeof kKbH[0]);
     auto hintW = [&](const Hint& hh) {
         const float tw = f->CalcTextSizeA(fsS, FLT_MAX, 0, TRS(hh.t)).x;
