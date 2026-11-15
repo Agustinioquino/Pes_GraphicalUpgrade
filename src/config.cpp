@@ -182,7 +182,8 @@ static bool LoadConfigLocked() {
             else if (kl == "motor_grilla_linea_fuerte") c.motorGridMajor = std::clamp(atoi(v.c_str()), 0, 50);
             else if (kl == "motor_cerca") c.motorNear = std::clamp((float)atof(v.c_str()), 0.0f, 10.0f);      // (15/11 o) plano cercano de la camara del visor en el Motor (0 = como el juego)
             else if (kl == "motor_lejos") c.motorFar = std::clamp((float)atof(v.c_str()), 0.0f, 100000.0f);   // (15/11 o) plano lejano (0 = como el juego)
-            else if (kl == "motor_deshacer_pasos") c.motorUndoSteps = std::clamp(atoi(v.c_str()), 10, 200);   // (15/11 p) Editar > Preferencias: pasos de Ctrl+Z
+            // (15/11 p) segunda cadena: MSVC no acepta mas de ~128 "else if" seguidos (C1061)
+            if (kl == "motor_deshacer_pasos") c.motorUndoSteps = std::clamp(atoi(v.c_str()), 10, 200);   // (15/11 p) Editar > Preferencias: pasos de Ctrl+Z
             else if (kl == "motor_autoguardado") c.motorAutoSave = atoi(v.c_str()) != 0 ? 1 : 0;                 // (15/11 p) guarda la escena sola (escena_autoguardado.txt)
             else if (kl == "motor_autoguardado_minutos") c.motorAutoSaveMin = std::clamp(atoi(v.c_str()), 1, 60);
             else if (kl == "motor_texto") c.motorText = std::clamp((float)atof(v.c_str()), 0.8f, 1.5f);            // (15/11 p) tamano del texto del editor (x el tamano de la interfaz)
