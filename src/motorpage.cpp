@@ -391,7 +391,12 @@ static void PanelShow(void* page, bool on) {
     }
 }
 // hilo del juego, una vez por cuadro con la pagina del Motor activa
+static std::atomic<double> s_uiTick0{ -1.0e9 }, s_uiTickLast{ -1.0e9 };
+// (15/11 j, Agustin 04:05: "verifica que la animacion tape la carga de la interfaz de el motor") listo = la pagina del Motor ya paso
+// 0.3 s seguidos por UiTick (lista del Editar escondida cada cuadro, estudio dibujando); hasta eso el editor sigue tapado
+bool MotorUiReady() { const double n = Now(); return n - s_uiTickLast.load() < 0.2 && n - s_uiTick0.load() > 0.3; }
 static void UiTick(void* win) {
+    { const double n = Now(); if (n - s_uiTickLast.load() > 0.2) s_uiTick0.store(n); s_uiTickLast.store(n); }
     const bool wantPanel = false;      // (15/11 b, Agustin 02:23) la lista del Editar no se muestra nunca: "Vista" abre el panel propio (motorgizmo.cpp)
     if (!wantPanel || s_uiPanelApplied != 1) PanelShow(win, wantPanel);      // escondido: se sostiene en cada cuadro
     const bool wantPlayer = s_uiPlayer.load(std::memory_order_relaxed);
@@ -426,7 +431,44 @@ void MotorUiBack() { s_uiBack.store(true); }
 bool MotorUiTakeBack() { return s_uiBack.exchange(false); }
 
 // la ventana que esta recibiendo entrada en este cuadro (la pasa menumouse.cpp): si es la del estudio del Motor, sigue viva
+// (15/11 j, Agustin 04:04: "evita que cargue el menu de editar al abrir el menu o que se muestre por un segundo") el menu de
+// Editar (menu::MenuEditMenu, tabla 0x1427012b0) recibe entrada mientras se elige; si la ultima vez que se lo vio tenia el cursor
+// en el boton 12 (fila 11, el del Motor) y deja de recibir entrada sin que otra ventana la reciba, se acepto el Motor: desde ese
+// cuadro se tapa la pantalla (MotorPreCoverDraw) hasta que el editor del Motor dibuja su propia entrada. Si a los 0.25 s otra
+// ventana recibe entrada (por ejemplo se volvio atras), se destapa enseguida. Tope 2.5 s.
+static const uintptr_t kVtEditMenu = 0x1427012b0ull;
+static std::atomic<double> s_edSeenT{ -1.0e9 }, s_coverT{ -1.0e9 }; static std::atomic<bool> s_ed12{ false }, s_coverArmed{ false };
+static void EditMenuSeen(void* win) {
+    const uintptr_t vp = *(uintptr_t*)win;
+    if (vp == kVtEditMenu) {
+        uint8_t* I = Readable((uint8_t*)win + 0x88, 8) ? *(uint8_t**)((uint8_t*)win + 0x88) : nullptr;
+        const int row = Readable(I, 0xe0) ? (int)*(uint32_t*)(I + 0xd8) : -1;
+        static int lastRow = -2; if (row != lastRow) { lastRow = row; static int n = 0; if (n++ < 30) Log("motor (pagina): menu de Editar, cursor en la fila %d", row); }
+        s_ed12.store(row == 11); s_edSeenT.store(Now()); s_coverArmed.store(true);
+        return;
+    }
+    if (win == s_motorWin.load(std::memory_order_relaxed)) return;
+    s_coverArmed.store(false);                                           // otra ventana: no se acepto el Motor (o ya paso)
+    if (Now() - s_coverT.load() > 0.25 && Now() - s_coverT.load() < 2.5 && !MotorPageActive()) { s_coverT.store(-1.0e9); Log("motor (pagina): tapa de entrada sacada (otra ventana)"); }
+}
+// overlay.cpp, cada cuadro, antes del editor del Motor
+void MotorPreCoverDraw() {
+    if (g_cfg.motorOwnMenu == 0 || g_cfg.motorPage == 0) return;
+    const double now = Now();
+    if (s_coverArmed.load() && s_ed12.load() && now - s_edSeenT.load() > 0.05 && now - s_edSeenT.load() < 0.5) {
+        s_coverArmed.store(false); s_coverT.store(now); Log("motor (pagina): se acepto el boton 12 -> tapa de entrada");
+    }
+    const double t = now - s_coverT.load();
+    if (t < 0.0 || t > 2.8) return;
+    if (MotorUiOn()) { s_coverT.store(-1.0e9); return; }                 // el editor ya dibuja su entrada (empieza tapado)
+    float a = std::min(1.0f, (float)t / 0.12f);
+    if (t > 2.5) a = std::max(0.0f, 1.0f - (float)(t - 2.5) / 0.3f);
+    ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(16, 16, 17, (int)(255.0f * a)));
+}
+
 void MotorPageSeen(void* win) {
+    if (win) EditMenuSeen(win);
     if (!win || win != s_motorWin.load(std::memory_order_relaxed)) return;
     const uintptr_t vp = *(uintptr_t*)win;
     if (vp == (uintptr_t)&s_vt[1] || vp == kVtApp) s_motorT.store(Now(), std::memory_order_relaxed);

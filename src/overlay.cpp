@@ -2994,6 +2994,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (lightIcons) DrawEditorLightIcons();
     if (sunCompass && !g_menuOpen) DrawSunCompass();
     if (g_cfg.live[426][0] > 0.5f) DrawSkeletonView();   // (09/11 f) vista del esqueleto (Diagnostico)
+    MotorPreCoverDraw();   // (15/11 j) tapa negra desde que se acepta el boton 12 del Editar hasta que el Motor dibuja su entrada
     if (gizmo) MotorGizmoDraw();   // (15/11 h, Agustin 03:17: "el cursor parece estar atras") el editor del Motor se dibuja ANTES que el cursor, asi la flecha queda arriba de los paneles
     if (mmCur && g_cfg.menuCursor == 1) {   // (14/11 c / d, Agustin: "que se mantenga igual con el menu abierto o cerrado", "que muestre donde puede clickear")
         const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);   // el mismo dardo del menu; mano justo sobre una fila del juego

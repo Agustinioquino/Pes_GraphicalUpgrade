@@ -128,7 +128,7 @@ static const char* ViewTr(int row, int op) { if (row == 0 && op == 3 && g_cfg.la
 static void ScaleSet(int i) { i = std::clamp(i, 0, 3); g_cfg.motorScale = kScales[i]; char b[16]; snprintf(b, sizeof b, "%.1f", kScales[i]); SaveOption("motor_escala", b); }
 // (15/11 h, Agustin 03:19: "al ingresar a veces aparece el fondo de edicion, podrias agregar una transicion al ingresar y salir")
 // al entrar: tapa oscura 0.2 s y fundido de 0.35 s; al salir (boton, menu o Esc): fundido a oscuro de 0.18 s y recien ahi se vuelve.
-static double s_enterT = -1.0e9, s_exitT = -1.0; static bool s_exitSent = false;
+static double s_enterT = -1.0e9, s_exitT = -1.0, s_coverEnd = -1.0; static bool s_exitSent = false, s_sceneOnce = false;
 static std::atomic<int> s_uiWheel{0}; static int s_treeScroll = 0;      // rueda sobre el arbol: corre la lista de luces
 // (15/11 g) Agustin 02:47: "separa cada accion en una barra arriba asi como lo hacen programas o menus como blender", "por
 // ejemplo abrir. cerrar. crear escena guardar escena. abrir interfaz para cargar ganis"; 02:49: "la vista del motor tiene que
@@ -263,7 +263,7 @@ static void ToolbarDraw() {
     // del arbol se desliza de una fila a otra; el contenido del inspector entra con un fundido corto al cambiar de fila. Se hace
     // moviendo / atenuando los vertices ya emitidos de cada parte (la lista de dibujo no tiene transformaciones).
     { const double now = Now(); const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
-      if (now - s_uiT > 0.4) { s_openA = 0.0f; s_selY = -1.0f; s_inspA = 1.0f; s_menuOpen = -1; s_menuKb = -1; s_modal = 0; s_origN = 0; s_pendN = 0; s_enterT = now; s_exitT = -1.0; s_exitSent = false; }
+      if (now - s_uiT > 0.4) { s_openA = 0.0f; s_selY = -1.0f; s_inspA = 1.0f; s_menuOpen = -1; s_menuKb = -1; s_modal = 0; s_origN = 0; s_pendN = 0; s_enterT = now; s_exitT = -1.0; s_exitSent = false; s_coverEnd = -1.0; s_sceneOnce = false; }
       s_uiT = now; s_openA = std::min(1.0f, s_openA + dt / 0.28f); s_inspA = std::min(1.0f, s_inspA + dt / 0.16f);
       if (s_sel != s_selWas) { s_selWas = s_sel; s_inspA = 0.0f; } }
     const float eo = 1.0f - (1.0f - s_openA) * (1.0f - s_openA) * (1.0f - s_openA);      // salida suave
@@ -271,7 +271,7 @@ static void ToolbarDraw() {
     // segundo se releen las luces y el conteo de objetos de la escena grafica (motorscene.cpp); la marcada se sigue por su direccion
     if (Now() - s_sceneT > 0.25) { s_sceneT = Now();
         static MotorLight tmp[64]; MotorSceneInfo si{}; const int n = MotorSceneLights(tmp, 64, &si);
-        if (n >= 0) { memcpy(s_lights, tmp, sizeof(MotorLight) * (size_t)n); s_nLights = n; s_info = si;
+        if (n >= 0) { memcpy(s_lights, tmp, sizeof(MotorLight) * (size_t)n); s_nLights = n; s_info = si; s_sceneOnce = true;
             for (int i = 0; i < n; i++) { bool f = false; for (int q = 0; q < s_origN; q++) if (s_orig[q].obj == s_lights[i].obj) f = true; if (!f && s_origN < 64) s_orig[s_origN++] = OrigL{ s_lights[i].obj, s_lights[i].on }; }
             if (s_pendN > 0 && Now() < s_pendUntil) PendApply(); }
         else MotorErr("No se pudo leer la escena del motor: el juego estaba cambiando sus listas de objetos. Se reintenta solo; si este aviso sigue, sal\xC3\xAD del Motor y volv\xC3\xA9 a entrar.");
@@ -546,7 +546,11 @@ static void ToolbarDraw() {
     } else s_miN = 0;
     {   // ---------------- transicion de entrada y de salida (tapa todo menos el cursor) ----------------
         const double now = Now(); float a = 0.0f; const float te = (float)(now - s_enterT);
-        if (te < 0.55f) a = te < 0.2f ? 1.0f : 1.0f - (te - 0.2f) / 0.35f;
+        // tapado hasta que este todo cargado: la pagina lista (MotorUiReady), la escena leida una vez y los iconos; minimo 0.2 s, tope 2 s.
+        // Recien al destaparse entran los paneles deslizando (s_openA)
+        if (s_coverEnd < 0.0) { const bool ready = MotorUiReady() && s_sceneOnce && s_iconTried;
+            if ((te >= 0.2f && ready) || te >= 2.0f) { s_coverEnd = now; s_openA = 0.0f; Log("motor (editor): entrada destapada a los %.2f s (%s)", te, ready ? "todo cargado" : "tope de 2 s"); } }
+        if (s_coverEnd < 0.0) a = 1.0f; else { const float tf = (float)(now - s_coverEnd); if (tf < 0.35f) a = 1.0f - tf / 0.35f; }
         if (s_exitT >= 0.0) { const float tx = (float)(now - s_exitT); a = std::max(a, std::min(1.0f, tx / 0.18f));
             if (tx >= 0.18f && !s_exitSent) { s_exitSent = true; MotorUiBack(); }
             if (tx > 1.2f) { s_exitT = -1.0; MotorErr("El juego no acept\xC3\xB3 el pedido de volver al Editar. Prob\xC3\xA1 de nuevo con Archivo > Cerrar el Motor."); } }
