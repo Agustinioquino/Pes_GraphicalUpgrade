@@ -324,7 +324,10 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     // (14/11) modo foto con el teclado: P pausa / sigue, O mantenida avanza, , y . reloj mas lento / rapido, N velocidad del menu
     const bool kbOk = front && !typing && !g_menuOpen.load() && !MotorPageActive();
     {   // (14/11 n) los toques se leen siempre (si no se acepta la tecla, el toque se descarta: no aparece despues al cerrar el menu)
-        const bool tab = KeyTap(VK_TAB, kbOk), kP = KeyTap('P', kbOk), kC = KeyTap(VK_OEM_COMMA, kbOk), kD = KeyTap(VK_OEM_PERIOD, kbOk), kN = KeyTap('N', kbOk), kB = KeyTap('B', kbOk), kM = KeyTap('M', kbOk);
+        // (15/11) con Alt apretado las letras no son de la camara: Alt + Shift + B / N / M son atajos de la DLL (piel del cuerpo, tejido,
+        // esconder los menus) y antes B / N de la camara se disparaban tambien
+        const bool kbL = kbOk && !Key(VK_MENU);
+        const bool tab = KeyTap(VK_TAB, kbOk), kP = KeyTap('P', kbL), kC = KeyTap(VK_OEM_COMMA, kbL), kD = KeyTap(VK_OEM_PERIOD, kbL), kN = KeyTap('N', kbL), kB = KeyTap('B', kbL), kM = KeyTap('M', kbL);
         const bool kO = kbOk && Key('O'), kI = kbOk && Key('I');
         const bool rep = ReplayNow() || ReplayViewerCalled();
         s_kbRplDir = (kbOk && rep) ? (kO && !kI ? 1 : kI && !kO ? -1 : 0) : 0;   // (14/11 n) en la repeticion: O adelante lento, I atras lento

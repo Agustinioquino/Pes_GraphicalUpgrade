@@ -1436,6 +1436,7 @@ static ID3D11ComputeShader* s_mbCS = nullptr; static ID3D11Texture2D* s_mbTex = 
 static ID3D11UnorderedAccessView* s_mbUAV = nullptr; static ID3D11ShaderResourceView* s_mbSRV = nullptr;
 static ID3D11ShaderResourceView* MBFitBeforeDraw(ID3D11DeviceContext* c) {
     if (!g_dev.dev || g_cfg.live[138][0] < 0.5f || g_cfg.live[138][1] <= 0.0f || (GrassLive(449, 1) <= 0.0f && GrassLive(449, 2) <= 0.0f)) return nullptr;
+    if (g_cfg.camNoMblur && FreeCamActive()) return nullptr;   // (15/11) camara libre sin desenfoque de movimiento: el PS escribe cero (y138 = 0 en la GPU)
     {
         std::lock_guard<std::mutex> lk(s_mbMx);
         if (s_mbDev != g_dev.dev) {
