@@ -286,7 +286,11 @@ void PesTorsoRegrow(inout float3 mP, float3 mN, float3 rest, float3 org) {
   float4 R = IniParams.Load(int2(349, 0));
   if (R.w < 0.5) return;
   // con camiseta (o sin lista): solo el brazo debajo de la manga (y351 / z351); sin camiseta: todo x349
-  float k = PesCharHasShirt(org) > 0.5 ? PesArmRestore(rest) : max(saturate(R.x), PesArmRestore(rest));
+  // (15/11, Agustin: "evita que se deforme el torso y los brazos") z327: tambien CON camiseta el torso vuelve a su tamano original
+  // (la tela simulada se aparta de la piel real al dibujarse, x256 = 2). La camiseta ajustada no se simula: ahi queda el achicado.
+  float kS = PesArmRestore(rest);
+  { float z327 = IniParams.Load(int2(327, 0)).z; if (z327 > 0.0 && PesCharShirtType(org) < 3.5) kS = max(kS, saturate(z327)); }
+  float k = PesCharHasShirt(org) > 0.5 ? kS : max(saturate(R.x), PesArmRestore(rest));
   float mm = PesTorsoShrinkMM(rest, mN) * k;
   if (mm <= 0.0) return;
   mP += mN * rsqrt(max(dot(mN, mN), 1e-8)) * (mm * 0.001);
