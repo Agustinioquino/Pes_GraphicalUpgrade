@@ -3111,12 +3111,23 @@ void OverlayPresent(IDXGISwapChain* sc) {
         dl->AddTriangleFilled(a, b, c, IM_COL32(255, 255, 255, 255)); dl->AddTriangleFilled(a, c, d, IM_COL32(255, 255, 255, 255));
         const ImVec2 pts[4] = { a, b, c, d }; dl->AddPolyline(pts, 4, IM_COL32(0, 0, 0, 255), ImDrawFlags_Closed, 1.4f * k);
     }
+    {   // (15/11 ythnmm) destello del doble clic sobre el visor del Editar: viaja con el punto hasta el centro mientras la camara se acerca
+        float px, py, age; int kind;
+        if (!g_menuOpen && MenuViewCamPulse(&px, &py, &age, &kind)) {
+            ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
+            const float e = kind == 1 ? expf(-9.0f * age) : 1.0f; const ImVec2 c(ds.x * 0.5f + (px - ds.x * 0.5f) * e, ds.y * 0.5f + (py - ds.y * 0.5f) * e);
+            const float t = age / 0.9f, fade = (1.0f - t) * (1.0f - t); const ImVec4 g = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+            for (int i = 7; i >= 1; i--) dl->AddCircleFilled(c, (10.0f + (float)i * 9.0f) * k * (0.7f + 0.6f * t), ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 0.035f * fade)), 40);   // brillo suave
+            dl->AddCircle(c, (16.0f + 70.0f * t) * k, ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 0.55f * fade)), 48, 2.0f * k);                                       // aro que se abre
+            dl->AddCircle(c, (8.0f + 34.0f * t) * k, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.35f * fade)), 40, 1.2f * k);
+        }
+    }
     float hintH = 0.0f;
     if (mouseHintA > 0.0f && !MotorUiOn()) {   // (15/11 b: en el Motor no va, tiene su menu)   // (14/11 d) "clic izquierdo seleccionar / avanzar, clic derecho volver" en el idioma del menu
         const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
         char kb[16]; const char* kn = g_cfg.cursorKey ? KeyHudName(g_cfg.cursorKey, kb, sizeof(kb)) : nullptr;   // (15/11) + la tecla del cursor (F1)
         const bool vc = MenuViewCamHint();   // (15/11 ythnmm) sobre el visor del Editar: girar / mover / zoom
-        hintH = MvMouseHint(ImGui::GetForegroundDrawList(), ImVec2(ds.x - 18.0f * k, ds.y - 18.0f * k), k, mouseHintA, vc ? TRS("Girar camara") : TRS("Seleccionar / avanzar"), vc ? TRS("Mover camara / Volver") : TRS("Volver"), kn, TRS("Cursor"), vc ? TRS("Zoom") : nullptr, vc) + 6.0f * k;
+        hintH = MvMouseHint(ImGui::GetForegroundDrawList(), ImVec2(ds.x - 18.0f * k, ds.y - 18.0f * k), k, mouseHintA, vc ? TRS("Girar camara") : TRS("Seleccionar / avanzar"), vc ? TRS("Mover camara / Volver") : TRS("Volver"), kn, TRS("Cursor"), vc ? TRS("Zoom") : nullptr, vc, vc ? TRS("Zoom en la zona") : nullptr) + 6.0f * k;
     }
     if (curToast) {   // (14/11 c) "Cursor apagado / prendido (F1)" chico, abajo a la derecha, en el idioma del menu; se va solo en 1.8 s
         const float t = (float)(Now() - s_curToastT), a = std::min(1.0f, std::min(t / 0.12f, (1.8f - t) / 0.35f));
