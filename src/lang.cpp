@@ -1595,6 +1595,9 @@ static const char* const kPt[][2] = {
 
 // (15/11 3icxbh) textos del editor del Motor en tiempo real: castellano, ingles, portugues
 static const char* const kMotor[][3] = {
+    { "IMAGEN", "IMAGE", "IMAGEM" },
+    { "Resoluci\303\263n del visor", "Viewer resolution", "Resolu\303\247\303\243o do visor" },
+    { "El Motor dibuja la escena a este tanto de la resoluci\303\263n de tu pantalla (100 % = n\303\255tida). Editar = el tama\303\261o chico del recuadro del Editar. M\303\241s de 100 % suaviza los bordes y pide m\303\241s a la placa.", "The Engine draws the scene at this share of your screen resolution (100 % = sharp). Edit = the small size of the Edit box. Above 100 % smooths edges and asks more of the graphics card.", "O Motor desenha a cena nesta parte da resolu\303\247\303\243o da sua tela (100 % = n\303\255tida). Editar = o tamanho pequeno do quadro do Editar. Acima de 100 % suaviza as bordas e exige mais da placa." },
     { "Perspectiva u ortogr\303\241fica", "Perspective or orthographic", "Perspectiva ou ortogr\303\241fica" },
     { "Vista ortogr\303\241fica", "Orthographic view", "Vista ortogr\303\241fica" },
     { "Vista en perspectiva", "Perspective view", "Vista em perspectiva" },

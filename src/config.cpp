@@ -186,6 +186,7 @@ static bool LoadConfigLocked() {
             // (15/11 p) segunda cadena: MSVC no acepta mas de ~128 "else if" seguidos (C1061)
             if (kl == "motor_deshacer_pasos") c.motorUndoSteps = std::clamp(atoi(v.c_str()), 10, 200);   // (15/11 p) Editar > Preferencias: pasos de Ctrl+Z
             else if (kl == "motor_panel_lugar") { int d0 = 0, d1 = 1; if (sscanf(v.c_str(), "%d,%d", &d0, &d1) == 2) { c.motorDock[0] = std::clamp(d0, 0, 2); c.motorDock[1] = std::clamp(d1, 0, 2); } }   // (15/11 q) 0 izquierda, 1 derecha, 2 flotante
+            else if (kl == "motor_resolucion") c.motorRes = std::clamp(atoi(v.c_str()), 0, 200);   // (15/11 q) visor del Motor: % de la pantalla (0 = como el Editar)
             else if (kl == "motor_panel_division") c.motorSplit = std::clamp((float)atof(v.c_str()), 0.15f, 0.85f);
             else if (kl == "motor_panel_arriba") c.motorStackTop = atoi(v.c_str()) != 0 ? 1 : 0;
             else if (kl == "motor_panel_flotante") { float f[8]; if (sscanf(v.c_str(), "%f,%f,%f,%f,%f,%f,%f,%f", &f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6], &f[7]) == 8) for (int q = 0; q < 8; q++) c.motorFloat[q / 4][q % 4] = f[q]; }

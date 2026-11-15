@@ -683,8 +683,43 @@ static void Install() {
     Log("camara libre: camara del visor del editor (0x1419bf3f0 RenderTarget::SetCamera) %s", s_okEditor ? "enganchada" : "NO se pudo enganchar");
 }
 
+// (15/11 q, Agustin 17:40: "le falta resolucion al motor") el visor del Editar dibuja en una imagen del tamano del recuadro loaderTex
+// (1238 x 1080 en su PC) y el Motor la muestra estirada. Dentro del Motor se le pide al juego el tamano de la pantalla x motor_resolucion
+// con SU funcion de cambiar el tamano en vivo (TaskModelView 0x141ee5490: toma el candado del visor +0x510, rehace sus imagenes y su
+// aspecto); al salir del Motor se le devuelve el tamano que tenia. Cadena: edit::ModelView [0x1438040d0] -> +0x78 tarea -> +0x90 Impl
+// (+0xfc ancho, +0x100 alto, +0x104 aspecto). Hallazgo: decompilado/hallazgos/20261115_graficos_niveles_y_visor_editar.cpp.md
+static bool Readable(const void* p, size_t n);
+static void MotorResTick() {
+    static uintptr_t s_task = 0; static int s_ow = 0, s_oh = 0; static bool s_set = false; static double s_t = -1.0e9; static int s_nl = 0;
+    static int s_exe = -1; if (s_exe < 0) { HMODULE mod = GetModuleHandleW(nullptr); auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
+        s_exe = ((uintptr_t)mod == 0x140000000ull && nt->FileHeader.TimeDateStamp == 0x62787C6A) ? 1 : 0; }
+    if (s_exe != 1) return;
+    const uintptr_t kMV = 0x1438040d0ull;
+    const uintptr_t mv = Readable((const void*)kMV, 8) ? *(const uintptr_t*)kMV : 0;
+    const uintptr_t task = (mv && Readable((const void*)(mv + 0x78), 8)) ? *(const uintptr_t*)(mv + 0x78) : 0;
+    const uintptr_t impl = (task && Readable((const void*)(task + 0x90), 8)) ? *(const uintptr_t*)(task + 0x90) : 0;
+    if (!impl || !Readable((const void*)(impl + 0xfc), 12)) { if (task != s_task) s_set = false; return; }
+    if (s_set && task != s_task) s_set = false;      // otro visor: lo guardado era del anterior
+    const int cw = *(const int*)(impl + 0xfc), ch = *(const int*)(impl + 0x100); const double now = Now();
+    typedef void (*ResizeFn)(uintptr_t, int, int, uintptr_t); const ResizeFn resize = (ResizeFn)0x141ee5490ull;
+    const bool want = MotorPageActive() && g_cfg.motorRes > 0 && g_bbW >= 640 && g_bbH >= 360;
+    if (want) {
+        const float sc = std::clamp((float)g_cfg.motorRes / 100.0f, 0.5f, 2.0f);
+        const int W = std::clamp((int)((float)g_bbW * sc + 0.5f) & ~1, 320, 8192), H = std::clamp((int)((float)g_bbH * sc + 0.5f) & ~1, 180, 8192);
+        if (cw == W && ch == H) return;
+        if (now - s_t < 1.0) return; s_t = now;
+        if (!s_set) { s_ow = cw; s_oh = ch; s_task = task; s_set = true; }
+        resize(task, W, H, 0);
+        if (s_nl++ < 12) Log("motor: visor a %d x %d (%d %% de la pantalla %u x %u; tenia %d x %d, aspecto %.3f)", W, H, g_cfg.motorRes, g_bbW, g_bbH, cw, ch, *(const float*)(impl + 0x104));
+    } else if (s_set) {
+        if (cw != s_ow || ch != s_oh) { if (now - s_t < 0.2) return; s_t = now; resize(task, s_ow, s_oh, 0); if (s_nl++ < 12) Log("motor: visor devuelto a %d x %d (fuera del Motor)", s_ow, s_oh); }
+        s_set = false;
+    }
+}
+
 void FreeCamPresent() {
     if (!s_tried) Install();
+    MotorResTick();
     static double s_t0 = 0; static int s_c0 = 0, s_a0 = 0;
     double t = Now();
     if (s_t0 == 0) { s_t0 = t; return; }

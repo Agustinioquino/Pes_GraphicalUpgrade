@@ -1068,6 +1068,10 @@ static void ToolbarDraw() {
                 rowLbl("Panel Escena (T)"); { const char* const nms[2] = { "Abierto", "Cerrado" }; seg(910, ImVec2(fxa, y), ImVec2(cx1, y + rowH), 2, g_cfg.motorPanelLOn ? 0 : 1, nms); y += rowH + 6.0f * k; }
                 rowLbl("Panel Inspector (N)"); { const char* const nms[2] = { "Abierto", "Cerrado" }; seg(912, ImVec2(fxa, y), ImVec2(cx1, y + rowH), 2, g_cfg.motorPanelROn ? 0 : 1, nms); y += rowH + 6.0f * k; }
                 btn(796, "Restablecer paneles"); }
+            if (sec("IMAGEN")) {      // (15/11 q, Agustin 17:40: "le falta resolucion al motor")
+                rowLbl("Resoluci\xC3\xB3n del visor"); { const char* const nms[5] = { "Editar", "50 %", "75 %", "100 %", "150 %" }; static const int rv[5] = { 0, 50, 75, 100, 150 }; int c = -1; for (int q = 0; q < 5; q++) if (g_cfg.motorRes == rv[q]) c = q;
+                    seg(940, ImVec2(fxa, y), ImVec2(cx1, y + rowH), 5, c, nms); y += rowH + 6.0f * k; }
+                note("El Motor dibuja la escena a este tanto de la resoluci\xC3\xB3n de tu pantalla (100 % = n\xC3\xADtida). Editar = el tama\xC3\xB1o chico del recuadro del Editar. M\xC3\xA1s de 100 % suaviza los bordes y pide m\xC3\xA1s a la placa."); }
         } else if (s_prefCat == 1) {
             if (sec("DESHACER (CTRL + Z)")) {
                 rowLbl("Pasos guardados"); { float v = (float)UndoLim(); if (sliNum(2506, 2011, v, 10.0f, (float)kUndoMax, 0.5f, "%.0f", "")) { g_cfg.motorUndoSteps = (int)(v + 0.5f); s_prefSave |= 4; } y += rowH + 4.0f * k; }
@@ -1274,6 +1278,7 @@ static void ToolbarDraw() {
         else if (id == 720 || id == 721) UndoStep(id == 721);
         else if (id == 722) { s_modal = 3; s_menuOpen = -1; }
         else if (id >= 900 && id < 905) s_prefCat = id - 900;
+        else if (id >= 940 && id < 945) { static const int rv[5] = { 0, 50, 75, 100, 150 }; g_cfg.motorRes = rv[id - 940]; char b[8]; snprintf(b, sizeof b, "%d", rv[id - 940]); SaveOption("motor_resolucion", b); }
         else if (id == 920 || id == 921) { g_cfg.motorAutoSave = id == 920 ? 1 : 0; SaveOption("motor_autoguardado", id == 920 ? "1" : "0"); s_autoT = -1.0; }
         else if (id >= 922 && id < 926) { static const int mv[4] = { 1, 2, 5, 10 }; g_cfg.motorAutoSaveMin = mv[id - 922]; char b[8]; snprintf(b, sizeof b, "%d", mv[id - 922]); SaveOption("motor_autoguardado_minutos", b); s_autoT = -1.0; }
         else if (id == 930 || id == 931) { g_cfg.motorSound = id == 930 ? 1 : 0; SaveOption("motor_sonido", id == 930 ? "1" : "0"); }
