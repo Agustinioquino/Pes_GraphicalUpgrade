@@ -1679,7 +1679,7 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
         // este con su brillo", "rezise horizontal y el vertical rotado en vertical") FLECHA DOBLE HUECA para cambiar el tamano: puntas
         // anchas y una barra fina en el medio (3 = de costado, 4 = arriba / abajo), contorno blanco con filo oscuro y un brillo verde
         // suave que late; al arrastrar el brillo sube. El punto del mouse es el centro.
-        const float sc = k * (1.0f - 0.06f * s_dn), L = 12.5f, H = 6.6f, hh = 6.4f, bh = 1.8f;
+        const float sc = k * (1.0f - 0.06f * s_dn), L = 12.5f, H = 5.6f, hh = 5.0f, bh = 1.2f;   // (15/11 p, Agustin 05:52: "un poco menos gordo")
         static const float P[10][2] = { { -1, 0 }, { -2, -3 }, { -2, -4 }, { 2, -4 }, { 2, -3 }, { 1, 0 }, { 2, 3 }, { 2, 4 }, { -2, 4 }, { -2, 3 } };
         ImVec2 pts[10];
         for (int i = 0; i < 10; i++) {   // codigos: x +-1 punta, +-2 base de la punta; y +-3 ancho de la punta, +-4 la barra
@@ -1691,8 +1691,8 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
         for (int i = 6; i >= 1; i--) dl->AddPolyline(pts, 10, ColA(grn, 0.075f * glow * (1.0f - (float)i / 7.5f)), ImDrawFlags_Closed, (1.6f + (float)i * 2.1f) * k);   // brillo
         { ImVec2 sp[10]; for (int j = 0; j < 10; j++) sp[j] = ImVec2(pts[j].x + 1.2f * k, pts[j].y + 1.6f * k); dl->AddConcavePolyFilled(sp, 10, Col(0, 0, 0, 0.25f * alpha)); }   // sombra
         dl->AddConcavePolyFilled(pts, 10, ColA(Lerp4(ImVec4(0.05f, 0.07f, 0.08f, 1), grn, 0.10f + 0.20f * s_dn), 0.55f * alpha));                                            // hueca: adentro oscuro translucido
-        dl->AddPolyline(pts, 10, Col(0.02f, 0.03f, 0.03f, 0.85f * alpha), ImDrawFlags_Closed, 3.0f * k);
-        dl->AddPolyline(pts, 10, ColA(Lerp4(ImVec4(1, 1, 1, 1), grn, 0.18f * glow), alpha), ImDrawFlags_Closed, 1.45f * k);
+        dl->AddPolyline(pts, 10, Col(0.02f, 0.03f, 0.03f, 0.85f * alpha), ImDrawFlags_Closed, 2.4f * k);
+        dl->AddPolyline(pts, 10, ColA(Lerp4(ImVec4(1, 1, 1, 1), grn, 0.18f * glow), alpha), ImDrawFlags_Closed, 1.2f * k);
         return;
     }
     (void)style; (void)grey;
