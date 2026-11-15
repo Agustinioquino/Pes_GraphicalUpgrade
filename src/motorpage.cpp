@@ -444,7 +444,8 @@ static void EditMenuSeen(void* win) {
         uint8_t* I = Readable((uint8_t*)win + 0x88, 8) ? *(uint8_t**)((uint8_t*)win + 0x88) : nullptr;
         const int row = Readable(I, 0xe0) ? (int)*(uint32_t*)(I + 0xd8) : -1;
         static int lastRow = -2; if (row != lastRow) { lastRow = row; static int n = 0; if (n++ < 30) Log("motor (pagina): menu de Editar, cursor en la fila %d", row); }
-        s_ed12.store(row == 11); s_edSeenT.store(Now()); s_coverArmed.store(true);
+        s_ed12.store(row == 11); s_edSeenT.store(Now()); s_coverArmed.store(!g_menuOpen.load());
+        if (Now() - s_coverT.load() < 2.8 && Now() - s_coverT.load() > 0.05) s_coverT.store(-1.0e9);   // el menu de Editar sigue: no era el Motor
         return;
     }
     if (win == s_motorWin.load(std::memory_order_relaxed)) return;
@@ -455,7 +456,7 @@ static void EditMenuSeen(void* win) {
 void MotorPreCoverDraw() {
     if (g_cfg.motorOwnMenu == 0 || g_cfg.motorPage == 0) return;
     const double now = Now();
-    if (s_coverArmed.load() && s_ed12.load() && now - s_edSeenT.load() > 0.05 && now - s_edSeenT.load() < 0.5) {
+    if (s_coverArmed.load() && !g_menuOpen.load() && s_ed12.load() && now - s_edSeenT.load() > 0.05 && now - s_edSeenT.load() < 0.5) {
         s_coverArmed.store(false); s_coverT.store(now); Log("motor (pagina): se acepto el boton 12 -> tapa de entrada");
     }
     const double t = now - s_coverT.load();
