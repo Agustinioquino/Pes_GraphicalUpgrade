@@ -616,7 +616,12 @@ static void ToolbarDraw() {
     // un clic sin arrastrar lo deja escribir. Devuelve true si v cambio en este cuadro (quien llama lo aplica al juego).
     auto inside = [&](const ImVec2& a, const ImVec2& b) { return mx >= a.x && mx <= b.x && my >= a.y && my <= b.y; };
     float pOffC = 0.0f;      // (15/11 q) corrimiento del panel que se esta dibujando: los recortes van a su lugar real
-    auto clipPush = [&](const ImVec2& a, const ImVec2& b) { dl->PushClipRect(ImVec2(a.x + pOffC, a.y), ImVec2(b.x + pOffC, b.y), true); };
+    // (15/11 r) el recorte se pone en el lugar de dibujo (sin corrimiento): ImGui descarta las letras que caen fuera del recorte al
+    // armarlas, y con el recorte ya corrido el texto del panel movido desaparecia (Agustin 18:43). Al final del panel clipShift corre
+    // los recortes de sus comandos junto con los vertices.
+    auto clipPush = [&](const ImVec2& a, const ImVec2& b) { dl->PushClipRect(a, b, true); };
+    auto clipBegin = [&]() { dl->AddDrawCmd(); return dl->CmdBuffer.Size - 1; };
+    auto clipShift = [&](int c0, float tx) { if (tx == 0.0f) return; for (int i = std::max(0, c0); i < dl->CmdBuffer.Size; i++) { ImVec4& r = dl->CmdBuffer[i].ClipRect; r.x += tx; r.z += tx; } dl->AddDrawCmd(); };
     auto numField = [&](int id, const ImVec2& p0, const ImVec2& p1, float& v, float step, float lo, float hi, const char* fmt, const char* unit) -> bool {
         const bool hv = hit(id, p0, p1); bool ch = false;
         if (lEdge0 && !hitOff && inside(p0, p1)) { s_pressId = id; s_pressVal = v; }
@@ -761,7 +766,7 @@ static void ToolbarDraw() {
       const float leftW = Q.W, y0 = Q.ya, y1 = Q.yb, aL = Q.a; const float slide = Q.dock == 0 ? -(Q.W - Q.V) : Q.dock == 1 ? (Q.W - Q.V) : 0.0f, dx = Q.x + slide;
       pMoving = s_mvOn && s_mvId == 1; mx -= dx; pOffC = dx;
       { float vx0, vx1; pVis(Q, vx0, vx1); s_treeZone.store(nz); zone(ImVec2(vx0, y0), ImVec2(vx1, y1)); }
-      { const int v0 = dl->VtxBuffer.Size; const ImVec2 a(0, y0), b(leftW, y1); hitOff = aL < 0.999f || pMoving;
+      { const int c0 = clipBegin(); const int v0 = dl->VtxBuffer.Size; const ImVec2 a(0, y0), b(leftW, y1); hitOff = aL < 0.999f || pMoving;
       dl->AddRectFilled(a, b, cPanel); dl->AddLine(ImVec2(leftW, y0), ImVec2(leftW, y1), cLine, 1.0f); if (Q.dock != 0) dl->AddLine(ImVec2(0, y0), ImVec2(0, y1), cLine, 1.0f);
       if (Q.dock == 2) dl->AddRect(ImVec2(0, y0), ImVec2(leftW, y1), IM_COL32(70, 70, 76, 255), 0.0f, 0, 1.0f);
       dl->AddRectFilled(a, ImVec2(leftW, y0 + rowH), cHead); text(12.0f * k, y0 + rowH * 0.5f, dim, "ESCENA", fsS);
@@ -818,14 +823,14 @@ static void ToolbarDraw() {
               dl->AddRectFilled(ImVec2(leftW - 5.0f * k, ty0), ImVec2(leftW - 2.0f * k, ty0 + th), IM_COL32(110, 110, 114, 255), 1.5f * k); }
           if (s_info.lights == 0 && !fL) text(34.0f * k, yL0 + 11.0f * k, dim, "La escena no tiene luces cargadas.", fsS);
       }
-      anim(v0, dx + (Q.dock == 1 ? 1.0f : Q.dock == 0 ? -1.0f : 0.0f) * (1.0f - eo) * leftW, 0.0f, eo * std::min(1.0f, aL * 1.6f) * (pMoving ? 0.85f : 1.0f)); hitOff = false;
+      { const float tx = dx + (Q.dock == 1 ? 1.0f : Q.dock == 0 ? -1.0f : 0.0f) * (1.0f - eo) * leftW; anim(v0, tx, 0.0f, eo * std::min(1.0f, aL * 1.6f) * (pMoving ? 0.85f : 1.0f)); clipShift(c0, tx); } hitOff = false;
       } mx += dx; pOffC = 0.0f; pMoving = false; };
     // ---------------- inspector ----------------
     auto drawInsp = [&]() { const PLay& Q = P[1]; if (Q.V <= 0.5f) return;
       const float rightW = Q.W, y0 = Q.ya, y1 = Q.yb, aR = Q.a; const float slide = Q.dock == 0 ? -(Q.W - Q.V) : Q.dock == 1 ? (Q.W - Q.V) : 0.0f, dx = Q.x + slide - (ds.x - Q.W);
       pMoving = s_mvOn && s_mvId == 2; mx -= dx; pOffC = dx;
       { float vx0, vx1; pVis(Q, vx0, vx1); zone(ImVec2(vx0, y0), ImVec2(vx1, y1)); }
-      { const int v0 = dl->VtxBuffer.Size; int v1 = v0; const float x0 = ds.x - rightW; const ImVec2 a(x0, y0), b(ds.x, y1); hitOff = aR < 0.999f || pMoving;
+      { const int c0 = clipBegin(); const int v0 = dl->VtxBuffer.Size; int v1 = v0; const float x0 = ds.x - rightW; const ImVec2 a(x0, y0), b(ds.x, y1); hitOff = aR < 0.999f || pMoving;
       dl->AddRectFilled(a, b, cPanel); dl->AddLine(ImVec2(x0, y0), ImVec2(x0, y1), cLine, 1.0f); if (Q.dock != 1) dl->AddLine(ImVec2(ds.x - 1.0f, y0), ImVec2(ds.x - 1.0f, y1), cLine, 1.0f);
       if (Q.dock == 2) dl->AddRect(a, b, IM_COL32(70, 70, 76, 255), 0.0f, 0, 1.0f);
       clipPush(a, b);
@@ -874,7 +879,7 @@ static void ToolbarDraw() {
       } else if (s_sel == 2) {
           // (15/11 o, Agustin 05:08: "la grilla no tiene opciones") todo se cambia desde aca y se guarda en el ini
           if (label("VISIBLE")) { const char* const nms[2] = { "S\xC3\xAD", "No" }; seg(210, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, grid ? 0 : 1, nms); y += rowH + 12.0f * k; }
-          if (label("TAMA\xC3\x91O (LADO)")) { static const char* const gn[4] = { "M\xC3\xA1xima", "40 m", "100 m", "200 m" }; static const int gv[4] = { 0, 40, 100, 200 }; int c = -1; for (int q = 0; q < 4; q++) if (g_cfg.motorGridSize == gv[q]) c = q;
+          if (label("TAMA\xC3\x91O (LADO)")) { static const char* const gn[4] = { "M\xC3\xA1xima", "40 m", "100 m", "150 m" }; static const int gv[4] = { 0, 40, 100, 150 }; int c = -1; for (int q = 0; q < 4; q++) if (g_cfg.motorGridSize == gv[q]) c = q;
               seg(780, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 4, c, gn); y += rowH + 12.0f * k; }
           if (label("CELDA")) { static const char* const cn[4] = { "25 cm", "50 cm", "1 m", "2 m" }; static const float cv[4] = { 0.25f, 0.5f, 1.0f, 2.0f }; int c = -1; for (int q = 0; q < 4; q++) if (fabsf(g_cfg.motorGridCell - cv[q]) < 1.0e-3f) c = q;
               seg(784, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 4, c, cn); y += rowH + 12.0f * k; }
@@ -963,7 +968,7 @@ static void ToolbarDraw() {
       }
       dl->PopClipRect();
       anim(v1, (1.0f - s_inspA) * 14.0f * k, 0.0f, s_inspA);
-      anim(v0, dx + (Q.dock == 0 ? -1.0f : Q.dock == 1 ? 1.0f : 0.0f) * (1.0f - eo) * rightW, 0.0f, eo * std::min(1.0f, aR * 1.6f) * (pMoving ? 0.85f : 1.0f)); hitOff = false;
+      { const float tx = dx + (Q.dock == 0 ? -1.0f : Q.dock == 1 ? 1.0f : 0.0f) * (1.0f - eo) * rightW; anim(v0, tx, 0.0f, eo * std::min(1.0f, aR * 1.6f) * (pMoving ? 0.85f : 1.0f)); clipShift(c0, tx); } hitOff = false;
       } mx += dx; pOffC = 0.0f; pMoving = false; };
     // pegados primero, flotantes encima, el que se mueve arriba de todo (el ultimo en dibujarse gana el clic)
     { int ord[2] = { 0, 1 }; auto rk = [&](int i) { return (s_mvOn && s_mvId == i + 1) ? 2 : P[i].dock == 2 ? 1 : 0; }; if (rk(0) > rk(1)) { ord[0] = 1; ord[1] = 0; }
@@ -1169,7 +1174,7 @@ static void ToolbarDraw() {
         auto add = [&](const char* t, const char* sc, int id, int chk = -1, int kind = 0) { if (n < 32) it[n++] = MI{ TRS(t), TRS(sc), id, chk, kind }; };      // (15/11 p) hasta 32
         if (m == 0) { add("Nueva escena", "Ctrl + N", 710); add("Abrir escena...", "Ctrl + O", 711); add("Guardar escena", "Ctrl + S", 712); add("Guardar como escena nueva", "Ctrl + Shift + S", 713); add(nullptr, "", -1, -1, 1); add("Cerrar el Motor", "Esc", 0); }
         else if (m == 1) { add(player ? "Quitar el jugador" : "Cargar el jugador", "J", 2); add("Grilla de piso", "G", 1, grid ? 1 : 0);
-            add("TAMA\xC3\x91O DE LA GRILLA", "", -1, -1, 2); { static const char* const gn[4] = { "M\xC3\xA1xima (hasta el horizonte)", "40 x 40 m", "100 x 100 m", "200 x 200 m" }; static const int gv[4] = { 0, 40, 100, 200 };
+            add("TAMA\xC3\x91O DE LA GRILLA", "", -1, -1, 2); { static const char* const gn[4] = { "M\xC3\xA1xima (hasta el horizonte)", "40 x 40 m", "100 x 100 m", "150 x 150 m" }; static const int gv[4] = { 0, 40, 100, 150 };
               for (int i = 0; i < 4; i++) add(gn[i], "", 780 + i, g_cfg.motorGridSize == gv[i] ? 3 : 2); } add(nullptr, "", -1, -1, 1);
             add("Cargar animaci\xC3\xB3n (.gani)...", "en preparaci\xC3\xB3n", -1, -1, 3); add("Cargar estadio...", "en preparaci\xC3\xB3n", -1, -1, 3); add("Cinem\xC3\xA1ticas del juego...", "en preparaci\xC3\xB3n", -1, -1, 3); }
         else if (m == 2) { add("C\xC3\xA1mara libre", "C", 3, camFree ? 1 : 0); add(nullptr, "", -1, -1, 1); add("MIRAR DESDE", "", -1, -1, 2);
@@ -1286,7 +1291,7 @@ static void ToolbarDraw() {
         else if (id == 730) s_modal = 2;
         else if (id >= 750 && id < 754) ScaleSet(id - 750);
         else if (id >= 770 && id < 774) LangSet(id - 770);
-        else if (id >= 780 && id < 784) { static const int gv[4] = { 0, 40, 100, 200 }; g_cfg.motorGridSize = gv[id - 780]; if (!grid) g_cfg.motorGrid = 1; char b[8]; snprintf(b, sizeof b, "%d", gv[id - 780]); SaveOption("motor_grilla_tamano", b); if (gv[id - 780] == 0) Note("Grilla hasta el horizonte"); else Note("Grilla de %d x %d m", gv[id - 780], gv[id - 780]); }
+        else if (id >= 780 && id < 784) { static const int gv[4] = { 0, 40, 100, 150 }; g_cfg.motorGridSize = gv[id - 780]; if (!grid) g_cfg.motorGrid = 1; char b[8]; snprintf(b, sizeof b, "%d", gv[id - 780]); SaveOption("motor_grilla_tamano", b); if (gv[id - 780] == 0) Note("Grilla hasta el horizonte"); else Note("Grilla de %d x %d m", gv[id - 780], gv[id - 780]); }
         else if (id == 760 || id == 761) ScaleSet(ScaleIdx() + (id == 760 ? 1 : -1));
         else if (id == 740 || id == 741) { const int n = std::max(1, MotorViewCount(0)); MotorViewSet(0, (MotorViewGet(0) + (id == 740 ? 1 : n - 1)) % n); Note("Vista: %s", ViewTr(0, MotorViewGet(0))); }
         else if (id == 742) { const int n = std::max(1, std::min(3, MotorViewCount(1))); MotorViewSet(1, (MotorViewGet(1) + 1) % n); }

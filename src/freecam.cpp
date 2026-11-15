@@ -206,7 +206,7 @@ bool FreeCamOrtho() { return s_orthoWant.load() != 0; }
 // pivote que la camara libre) y motorextra.cpp guarda esa imagen y vuelve a poner en pantalla la del cuadro anterior. Cada vista se
 // renueva la mitad de las veces. s_xOff = intercambiar (si el juego dibuja la camara un cuadro despues de recibirla).
 static std::atomic<int> s_xOn{ 0 }, s_xOff{ 0 }; static std::atomic<unsigned> s_xFrame{ 0 };
-static std::mutex s_xMx; static float s_xYaw = 0.0f, s_xPitch = 0.25f, s_xDist = 3.0f; static bool s_xInit = false;
+static std::mutex s_xMx; static float s_xYaw = 0.0f, s_xPitch = 0.25f, s_xDist = 3.0f, s_xPiv[3] = { 0.0f, 0.95f, 0.0f }, s_xFov = 0.364f; static bool s_xInit = false;
 void FreeCamExtraSet(int on) { s_xOn.store(on ? 1 : 0); if (!on) { std::lock_guard<std::mutex> lk(s_xMx); s_xInit = false; } }
 bool FreeCamExtra() { return s_xOn.load() != 0; }
 void FreeCamExtraSwap() { s_xOff.store(s_xOff.load() ^ 1); }
@@ -682,11 +682,15 @@ static void hk_SetCam(void* rt, unsigned char* cam) {
         std::lock_guard<std::mutex> lk(s_xMx);
         if (!s_xInit) { const float d[3] = { s_pos[0] - s_pivot[0], s_pos[1] - s_pivot[1], s_pos[2] - s_pivot[2] }; const float l = Len3(d);
             s_xDist = std::clamp(l, 0.3f, 120.0f); s_xYaw = atan2f(d[0], d[2]) + 1.5707963f; s_xPitch = 0.15f; s_xInit = true;
-            Log("motor: vista extra prendida (alternando cuadros), camara extra a %.2f m del pivote, de costado", s_xDist); }
+            // (15/11 r, Agustin 18:43: "no es independiente, se mueve con la vista normal") la camara extra guarda SU punto de giro y su
+            // campo de vision al prenderse: mover, girar o hacer zoom con la principal ya no la mueve
+            memcpy(s_xPiv, s_pivot, 12); { float f0; memcpy(&f0, cam + 0x40, 4); s_xFov = (f0 == f0 && f0 > 0.1f && f0 < 2.0f) ? f0 : (s_fovBase > 0.1f ? s_fovBase : 0.364f); }
+            Log("motor: vista extra prendida (alternando cuadros), camara propia a %.2f m de su punto (%.2f, %.2f, %.2f), de costado, campo de vision %.3f", s_xDist, s_xPiv[0], s_xPiv[1], s_xPiv[2], s_xFov); }
         memcpy(xSave, cam + 0x10, sizeof xSave); xb = true;
         const float cp = cosf(s_xPitch); const float c[3] = { cp * sinf(s_xYaw), sinf(s_xPitch), cp * cosf(s_xYaw) };
         float* pos = (float*)(cam + 0x10); float* tgt = (float*)(cam + 0x1c); float* up = (float*)(cam + 0x28);
-        for (int i = 0; i < 3; i++) { pos[i] = s_pivot[i] + c[i] * s_xDist; tgt[i] = s_pivot[i]; } up[0] = 0.0f; up[1] = 1.0f; up[2] = 0.0f;
+        for (int i = 0; i < 3; i++) { pos[i] = s_xPiv[i] + c[i] * s_xDist; tgt[i] = s_xPiv[i]; } up[0] = 0.0f; up[1] = 1.0f; up[2] = 0.0f;
+        memcpy(cam + 0x40, &s_xFov, 4); { float cn; memcpy(&cn, cam + 0x34, 4); const float n0 = 0.05f; if (cn == cn && cn > n0) memcpy(cam + 0x34, &n0, 4); }   // sin la lente ni el cerca de la ortografica
     }
     o_setCam(rt, cam);
     if (vc) memcpy(cam + 0x10, vcSave, sizeof vcSave);
@@ -732,6 +736,18 @@ static void MotorResTick() {
     const int cw = *(const int*)(impl + 0xfc), ch = *(const int*)(impl + 0x100); const double now = Now();
     typedef void (*ResizeFn)(uintptr_t, int, int, uintptr_t); const ResizeFn resize = (ResizeFn)0x141ee5490ull;
     const bool want = MotorPageActive() && g_cfg.motorRes > 0 && g_bbW >= 640 && g_bbH >= 360;
+    // (15/11 r, Agustin 18:43: "la resolucion parece seguir siendo baja" con el visor ya a 1920 x 1080) escala de resolucion interna del
+    // juego (menu de graficos, fila 2, 50..100 %: byte 0x14352c638, por cuadro float 0x143802f38 = pct / 100; decompilado 15/11,
+    // INFERIDO que es la resolucion interna). En el Motor se pone al 100 % y al salir vuelve la del juego. Se anota cada cambio.
+    {   static int s_pctOrig = -1; static int s_lastPct = -2; static float s_lastF = -2.0f; static int s_nlp = 0;
+        unsigned char* pPct = (unsigned char*)0x14352c638ull; const float* pF = (const float*)0x143802f38ull;
+        if (Readable(pPct, 1) && Readable(pF, 4)) {
+            const int pct = *pPct; const float f = *pF;
+            if ((pct != s_lastPct || std::fabs(f - s_lastF) > 0.001f) && s_nlp < 16) { s_nlp++; Log("motor: escala de resolucion interna del juego %d %% (por cuadro %.3f)%s", pct, f, MotorPageActive() ? " - en el Motor" : ""); }
+            s_lastPct = pct; s_lastF = f;
+            if (want && pct >= 50 && pct < 100) { if (s_pctOrig < 0) s_pctOrig = pct; DWORD op; if (VirtualProtect(pPct, 1, PAGE_READWRITE, &op)) { *pPct = 100; VirtualProtect(pPct, 1, op, &op); } }
+            else if (!want && s_pctOrig >= 0) { DWORD op; if (VirtualProtect(pPct, 1, PAGE_READWRITE, &op)) { *pPct = (unsigned char)s_pctOrig; VirtualProtect(pPct, 1, op, &op); } s_pctOrig = -1; }
+        } }
     if (want) {
         const float sc = std::clamp((float)g_cfg.motorRes / 100.0f, 0.5f, 2.0f);
         const int W = std::clamp((int)((float)g_bbW * sc + 0.5f) & ~1, 320, 8192), H = std::clamp((int)((float)g_bbH * sc + 0.5f) & ~1, 180, 8192);

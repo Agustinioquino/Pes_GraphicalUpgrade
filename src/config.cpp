@@ -196,7 +196,7 @@ static bool LoadConfigLocked() {
             else if (kl == "motor_camara_velocidad") c.motorCamSpeed = std::clamp((float)atof(v.c_str()), 0.0f, 50.0f);   // (15/11 p) 0 = la de la camara libre
             else if (kl == "motor_camara_sensibilidad") c.motorCamSens = std::clamp((float)atof(v.c_str()), 0.0f, 10.0f);
             else if (kl == "motor_grilla_ejes") c.motorGridAxes = atoi(v.c_str()) != 0 ? 1 : 0;
-            else if (kl == "motor_grilla_tamano") { const int gs = atoi(v.c_str()); c.motorGridSize = gs <= 0 ? 0 : std::clamp(gs, 10, 400); }   // (15/11 q) 0 = maxima (hasta el horizonte)   // (15/11) lado de la grilla en metros
+            else if (kl == "motor_grilla_tamano") { const int gs = atoi(v.c_str()); c.motorGridSize = (gs <= 0 || gs >= 200) ? 0 : std::clamp(gs, 10, 400); }   // (15/11 r) 200 (lo que guardaban las DLL viejas) o mas = Maxima   // (15/11 q) 0 = maxima (hasta el horizonte)   // (15/11) lado de la grilla en metros
             else if (kl == "motor_sonido") c.motorSound = atoi(v.c_str()) != 0 ? 1 : 0;                     // (15/11 m) motorsound.cpp: sonido de la transicion
             else if (kl == "motor_sonido_volumen") c.motorSoundVol = std::clamp(atoi(v.c_str()), 0, 100);
             else if (kl == "motor_carga_tiempos") c.motorLoadTimes = v;                                       // (15/11 n) tiempos aprendidos de la barra de carga

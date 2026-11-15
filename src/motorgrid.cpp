@@ -101,7 +101,7 @@ static void GridPaint(const Cam& c) {
         // M celdas (M = la linea fuerte, o 10) desde ahi hasta 60 x M celdas; nivel 2 = cada M x M... Cada nivel dibuja solo el anillo que
         // el anterior no cubre (sin lineas dobles) y sus tramos son mas largos cuanto mas lejos.
         const bool maxi = g_cfg.motorGridSize <= 0;
-        const float Rmax = maxi ? 2000.0f : std::min((float)std::clamp(g_cfg.motorGridSize, 10, 400) * 0.5f, cell * 600.0f);
+        const float Rmax = maxi ? 2000.0f : std::min((float)std::clamp(g_cfg.motorGridSize, 10, 199) * 0.5f, cell * 600.0f);
         const float fade = maxi ? Rmax : std::min(Rmax, (9.0f + 6.0f * std::fabs(c.pos[1]) + 0.45f / c.th) * std::max(1.0f, Rmax / 20.0f));
         const int M = major > 1 ? major : 10;
         const float px = c.pos[0], pz = c.pos[2];
@@ -116,9 +116,12 @@ static void GridPaint(const Cam& c) {
             float ax, ay, bx, by, tx, ty; if (!proj(m, ax, ay) || !proj(n, bx, by) || !proj(t, tx, ty)) return 1.0e6f;
             float dx = tx - ax, dy = ty - ay; const float l = sqrtf(dx * dx + dy * dy); if (l < 1.0e-4f) return 1.0e6f; dx /= l; dy /= l;
             return std::fabs((bx - ax) * dy - (by - ay) * dx); };
-        auto fadeAt = [&](float x, float z) { const float d = sqrtf((x - px) * (x - px) + (z - pz) * (z - pz)) / fade; const float a = std::clamp(1.0f - d, 0.0f, 1.0f); return a * a * (3.0f - 2.0f * a); };
+        // (15/11 r, Agustin 18:43: "la grilla sigue desapareciendo en el horizonte") en Maxima no se apaga por distancia hasta el
+        // ultimo 15 % del radio de 2 km
+        auto fadeAt = [&](float x, float z) { const float d = sqrtf((x - px) * (x - px) + (z - pz) * (z - pz)) / fade;
+            const float a = maxi ? std::clamp((1.0f - d) / 0.15f, 0.0f, 1.0f) : std::clamp(1.0f - d, 0.0f, 1.0f); return a * a * (3.0f - 2.0f * a); };
         float rIn = 0.0f, step = cell; long long mult = 1;
-        for (int lv = 0; lv < 4 && rIn < Rmax; lv++, step *= (float)M, mult *= M) {
+        for (int lv = 0; lv < 5 && rIn < Rmax; lv++, step *= (float)M, mult *= M) {
             const float R = maxi ? std::min(Rmax, step * 60.0f) : Rmax;
             for (int axis = 0; axis < 2; axis++) {          // 0: lineas de x fija (corren por z, el eje Z azul) / 1: de z fija (el eje X rojo)
                 const float pc = axis == 0 ? px : pz, po = axis == 0 ? pz : px;
@@ -139,7 +142,10 @@ static void GridPaint(const Cam& c) {
                             float fa = fadeAt(a[0], a[2]), fb = fadeAt(b[0], b[2]);
                             if (fa > 0.003f || fb > 0.003f) {
                                 float sp = 1.0f;
-                                if (!ax0) { float m[3] = { (a[0] + b[0]) * 0.5f, 0.0f, (a[2] + b[2]) * 0.5f }; const float s1 = spacing(m, axis, step) * (maj && mult < major ? (float)major / (float)mult : 1.0f); sp = std::clamp((s1 - 2.0f) / 4.0f, 0.0f, 1.0f); }
+                                if (!ax0) { float m[3] = { (a[0] + b[0]) * 0.5f, 0.0f, (a[2] + b[2]) * 0.5f }; const float s1 = spacing(m, axis, step) * (maj && mult < major ? (float)major / (float)mult : 1.0f); sp = std::clamp((s1 - 2.0f) / 4.0f, 0.0f, 1.0f);
+                                    // en Maxima las lineas fuertes y las del ultimo nivel no se apagan del todo al juntarse cerca del horizonte:
+                                    // se funden en una franja suave en vez de cortarse
+                                    if (maxi && (maj || R >= Rmax || lv >= 3)) sp = std::max(sp, 0.30f); }
                                 if (sp > 0.003f) Seg(c, a, b, col, base * sp, 1.0e9f, fa, fb);
                             }
                             t = t2;
