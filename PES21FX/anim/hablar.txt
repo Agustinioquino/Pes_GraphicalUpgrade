@@ -1,0 +1,34 @@
+# PES21FX - frases que "dicen" los jugadores con Hablar por palabras (w396 = 1). Una frase por linea.
+# Las tildes marcan la silaba tonica (levanta apenas las cejas); sin tilde se usa la regla del castellano.
+# Letras: a e i o u = vocales; m b p = labios juntos; f v = labio de abajo contra los dientes; el resto = consonantes.
+# Si este archivo no existe o esta vacio, la DLL usa su propia lista de cancha. Se relee solo al cambiar de tamano (cada ~10 s).
+dale dale
+acá acá
+pásala
+vamos vamos
+árbitro
+solo solo
+atrás atrás
+cuidado
+bien ahí
+no no no
+la mía
+tiempo tiempo
+arriba arriba
+cambio
+salí salí
+cubrime
+al medio
+dame dame
+eh eh eh
+vamos muchachos
+tranquilo
+cerrá cerrá
+marca marca
+fue falta
+mano mano
+tuya tuya
+corré corré
+hombre hombre
+afuera
+qué pasa
