@@ -462,7 +462,7 @@ ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps, ID3D1
     ID3D11ShaderResourceView* v = nullptr;
     if (mode >= 2) v = LoadUserBg();
     else if (s_bgImgTried) { s_bgImgTried = false; }                   // al volver a "imagen propia" se relee el archivo
-    if (motorBg && g_cfg.motorGrid != 0) { if (ID3D11ShaderResourceView* g = MotorGridSRV(c)) v = g; }   // (15/11) fondo del Motor: gris con grilla de piso (motorgrid.cpp)
+    if (motorBg) { if (ID3D11ShaderResourceView* g = MotorGridSRV(c)) v = g; }   // (15/11) fondo del Motor: gris con grilla de piso (motorgrid.cpp; 15/11 o: con la grilla apagada, gris sin lineas)
     if (!v) { if (!s_bgBlack) s_bgBlack = SolidSRV(0xff000000u); v = s_bgBlack; }
     const int n = s_bgSwaps.fetch_add(1);
     if (n == 0 || n == 20000) Log("fondo del editor (x424 = %d): fondo %ux%u cambiado por %s (%d veces)", mode, d.Width, d.Height, v == s_bgBlack ? "negro" : "la imagen propia", n + 1);

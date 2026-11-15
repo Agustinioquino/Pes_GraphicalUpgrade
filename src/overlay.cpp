@@ -30,7 +30,7 @@ static ID3D11RenderTargetView* s_rtv = nullptr;
 static bool s_keyWas = false;
 static std::string s_status;
 static std::string s_btnPending;   // accion de un "button =" del ini (se ejecuta fuera de g_cfgMutex)
-static ImFont* s_motorFont[3] = {};   // (15/11 m) letra del editor del Motor (Lack UA): 0 normal, 1 cursiva, 2 de contorno
+static ImFont* s_motorFont[4] = {};   // (15/11 m) letra del editor del Motor (Lack UA): 0 normal, 1 cursiva, 2 de contorno, 3 contorno cursiva (nombre de la barra)
 static ImFont* s_fontBig = nullptr; static ImFont* s_fontBold = nullptr; static ImFont* s_fontPad = nullptr;   // (14/11 n) s_fontPad: letras de los simbolos del mando
 static ID3D11ShaderResourceView* s_logo = nullptr; static float s_logoAspect = 1.0f;
 void* MenuLogoTex(float* aspect) { if (aspect) *aspect = s_logoAspect; return s_logo; }   // (15/11) el editor del Motor lo dibuja en su barra
@@ -80,16 +80,17 @@ static void BuildFonts(float H) {
         // Se arma al tamano de las letras del editor (15 px x escala del editor, como UiK de motorgizmo.cpp) para que quede nitida; la de
         // contorno al tamano del subtitulo de la transicion (16 x alto / 540). Si falta un archivo, MotorFont da la normal o la del menu.
         // Cambiar el tamano del editor (Ver > Tamano) rehace las letras (MenuFontsDirty). [PES21FX] motor_letra = 0 la apaga.
-        s_motorFont[0] = s_motorFont[1] = s_motorFont[2] = nullptr;
+        s_motorFont[0] = s_motorFont[1] = s_motorFont[2] = s_motorFont[3] = nullptr;
         if (g_cfg.motorFont) {
             int len = WideCharToMultiByte(CP_UTF8, 0, g_cfg.baseDir.c_str(), -1, nullptr, 0, nullptr, nullptr);
             std::string dir(len > 0 ? len - 1 : 0, '\0');
             if (len > 1) WideCharToMultiByte(CP_UTF8, 0, g_cfg.baseDir.c_str(), -1, &dir[0], len, nullptr, nullptr);
             const float km = std::max(1.0f, H / 1080.0f) * std::clamp(g_cfg.motorScale, 0.8f, 2.0f);
-            static const char* const kFile[3] = { "textures\\pes_motor.ttf", "textures\\pes_motor_italic.ttf", "textures\\pes_motor_line.ttf" };
-            const float px[3] = { std::round(15.0f * km), std::round(15.0f * km), std::round(16.0f * H / 540.0f) };
+            static const char* const kFile[4] = { "textures\\pes_motor.ttf", "textures\\pes_motor_italic.ttf", "textures\\pes_motor_line.ttf", "textures\\pes_motor_line_italic.ttf" };
+            const float kt = std::clamp(g_cfg.motorText, 0.8f, 1.5f);   // (15/11 p) Editar > Preferencias > Tamano del texto
+            const float px[4] = { std::round(15.0f * km * kt), std::round(15.0f * km * kt), std::round(16.0f * H / 540.0f), std::round(17.0f * km * kt) };
             int n = 0;
-            for (int i = 0; i < 3; i++) {
+            for (int i = 0; i < 4; i++) {
                 const std::string p = dir + kFile[i];
                 int wl = MultiByteToWideChar(CP_UTF8, 0, p.c_str(), -1, nullptr, 0); std::wstring w(wl > 0 ? wl - 1 : 0, L'\0');
                 if (wl > 1) MultiByteToWideChar(CP_UTF8, 0, p.c_str(), -1, &w[0], wl);
@@ -98,7 +99,7 @@ static void BuildFonts(float H) {
                 s_motorFont[i] = io.Fonts->AddFontFromFileTTF(p.c_str(), std::max(8.0f, px[i]), &fc, io.Fonts->GetGlyphRangesDefault());
                 if (s_motorFont[i]) n++;
             }
-            Log("motor: letra Lack UA, %d de 3 archivos (textures\\pes_motor*.ttf)%s", n, n ? "" : ": se usa la del menu");
+            Log("motor: letra Lack UA, %d de 4 archivos (textures\\pes_motor*.ttf)%s", n, n ? "" : ": se usa la del menu");
         }
     }
     {   // (04/11 n) iconos del menu (Font Awesome Free, recortado): se mezclan en la letra normal y en la negrita
@@ -125,7 +126,7 @@ static void BuildFonts(float H) {
     s_fontsH = H;
     Log("menu: letras para %.0f px de alto (x%.2f)", H, k);
 }
-ImFont* MotorFont(int i) { i = std::clamp(i, 0, 2); return s_motorFont[i] ? s_motorFont[i] : s_motorFont[0] ? s_motorFont[0] : ImGui::GetFont(); }
+ImFont* MotorFont(int i) { i = std::clamp(i, 0, 3); if (s_motorFont[i]) return s_motorFont[i]; if (i == 3 && s_motorFont[2]) return s_motorFont[2]; return s_motorFont[0] ? s_motorFont[0] : ImGui::GetFont(); }
 void MenuFontsDirty() { s_fontsH = -1.0f; }   // (15/11 m) las letras se rehacen en el proximo cuadro (antes del NewFrame)
 
 
@@ -135,7 +136,7 @@ void MenuFontsDirty() { s_fontsH = -1.0f; }   // (15/11 m) las letras se rehacen
 // ventana del juego al frente; no toca lo que recibe el juego.
 // (22:48, Agustin: "me referia que aparezca solo en el motor") solo se ve con el Motor en tiempo real abierto: su estudio 3D
 // (MotorPageActive, motorpage.cpp) o su panel (MotorPanelOpen). Fuera del Motor no se mira el teclado ni se dibuja nada.
-static int s_khVk = 0, s_khN = 0; static double s_khT = -1.0e9; static unsigned char s_khWas[256] = {};
+static int s_khVk = 0, s_khN = 0, s_khMods = 0; static double s_khT = -1.0e9; static unsigned char s_khWas[256] = {};   // (15/11 p) s_khMods: 1 Ctrl, 2 Shift, 4 Alt apretadas junto con la tecla
 static const char* KeyHudName(int vk, char* buf, size_t n) {
     if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) { snprintf(buf, n, "%c", (char)vk); return buf; }
     if (vk >= VK_F1 && vk <= VK_F24) { snprintf(buf, n, "F%d", vk - VK_F1 + 1); return buf; }
@@ -161,7 +162,10 @@ static bool KeyHudPoll() {
         for (int vk = 8; vk < 255; vk++) {
             if (vk >= VK_LSHIFT && vk <= VK_RMENU) continue;            // ya entran como Shift / Ctrl / Alt
             const unsigned char d = (GetAsyncKeyState(vk) & 0x8000) ? 1 : 0;
-            if (d && !s_khWas[vk]) { s_khN = (vk == s_khVk && Now() - s_khT < 1.5) ? s_khN + 1 : 1; s_khVk = vk; s_khT = Now(); }
+            if (d && !s_khWas[vk]) {
+                const bool mod = vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU;
+                const int mods = mod ? 0 : ((GetAsyncKeyState(VK_CONTROL) & 0x8000) ? 1 : 0) | ((GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 2 : 0) | ((GetAsyncKeyState(VK_MENU) & 0x8000) ? 4 : 0);
+                s_khN = (vk == s_khVk && mods == s_khMods && Now() - s_khT < 1.5) ? s_khN + 1 : 1; s_khVk = vk; s_khMods = mods; s_khT = Now(); }
             s_khWas[vk] = d;
         }
     } else memset(s_khWas, 0, sizeof s_khWas);
@@ -169,42 +173,58 @@ static bool KeyHudPoll() {
 }
 // (11/11, Agustin 22:29: "que muestre un icono de la tecla") la tecla se dibuja como una tecla de teclado: base oscura, cara clara
 // con brillo arriba y el nombre adentro; las flechas van con su triangulo y la barra espaciadora ancha.
+// (15/11 p, Agustin 05:37: "que tambien funcione el atajo, y que se muestre el icono abajo a la derecha que ya se muestran las teclas") los
+// atajos se ven enteros: Ctrl / Shift / Alt apretadas con la tecla van como teclas propias unidas con "+" (Ctrl + Z), y si la tecla hizo
+// algo en el editor del Motor, arriba va el nombre de lo que hizo (MotorKeyLabel: "Deshacer", "Preferencias"...).
 static void KeyHudDraw() {
     char nb[64]; const char* nm = KeyHudName(s_khVk, nb, sizeof nb);
     const int arrow = s_khVk == VK_UP ? 1 : s_khVk == VK_DOWN ? 2 : s_khVk == VK_LEFT ? 3 : s_khVk == VK_RIGHT ? 4 : 0;
     ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
     const float k = std::max(1.0f, ds.y / 1080.0f), fs = 24.0f * k, mg = 22.0f * k, pad = 8.0f * k;
-    ImFont* f = ImGui::GetFont(); const ImVec2 ts = arrow ? ImVec2(fs, fs) : f->CalcTextSizeA(fs, FLT_MAX, 0.0f, nm);
-    const float kh = 50.0f * k;                                                                   // alto de la tecla
-    float kw = std::max(kh, ts.x + 26.0f * k); if (s_khVk == VK_SPACE) kw = std::max(kw, 170.0f * k);   // ancho: cuadrada si es una letra
+    ImFont* f = ImGui::GetFont(); const float kh = 50.0f * k, fr = 17.0f * k, plusW = 22.0f * k;                    // alto de la tecla
+    const char* modName[3] = { "Ctrl", "Shift", "Alt" }; const char* caps[4]; int nc = 0;
+    for (int i = 0; i < 3; i++) if (s_khMods & (1 << i)) caps[nc++] = modName[i];
+    auto capW = [&](const char* t, int arw, bool space) { const ImVec2 ts = arw ? ImVec2(fs, fs) : f->CalcTextSizeA(fs, FLT_MAX, 0.0f, t);
+        float w2 = std::max(kh, ts.x + 26.0f * k); if (space) w2 = std::max(w2, 170.0f * k); return w2; };   // ancho: cuadrada si es una letra
+    float kwAll = 0.0f; for (int i = 0; i < nc; i++) kwAll += capW(caps[i], 0, false) + plusW;
+    const float kwMain = capW(nm, arrow, s_khVk == VK_SPACE); kwAll += kwMain;
     char rep[16] = ""; if (s_khN > 1) snprintf(rep, sizeof rep, "x%d", s_khN);
-    const float fr = 17.0f * k; const ImVec2 rs = rep[0] ? f->CalcTextSizeA(fr, FLT_MAX, 0.0f, rep) : ImVec2(0, 0);
-    const float w = pad * 2.0f + kw + (rep[0] ? rs.x + 8.0f * k : 0.0f), h = pad * 2.0f + kh; const int c = std::clamp(g_cfg.keyHud, 1, 4);
+    const ImVec2 rs = rep[0] ? f->CalcTextSizeA(fr, FLT_MAX, 0.0f, rep) : ImVec2(0, 0);
+    double lt = -1.0e9; const char* lab = MotorKeyLabel(&lt); const bool hasLab = lab && lab[0] && lt >= s_khT - 0.25 && lt - s_khT < 1.0;
+    const ImVec2 ls = hasLab ? f->CalcTextSizeA(fr, FLT_MAX, 0.0f, lab) : ImVec2(0, 0); const float labH = hasLab ? ls.y + 6.0f * k : 0.0f;
+    const float w = std::max(pad * 2.0f + kwAll + (rep[0] ? rs.x + 8.0f * k : 0.0f), hasLab ? ls.x + pad * 2.0f : 0.0f), h = pad * 2.0f + kh + labH; const int c = std::clamp(g_cfg.keyHud, 1, 4);
     const float x = (c == 1 || c == 3) ? mg : ds.x - mg - w, y = (c <= 2) ? mg : ds.y - mg - h;
     const double age = Now() - s_khT; const float a = age < 1.2 ? 1.0f : (age < 2.0 ? 1.0f - 0.5f * (float)((age - 1.2) / 0.8) : 0.5f);   // recien apretada se ve fuerte; despues queda tenue
     const float push = age < 0.12 ? 2.5f * k : 0.0f;                                              // recien apretada: la tecla baja un poco
     auto A = [a](int v) { return (int)((float)v * a); };
     dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), IM_COL32(8, 12, 20, A(120)), 9.0f * k);                       // fondo semitransparente
-    const float kx = x + pad, ky = y + pad, r = 7.0f * k, lip = 6.0f * k;                         // lip = canto de abajo de la tecla
-    dl->AddRectFilled(ImVec2(kx, ky + push), ImVec2(kx + kw, ky + kh), IM_COL32(38, 42, 52, A(235)), r);                // base (canto)
-    const ImVec2 f0(kx + 2.0f * k, ky + push + 1.0f * k), f1(kx + kw - 2.0f * k, ky + kh - lip + push * 0.6f);         // cara de arriba
-    dl->AddRectFilled(f0, f1, IM_COL32(236, 239, 244, A(240)), r - 1.0f * k);
-    dl->AddRectFilled(f0, ImVec2(f1.x, f0.y + (f1.y - f0.y) * 0.45f), IM_COL32(255, 255, 255, A(70)), r - 1.0f * k);    // brillo
-    dl->AddRect(ImVec2(kx, ky + push), ImVec2(kx + kw, ky + kh), IM_COL32(0, 0, 0, A(170)), r, 0, 1.2f * k);
-    const ImVec2 ctr((f0.x + f1.x) * 0.5f, (f0.y + f1.y) * 0.5f); const ImU32 ink = IM_COL32(22, 26, 34, A(255));
-    if (arrow) {
-        const float q = 9.0f * k; ImVec2 p0, p1, p2;
-        if (arrow == 1) { p0 = ImVec2(ctr.x, ctr.y - q); p1 = ImVec2(ctr.x - q, ctr.y + q * 0.7f); p2 = ImVec2(ctr.x + q, ctr.y + q * 0.7f); }
-        else if (arrow == 2) { p0 = ImVec2(ctr.x, ctr.y + q); p1 = ImVec2(ctr.x + q, ctr.y - q * 0.7f); p2 = ImVec2(ctr.x - q, ctr.y - q * 0.7f); }
-        else if (arrow == 3) { p0 = ImVec2(ctr.x - q, ctr.y); p1 = ImVec2(ctr.x + q * 0.7f, ctr.y + q); p2 = ImVec2(ctr.x + q * 0.7f, ctr.y - q); }
-        else { p0 = ImVec2(ctr.x + q, ctr.y); p1 = ImVec2(ctr.x - q * 0.7f, ctr.y - q); p2 = ImVec2(ctr.x - q * 0.7f, ctr.y + q); }
-        dl->AddTriangleFilled(p0, p1, p2, ink);
-    } else if (s_khVk == VK_SPACE) {
-        dl->AddRectFilled(ImVec2(ctr.x - kw * 0.28f, ctr.y + 5.0f * k), ImVec2(ctr.x + kw * 0.28f, ctr.y + 8.0f * k), ink, 1.5f * k);   // la rayita de la barra
-        const ImVec2 t2 = f->CalcTextSizeA(fr, FLT_MAX, 0.0f, nm);
-        dl->AddText(f, fr, ImVec2(ctr.x - t2.x * 0.5f, ctr.y - t2.y * 0.5f - 6.0f * k), ink, nm);
-    } else dl->AddText(f, fs, ImVec2(ctr.x - ts.x * 0.5f, ctr.y - ts.y * 0.5f), ink, nm);
-    if (rep[0]) dl->AddText(f, fr, ImVec2(kx + kw + 8.0f * k, y + (h - rs.y) * 0.5f), IM_COL32(255, 255, 255, A(230)), rep);
+    if (hasLab) dl->AddText(f, fr, ImVec2(x + pad, y + pad * 0.6f), IM_COL32(120, 236, 160, A(240)), lab);             // lo que hizo el atajo
+    const float r = 7.0f * k, lip = 6.0f * k, ky = y + pad + labH;                                 // lip = canto de abajo de la tecla
+    auto cap = [&](float kx, float kw, const char* t, int arw, bool space) {
+        dl->AddRectFilled(ImVec2(kx, ky + push), ImVec2(kx + kw, ky + kh), IM_COL32(38, 42, 52, A(235)), r);            // base (canto)
+        const ImVec2 f0(kx + 2.0f * k, ky + push + 1.0f * k), f1(kx + kw - 2.0f * k, ky + kh - lip + push * 0.6f);     // cara de arriba
+        dl->AddRectFilled(f0, f1, IM_COL32(236, 239, 244, A(240)), r - 1.0f * k);
+        dl->AddRectFilled(f0, ImVec2(f1.x, f0.y + (f1.y - f0.y) * 0.45f), IM_COL32(255, 255, 255, A(70)), r - 1.0f * k);    // brillo
+        dl->AddRect(ImVec2(kx, ky + push), ImVec2(kx + kw, ky + kh), IM_COL32(0, 0, 0, A(170)), r, 0, 1.2f * k);
+        const ImVec2 ctr((f0.x + f1.x) * 0.5f, (f0.y + f1.y) * 0.5f); const ImU32 ink = IM_COL32(22, 26, 34, A(255));
+        if (arw) {
+            const float q = 9.0f * k; ImVec2 p0, p1, p2;
+            if (arw == 1) { p0 = ImVec2(ctr.x, ctr.y - q); p1 = ImVec2(ctr.x - q, ctr.y + q * 0.7f); p2 = ImVec2(ctr.x + q, ctr.y + q * 0.7f); }
+            else if (arw == 2) { p0 = ImVec2(ctr.x, ctr.y + q); p1 = ImVec2(ctr.x + q, ctr.y - q * 0.7f); p2 = ImVec2(ctr.x - q, ctr.y - q * 0.7f); }
+            else if (arw == 3) { p0 = ImVec2(ctr.x - q, ctr.y); p1 = ImVec2(ctr.x + q * 0.7f, ctr.y + q); p2 = ImVec2(ctr.x + q * 0.7f, ctr.y - q); }
+            else { p0 = ImVec2(ctr.x + q, ctr.y); p1 = ImVec2(ctr.x - q * 0.7f, ctr.y - q); p2 = ImVec2(ctr.x - q * 0.7f, ctr.y + q); }
+            dl->AddTriangleFilled(p0, p1, p2, ink);
+        } else if (space) {
+            dl->AddRectFilled(ImVec2(ctr.x - kw * 0.28f, ctr.y + 5.0f * k), ImVec2(ctr.x + kw * 0.28f, ctr.y + 8.0f * k), ink, 1.5f * k);   // la rayita de la barra
+            const ImVec2 t2 = f->CalcTextSizeA(fr, FLT_MAX, 0.0f, t);
+            dl->AddText(f, fr, ImVec2(ctr.x - t2.x * 0.5f, ctr.y - t2.y * 0.5f - 6.0f * k), ink, t);
+        } else { const ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, t); dl->AddText(f, fs, ImVec2(ctr.x - ts.x * 0.5f, ctr.y - ts.y * 0.5f), ink, t); }
+    };
+    float kx = x + pad;
+    for (int i = 0; i < nc; i++) { const float cw = capW(caps[i], 0, false); cap(kx, cw, caps[i], 0, false); kx += cw;
+        const ImVec2 ps = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, "+"); dl->AddText(f, fs, ImVec2(kx + (plusW - ps.x) * 0.5f, ky + (kh - ps.y) * 0.5f), IM_COL32(255, 255, 255, A(210)), "+"); kx += plusW; }
+    cap(kx, kwMain, nm, arrow, s_khVk == VK_SPACE); kx += kwMain;
+    if (rep[0]) dl->AddText(f, fr, ImVec2(kx + 8.0f * k, ky + (kh - rs.y) * 0.5f), IM_COL32(255, 255, 255, A(230)), rep);
 }
 
 HWND OverlayHwnd() { return s_hwnd; }   // (11/11) menumouse.cpp
@@ -2085,6 +2105,12 @@ static void DrawSettingsPage() {
         int cc = std::clamp(g_cfg.menuCursor, 0, 2); ImGui::SetNextItemWidth(320.0f * UIK());
         if (ImGui::Combo(TRS("Cursor del menu"), &cc, cn, 3)) { if (g_cfg.menuCursor) s_curOn = g_cfg.menuCursor; g_cfg.menuCursor = cc; char b[8]; snprintf(b, sizeof(b), "%d", cc); SaveOption("menu_cursor", b); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Tambien con el boton Cursor de arriba o F1. Es el mismo con el menu abierto o cerrado. Con un mando conectado se esconde solo si no moves el mouse."));
+        {   // (15/11 p, Agustin 05:38: "una opcion para agrandar el cursor general un poco o achicarlo") [PES21FX] cursor_tamano
+            int pc = (int)std::lround(g_cfg.cursorScale * 100.0f); ImGui::SetNextItemWidth(320.0f * UIK());
+            if (ImGui::SliderInt(TRS("Tamano del cursor"), &pc, 75, 200, "%d %%")) g_cfg.cursorScale = std::clamp((float)pc / 100.0f, 0.75f, 2.0f);
+            if (ImGui::IsItemDeactivatedAfterEdit()) { char b[16]; snprintf(b, sizeof(b), "%.2f", g_cfg.cursorScale); SaveOption("cursor_tamano", b); }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Agranda o achica el cursor dibujado: el del menu, el de los menus del juego, el de la repeticion y los del Motor (tambien la flecha doble de los paneles). 100 % = como venia."));
+            }
     }
     {   bool nd = g_cfg.camNoDof != 0;   // (14/11 h) camara libre sin desenfoque de profundidad
         if (ImGui::Checkbox(TRS("Camara libre sin desenfoque de profundidad"), &nd)) { g_cfg.camNoDof = nd ? 1 : 0; SaveOption("camara_sin_dof", nd ? "1" : "0"); }
@@ -2963,6 +2989,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         s_optWas = opt;
     }
     if (menuShown && MvVkVisible()) MvVirtualKeyboard(s_search, (int)sizeof(s_search), s_pad, UIK(), Ease(s_menuVis), g_cfg.menuVisual, &GlassBackdrop);   // (14/11 b) mismo vidrio y colores del menu
+    MvSetCursorScale(g_cfg.cursorScale);   // (15/11 p) tamano de los cursores dibujados
     if (g_menuOpen && g_cfg.menuCursor == 1) {   // (14/11) cursor nuevo: flecha con sombra, verde sobre lo que se toca, onda al clic, barra I en texto
         ImGuiIO& mio = ImGui::GetIO();
         static float s_curA = 1.0f; static double s_mMoveT = 0.0;   // con el mando: si el mouse no se mueve en 2.5 s el cursor se va
@@ -2971,8 +2998,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
         s_curA = std::clamp(s_curA + (idle ? -1.0f : 1.0f) * mio.DeltaTime * (idle ? 3.0f : 10.0f), 0.0f, 1.0f);
         if (ImGui::IsMousePosValid()) {
             const ImGuiMouseCursor mc = ImGui::GetMouseCursor();
-            const int kind = mc == ImGuiMouseCursor_TextInput ? 2 : (ImGui::IsAnyItemHovered() || mc == ImGuiMouseCursor_Hand) ? 1 : 0;
-            if (mc == ImGuiMouseCursor_Arrow || mc == ImGuiMouseCursor_Hand || mc == ImGuiMouseCursor_TextInput)
+            const int kind = mc == ImGuiMouseCursor_ResizeEW ? 3 : mc == ImGuiMouseCursor_ResizeNS ? 4 : mc == ImGuiMouseCursor_TextInput ? 2 : (ImGui::IsAnyItemHovered() || mc == ImGuiMouseCursor_Hand) ? 1 : 0;
+            if (mc == ImGuiMouseCursor_Arrow || mc == ImGuiMouseCursor_Hand || mc == ImGuiMouseCursor_TextInput || mc == ImGuiMouseCursor_ResizeEW || mc == ImGuiMouseCursor_ResizeNS)   // (15/11 p) las flechas de cambiar el tamano: las propias
                 MvCursorDraw(ImGui::GetForegroundDrawList(), mio.MousePos, kind, ImGui::IsMouseDown(0), UIK(), s_curA * Ease(s_menuVis), g_cfg.menuVisual);
             else mio.MouseDrawCursor = true;   // flechas de agrandar / mover ventana: las de ImGui
         }
@@ -3067,12 +3094,19 @@ void OverlayPresent(IDXGISwapChain* sc) {
     }
     MotorPreCoverDraw();   // (15/11 j) tapa negra desde que se acepta el boton 12 del Editar hasta que el Motor dibuja su entrada
     if (gizmo) MotorGizmoDraw();   // (15/11 h, Agustin 03:17: "el cursor parece estar atras") el editor del Motor se dibuja ANTES que el cursor, asi la flecha queda arriba de los paneles
-    if (mmCur && g_cfg.menuCursor == 1) {   // (14/11 c / d, Agustin: "que se mantenga igual con el menu abierto o cerrado", "que muestre donde puede clickear")
+    // (15/11 p, Agustin 05:33: "cuando se vaya a agrandar o se pueda arrastrar para el tamano de las cartas ... darle al cursor un icono") en el
+    // borde de un panel del editor del Motor: la flecha doble (con cualquiera de los dos cursores)
+    const int motorCur = gizmo ? MotorCursorKind() : 0;
+    if (mmCur && g_cfg.menuCursor != 0 && motorCur) {
+        const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);
+        MvCursorDraw(ImGui::GetForegroundDrawList(), ImVec2(mmx, mmy), motorCur, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, k, 1.0f, g_cfg.menuVisual);
+    }
+    else if (mmCur && g_cfg.menuCursor == 1) {   // (14/11 c / d, Agustin: "que se mantenga igual con el menu abierto o cerrado", "que muestre donde puede clickear")
         const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);   // el mismo dardo del menu; mano justo sobre una fila del juego
         MvCursorDraw(ImGui::GetForegroundDrawList(), ImVec2(mmx, mmy), MenuMouseOverRow() ? 1 : 0, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, k, 1.0f, g_cfg.menuVisual);
     }
     else if (mmCur && g_cfg.menuCursor != 0) {   // (11/11) el juego esconde el cursor de Windows: una flecha chica donde esta el mouse (los menus son los del juego)
-        ImDrawList* dl = ImGui::GetForegroundDrawList(); const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);
+        ImDrawList* dl = ImGui::GetForegroundDrawList(); const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f) * MvCursorScale();
         const ImVec2 a(mmx, mmy), b(mmx, mmy + 19.0f * k), c(mmx + 5.2f * k, mmy + 14.6f * k), d(mmx + 13.5f * k, mmy + 13.5f * k);
         dl->AddTriangleFilled(a, b, c, IM_COL32(255, 255, 255, 255)); dl->AddTriangleFilled(a, c, d, IM_COL32(255, 255, 255, 255));
         const ImVec2 pts[4] = { a, b, c, d }; dl->AddPolyline(pts, 4, IM_COL32(0, 0, 0, 255), ImDrawFlags_Closed, 1.4f * k);

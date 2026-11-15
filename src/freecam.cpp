@@ -619,6 +619,20 @@ static void hk_SetCam(void* rt, unsigned char* cam) {
     } else if (!FreeCamActive() && s_on) {
         Update(nullptr, nullptr, nullptr, nullptr, 0, "editor", nullptr);   // solo anota "apagada"
     }
+    // (15/11 o, Agustin 05:08 / 05:23: "veo la camara y los recortes de la escena del modo editar", "desmontar los limites de
+    // renderizado del modo editar para este menu") dentro del Motor la camara del visor corta mas cerca y mucho mas lejos que la
+    // del Editar ([PES21FX] motor_cerca / motor_lejos en metros; 0 = como el juego). Fuera del Motor no se toca.
+    // Al salir del Motor se devuelven los valores que tenia esa camara (Agustin 05:28: "que al salir se vuelva a la normal del modo editar").
+    static unsigned char* s_clipCam = nullptr; static float s_clipOrig[2] = {}; static bool s_clipOn = false;
+    if (cam && s_clipOn && !MotorPageActive()) { if (cam == s_clipCam) { memcpy(cam + 0x34, &s_clipOrig[0], 4); memcpy(cam + 0x38, &s_clipOrig[1], 4); Log("camara libre (Motor): cerca / lejos del visor devueltos a %.3f / %.1f", s_clipOrig[0], s_clipOrig[1]); } s_clipOn = false; }
+    if (cam && MotorPageActive()) { int proj; memcpy(&proj, cam + 0x3c, 4); if (proj == 0) {
+        float nr, fr; memcpy(&nr, cam + 0x34, 4); memcpy(&fr, cam + 0x38, 4);
+        if (!s_clipOn || cam != s_clipCam) { s_clipCam = cam; s_clipOrig[0] = nr; s_clipOrig[1] = fr; s_clipOn = true; }
+        const float wn = g_cfg.motorNear, wf = g_cfg.motorFar;
+        if (wn > 0.0f && nr == nr && nr > wn) memcpy(cam + 0x34, &wn, 4);
+        if (wf > 0.0f && fr == fr && fr < wf) memcpy(cam + 0x38, &wf, 4);
+        static int nl = 0; if (nl++ < 3) Log("camara libre (Motor): cerca / lejos del visor %.3f / %.1f -> %.3f / %.1f", nr, fr, wn > 0.0f && nr > wn ? wn : nr, wf > 0.0f && fr < wf ? wf : fr);
+    } }
     o_setCam(rt, cam);
 }
 

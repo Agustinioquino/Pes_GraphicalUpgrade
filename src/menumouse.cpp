@@ -386,7 +386,9 @@ static bool Enabled() { return s_ok && g_cfg.menuMouse != 0 && !g_menuOpen.load(
 static void Sample(double now, bool fresh) {
     s_m = Muestra(); s_m.t = now;
     const bool lNow = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, rNow = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
-    const bool lEdge = lNow && !s_lWas && !fresh, rEdge = rNow && !s_rWas && !fresh;
+    // (15/11 n, Agustin 05:10: "cuando se selecciona la opcion camara de juego el click derecho hace regresar al menu editar") en el Motor
+    // el clic derecho nunca es volver (se sale con su boton Volver o Esc): con la camara del juego tambien es para mirar
+    const bool lEdge = lNow && !s_lWas && !fresh, rEdge = rNow && !s_rWas && !fresh && !MotorPageActive();
     s_lWas = lNow; s_rWas = rNow;
     HWND h = OverlayHwnd(); POINT p{}; RECT rc{};
     if (!h || GetForegroundWindow() != h || !GetCursorPos(&p) || !ScreenToClient(h, &p) || !GetClientRect(h, &rc)) { s_last.x = s_last.y = -32000; return; }

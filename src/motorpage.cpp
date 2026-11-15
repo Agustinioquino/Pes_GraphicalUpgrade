@@ -472,7 +472,18 @@ void MotorPageSeen(void* win) {
 }
 // el estudio del Motor esta abierto (su pagina recibio entrada hace menos de 0.6 s)
 bool MotorPageIs(void* win) { return win && win == s_motorWin.load(std::memory_order_relaxed); }
-bool MotorPageActive() { return Now() - s_motorT.load(std::memory_order_relaxed) < 0.6; }
+// (15/11 n, Agustin 05:08: "al abrir el menu insert se recarga el motor") con el menu del mod abierto el juego deja de pasar por el
+// gancho que marca la pagina (s_motorT) y a los 0.6 s el Motor parecia cerrado: al cerrar el menu volvia a entrar con transicion,
+// sonido y carga. Si la pagina estaba activa al abrir el menu se la sigue dando por activa mientras este abierto y 1 s despues.
+bool MotorPageActive() {
+    static bool s_hold = false; static double s_closeT = -1.0e9; static bool s_wasOpen = false;
+    const double n = Now(); const bool act = n - s_motorT.load(std::memory_order_relaxed) < 0.6, open = g_menuOpen.load(std::memory_order_relaxed);
+    if (open) { if (act) s_hold = true; s_wasOpen = true; return act || s_hold; }
+    if (s_wasOpen) { s_wasOpen = false; s_closeT = n; }
+    if (act) { s_hold = false; return true; }
+    if (s_hold && n - s_closeT < 1.0) return true;
+    s_hold = false; return false;
+}
 
 void MotorPagePresent() {
     if (s_panelSave.exchange(false)) {

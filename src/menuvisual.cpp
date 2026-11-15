@@ -1649,8 +1649,14 @@ bool MvVirtualKeyboard(char* buf, int cap, const MvPad& p, float k, float alpha,
 // asi como el cursor de windows, asi como en las partes donde se pueda escribir que cambie, que se muestre arriba del menu insert")
 // flecha clasica de Windows; sobre lo que se toca: MANO con el dedo arriba y un brillo suave del color del menu que respira; sobre un
 // campo de texto: barra I. Al apretar se achica apenas (sin ondas). Se dibuja en la capa de arriba de todo (foreground).
+// (15/11 p, Agustin 05:38: "una opcion para agrandar el cursor general un poco o achicarlo") [PES21FX] cursor_tamano (0.75..2): vale
+// para todos los cursores dibujados (menu Insert, menus del juego, repeticion y el editor del Motor)
+static float s_curScale = 1.0f;
+void MvSetCursorScale(float s) { s_curScale = std::clamp(s, 0.75f, 2.0f); }
+float MvCursorScale() { return s_curScale; }
 void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float alpha, bool anim, int style) {
     if (alpha <= 0.0f) return;
+    k *= s_curScale;
     const ImVec4 acc = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
     const float dt = ImGui::GetIO().DeltaTime; const double now = ImGui::GetTime();
     static float s_hov = 0.0f, s_dn = 0.0f, s_flash = 0.0f; static int s_kindWas = 0;
@@ -1666,6 +1672,27 @@ void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float 
             dl->AddLine(ImVec2(m.x, m.y - h), ImVec2(m.x, m.y + h), c, th);
             dl->AddLine(ImVec2(m.x - w, m.y - h), ImVec2(m.x + w, m.y - h), c, th); dl->AddLine(ImVec2(m.x - w, m.y + h), ImVec2(m.x + w, m.y + h), c, th);
         }
+        return;
+    }
+    if (kind == 3 || kind == 4) {
+        // (15/11 p, Agustin 05:33 / 05:34: "cuando se pueda arrastrar para el tamano de las cartas ... darle al cursor un icono similar a
+        // este con su brillo", "rezise horizontal y el vertical rotado en vertical") FLECHA DOBLE HUECA para cambiar el tamano: puntas
+        // anchas y una barra fina en el medio (3 = de costado, 4 = arriba / abajo), contorno blanco con filo oscuro y un brillo verde
+        // suave que late; al arrastrar el brillo sube. El punto del mouse es el centro.
+        const float sc = k * (1.0f - 0.06f * s_dn), L = 12.5f, H = 6.6f, hh = 6.4f, bh = 1.8f;
+        static const float P[10][2] = { { -1, 0 }, { -2, -3 }, { -2, -4 }, { 2, -4 }, { 2, -3 }, { 1, 0 }, { 2, 3 }, { 2, 4 }, { -2, 4 }, { -2, 3 } };
+        ImVec2 pts[10];
+        for (int i = 0; i < 10; i++) {   // codigos: x +-1 punta, +-2 base de la punta; y +-3 ancho de la punta, +-4 la barra
+            const float cx = P[i][0], cy = P[i][1];
+            const float x = cx == -1 ? -L : cx == 1 ? L : cx == -2 ? -L + H : L - H, y = cy == 0 ? 0.0f : cy == -3 ? -hh : cy == 3 ? hh : cy == -4 ? -bh : bh;
+            pts[i] = kind == 3 ? ImVec2(m.x + x * sc, m.y + y * sc) : ImVec2(m.x + y * sc, m.y + x * sc); }
+        const float breath = anim ? 0.5f + 0.5f * sinf((float)now * 3.6f) : 0.5f, glow = (0.55f + 0.25f * breath + 0.35f * s_dn) * alpha;
+        const ImVec4 grn(0.20f, 0.91f, 0.50f, 1.0f);
+        for (int i = 6; i >= 1; i--) dl->AddPolyline(pts, 10, ColA(grn, 0.075f * glow * (1.0f - (float)i / 7.5f)), ImDrawFlags_Closed, (1.6f + (float)i * 2.1f) * k);   // brillo
+        { ImVec2 sp[10]; for (int j = 0; j < 10; j++) sp[j] = ImVec2(pts[j].x + 1.2f * k, pts[j].y + 1.6f * k); dl->AddConcavePolyFilled(sp, 10, Col(0, 0, 0, 0.25f * alpha)); }   // sombra
+        dl->AddConcavePolyFilled(pts, 10, ColA(Lerp4(ImVec4(0.05f, 0.07f, 0.08f, 1), grn, 0.10f + 0.20f * s_dn), 0.55f * alpha));                                            // hueca: adentro oscuro translucido
+        dl->AddPolyline(pts, 10, Col(0.02f, 0.03f, 0.03f, 0.85f * alpha), ImDrawFlags_Closed, 3.0f * k);
+        dl->AddPolyline(pts, 10, ColA(Lerp4(ImVec4(1, 1, 1, 1), grn, 0.18f * glow), alpha), ImDrawFlags_Closed, 1.45f * k);
         return;
     }
     (void)style; (void)grey;
