@@ -636,10 +636,11 @@ static void hk_SetCam(void* rt, unsigned char* cam) {
     // (15/11 ythnmm, Agustin: "le falta opciones en el modo editar jugador para mover la camara, hacer zoom") camara del visor del Editar
     // con el mouse (menumouse.cpp MenuViewCamAdjust): se corre solo la copia que se manda al render target y despues se devuelve lo del
     // juego, asi el CameraImpl del visor no acumula nada y al salir queda la camara de siempre. Nunca con la camara libre ni en el Motor.
+    // (15/11 f) ahora queda escrita en el CameraImpl (asi el recorte y las sombras del juego ven la misma camara); MenuViewCamAdjust
+    // devuelve la del juego al salir de Apariencia
     unsigned char vcSave[0x34];
-    const bool vc = cam && !FreeCamActive() && !MotorPageActive() && MenuViewCamAdjust(cam, vcSave);
+    if (cam && !FreeCamActive() && !MotorPageActive()) MenuViewCamAdjust(cam, vcSave);
     o_setCam(rt, cam);
-    if (vc) memcpy(cam + 0x10, vcSave, sizeof vcSave);
 }
 
 static bool Readable(const void* p, size_t n) {

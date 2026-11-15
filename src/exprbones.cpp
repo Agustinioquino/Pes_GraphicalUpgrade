@@ -1641,7 +1641,7 @@ static void FrameBody(const void* skel) {
         if (nt || nb) { s_ganiLid[0] = nt ? -(at / nt - 0.43633f) * gW : 0.0f; s_ganiLid[1] = nb ? -(ab2 / nb + 0.08727f) * gW : 0.0f; s_ganiLidOn = true; }
     }
     s_poseG[0] = pNeu; s_poseG[1] = pAng; s_poseG[2] = pSmi; s_poseG[3] = pSur; s_poseG[4] = pGri; s_poseG[5] = pPuc; s_poseProf = PF;
-    if (FreeCamActive() && g_cfg.live[346][0] > 0.5f) PublishHead(*S);   // (02/11) camara libre "seguir la cara"
+    if ((FreeCamActive() && g_cfg.live[346][0] > 0.5f) || MenuViewCamWantsHead()) PublishHead(*S);   // (02/11) camara libre "seguir la cara"; (15/11) doble clic por zonas del visor de Apariencia (menumouse.cpp)
     float deg = 0.0f; if (JawAngle(*S, jc, &deg)) { S->angMin = (std::min)(S->angMin, deg); S->angMax = (std::max)(S->angMax, deg); S->angN++; }
     // (03/11, Agustin: con x340 = 0 "no cambia nada") al apagar, lo ultimo escrito quedaba puesto: el juego no reescribe todos los
     // huesos de la cara en cada cuadro (editor quieto), asi que la cara seguia deformada. Ahora al apagar se devuelve la base del juego
