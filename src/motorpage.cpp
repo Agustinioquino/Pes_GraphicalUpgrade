@@ -462,10 +462,9 @@ void MotorPreCoverDraw() {
     const double t = now - s_coverT.load();
     if (t < 0.0 || t > 2.8) return;
     if (MotorUiOn()) { s_coverT.store(-1.0e9); return; }                 // el editor ya dibuja su entrada (empieza tapado)
-    float a = std::min(1.0f, (float)t / 0.12f);
+    float a = std::min(1.0f, (float)t / 0.26f);
     if (t > 2.5) a = std::max(0.0f, 1.0f - (float)(t - 2.5) / 0.3f);
-    ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
-    dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(16, 16, 17, (int)(255.0f * a)));
+    MotorGlitchCover(a, -1.0f);          // (15/11 k) entrar: los bloques llegan desde la izquierda
 }
 
 void MotorPageSeen(void* win) {

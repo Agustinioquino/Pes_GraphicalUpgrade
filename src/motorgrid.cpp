@@ -96,8 +96,9 @@ ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx) {
         const uint32_t col = 0xff000000u | (uint32_t)v | ((uint32_t)v << 8) | ((uint32_t)(v + 3) << 16);
         uint32_t* row = &s_px[(size_t)y * kW]; for (int x = 0; x < kW; x++) row[x] = col;
     }
-    // --- grilla: celdas de 1 m, lineas mas fuertes cada 5 m, 40 x 40 m alrededor de la camara ---
-    const int half = 20; const float fade = 9.0f + 6.0f * std::fabs(c.pos[1]) + 0.45f / c.th;
+    // --- grilla: celdas de 1 m, lineas mas fuertes cada 5 m, motor_grilla_tamano x motor_grilla_tamano m alrededor de la camara (40 de fabrica;
+    // 15/11, Agustin 04:09: "puedes agregar una opcion para aumentar la grilla?"). Mas grande = se ve mas lejos (la niebla se aleja igual)
+    const int half = std::clamp(g_cfg.motorGridSize, 10, 400) / 2; const float fade = (9.0f + 6.0f * std::fabs(c.pos[1]) + 0.45f / c.th) * std::max(1.0f, (float)half / 20.0f);
     const int cx = (int)std::floor(c.pos[0] + 0.5f), cz = (int)std::floor(c.pos[2] + 0.5f);
     for (int i = -half; i <= half; i++) {
         const int gx = cx + i, gz = cz + i;

@@ -1764,6 +1764,9 @@ static const char* const kMotor[][3] = {
     { "prender o apagar todas las luces  /  como estaban", "turn all lights on or off  /  as they were", "acender ou apagar todas as luzes  /  como estavam" },
     { "vista del render siguiente  /  anterior", "next  /  previous render view", "vista do render seguinte  /  anterior" },
     { "volver a la pose inicial de la c\303\241mara", "back to the camera start pose", "voltar \303\240 pose inicial da c\303\242mera" },
+    { "TAMA\303\221O DE LA GRILLA", "GRID SIZE", "TAMANHO DA GRADE" },
+    { "Grilla de %d x %d m", "Grid of %d x %d m", "Grade de %d x %d m" },
+    { "Tama\303\261o", "Size", "Tamanho" },
     { "Como el juego (autom\303\241tico)", "Same as the game (automatic)", "Como o jogo (autom\303\241tico)" },
     { "'Como el juego' usa el idioma de textos que elegiste en el juego. Si el juego est\303\241 en un idioma que el men\303\272 no tiene, queda el \303\272ltimo elegido.", "'Same as the game' uses the text language you chose in the game. If the game is in a language the menu does not have, the last one chosen stays.", "'Como o jogo' usa o idioma de textos que voc\303\252 escolheu no jogo. Se o jogo estiver num idioma que o menu n\303\243o tem, fica o \303\272ltimo escolhido." },
 };

@@ -247,6 +247,47 @@ static const char* const kHelp[][2] = {
     { "Esc", "cerrar el men\xC3\xBA abierto o salir del Motor" },
 };
 static const int kHelpN = (int)(sizeof kHelp / sizeof kHelp[0]);
+// (15/11 k, Agustin 04:09: "cuadrados deslizandose a la derecha o izquierda dependiendo si se entra o sale, como si fuera un efecto
+// glitch") tapa de bloques: la pantalla se parte en filas de cuadrados; cada fila llega con su propio atraso (azar fijo por fila) y se
+// corre de costado. a = cuanto tapa (0..1); sign = de donde viene el bloque cuando a sube (-1 desde la izquierda, +1 desde la derecha):
+// entrar = la tapa llega desde la izquierda y se va hacia la derecha; salir = llega desde la derecha (se mueve hacia la izquierda).
+// En el borde que avanza algunos cuadrados faltan o titilan (cambian 30 veces por segundo) y unos pocos se tinen de naranja.
+static inline float Hash1(uint32_t x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return (float)(x & 0xffffff) / 16777215.0f; }
+void MotorGlitchCover(float a, float sign) {
+    a = std::clamp(a, 0.0f, 1.0f); if (a <= 0.001f) return;
+    ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const ImU32 cBg = IM_COL32(16, 16, 17, 255);
+    if (a >= 0.999f) { dl->AddRectFilled(ImVec2(0, 0), ds, cBg); return; }
+    const int rows = 12; const float rh = ds.y / (float)rows, sq = rh;
+    const uint32_t tick = (uint32_t)(Now() * 30.0);
+    for (int r = 0; r < rows; r++) {
+        const float delay = Hash1(0x51u + (uint32_t)r * 7919u) * 0.45f;
+        float c = std::clamp(a * 1.45f - delay, 0.0f, 1.0f);
+        c = c * c * (3.0f - 2.0f * c);                                      // suave al llegar
+        if (c <= 0.0f) continue;
+        const float off = sign * (1.0f - c) * ds.x * 1.08f;                 // corrimiento de la fila
+        const float y0 = (float)r * rh, y1 = y0 + rh + 0.5f;
+        // la fila entera menos el borde que avanza: un rectangulo (rapido)
+        const float edgeW = sq * 3.0f;
+        float x0 = off, x1 = off + ds.x;
+        if (sign < 0) x1 -= edgeW * (1.0f - c); else x0 += edgeW * (1.0f - c);
+        if (x1 > x0) dl->AddRectFilled(ImVec2(std::max(0.0f, x0), y0), ImVec2(std::min(ds.x, x1), y1), cBg);
+        // borde que avanza: cuadrados sueltos con faltantes y titileo
+        for (int q = 0; q < 4; q++) {
+            const float bx = sign < 0 ? x1 + (float)q * sq : x0 - (float)(q + 1) * sq;
+            if (bx + sq < 0.0f || bx > ds.x) continue;
+            const float h = Hash1((uint32_t)r * 131u + (uint32_t)q * 17u + tick * 977u);
+            if (h < 0.18f + 0.18f * (float)q) continue;                     // faltan mas cuanto mas lejos del borde
+            const bool hot = h > 0.965f;
+            dl->AddRectFilled(ImVec2(bx, y0), ImVec2(bx + sq * (0.55f + 0.45f * Hash1((uint32_t)r * 31u + (uint32_t)q + tick)), y1), hot ? IM_COL32(240, 138, 36, 200) : cBg);
+        }
+        // linea fina de "senal rota" en algunas filas
+        if (c < 0.98f && Hash1((uint32_t)r * 53u + tick * 13u) > 0.82f) {
+            const float ly = y0 + rh * Hash1((uint32_t)r + tick * 3u);
+            dl->AddLine(ImVec2(std::max(0.0f, sign < 0 ? x0 : x0 - sq * 4.0f), ly), ImVec2(std::min(ds.x, sign < 0 ? x1 + sq * 4.0f : x1), ly), IM_COL32(240, 138, 36, 110), std::max(1.0f, rh * 0.03f));
+        }
+    }
+}
 static void ToolbarDraw() {
     if (!s_iconTried) IconsLoad();
     ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
@@ -416,7 +457,7 @@ static void ToolbarDraw() {
           } else text(lx, y + 10.0f * k, dim, "La c\xC3\xA1mara la maneja el juego.", fsS + 1.0f * k);
       } else if (s_sel == 2) {
           label("VISIBLE"); { const char* const nms[2] = { "S\xC3\xAD", "No" }; seg(210, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, grid ? 0 : 1, nms); y += rowH + 12.0f * k; }
-          label("MEDIDAS"); value("Celda", "1 m"); value("L\xC3\xADnea fuerte", "cada 5 m"); value("Eje X", "rojo"); value("Eje Z", "azul");
+          label("MEDIDAS"); { char gs[24]; snprintf(gs, sizeof gs, "%d x %d m", g_cfg.motorGridSize, g_cfg.motorGridSize); value("Tama\xC3\xB1o", gs); } value("Celda", "1 m"); value("L\xC3\xADnea fuerte", "cada 5 m"); value("Eje X", "rojo"); value("Eje Z", "azul");
       } else if (s_sel >= 4) {
           if (s_sel - 4 < s_nLights) { const MotorLight& L = s_lights[s_sel - 4]; char b1[48];
               label("ESTADO"); { const char* const nms[2] = { "Prendida", "Apagada" }; seg(250, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, L.on ? 0 : 1, nms); y += rowH + 12.0f * k; }
@@ -503,7 +544,9 @@ static void ToolbarDraw() {
     auto menuItems = [&](int m, MI* it) { int n = 0;
         auto add = [&](const char* t, const char* sc, int id, int chk = -1, int kind = 0) { if (n < 28) it[n++] = MI{ TRS(t), TRS(sc), id, chk, kind }; };
         if (m == 0) { add("Nueva escena", "Ctrl + N", 710); add("Abrir escena...", "Ctrl + O", 711); add("Guardar escena", "Ctrl + S", 712); add("Guardar como escena nueva", "Ctrl + Shift + S", 713); add(nullptr, "", -1, -1, 1); add("Cerrar el Motor", "Esc", 0); }
-        else if (m == 1) { add(player ? "Quitar el jugador" : "Cargar el jugador", "J", 2); add("Grilla de piso", "G", 1, grid ? 1 : 0); add(nullptr, "", -1, -1, 1);
+        else if (m == 1) { add(player ? "Quitar el jugador" : "Cargar el jugador", "J", 2); add("Grilla de piso", "G", 1, grid ? 1 : 0);
+            add("TAMA\xC3\x91O DE LA GRILLA", "", -1, -1, 2); { static const char* const gn[4] = { "20 x 20 m", "40 x 40 m", "100 x 100 m", "200 x 200 m" }; static const int gv[4] = { 20, 40, 100, 200 };
+              for (int i = 0; i < 4; i++) add(gn[i], "", 780 + i, g_cfg.motorGridSize == gv[i] ? 3 : 2); } add(nullptr, "", -1, -1, 1);
             add("Cargar animaci\xC3\xB3n (.gani)...", "en preparaci\xC3\xB3n", -1, -1, 3); add("Cargar estadio...", "en preparaci\xC3\xB3n", -1, -1, 3); add("Cinem\xC3\xA1ticas del juego...", "en preparaci\xC3\xB3n", -1, -1, 3); }
         else if (m == 2) { add("C\xC3\xA1mara libre", "C", 3, camFree ? 1 : 0); add(nullptr, "", -1, -1, 1); add("MIRAR DESDE", "", -1, -1, 2);
             add("Frente", "Num 1", 232); add("Atr\xC3\xA1s", "Ctrl + Num 1", 235); add("Derecha", "Num 3", 230); add("Izquierda", "Ctrl + Num 3", 233); add("Arriba", "Num 7", 231); add("Abajo", "Ctrl + Num 7", 234);
@@ -550,11 +593,12 @@ static void ToolbarDraw() {
         // Recien al destaparse entran los paneles deslizando (s_openA)
         if (s_coverEnd < 0.0) { const bool ready = MotorUiReady() && s_sceneOnce && s_iconTried;
             if ((te >= 0.2f && ready) || te >= 2.0f) { s_coverEnd = now; s_openA = 0.0f; Log("motor (editor): entrada destapada a los %.2f s (%s)", te, ready ? "todo cargado" : "tope de 2 s"); } }
-        if (s_coverEnd < 0.0) a = 1.0f; else { const float tf = (float)(now - s_coverEnd); if (tf < 0.35f) a = 1.0f - tf / 0.35f; }
-        if (s_exitT >= 0.0) { const float tx = (float)(now - s_exitT); a = std::max(a, std::min(1.0f, tx / 0.18f));
-            if (tx >= 0.18f && !s_exitSent) { s_exitSent = true; MotorUiBack(); }
+        if (s_coverEnd < 0.0) a = 1.0f; else { const float tf = (float)(now - s_coverEnd); if (tf < 0.5f) a = 1.0f - tf / 0.5f; }
+        float sign = 1.0f;      // destapar al entrar: los bloques se van hacia la derecha
+        if (s_exitT >= 0.0) { const float tx = (float)(now - s_exitT); a = std::max(a, std::min(1.0f, tx / 0.32f)); sign = 1.0f;   // salir: llegan desde la derecha, corriendose a la izquierda
+            if (tx >= 0.34f && !s_exitSent) { s_exitSent = true; MotorUiBack(); }
             if (tx > 1.2f) { s_exitT = -1.0; MotorErr("El juego no acept\xC3\xB3 el pedido de volver al Editar. Prob\xC3\xA1 de nuevo con Archivo > Cerrar el Motor."); } }
-        if (a > 0.003f) dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(16, 16, 17, (int)(255.0f * std::clamp(a, 0.0f, 1.0f))));
+        MotorGlitchCover(a, sign);
     }
     s_hrN.store(nz);
     // ---------------- acciones: las mismas para el clic, los menus y el teclado ----------------
@@ -597,6 +641,7 @@ static void ToolbarDraw() {
         else if (id == 730) s_modal = 2;
         else if (id >= 750 && id < 754) ScaleSet(id - 750);
         else if (id >= 770 && id < 774) LangSet(id - 770);
+        else if (id >= 780 && id < 784) { static const int gv[4] = { 20, 40, 100, 200 }; g_cfg.motorGridSize = gv[id - 780]; if (!grid) g_cfg.motorGrid = 1; char b[8]; snprintf(b, sizeof b, "%d", gv[id - 780]); SaveOption("motor_grilla_tamano", b); Note("Grilla de %d x %d m", gv[id - 780], gv[id - 780]); }
         else if (id == 760 || id == 761) ScaleSet(ScaleIdx() + (id == 760 ? 1 : -1));
         else if (id == 740 || id == 741) { const int n = std::max(1, MotorViewCount(0)); MotorViewSet(0, (MotorViewGet(0) + (id == 740 ? 1 : n - 1)) % n); Note("Vista: %s", ViewTr(0, MotorViewGet(0))); }
         else if (id == 742) { const int n = std::max(1, std::min(3, MotorViewCount(1))); MotorViewSet(1, (MotorViewGet(1) + 1) % n); }
