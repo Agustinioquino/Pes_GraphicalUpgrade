@@ -82,8 +82,13 @@ static bool SetOn(uintptr_t obj, uintptr_t data, int kind, bool on) {
         return true;
     } __except (1) { return false; }
 }
+static bool RefreshLight(const MotorLight& L);      // abajo: vuelve a poner su color con el setter del juego (llama a su actualizacion)
 bool MotorLightSetOn(const MotorLight& L, bool on) {
-    const bool ok = SetOn(L.obj, L.data, L.kind, on);
+    bool ok = SetOn(L.obj, L.data, L.kind, on);
+    // (15/11 r, Agustin 18:48: "los focos los volvi a activar en el motor pero se sigue viendo como si los focos estuvieran apagados")
+    // el bit solo no avisa a la luz; al prender se le vuelve a poner su propio color con el setter del juego, que termina en la
+    // actualizacion de la clase (ranura +0x78), como cuando el juego arma la escena
+    if (ok && on) { const bool r = RefreshLight(L); static int nr = 0; if (nr++ < 30) Log("motor (escena): luz \"%s\" actualizada al prender: %s", L.name[0] ? L.name : "(sin nombre)", r ? "si" : "no (sin setter de color)"); }
     static int n = 0; if (n++ < 60) Log("motor (escena): luz \"%s\" %s%s", L.name[0] ? L.name : "(sin nombre)", on ? "prendida" : "apagada", ok ? "" : " -> NO se pudo (ya no esta en la escena)");
     return ok;
 }
@@ -150,6 +155,12 @@ static bool ReadF(uintptr_t a, float* out) { __try { if (!Heap(a & ~(uintptr_t)7
 static bool Finite(float v, float lim) { return v == v && v > -lim && v < lim; }
 bool MotorLightSetColor(const MotorLight& L, const float* c) {
     if (!MotorLightCan(L, 0)) return false;
+    for (int i = 0; i < 4; i++) if (!Finite(c[i], 1.0e7f)) return false;
+    return CallV4(kFnColor, L.obj, L.data, L.kind, c);
+}
+static bool RefreshLight(const MotorLight& L) {
+    if (!MotorLightCan(L, 0)) return false;
+    float c[4]; if (!ReadF(L.data + 0x40, &c[0]) || !ReadF(L.data + 0x44, &c[1]) || !ReadF(L.data + 0x48, &c[2]) || !ReadF(L.data + 0x4c, &c[3])) return false;
     for (int i = 0; i < 4; i++) if (!Finite(c[i], 1.0e7f)) return false;
     return CallV4(kFnColor, L.obj, L.data, L.kind, c);
 }
