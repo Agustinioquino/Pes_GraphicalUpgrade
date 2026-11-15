@@ -156,7 +156,7 @@ void MotorLinkPresent() {
     if (s_ml) {
         s_ml->vistaAct = v[0]; s_ml->alambreAct = v[1]; s_ml->corteAct = v[2]; s_ml->escalaAct = v[3];
         s_ml->alambreDibujos = nd;
-        s_ml->res[0] = (uint32_t)std::clamp(g_cfg.lang, 0, 2);   // (15/11) idioma del mod: el modulo de Sider nombra la pestana del Editar con esto
+        s_ml->res[0] = (g_cfg.lang == 1 || g_cfg.lang == 2) ? (uint32_t)g_cfg.lang : 0u;   // (15/11) idioma del mod: el modulo de Sider nombra la pestana del Editar con esto
         s_ml->dllSeq = s_ml->dllSeq + 1;
     }
     if (wire) {   // cada 10 s con el alambre prendido: cuantos dibujos se cambiaron (0 = ningun dibujo de G-buffer: avisar)
