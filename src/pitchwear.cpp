@@ -581,7 +581,10 @@ static void PitchFlatPresent() {
         // dependia de cuantas lecturas llegaban y el rastro se saturaba), con la fuerza x los Presents desde la lectura anterior (hasta 6); la
         // pelota quieta (< 1 cm) x0.25, asi el disco aplastado deja de crecer. 0 = como antes
         const bool segOnce = GrassLive(446, 2) > 0.f; const int segN = std::min(ballNewN, 6);
-        const float segK = !segOnce ? 1.f : (segN > 0 ? (float)segN * (dist < 0.01f ? 0.25f : 1.f) : 0.f);
+        // (15/11, videos de Agustin en pausa / camara libre: disco pelado de ~80 cm con borde duro alrededor de la pelota quieta) la pelota
+        // quieta (< 1 cm por lectura) ya no estampa: con x0.25 por lectura seguia sumando mas rapido de lo que el mapa se recupera (tau 30 s)
+        // y el disco se saturaba hasta el corte del pincel (1.5 x radio). La pelota apoyada la hace el VS (corona / asiento), no el mapa
+        const float segK = (dist < 0.01f) ? 0.f : (!segOnce ? 1.f : (segN > 0 ? (float)segN : 0.f));
         const float dtSp = (segOnce && segN > 0) ? dt * (float)segN : dt;   // z446: la velocidad sobre el tiempo del tramo entero
         float kb = (F[3] > 0.f ? F[3] : 1.0f) * k * onGround;
         { const float kv = std::clamp(g_cfg.live[177][2], 0.f, 2.f); float spd = dtSp > 0.002f ? std::min(dist / dtSp / 12.f, 1.5f) : 0.f;   // (2/11) rapida: aplasta mas; lenta: menos
