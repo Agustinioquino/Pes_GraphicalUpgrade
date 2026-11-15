@@ -207,6 +207,7 @@ struct Config {
     bool coverOn = false; int coverDelay = 30;   // (08/11 h) [PES21FX] cobertura / cobertura_demora: medidor de que funciones del exe corren (cobertura.cpp)
     bool rastroOn = false; int rastroMaxMb = 2000, rastroFps = 2; bool rastroFalta = true;   // (08/11 j) rastro_faltas: vigia de escritura del registro de faltas (quien marca el offside)
       // (08/11 i) [PES21FX] rastro / rastro_max_mb / rastro_fotos: registro de depuracion del juego + fotos del partido (rastro.cpp)
+    int borderless = 0;   // (15/11) [PES21FX] ventana_sin_bordes: 1 = la ventana del juego sale sin bordes y ocupa el monitor (borderless.cpp); vale al abrir el juego
     int optHangSec = 20;   // (08/11 c) [PES21FX] congelado_seg: segundos sin cuadros = congelamiento -> volcado (main.cpp vigia); 0 apagado
     int optCrashDump = 1;   // (08/11) [PES21FX] crash_dump: 0 sin volcado, 1 minidump con datos, 2 memoria completa (main.cpp)
     bool optExprPalette = true;
@@ -438,6 +439,8 @@ void SolRelojPresent();   // (02/11) registro de hora del dia / sol / sunLux del
 void GrassDistPresent();  // (26/10) busca el recorte de distancia del pasto 3D del juego ya descifrado (grassdist.cpp)
 // (23/10) camara del motor (camhook.cpp): cortes de camara del juego (CameraSystem 0x14198d3b0) y reinicios del TAA del juego
 int PresentNo();
+void BorderlessStart();   // (15/11) borderless.cpp
+void BorderlessEnsure(HWND w, bool windowed, unsigned bw, unsigned bh);
 void StartHangWatch();   // (08/11 c) vigia de congelamientos (main.cpp)
 void OnDeviceLost(unsigned reason);   // (08/11 e) placa reiniciada (TDR): aviso y cierre ordenado (main.cpp)
 // (08/11 e) liberar un recurso nuestro que pudo quedar grabado en una lista diferida del juego: se suelta a los 30 s (hooks.cpp)

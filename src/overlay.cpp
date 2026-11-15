@@ -1988,6 +1988,13 @@ static void DrawSettingsPage() {
         if (ImGui::Combo("##bloqteclas", &bk, kBlk, 3)) { g_cfg.blockKeys = bk; SaveOption("bloquear_teclado", std::to_string(bk)); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Que el juego no reciba las teclas mientras escribis en el menu (buscador, nombres). 'No al escribir' = solo con un campo de texto activo; 'No con el menu' = mientras el menu esta abierto."));
     }
+    {   // (15/11) ventana sin bordes a pantalla completa: [PES21FX] ventana_sin_bordes (borderless.cpp); vale al volver a abrir el juego
+        bool bl = g_cfg.borderless != 0;
+        row(TRS("Ventana sin bordes a pantalla completa"));
+        if (ImGui::Checkbox("##ventanasinbordes", &bl)) { g_cfg.borderless = bl ? 1 : 0; SaveOption("ventana_sin_bordes", bl ? "1" : "0"); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("El juego ocupa toda la pantalla pero sigue siendo una ventana: se puede pasar a otro programa sin que se minimice ni parpadee. Hay que elegir Ventana y la resolucion del monitor en la configuracion del juego (settings.exe). Vale al volver a abrir el juego."));
+        ImGui::SameLine(); ImGui::TextDisabled("%s", TRS("(al volver a abrir el juego)"));
+    }
     {   // (11/11) mouse en los menus nativos del juego: [PES21FX] mouse_menus
         bool mm = g_cfg.menuMouse != 0;
         row(TRS("Mouse en los menus del juego"));

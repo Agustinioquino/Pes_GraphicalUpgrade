@@ -226,6 +226,7 @@ static bool LoadConfigLocked() {
             else if (kl == "expr_paleta_blindaje") c.optExprBlindaje = atoi(v.c_str()) != 0;
             else if (kl == "expr_paleta_error") c.optExprPaletteErr = (float)atof(v.c_str());
             else if (kl == "congelado_seg") c.optHangSec = atoi(v.c_str());
+            else if (kl == "ventana_sin_bordes") c.borderless = atoi(v.c_str()) != 0 ? 1 : 0;   // (15/11) borderless.cpp
             else if (kl == "vigia_estados") c.relWatch = atoi(v.c_str()) != 0;
             else if (kl == "cobertura") c.coverOn = atoi(v.c_str()) != 0;
             else if (kl == "rastro") c.rastroOn = atoi(v.c_str()) != 0;
