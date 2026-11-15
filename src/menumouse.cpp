@@ -418,7 +418,10 @@ static void GuideSync(double now) {
 static bool IsTeamSel(void* win) {
     if (!s_tsOk) return false;
     void** vt = *(void***)win;
-    return Ptr(vt) && (uintptr_t)vt[0x250 / 8] == kTsPrev && (uintptr_t)vt[0x258 / 8] == kTsNext && (uintptr_t)vt[0x260 / 8] == kTsMove;
+    // (15/11) + menu::MenuEditCmnNationalitySelectBase 0x142728bd0 (Editar: elegir liga / nacionalidad): hereda de TeamSelectCommon
+    // (mismas ranuras 0x250 / 0x258, su propio mover 0x140c9f310); antes caia en la prueba general = un solo rect gigante y el clic aceptaba
+    const uintptr_t mv = Ptr(vt) ? (uintptr_t)vt[0x260 / 8] : 0;
+    return Ptr(vt) && (uintptr_t)vt[0x250 / 8] == kTsPrev && (uintptr_t)vt[0x258 / 8] == kTsNext && (mv == kTsMove || mv == 0x140c9f310ull);
 }
 
 // rect de un nodo cualquiera: lo que dibuja; si no se puede leer, el del juego
@@ -515,6 +518,8 @@ static bool TeamSelStep(void* win, uint8_t* I, float mx, float my, double now) {
 // 0x140ab0830). Cerrar = lo mismo que la X de la ventana: el bucle principal sigue mientras [0x143713268]+0xfc sea 0 (0x1403a6ac0;
 // la X de la ventana y el nodo de flujo ProcExit, 0x141265760, ponen 1). Primer clic: "Salir? clic otra vez"; segundo clic
 // (dentro de 4 s) cierra. [PES21FX] mouse_boton_salir = 0 lo saca.
+static const uintptr_t kMoveSel = 0x140e3e8c0ull;   // (15/11) mover la seleccion del juego (ver hk_Dirs, paginas sin mando)
+static const unsigned char kMoveSelSig[24] = { 0x44,0x88,0x4c,0x24,0x20,0x44,0x89,0x44,0x24,0x18,0x89,0x54,0x24,0x10,0x55,0x53,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56 };
 static const uintptr_t kTopModeVt = 0x142676ea8ull, kGameRoot = 0x143713268ull;
 // (Agustin 04:19: "que funcione como la opcion de salir") el boton manda el MISMO evento que la opcion Salir del menu principal:
 // TopMenu/TopMenuNew.json "24_Exit" -> ProcExit (0x141265760, que solo pone [0x143713268]+0xfc = 1, sin guardar nada aparte).
@@ -801,10 +806,31 @@ static void hk_Dirs(void* win, int* dx, int* dy, unsigned char* trig) {
         // (0x140e69a70: base + 0x94 + n * 0x58). El juego solo llega ahi con un mando de verdad (0x140e3e6b0 sale si
         // 0x141b57c60(Impl+0x114) no da mando); si la pagina no tiene mando (Impl+0x114 = -1) la rueda / el clic sobre un selector
         // NO pueden mandar direcciones: se descartan.
+        // (15/11 06:04, Agustin: "en el menu editar la rueda del mouse no funciona") en esas paginas la DLL mueve ella misma con la MISMA
+        // funcion del juego (0x140e3e8c0, lo que 0x140e3e480 llama despues de leer las direcciones) con Impl+0x114 = 0 solo durante esa
+        // llamada: 0x140e3cbd0 lee el puntero 0 (memoria valida) y lo pisa con la posicion de la fila actual si hay una.
         uint8_t* I = P8((uint8_t*)win + 0x88);
         if (!Ptr(I) || U32(I + 0x114) >= 8u) {
-            if (optWin == win || std::abs(s_wheelAcc + w) >= 120) { static int s_n = 0; if (s_n++ < 6) Log("mouse en menus: pagina sin mando (Impl+0x114 = %d, vtable %p): rueda / selector descartados", Ptr(I) ? (int)U32(I + 0x114) : -2, *(void**)win); }
-            s_wheelAcc = 0; return;
+            int mdx = 0, mdy = 0; unsigned char mtr = 1;
+            if (optWin && optWin == win && *dx == 0 && *dy == 0) mdx = s_pendDx > 0 ? 1 : -1;
+            else {
+                s_wheelAcc = std::clamp(s_wheelAcc + w, -600, 600);
+                HWND h = OverlayHwnd();
+                if (std::abs(s_wheelAcc) >= 120 && *dx == 0 && *dy == 0 && h && GetForegroundWindow() == h) {
+                    const int sgn = s_wheelAcc > 0 ? 1 : -1; s_wheelAcc -= sgn * 120;
+                    if (s_wheelOptWin == win) mdx = sgn > 0 ? 1 : -1; else { mdy = sgn > 0 ? -1 : 1; mtr = 0; }
+                }
+            }
+            if ((mdx != 0 || mdy != 0) && Ptr(I) && SigAt(kMoveSel, kMoveSelSig, sizeof kMoveSelSig)) {
+                const uint32_t keep = U32(I + 0x114);
+                *(uint32_t*)(I + 0x114) = 0;
+                ((int (*)(void*, int, int, unsigned char))kMoveSel)(win, mdx, mdy, mtr);
+                *(uint32_t*)(I + 0x114) = keep;
+                s_pendWin = nullptr; s_pendAction = -1; s_moveT.store(Now());
+                s_nWheel.fetch_add(1, std::memory_order_relaxed);
+                static int s_n = 0; if (s_n++ < 6) Log("mouse en menus: pagina sin mando (vtable %p): la DLL mueve %d / %d con 0x140e3e8c0", *(void**)win, mdx, mdy);
+            }
+            return;
         }
     }
     if (optWin && optWin == win && *dx == 0 && *dy == 0) {               // (v3) clic sobre un selector: lo mismo que apretar derecha / izquierda
