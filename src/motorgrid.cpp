@@ -96,43 +96,59 @@ static void GridPaint(const Cam& c) {
     if (g_cfg.motorGrid != 0) {
         const float cell = std::clamp(g_cfg.motorGridCell, 0.1f, 10.0f); const int major = std::clamp(g_cfg.motorGridMajor, 0, 50);
         const float gain = std::clamp((float)g_cfg.motorGridAlpha, 0.0f, 200.0f) / 100.0f;
-        float R = (float)std::clamp(g_cfg.motorGridSize, 10, 400) * 0.5f; R = std::min(R, cell * 600.0f);
-        const float fade = std::min(R, (9.0f + 6.0f * std::fabs(c.pos[1]) + 0.45f / c.th) * std::max(1.0f, R / 20.0f));
+        // (15/11 q, Agustin 17:28: "que la grilla se renderize con la distancia al maximo") tamano 0 = MAXIMA: hasta 2 km (el horizonte
+        // del visor). Para que no cueste: por niveles, como los editores. Nivel 0 = la celda hasta 60 celdas de la camara; nivel 1 = cada
+        // M celdas (M = la linea fuerte, o 10) desde ahi hasta 60 x M celdas; nivel 2 = cada M x M... Cada nivel dibuja solo el anillo que
+        // el anterior no cubre (sin lineas dobles) y sus tramos son mas largos cuanto mas lejos.
+        const bool maxi = g_cfg.motorGridSize <= 0;
+        const float Rmax = maxi ? 2000.0f : std::min((float)std::clamp(g_cfg.motorGridSize, 10, 400) * 0.5f, cell * 600.0f);
+        const float fade = maxi ? Rmax : std::min(Rmax, (9.0f + 6.0f * std::fabs(c.pos[1]) + 0.45f / c.th) * std::max(1.0f, Rmax / 20.0f));
+        const int M = major > 1 ? major : 10;
         const float px = c.pos[0], pz = c.pos[2];
         const float asp = s_asp, hx = 0.5f * kW, hy = 0.5f * kH;
         auto proj = [&](const float* w, float& sx, float& sy) {      // false = detras de la camara
             const float d[3] = { w[0] - c.pos[0], w[1] - c.pos[1], w[2] - c.pos[2] };
             const float z = d[0] * c.f[0] + d[1] * c.f[1] + d[2] * c.f[2]; if (z < 0.05f) return false;
             sx = hx + (d[0] * c.r[0] + d[1] * c.r[1] + d[2] * c.r[2]) / (z * c.th * asp) * hx; sy = hy - (d[0] * c.u[0] + d[1] * c.u[1] + d[2] * c.u[2]) / (z * c.th) * hy; return true; };
-        // separacion en pantalla entre esta linea y su vecina (a "cell" de distancia por el otro eje), en pixeles
-        auto spacing = [&](const float* m, int axis) {
-            float n[3] = { m[0], 0.0f, m[2] }; n[axis] += cell; float t[3] = { m[0], 0.0f, m[2] }; t[2 - axis] += cell * 0.5f;
+        // separacion en pantalla entre esta linea y su vecina (a "st" de distancia por el otro eje), en pixeles
+        auto spacing = [&](const float* m, int axis, float st) {
+            float n[3] = { m[0], 0.0f, m[2] }; n[axis] += st; float t[3] = { m[0], 0.0f, m[2] }; t[2 - axis] += st * 0.5f;
             float ax, ay, bx, by, tx, ty; if (!proj(m, ax, ay) || !proj(n, bx, by) || !proj(t, tx, ty)) return 1.0e6f;
             float dx = tx - ax, dy = ty - ay; const float l = sqrtf(dx * dx + dy * dy); if (l < 1.0e-4f) return 1.0e6f; dx /= l; dy /= l;
             return std::fabs((bx - ax) * dy - (by - ay) * dx); };
         auto fadeAt = [&](float x, float z) { const float d = sqrtf((x - px) * (x - px) + (z - pz) * (z - pz)) / fade; const float a = std::clamp(1.0f - d, 0.0f, 1.0f); return a * a * (3.0f - 2.0f * a); };
-        for (int axis = 0; axis < 2; axis++) {          // 0: lineas de x fija (corren por z, el eje Z azul) / 1: de z fija (el eje X rojo)
-            const float pc = axis == 0 ? px : pz, po = axis == 0 ? pz : px;
-            const int k0 = (int)std::ceil((pc - R) / cell), k1 = (int)std::floor((pc + R) / cell);
-            for (int kk = k0; kk <= k1; kk++) {
-                const float v = (float)kk * cell, dv = v - pc; const float hc = sqrtf(std::max(0.0f, R * R - dv * dv)); if (hc < 1.0e-3f) continue;
-                const bool ax0 = kk == 0 && g_cfg.motorGridAxes != 0, maj = major > 0 && kk % major == 0;
-                const uint32_t col = ax0 ? (axis == 0 ? 0x00e08c40u : 0x005448eau) : 0x00909090u;
-                const float base = (ax0 ? 0.95f : maj ? 0.50f : 0.24f) * gain; if (base <= 0.003f) continue;
-                // tramos: cortos cerca de la camara, mas largos lejos
-                float t = po - hc; const float tEnd = po + hc;
-                while (t < tEnd) {
-                    const float dist = std::fabs(dv) + std::fabs(t - po); const float step = std::clamp(dist * 0.18f, 0.25f, 6.0f); const float t2 = std::min(tEnd, t + step);
-                    float a[3], b[3]; if (axis == 0) { a[0] = b[0] = v; a[2] = t; b[2] = t2; } else { a[2] = b[2] = v; a[0] = t; b[0] = t2; } a[1] = b[1] = 0.0f;
-                    float fa = fadeAt(a[0], a[2]), fb = fadeAt(b[0], b[2]);
-                    if (fa > 0.003f || fb > 0.003f) {
-                        float sp = 1.0f;
-                        if (!ax0) { float m[3] = { (a[0] + b[0]) * 0.5f, 0.0f, (a[2] + b[2]) * 0.5f }; const float s1 = spacing(m, axis) * (maj ? (float)major : 1.0f); sp = std::clamp((s1 - 2.0f) / 4.0f, 0.0f, 1.0f); }
-                        if (sp > 0.003f) Seg(c, a, b, col, base * sp, 1.0e9f, fa, fb);
+        float rIn = 0.0f, step = cell; long long mult = 1;
+        for (int lv = 0; lv < 4 && rIn < Rmax; lv++, step *= (float)M, mult *= M) {
+            const float R = maxi ? std::min(Rmax, step * 60.0f) : Rmax;
+            for (int axis = 0; axis < 2; axis++) {          // 0: lineas de x fija (corren por z, el eje Z azul) / 1: de z fija (el eje X rojo)
+                const float pc = axis == 0 ? px : pz, po = axis == 0 ? pz : px;
+                const long long k0 = (long long)std::ceil((pc - R) / step), k1 = (long long)std::floor((pc + R) / step);
+                for (long long kk = k0; kk <= k1; kk++) {
+                    const float v = (float)kk * step, dv = v - pc; const float hc = sqrtf(std::max(0.0f, R * R - dv * dv)); if (hc < 1.0e-3f) continue;
+                    const float hi = rIn > std::fabs(dv) ? sqrtf(rIn * rIn - dv * dv) : 0.0f;      // tramo que ya dibujo el nivel anterior
+                    const long long kc = kk * mult;      // numero de la linea en celdas
+                    const bool ax0 = kk == 0 && g_cfg.motorGridAxes != 0, maj = major > 0 && kc % major == 0;
+                    const uint32_t col = ax0 ? (axis == 0 ? 0x00e08c40u : 0x005448eau) : 0x00909090u;
+                    const float base = (ax0 ? 0.95f : maj ? 0.50f : 0.24f) * gain; if (base <= 0.003f) continue;
+                    for (int side = 0; side < 2; side++) {      // los dos lados del anillo (o la linea entera si no hay anillo adentro)
+                        float t = side == 0 ? po - hc : po + hi; const float tEnd = side == 0 ? (hi > 0.0f ? po - hi : po + hc) : po + hc;
+                        if (side == 1 && hi <= 0.0f) break;
+                        while (t < tEnd) {
+                            const float dist = std::fabs(dv) + std::fabs(t - po); const float sg = std::clamp(dist * 0.18f, 0.25f, 6.0f * (float)mult); const float t2 = std::min(tEnd, t + sg);
+                            float a[3], b[3]; if (axis == 0) { a[0] = b[0] = v; a[2] = t; b[2] = t2; } else { a[2] = b[2] = v; a[0] = t; b[0] = t2; } a[1] = b[1] = 0.0f;
+                            float fa = fadeAt(a[0], a[2]), fb = fadeAt(b[0], b[2]);
+                            if (fa > 0.003f || fb > 0.003f) {
+                                float sp = 1.0f;
+                                if (!ax0) { float m[3] = { (a[0] + b[0]) * 0.5f, 0.0f, (a[2] + b[2]) * 0.5f }; const float s1 = spacing(m, axis, step) * (maj && mult < major ? (float)major / (float)mult : 1.0f); sp = std::clamp((s1 - 2.0f) / 4.0f, 0.0f, 1.0f); }
+                                if (sp > 0.003f) Seg(c, a, b, col, base * sp, 1.0e9f, fa, fb);
+                            }
+                            t = t2;
+                        }
                     }
-                    t = t2;
                 }
             }
+            rIn = R;
+            if (!maxi) break;
         }
     }
 }

@@ -194,6 +194,13 @@ static float s_fovOut = 0.364f;
 void FreeCamGizmoOrbit(float dyaw, float dpitch) { std::lock_guard<std::mutex> lk(s_gzMx); s_gzDYaw += dyaw; s_gzDPitch += dpitch; }
 void FreeCamGizmoAxis(int a) { s_gzAxis.store(a); }      // 0 +X, 1 -X, 2 +Y, 3 -Y, 4 +Z, 5 -Z: la camara se pone de ese lado del pivote
 void FreeCamGizmoHome() { s_gzHome.store(1); }
+// (15/11 q, Agustin 17:28: "faltan las vistas en perspectiva y en no") vista ortografica del Motor (Num 5, como Blender). La proyeccion
+// del visor (+0x3c) no se toca: se hace con un teleobjetivo (campo de vision 0.02 rad) y la camara alejada del pivote lo justo para que
+// lo que esta en el pivote se vea del mismo tamano; con ese angulo la perspectiva es menos de 1 % de un lado al otro de la escena.
+// El cambio es animado (0.25 s) y lo que se ve en el pivote no cambia de tamano mientras pasa. s_orthoFar = lejos que hace falta.
+static std::atomic<int> s_orthoWant{ 0 }; static float s_orthoA = 0.0f, s_posOut[3] = {}; static bool s_posOutOk = false; static std::atomic<float> s_orthoFar{ 0.0f };
+void FreeCamOrthoSet(int on) { s_orthoWant.store(on ? 1 : 0); }
+bool FreeCamOrtho() { return s_orthoWant.load() != 0; }
 static double s_headLostT = -1.0;   // (08/11 e) cuando se perdio el dato de la cabeza siguiendo la cara (-1 = no)
 static bool FreeCamHeadLost() {   // se pidio seguir la cara, se estaba siguiendo y el dato se corto: se suelta hasta que vuelva
     if (s_headLostT < 0.0) return false;
@@ -551,6 +558,19 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
             if (*fov != s_fovWritten) s_fovBase = *fov;
             *fov = s_fovBase * z; s_fovWritten = *fov; fovApplied = *fov;
         }
+        // (15/11 q) ortografica: alejar a lo largo de la mirada y cerrar el angulo en la misma proporcion (tan), con el pivote quieto
+        const float want = (motor && !s_follow && s_pivotOk && s_orthoWant.load()) ? 1.0f : 0.0f;
+        s_orthoA = want > s_orthoA ? std::min(want, s_orthoA + dt / 0.25f) : std::max(want, s_orthoA - dt / 0.25f);
+        s_orthoFar.store(0.0f); s_posOutOk = false;
+        if (s_orthoA > 0.0f && fovApplied > 0.0f && s_pivotOk) {
+            const float e = s_orthoA * s_orthoA * (3.0f - 2.0f * s_orthoA);
+            const float t0 = tanf(fovApplied * 0.5f), tO = tanf(0.02f * 0.5f), tN = t0 + (tO - t0) * e;
+            float d[3] = { s_pivot[0] - s_pos[0], s_pivot[1] - s_pos[1], s_pivot[2] - s_pos[2] };
+            const float dist = std::max(0.3f, d[0] * f[0] + d[1] * f[1] + d[2] * f[2]), nd = dist * t0 / std::max(1.0e-5f, tN);
+            for (int i = 0; i < 3; i++) { pos[i] = s_pos[i] - f[i] * (nd - dist); if (!s_follow) tgt[i] = pos[i] + f[i]; }
+            *fov = 2.0f * atanf(tN); s_fovWritten = *fov; fovApplied = *fov; s_orthoFar.store(nd); memcpy(s_posOut, pos, 12); s_posOutOk = true;
+            static int nl = 0; if (e >= 1.0f && nl++ < 3) Log("camara libre (Motor): vista ortografica, camara a %.1f m del pivote (antes %.2f)", nd, dist);
+        }
     }
     float* q = g_cfg.live[345]; q[0] = s_pos[0]; q[1] = s_pos[1]; q[2] = s_pos[2]; q[3] = fovApplied;
     if (++s_applies % 600 == 0 && s_logged < 20) {   // cada ~10 s de uso
@@ -631,6 +651,8 @@ static void hk_SetCam(void* rt, unsigned char* cam) {
         const float wn = g_cfg.motorNear, wf = g_cfg.motorFar;
         if (wn > 0.0f && nr == nr && nr > wn) memcpy(cam + 0x34, &wn, 4);
         if (wf > 0.0f && fr == fr && fr < wf) memcpy(cam + 0x38, &wf, 4);
+        { const float od = s_orthoFar.load(), of = od + 2000.0f; float cf; memcpy(&cf, cam + 0x38, 4); if (od > 0.0f && cf == cf && cf < of) memcpy(cam + 0x38, &of, 4);
+          float cn; memcpy(&cn, cam + 0x34, 4); const float on = od > 20.0f ? std::min(5.0f, od * 0.25f) : 0.0f; if (on > 0.0f && cn == cn && cn < on) memcpy(cam + 0x34, &on, 4); }   // ortografica: lejos sin cortar, cerca un poco mas afuera (precision)
         static int nl = 0; if (nl++ < 3) Log("camara libre (Motor): cerca / lejos del visor %.3f / %.1f -> %.3f / %.1f", nr, fr, wn > 0.0f && nr > wn ? wn : nr, wf > 0.0f && fr < wf ? wf : fr);
     } }
     o_setCam(rt, cam);
@@ -674,7 +696,7 @@ void FreeCamSetPose(const float* pos, float yaw, float pitch) {
     memcpy(s_posePos, pos, 12); s_poseYaw = yaw; s_posePitch = pitch; s_poseWant = true;
     if (!FreeCamActive()) g_cfg.live[344][0] = 2.0f;
 }
-bool FreeCamGetPose(float* pos, float* yaw, float* pitch) { memcpy(pos, s_pos, 12); *yaw = s_yaw; *pitch = s_pitch; return s_on; }
+bool FreeCamGetPose(float* pos, float* yaw, float* pitch) { memcpy(pos, s_posOutOk ? s_posOut : s_pos, 12);   /* (15/11 q) ortografica: la camara alejada que se escribe */ *yaw = s_yaw; *pitch = s_pitch; return s_on; }
 // (15/11) Motor sin modelo: mantiene viva la camara libre aunque el visor no pida camara. Camara de mentira = la del estudio del
 // Editar (a 6.5 m, campo de vision 0.364 rad, mirando al centro a 0.95 m del piso). Devuelve el campo de vision vertical que se ve
 void FreeCamMotorTick() {

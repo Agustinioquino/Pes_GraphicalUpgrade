@@ -184,13 +184,17 @@ static bool LoadConfigLocked() {
             else if (kl == "motor_lejos") c.motorFar = std::clamp((float)atof(v.c_str()), 0.0f, 100000.0f);   // (15/11 o) plano lejano (0 = como el juego)
             // (15/11 p) segunda cadena: MSVC no acepta mas de ~128 "else if" seguidos (C1061)
             if (kl == "motor_deshacer_pasos") c.motorUndoSteps = std::clamp(atoi(v.c_str()), 10, 200);   // (15/11 p) Editar > Preferencias: pasos de Ctrl+Z
+            else if (kl == "motor_panel_lugar") { int d0 = 0, d1 = 1; if (sscanf(v.c_str(), "%d,%d", &d0, &d1) == 2) { c.motorDock[0] = std::clamp(d0, 0, 2); c.motorDock[1] = std::clamp(d1, 0, 2); } }   // (15/11 q) 0 izquierda, 1 derecha, 2 flotante
+            else if (kl == "motor_panel_division") c.motorSplit = std::clamp((float)atof(v.c_str()), 0.15f, 0.85f);
+            else if (kl == "motor_panel_arriba") c.motorStackTop = atoi(v.c_str()) != 0 ? 1 : 0;
+            else if (kl == "motor_panel_flotante") { float f[8]; if (sscanf(v.c_str(), "%f,%f,%f,%f,%f,%f,%f,%f", &f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6], &f[7]) == 8) for (int q = 0; q < 8; q++) c.motorFloat[q / 4][q % 4] = f[q]; }
             else if (kl == "motor_autoguardado") c.motorAutoSave = atoi(v.c_str()) != 0 ? 1 : 0;                 // (15/11 p) guarda la escena sola (escena_autoguardado.txt)
             else if (kl == "motor_autoguardado_minutos") c.motorAutoSaveMin = std::clamp(atoi(v.c_str()), 1, 60);
             else if (kl == "motor_texto") c.motorText = std::clamp((float)atof(v.c_str()), 0.8f, 1.5f);            // (15/11 p) tamano del texto del editor (x el tamano de la interfaz)
             else if (kl == "motor_camara_velocidad") c.motorCamSpeed = std::clamp((float)atof(v.c_str()), 0.0f, 50.0f);   // (15/11 p) 0 = la de la camara libre
             else if (kl == "motor_camara_sensibilidad") c.motorCamSens = std::clamp((float)atof(v.c_str()), 0.0f, 10.0f);
             else if (kl == "motor_grilla_ejes") c.motorGridAxes = atoi(v.c_str()) != 0 ? 1 : 0;
-            else if (kl == "motor_grilla_tamano") c.motorGridSize = std::clamp(atoi(v.c_str()), 10, 400);   // (15/11) lado de la grilla en metros
+            else if (kl == "motor_grilla_tamano") { const int gs = atoi(v.c_str()); c.motorGridSize = gs <= 0 ? 0 : std::clamp(gs, 10, 400); }   // (15/11 q) 0 = maxima (hasta el horizonte)   // (15/11) lado de la grilla en metros
             else if (kl == "motor_sonido") c.motorSound = atoi(v.c_str()) != 0 ? 1 : 0;                     // (15/11 m) motorsound.cpp: sonido de la transicion
             else if (kl == "motor_sonido_volumen") c.motorSoundVol = std::clamp(atoi(v.c_str()), 0, 100);
             else if (kl == "motor_carga_tiempos") c.motorLoadTimes = v;                                       // (15/11 n) tiempos aprendidos de la barra de carga
