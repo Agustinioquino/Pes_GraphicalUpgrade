@@ -32,14 +32,18 @@ starts = {i.address for i in ins}
 by = {i.address - BASE: i for i in ins}
 fin = [i.address for i in ins if i.mnemonic == 'add' and i.op_str == 'rsp, 0x28'][0]
 usar = [i.address for i in ins if i.mnemonic == 'test' and i.op_str == 'ecx, ecx'][0]
-for i in ins:
-    if i.mnemonic in ('je', 'ja', 'jae', 'jne'):
-        t = int(i.op_str, 16)
-        assert t in starts, 'salto al medio de una instruccion'
-        assert t == (usar if i.mnemonic == 'jae' else fin), 'salto a %x' % (t - BASE)
+poner = [i.address for i in ins if i.mnemonic == 'inc' and '0x10' in i.op_str][0]
+saltos = [i for i in ins if i.mnemonic in ('je', 'ja', 'jae', 'jne')]
+assert len(saltos) == 8
+for k, i in enumerate(saltos):
+    t = int(i.op_str, 16)
+    assert t in starts, 'salto al medio de una instruccion'
+    assert t == (usar if i.mnemonic == 'jae' else poner if k == 7 else fin), 'salto %d a %x' % (k, t - BASE)
 txt = '\n'.join(str(i.mnemonic) + ' ' + str(i.op_str) for i in ins)
-for need in ('sub rsp, 0x28', 'movabs r10, 0x%x' % (BASE + 0x800), 'cmp eax, 3', 'cmp eax, 0x100000', 'movabs r11, 0x%x' % (BASE + 0x12000),
-             'movabs r11, 0x%x' % (BASE + 0x1000), 'mov rdx, qword ptr [r11 + rcx*8]', 'mov rcx, r15', 'movabs rax, 0x141a09fe0', 'call rax',
+for need in ('sub rsp, 0x28', 'movabs r10, 0x%x' % (BASE + 0x800), 'cmp eax, 3', 'cmp eax, 0x100000', 'movabs r11, 0x%x' % (BASE + 0x85000),
+             'movabs r11, 0x%x' % (BASE + 0x1000), 'movabs r11, 0x%x' % (BASE + 0xc00), 'mov r9, qword ptr [r15 + 0x10]',
+             'mov eax, dword ptr [r9 + 0x160]', 'and eax, 7', 'lea eax, [rax + rcx*8]', 'mov rdx, qword ptr [r11 + rax*8]',
+             'test byte ptr [r11 + rcx], 1', 'and dword ptr [r9 + 0x44], 0xfffffff7', 'mov rcx, r15', 'movabs rax, 0x141a09fe0', 'call rax',
              'movabs rax, 0x141ea44d0', 'jmp rax', 'mov eax, dword ptr [rbp - 0x5c]', 'mov ecx, dword ptr [rbp - 0x60]'):
     assert need in txt, 'falta: ' + need
 assert ins[-1].mnemonic == 'jmp' and ins[-2].op_str.endswith('0x141ea44d0') and ins[-3].op_str == 'rsp, 0x28'
@@ -55,7 +59,7 @@ if not GBF or not os.path.exists(GBF):
 sys.path.insert(0, '/mnt/project-files/decompilado/herramientas/leer_exe')
 import exe
 tmp = tempfile.mkdtemp()
-LISTA = "# prueba\n* = /Assets/pes16/model/character/parts/bibs_reserve/scenes/bibs_reserve.fmdl\r\n7511 = /Assets/pes16/model/character/cuerpo/cuerpo_a.fmdl\n40352 = no\n  99 =   /Assets/pes16/model/character/cuerpo/cuerpo_a.fmdl  \n; 5 = /x\nbasura\n2000000 = /fuera/de/rango.fmdl\n"
+LISTA = "# prueba\n* = /Assets/pes16/model/character/parts/naked/scenes/naked_body.fmdl\r\n7511 = /Assets/pes16/model/character/cuerpo/cuerpo_a_#.fmdl\n40352 = no\n  99 =   /Assets/pes16/model/character/cuerpo/cuerpo_a_#.fmdl  \n; 5 = /x\nbasura\n2000000 = /fuera/de/rango.fmdl\n# 6 = /y\n123 = /Assets/pes16/model/character/cuerpo/cuerpo_b_#.fmdl | sin_brazo\n"
 open(os.path.join(tmp, 'modules\\cuerpo_propio.txt'), 'w', newline='').write(LISTA)   # en Linux la barra de Windows es parte del nombre
 parche = {}
 def juego(d, n):
@@ -105,7 +109,7 @@ return o1, o2, o3, bloque.ini, (reg.key_down and reg.overlay_on) and 1 or 0
 o1, o2, o3, base, regs = r
 for l in logs: print('  log:', l.decode() if isinstance(l, bytes) else l)
 print(o1.decode()); print(o2.decode()); print(o3.decode())
-assert regs == 1 and b'activo' in o1 and b'PRENDIDO' in o1 and b'apagado' in o2 and b'PRENDIDO' in o3
+assert regs == 1 and b"activo" in o1 and b"PRENDIDO" in o1 and b"apagado" in o2 and b"PRENDIDO" in o3 and o1.count(b"\n") == 2 and b"tono 0" in o1
 base = int(base)
 import ctypes
 mem = lambda off, n: ctypes.string_at(base + off, n)
@@ -114,14 +118,18 @@ SITIO = 0x141ecd521
 new = juego(SITIO, 5)
 assert new[0] == 0xE8 and SITIO + 5 + struct.unpack('<i', new[1:])[0] == base, 'el call no apunta al bloque'
 assert set(parche) == {SITIO + 1, SITIO + 2, SITIO + 3, SITIO + 4}, 'se escribio fuera del call'
-assert mem(0, 142) == bytes(m.codigo(base))
+cod = bytes(m.codigo(base))
+assert mem(0, len(cod)) == cod and len(cod) < 0x800
 on, defecto = struct.unpack('<II', mem(0x800, 8))
-p = struct.unpack('<256Q', mem(0x1000, 0x800))
-ruta = lambda i: ctypes.string_at(p[i]).decode() if p[i] else None
-tab = lambda i: mem(0x12000 + i, 1)[0]
-assert on == 1 and ruta(defecto).endswith('bibs_reserve.fmdl'), (on, defecto)
-assert ruta(tab(7511)).endswith('cuerpo_a.fmdl') and tab(99) == tab(7511) and tab(40352) == 255 and tab(5) == 0 and tab(7512) == 0
-assert sum(1 for x in p if x) == 2 and all(base + 0x2000 <= x < base + 0x12000 for x in p if x)
+p = struct.unpack('<2048Q', mem(0x1000, 0x4000))
+ruta = lambda i, tono=1: ctypes.string_at(p[i * 8 + tono]).decode() if p[i * 8 + tono] else None
+tab = lambda i: mem(0x85000 + i, 1)[0]
+band = lambda i: mem(0xc00 + i, 1)[0]
+assert on == 1 and ruta(defecto).endswith('naked_body.fmdl') and all(ruta(defecto, t) == ruta(defecto) for t in range(8)), (on, defecto)
+assert [ruta(tab(7511), t).rsplit('_', 1)[1] for t in range(8)] == ['1.fmdl', '1.fmdl', '2.fmdl', '3.fmdl', '4.fmdl', '5.fmdl', '6.fmdl', '1.fmdl']
+assert tab(99) == tab(7511) and tab(40352) == 255 and tab(5) == 0 and tab(6) == 0 and tab(7512) == 0
+assert band(tab(123)) == 1 and band(tab(7511)) == 0 and band(defecto) == 0 and ruta(tab(123), 4).endswith('cuerpo_b_4.fmdl')
+assert all(x == 0 or base + 0x5000 <= x < base + 0x85000 for x in p) and len({x for x in p if x}) == 1 + 6 + 6
 print('arranque OK: bloque 0x%X, call -> bloque, lista bien cargada (para todos = %s)' % (base, ruta(defecto)))
 
 # ---------------------------------------------------------------- 5) el codigo propio EJECUTADO de verdad
@@ -144,21 +152,30 @@ ctypes.memmove(TRAMPA, tr, len(tr))
 llamar = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(TRAMPA)
 marco = ctypes.create_string_buffer(0x100)
 RBP = ctypes.addressof(marco) + 0x80
-CONFIG = 0x1122334455
-def caso(tipo, ident):
+cfg = ctypes.create_string_buffer(0x20)                    # config: +0x10 -> C
+datos = ctypes.create_string_buffer(0x200)                 # C: +0x44 mascara de unidades, +0x160 tono
+CONFIG = ctypes.addressof(cfg)
+struct.pack_into('<Q', cfg, 0x10, ctypes.addressof(datos))
+def caso(tipo, ident, tono=3):
     ctypes.memset(ANOTA, 0, 16)
     struct.pack_into('<II', marco, 0x80 - 0x60, ident & 0xffffffff, tipo)
+    struct.pack_into('<II', datos, 0x44, 0xffffffff, 0xffffffff)
+    struct.pack_into('<I', datos, 0x160, tono)
     ret = llamar(RBP, CONFIG, base)
     assert ret & 0xffffffff == 0x1234, 'no siguio al destino original'
-    cfg, r = struct.unpack('<QQ', mem(0x900, 16))
-    assert cfg in (0, CONFIG)
-    return ctypes.string_at(r).decode().rsplit('/', 1)[1] if r else None
-esperado = [((0, 7511), 'cuerpo_a.fmdl'), ((3, 99), 'cuerpo_a.fmdl'), ((0, 12345), 'bibs_reserve.fmdl'), ((1, 40352), None),
-            ((4, 7511), None), ((0x13, 12345), None), ((0, 0x80000001), 'bibs_reserve.fmdl'), ((2, 0), 'bibs_reserve.fmdl')]
-for (t, i), e in esperado:
-    g = caso(t, i); print('  tipo %2d id %10d -> %s' % (t, i, g)); assert g == e, (t, i, g, e)
-paso, puso, ut, ui = struct.unpack('<QQII', mem(0x808, 24))
-assert (paso, puso, ut, ui) == (8, 5, 2, 0), (paso, puso, ut, ui)
+    c, r = struct.unpack('<QQ', mem(0x900, 16))
+    assert c in (0, CONFIG) and (c == 0) == (r == 0)
+    masc, otro = struct.unpack_from('<II', datos, 0x44)
+    assert otro == 0xffffffff and masc in (0xffffffff, 0xfffffff7)
+    return (ctypes.string_at(r).decode().rsplit('/', 1)[1] if r else None), masc == 0xfffffff7
+N, C6 = 'naked_body.fmdl', 'cuerpo_a_%d.fmdl'
+esperado = [((0, 7511, 3), (C6 % 3, False)), ((3, 99, 6), (C6 % 6, False)), ((0, 7511, 0), (C6 % 1, False)), ((0, 7511, 7), (C6 % 1, False)),
+            ((0, 12345, 2), (N, False)), ((1, 40352, 2), (None, False)), ((4, 7511, 2), (None, False)), ((0x13, 123, 2), (None, False)),
+            ((0, 0x80000001, 5), (N, False)), ((2, 0, 1), (N, False)), ((1, 123, 4), ('cuerpo_b_4.fmdl', True)), ((0, 123, 0x1f), ('cuerpo_b_1.fmdl', True))]
+for a_, e in esperado:
+    g = caso(*a_); print('  tipo %2d id %10d tono %2d -> %s%s' % (a_ + (g[0], ' + sin brazo del juego' if g[1] else ''))); assert g == e, (a_, g, e)
+paso, puso, ut, ui, utono = struct.unpack('<QQIII', mem(0x808, 28))
+assert (paso, puso, ut, ui, utono) == (12, 9, 0, 123, 7), (paso, puso, ut, ui, utono)
 ctypes.memmove(base + 0x800, struct.pack('<I', 0), 4)          # apagado (tecla 2)
-assert caso(0, 7511) is None
-print('ejecucion OK: 9 casos, contadores bien, siempre sigue al destino original')
+assert caso(0, 7511) == (None, False) and caso(1, 123) == (None, False)
+print('ejecucion OK: 14 casos, contadores bien, siempre sigue al destino original')

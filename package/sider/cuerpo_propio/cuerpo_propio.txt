@@ -1,9 +1,11 @@
-# CuerpoPropio: que modelo suelto se le agrega a cada jugador.
-#   * = ruta        a todos los jugadores
-#   id = ruta       solo a ese jugador (el id propio gana sobre *)
-#   id = no         ese jugador sin pieza
-# El nombre del archivo no puede empezar con suit, shirt ni jersey.
-# Se lee al abrir el juego y con la tecla 3 (overlay de Sider abierto, modulo CuerpoPropio elegido).
+; CuerpoPropio: que modelo suelto se le agrega a cada jugador.
+;   * = ruta                 a todos los jugadores
+;   id = ruta                solo a ese jugador (el id propio gana sobre *)
+;   id = no                  ese jugador sin pieza
+;   ... | sin_brazo          ademas el juego no carga su brazo (solo para modelos que traen los brazos)
+; Un numeral en la ruta se cambia por el tono de piel del jugador (1 a 6).
+; El nombre del archivo no puede empezar con suit, shirt ni jersey.
+; Se lee al abrir el juego y con la tecla 3 (overlay de Sider abierto, modulo CuerpoPropio elegido).
 
-# PRUEBA 1 (15/11): la pechera de reserva del propio juego, a todos. Si se ve sobre la camiseta, el mecanismo anda.
-* = /Assets/pes16/model/character/parts/bibs_reserve/scenes/bibs_reserve.fmdl
+; PRUEBA 1 (15/11): el cuerpo sin ropa del propio juego, a todos. Si asoma piel por la camiseta, el mecanismo anda.
+* = /Assets/pes16/model/character/parts/naked/scenes/naked_body.fmdl
