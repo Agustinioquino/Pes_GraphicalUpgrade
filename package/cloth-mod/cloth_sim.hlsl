@@ -223,7 +223,7 @@ cbuffer Params : register(b2)
 // meta en lo que tiene abajo (torso o camiseta) no puede quedar mas adentro que su superficie de armado + PES_BIB_AIR, y en
 // la correccion al dibujar (x256 = 2) queda PES_BIB_SKIN mas lejos de la piel que la camiseta.
 #define PES_BIB_VERTS0   3542     // bibs.fmdl (visto en cloth.log 15/11: 3542 vertices, 16014 indices)
-#define PES_BIB_VERTS1   0        // bibs_reserve.fmdl (0 = todavia sin dato: no se reconoce)
+#define PES_BIB_VERTS1   1226     // bibs_reserve.fmdl (15/11 c: volcado F7, 6675 indices, 14720 B de posiciones)
 // (15/11 b) cloth.log: la pechera quedaba a 39 / 118 / 132 mm de su pose (p50 / p90 / max; la camiseta 26-28 max) y Agustin la
 // vio "romper el modelo": casi toda es tela libre (fija 4 %, pin ~ 0), el anclaje casi no tiraba y la correa era de 25 cm.
 // Ahora por altura de la pose de armado: hombros y pecho sujetos, y de ahi para abajo cada vez mas suelta. Tope a la blandura
@@ -243,6 +243,21 @@ cbuffer Params : register(b2)
 #define PES_BIB_AIR      0.004    // (m) aire minimo sobre su superficie de armado (lo que tiene abajo)
 #define PES_BIB_SKIN     0.004    // (m) separacion extra de la piel al dibujar, sobre la de la camiseta (y256)
 #define PES_IS_BIB (g_legCount == 0 && g_capsuleCount == 0 && (g_vertexCount == PES_BIB_VERTS0 || (PES_BIB_VERTS1 > 0 && g_vertexCount == PES_BIB_VERTS1)))
+// (15/11 c) pechera de dos capas: la capa de adentro trae la normal hacia adentro, asi que el choque contra el cuerpo por la
+// normal la empujaba para el lado contrario (las capas se separaban). La pechera ya no usa ese choque: la normal se orienta
+// hacia afuera del torso (centro de la prenda, eje vertical) y la tela no puede entrar mas que PES_BIB_IN por debajo de su
+// propia pose (la pose esta 10 mm por fuera de la camiseta): asi no se mete en la camiseta que ahora se dibuja abajo.
+#define PES_BIB_IN       0.002    // (m) cuanto puede entrar la pechera por debajo de su pose
+// (15/11 c, Agustin: "la campera deberia tener una fisica menor, pero un poco visible") campera de entrenamiento: tela mas
+// pesada, anclaje firme, correa corta y mas freno. Se reconoce por su tamano (ninguna camiseta del juego llega a 3900 vertices).
+#define PES_JK_MINV       3900
+#define PES_JK_ALPHA      0.0008  // tope de la blandura del anclaje (~8 mm de caida libre)
+#define PES_JK_TETHER     0.025   // (m) tope de la correa de distancia maxima
+#define PES_JK_DAMP       1.6     // freno relativo al cuerpo (x)
+#define PES_IS_JACKET (g_legCount == 0 && !PES_IS_BIB && g_vertexCount >= PES_JK_MINV)
+// (15/11 c, Agustin: "revisa los calculos del short que parece que siguen alto") con la brisa de los menus el short (mas
+// corto y mas libre abajo) se abria hasta 47-53 mm de su pose: al short le llega una parte de la brisa
+#define PES_MENU_BREEZE_SHORTS 0.35
 struct ParticleRest { float4 posPin; float4 nrm; uint4 skin; };
 struct Capsule      { float4 a; float4 b; };
 ByteAddressBuffer               g_bindPos   : register(t0);
@@ -675,6 +690,7 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
     float sleeveW = float((g_rest[p].skin.w >> 8) & 255) / 255.0;
     float damp = g_damping + g_sleeveDamping * sleeveW;
     if (PES_IS_BIB) damp *= PES_BIB_DAMP;   // (15/11) pechera: tela liviana
+    if (PES_IS_JACKET) damp *= PES_JK_DAMP;   // (15/11 c) campera: tela pesada
     bool pesShorts = g_legCount > 0;                                   // PES21 FX: esta prenda es el short
     if (pesShorts) { damp *= PES_SHORTS_DAMP; if (s == 0) v += s_kick * (PES_SHORTS_KICK - 1.0); }
     // PES21 FX inercia por zona: la cara que mira en contra de la aceleracion recibe mas impulso (se queda atras)
@@ -1054,10 +1070,12 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         float3 restB = rest1;
 #endif
         if (PES_IS_BIB) alpha = min(alpha, lerp(PES_BIB_ALPHA_HI, PES_BIB_ALPHA_LO, PES_BIB_LOOSE(p)));   // (15/11 b) pechera: suelta abajo, en su lugar
+        if (PES_IS_JACKET) alpha = min(alpha, PES_JK_ALPHA);   // (15/11 c) campera: se mueve poco
         x += (restT - x) * (1.0 / (1.0 + alpha / hh));
         float3 off = x - restT;
         float maxD0 = g_tetherRadius * (1.0 - pin);
         if (PES_IS_BIB) maxD0 = min(maxD0, lerp(PES_BIB_TETHER_HI, PES_BIB_TETHER_LO, PES_BIB_LOOSE(p)));   // (15/11 b)
+        if (PES_IS_JACKET) maxD0 = min(maxD0, PES_JK_TETHER);   // (15/11 c)
         float maxD = maxD0 * (1.0 + pesSlide * PES_SLIDE_TETHER) * clamp(1.0 + pesFit * 25.0, 0.7, 1.3) * (1.0 + pesLift * 0.6) * clamp(1.0 - pesLimbK * 0.6, 0.6, 1.3) / (1.0 + pesFollow * 0.5);
         float dl = length(off);
         if (dl > maxD) x = restT + off * (maxD / dl);
@@ -1068,17 +1086,22 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         bool legTracked = lp.x != 0xffffffff;
         if (legTracked && (g_rest[p].skin.w & 1)) inset = max(inset, g_legMaxRoom);
         float insetF = inset - min(max(pesFit, 0.0), 0.008);   // PES21 FX: delgado = la tela queda a 'fit' del cuerpo
-        if (PES_IS_BIB) insetF = min(insetF, -PES_BIB_AIR * fitFree);   // (15/11) pechera: aire sobre lo que tiene abajo
         // (25/10) donde se conoce la piel real, la tela puede ir mas adentro que el cuerpo que adivina el mod: la frena la piel
         if (pesBodyHas) insetF += clamp(s_bodyPrm.z * 0.01, 0.0, 0.08);   // cm
-        if (capN == 0 && sd < -insetF) {
+        if (!PES_IS_BIB && capN == 0 && sd < -insetF) {
             float3 corr = -(sd + insetF) * rnrm1;
             x += corr;
             xPrev += corr * (1.0 - g_bodyBounce);
-        } else if (pesFit < 0.0 && sd > 0.0) {
+        } else if (!PES_IS_BIB && pesFit < 0.0 && sd > 0.0) {
             // ancho: la tela que quedo despegada se acerca al cuerpo (se marca el torso), sin inyectar velocidad
             float pull = min(sd, 0.03) * saturate(-pesFit / 0.006) * PES_FIT_CLING * fitFree;
             x -= rnrm1 * pull; xPrev -= rnrm1 * pull;
+        }
+        if (PES_IS_BIB) {   // (15/11 c) ver PES_BIB_IN
+            float3 nO = rnrm1;
+            if (s_tOk) { float3 ro = rest1 - s_tC; ro -= s_tUp * dot(ro, s_tUp); if (dot(nO, ro) < 0.0) nO = -nO; }
+            float sdB = dot(x - restT, nO);
+            if (sdB < -PES_BIB_IN) { float3 corrB = (-PES_BIB_IN - sdB) * nO; x += corrB; xPrev += corrB * (1.0 - g_bodyBounce); }
         }
         if (legTracked) {
             float3 ly = 0, ln = 0;
@@ -1552,7 +1575,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                           s_windLen = 2.0; }
             s_pesWindOn = pesWOn; s_windHem = pesEffOk ? pesEff.z : 1.0;
             if (s_menu && PES_MENU_BREEZE > 0.0 && length(windBase) < 0.1) {   // (15/11 b) brisa leve de los menus, con rachas lentas
-                windBase = mul(transpose(W), float3(0.92, 0.0, 0.39)) * (PES_MENU_BREEZE * (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0)));
+                windBase = mul(transpose(W), float3(0.92, 0.0, 0.39)) * (PES_MENU_BREEZE * (g_legCount > 0 ? PES_MENU_BREEZE_SHORTS : 1.0) * (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0)));
                 s_windLen = 1.5; }
             // PES21 FX (25/10): el cuerpo real de este personaje (cuerpo.cpp): de las tablas que la DLL armo en el ultimo Present (una
             // por personaje, con la piel del cuadro anterior), la que tiene su origen en el mundo mas cerca del de la prenda
