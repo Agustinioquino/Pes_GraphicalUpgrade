@@ -392,7 +392,7 @@ static void PanelShow(void* page, bool on) {
 }
 // hilo del juego, una vez por cuadro con la pagina del Motor activa
 static void UiTick(void* win) {
-    const bool wantPanel = s_uiPanel.load(std::memory_order_relaxed);
+    const bool wantPanel = false;      // (15/11 b, Agustin 02:23) la lista del Editar no se muestra nunca: "Vista" abre el panel propio (motorgizmo.cpp)
     if (!wantPanel || s_uiPanelApplied != 1) PanelShow(win, wantPanel);      // escondido: se sostiene en cada cuadro
     const bool wantPlayer = s_uiPlayer.load(std::memory_order_relaxed);
     if (wantPlayer != s_uiPlayerShown) {
@@ -405,6 +405,11 @@ static void UiTick(void* win) {
         }
     }
 }
+// (15/11 b) las mismas opciones de las filas, para el panel propio (hilo de Present)
+int MotorViewCount(int row) { return row >= 0 && row < kNFilas ? kFilas[row].n : 0; }
+const char* MotorViewName(int row, int op) { if (row < 0 || row >= kNFilas) return ""; return op < 0 ? kFilas[row].nombre : op < kFilas[row].n ? kFilas[row].op[op] : ""; }
+int MotorViewGet(int row) { return row >= 0 && row < kNFilas ? FilaActual(row) : 0; }
+void MotorViewSet(int row, int op) { my_Value(nullptr, 0, row, op); }
 bool MotorUiOn() { return g_cfg.motorOwnMenu != 0 && g_cfg.motorPage != 0 && s_ok && MotorPageActive(); }
 bool MotorUiPanel() { return s_uiPanel.load(std::memory_order_relaxed); }
 bool MotorUiPlayer() { return s_uiPlayer.load(std::memory_order_relaxed); }

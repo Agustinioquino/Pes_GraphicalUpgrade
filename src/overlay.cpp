@@ -3001,7 +3001,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         const ImVec2 pts[4] = { a, b, c, d }; dl->AddPolyline(pts, 4, IM_COL32(0, 0, 0, 255), ImDrawFlags_Closed, 1.4f * k);
     }
     float hintH = 0.0f;
-    if (mouseHintA > 0.0f) {   // (14/11 d) "clic izquierdo seleccionar / avanzar, clic derecho volver" en el idioma del menu
+    if (mouseHintA > 0.0f && !MotorUiOn()) {   // (15/11 b: en el Motor no va, tiene su menu)   // (14/11 d) "clic izquierdo seleccionar / avanzar, clic derecho volver" en el idioma del menu
         const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
         hintH = MvMouseHint(ImGui::GetForegroundDrawList(), ImVec2(ds.x - 18.0f * k, ds.y - 18.0f * k), k, mouseHintA, TRS("Seleccionar / avanzar"), TRS("Volver")) + 6.0f * k;
     }

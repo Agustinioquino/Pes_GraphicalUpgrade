@@ -1510,6 +1510,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     if (UiHideShouldSkip(c, ps ? ps->hash : 0)) { d.skip = true; return d.n > 0; }   // (08/11 e) x392: menus del juego ocultos (sin vidrio ni aro)
     { ID3D11PixelShader* edge_ = nullptr;
       if (ID3D11ShaderResourceView* bg_ = EditorBgFor(c, ps ? ps->hash : 0, &edge_)) { Remember(c, d, true, true, 8); c->PSSetShaderResources(8, 1, &bg_); }
+      else if (!edge_ && MotorUiSkipGameDraw(c, ps ? ps->hash : 0)) { d.skip = true; return d.n > 0; }   // (15/11 b) menu propio del Motor: sin la interfaz del juego
       if (edge_ && !d.restorePS) { c->PSGetShader(&d.restorePS, nullptr, nullptr); c->PSSetShader(edge_, nullptr, 0); } }   // (10/11 m042wp) borde del jugador sin el gris del fondo del juego   // (08/11 qk2yxa) x424: fondo del visor del editor negro / imagen propia
     GlassBeforeDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts, d.glass);   // (24/10) vidrio de los menus: GS + PS propios (se devuelven en FX_DRAW)
     RingBeforeDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, d.ring);   // (24/10 c) aro del musculo: variante de la piel / dibujo extra encima del jugador

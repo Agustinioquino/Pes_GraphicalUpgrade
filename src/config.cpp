@@ -167,6 +167,7 @@ static bool LoadConfigLocked() {
             else if (kl == "motor_pagina") c.motorPage = atoi(v.c_str()) != 0 ? 1 : 0;   // (11/11) filas nativas del Motor en el estudio
             else if (kl == "motor_panel_x") c.motorPanelX = (float)atof(v.c_str());   // (11/11) panel del Motor corrido con el mouse (escenario 1920 x 1080)
             else if (kl == "motor_panel_y") c.motorPanelY = (float)atof(v.c_str());
+            else if (kl == "motor_interfaz_juego") c.motorGameUi = atoi(v.c_str()) != 0;      // (15/11 b) 1 = con el menu propio del Motor igual se ve la interfaz del juego
             else if (kl == "motor_menu_propio") c.motorOwnMenu = atoi(v.c_str()) != 0;        // (15/11) 1 = el Motor abre con su barra de iconos, sin la lista del Editar
             else if (kl == "motor_grilla") c.motorGrid = atoi(v.c_str()) != 0;               // (15/11) 1 = fondo con grilla de piso
             else if (kl == "motor_jugador_al_abrir") c.motorStartPlayer = atoi(v.c_str()) != 0;   // (15/11) 1 = carga al jugador al abrir (0 = solo el menu)

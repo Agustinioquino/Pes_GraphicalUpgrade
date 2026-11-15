@@ -392,6 +392,22 @@ static ID3D11PixelShader* EditorEdgePS(ID3D11DeviceContext* c, const D3D11_TEXTU
     return s_edgePS;
 }
 
+// (15/11 b, Agustin 02:23: "no me gusta el diseño que se parezca tanto al modo editar quiero menus nuevos") con el menu propio del
+// Motor abierto no se dibuja NADA de la interfaz del juego (lista, titulo, logo del parche, ayudas): solo pasan el fondo (que
+// EditorBgFor ya cambio por la grilla; este filtro se llama despues y solo si no lo cambio) y la imagen del jugador (textura
+// render target en t8). [PES21FX] motor_interfaz_juego = 1 la deja a la vista.
+bool MotorUiSkipGameDraw(ID3D11DeviceContext* c, uint64_t ps) {
+    if (ps != kUiPS || g_cfg.motorGameUi != 0 || !MotorUiOn()) return false;
+    ID3D11ShaderResourceView* t8 = nullptr; c->PSGetShaderResources(8, 1, &t8);
+    if (!t8) return true;
+    bool rt = false;
+    { ID3D11Resource* r = nullptr; t8->GetResource(&r);
+      if (r) { ID3D11Texture2D* t2 = nullptr; r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t2); r->Release();
+          if (t2) { D3D11_TEXTURE2D_DESC d; t2->GetDesc(&d); rt = (d.BindFlags & D3D11_BIND_RENDER_TARGET) != 0; t2->Release(); } } }
+    t8->Release();
+    return !rt;
+}
+
 ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps, ID3D11PixelShader** edgePS) {
     if (edgePS) *edgePS = nullptr;
     int mode = (int)(g_cfg.live[424][0] + 0.5f);
@@ -437,7 +453,10 @@ ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps, ID3D1
     const bool big = d.Width >= 1024 && ar > 1.45f && ar < 1.95f;      // fondo de pantalla completa (los atlas del menu son cuadrados o 2:1)
     if (s_bgDiag.fetch_add(1) < 12) Log("fondo del editor: dibujo del menu antes de la escena con textura %ux%u -> %s", d.Width, d.Height, big ? "fondo (se cambia)" : "se deja");
     if (!big) { s_bgNSmall.fetch_add(1, std::memory_order_relaxed); return nullptr; }
-    if (noComp && !known && s_bgMotorNew.exchange(true)) return nullptr;
+    // (15/11 b) ANTES: "if (noComp && !known && s_bgMotorNew.exchange(true)) return nullptr;" (una sola textura nueva por cuadro).
+    // Video de Agustin 23.20.50: el fondo azul de Dream Patch volvia 1 de cada 3 cuadros. El fondo se dibuja ~11 veces por cuadro
+    // (log: 1780 cambios por segundo) con mas de 4 texturas distintas, la lista de conocidas (4) rotaba y por cuadro quedaba una
+    // sin cambiar. Sin ese tope: con el estudio del Motor abierto y sin escena, todo dibujo apaisado grande del menu es fondo.
     if (!known && resId) { const int k = s_bgKnownN.fetch_add(1) & 3; s_bgKnown[k].store(resId, std::memory_order_relaxed); }   // se recuerda la textura del fondo (solo el puntero, sin AddRef)
     std::lock_guard<std::mutex> lk(s_bgMx);
     ID3D11ShaderResourceView* v = nullptr;

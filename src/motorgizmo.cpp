@@ -14,6 +14,7 @@
 #include <imgui.h>
 #include <WICTextureLoader.h>
 #include <string>
+#include <cctype>
 #include <atomic>
 #include <cmath>
 #include <algorithm>
@@ -38,7 +39,6 @@ bool MotorGizmoPoll() { return (g_cfg.motorGizmo != 0 || MotorUiOn()) && MotorPa
 static const char* const kIconFile[4] = { "volver", "vista", "jugador", "grilla" };
 static const char* const kIconTip[4] = { "Volver", "Vista y render", "Jugador", "Grilla" };
 static ID3D11ShaderResourceView* s_icon[4] = {}; static bool s_iconTried = false;
-static std::atomic<float> s_tx0{0}, s_ty0{0}, s_tx1{0}, s_ty1{0};      // rect de la barra en pixeles de la ventana
 static bool s_tlWas = false; static int s_tPress = -1;
 
 static void IconsLoad() {
@@ -82,19 +82,61 @@ static void IconFallback(ImDrawList* dl, int i, const ImVec2& o, float s, ImU32 
         }
     }
 }
+// (15/11 b) Agustin 02:21 / 02:23: "no me gusta la forma de los menus", "quiero menus nuevos ... con formas nuevas, funciones
+// nuevas". Forma nueva, sin nada del Editar: boton redondo Volver arriba a la izquierda, una CAPSULA flotante abajo al centro
+// con Vista / Jugador / Grilla (icono + nombre) y, al tocar Vista, una TARJETA flotante encima de la capsula con las vistas del
+// render como pastillas (se elige con un clic, sin listas ni flechas izquierda / derecha), Alambre y Pantalla partida como
+// selectores partidos. La lista nativa del Editar ya no se muestra nunca (motorpage.cpp UiTick).
+bool MotorGizmoOver(float px, float py);
+static std::atomic<float> s_hr[3][4];                // zonas que tapan el clic: 0 volver, 1 capsula, 2 tarjeta (pixeles de la ventana)
+static std::atomic<int> s_hrN{0};
+static float s_cardA = 0.0f;                         // 0..1: aparicion de la tarjeta
 static void ToolbarDraw() {
     if (!s_iconTried) IconsLoad();
     ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
-    const float k = std::max(1.0f, ds.y / 1080.0f), bs = 46.0f * k, gap = 8.0f * k, mg = 26.0f * k;
+    const float k = std::max(1.0f, ds.y / 1080.0f);
     float mx = -1.0e6f, my = -1.0e6f, sx = 1.0f, sy = 1.0f; bool front = false;
     { HWND h = OverlayHwnd(); POINT p{}; RECT rc{};
       if (h && GetForegroundWindow() == h && GetCursorPos(&p) && ScreenToClient(h, &p) && GetClientRect(h, &rc) && rc.right > rc.left && rc.bottom > rc.top) {
           sx = (float)(rc.right - rc.left) / ds.x; sy = (float)(rc.bottom - rc.top) / ds.y; mx = (float)p.x / sx; my = (float)p.y / sy; front = true; } }
-    ImVec2 b[4]; b[0] = ImVec2(mg, mg);
-    for (int i = 1; i < 4; i++) b[i] = ImVec2(mg, mg + bs + 18.0f * k + (float)(i - 1) * (bs + gap));
-    s_tx0.store(mg * sx); s_ty0.store(mg * sy); s_tx1.store((mg + bs) * sx); s_ty1.store((b[3].y + bs) * sy);
-    int hot = -1;
-    for (int i = 0; i < 4; i++) if (mx >= b[i].x && mx <= b[i].x + bs && my >= b[i].y && my <= b[i].y + bs) hot = i;
+    ImFont* font = ImGui::GetFont();
+    const ImU32 ink = IM_COL32(236, 239, 244, 255), dim = IM_COL32(150, 158, 172, 255), acc = IM_COL32(86, 156, 255, 255);
+    auto in = [&](const ImVec2& a, const ImVec2& b) { return mx >= a.x && mx <= b.x && my >= a.y && my <= b.y; };
+    int nz = 0;
+    auto zone = [&](const ImVec2& a, const ImVec2& b) { if (nz < 3) { s_hr[nz][0].store(a.x * sx); s_hr[nz][1].store(a.y * sy); s_hr[nz][2].store(b.x * sx); s_hr[nz][3].store(b.y * sy); nz++; } };
+    int hot = -1;                                    // 0 volver, 1..3 capsula, 100 + fila * 16 + opcion = pastilla de la tarjeta
+    // --- Volver: boton redondo + titulo ---
+    const float br = 23.0f * k; const ImVec2 bc(34.0f * k + br, 30.0f * k + br);
+    const ImVec2 b0(bc.x - br, bc.y - br), b1(bc.x + br, bc.y + br); zone(b0, b1);
+    if (in(b0, b1)) hot = 0;
+    // --- capsula ---
+    const float cw = 104.0f * k, ch = 70.0f * k, padx = 10.0f * k; const float W = cw * 3.0f + padx * 2.0f;
+    const ImVec2 d0((ds.x - W) * 0.5f, ds.y - 34.0f * k - ch), d1(d0.x + W, d0.y + ch); zone(d0, d1);
+    ImVec2 c0[4], c1[4];
+    for (int i = 1; i < 4; i++) { c0[i] = ImVec2(d0.x + padx + (float)(i - 1) * cw, d0.y + 6.0f * k); c1[i] = ImVec2(c0[i].x + cw, d1.y - 6.0f * k); if (in(c0[i], c1[i])) hot = i; }
+    // --- tarjeta de vistas ---
+    const bool open = MotorUiPanel();
+    { const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime); s_cardA = open ? std::min(1.0f, s_cardA + dt * 9.0f) : std::max(0.0f, s_cardA - dt * 12.0f); }
+    struct Chip { ImVec2 a, b; int row, op; }; Chip chips[24]; int nchip = 0;
+    const float cardW = 620.0f * k, cpad = 22.0f * k, chipH = 36.0f * k, cgap = 8.0f * k, secH = 30.0f * k;
+    const int nV = MotorViewCount(0), nA = MotorViewCount(1), nC = MotorViewCount(2), cols = 3, rowsV = (nV + cols - 1) / cols;
+    const float cardH = cpad + secH + (float)rowsV * (chipH + cgap) + 8.0f * k + secH + chipH + 14.0f * k + secH + chipH + cpad;
+    const float rise = (1.0f - s_cardA) * 14.0f * k;
+    const ImVec2 k0((ds.x - cardW) * 0.5f, d0.y - 18.0f * k - cardH + rise), k1(k0.x + cardW, k0.y + cardH);
+    float yV = 0, yA = 0, yC = 0;
+    if (s_cardA > 0.0f) {
+        if (open) zone(k0, k1);
+        float y = k0.y + cpad; yV = y; y += secH;
+        const float cwv = (cardW - cpad * 2.0f - cgap * (float)(cols - 1)) / (float)cols;
+        for (int i = 0; i < nV && nchip < 24; i++) { const int cx = i % cols, cy = i / cols; const ImVec2 a(k0.x + cpad + (float)cx * (cwv + cgap), y + (float)cy * (chipH + cgap)); chips[nchip++] = { a, ImVec2(a.x + cwv, a.y + chipH), 0, i }; }
+        y += (float)rowsV * (chipH + cgap) + 8.0f * k; yA = y; y += secH;
+        for (int r = 1; r <= 2; r++) { const int n = r == 1 ? nA : nC; const float w = (cardW - cpad * 2.0f) / (float)std::max(1, n);
+            for (int i = 0; i < n && nchip < 24; i++) { const ImVec2 a(k0.x + cpad + (float)i * w, y); chips[nchip++] = { a, ImVec2(a.x + w, a.y + chipH), r, i }; }
+            if (r == 1) { y += chipH + 14.0f * k; yC = y; y += secH; } }
+        if (open) for (int i = 0; i < nchip; i++) if (in(chips[i].a, chips[i].b)) hot = 100 + chips[i].row * 16 + chips[i].op;
+    }
+    s_hrN.store(nz);
+    // --- clic (al soltar, sobre lo mismo que se apreto) ---
     const bool lNow = front && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0; const bool lEdge = lNow && !s_tlWas, lUp = !lNow && s_tlWas; s_tlWas = lNow;
     if (lEdge) s_tPress = hot;
     if (lUp) {
@@ -102,34 +144,61 @@ static void ToolbarDraw() {
             if (hot == 0) MotorUiBack();
             else if (hot == 1) MotorUiTogglePanel();
             else if (hot == 2) MotorUiTogglePlayer();
-            else { g_cfg.motorGrid = g_cfg.motorGrid ? 0 : 1; }
-            Log("motor (iconos): clic en %s", kIconTip[hot]);
-        }
+            else if (hot == 3) g_cfg.motorGrid = g_cfg.motorGrid ? 0 : 1;
+            else if (hot >= 100) MotorViewSet((hot - 100) / 16, (hot - 100) % 16);
+            if (hot < 100) Log("motor (menu): clic en %s", kIconTip[hot]);
+        } else if (s_tPress < 0 && hot < 0 && open && !MotorGizmoOver(mx * sx, my * sy)) MotorUiTogglePanel();      // clic afuera: cierra la tarjeta
         s_tPress = -1;
     }
     if (!lNow) s_tPress = -1;
-    const bool act[4] = { false, MotorUiPanel(), MotorUiPlayer(), g_cfg.motorGrid != 0 };
-    ImFont* font = ImGui::GetFont();
-    for (int i = 0; i < 4; i++) {
-        const bool hov = hot == i, down = hov && s_tPress == i;
-        const ImVec2 p1(b[i].x + bs, b[i].y + bs);
-        dl->AddRectFilled(b[i], p1, act[i] ? IM_COL32(58, 108, 196, 235) : IM_COL32(24, 27, 34, hov ? 240 : 200), 9.0f * k);
-        dl->AddRect(b[i], p1, IM_COL32(255, 255, 255, down ? 220 : hov ? 150 : 46), 9.0f * k, 0, 1.2f * k);
-        const ImVec2 o(b[i].x + bs * 0.5f, b[i].y + bs * 0.5f); const ImU32 ink = IM_COL32(236, 239, 244, 255);
-        if (s_icon[i]) { const float h2 = bs * 0.32f; dl->AddImage((ImTextureID)(uintptr_t)s_icon[i], ImVec2(o.x - h2, o.y - h2), ImVec2(o.x + h2, o.y + h2), ImVec2(0, 0), ImVec2(1, 1), ink); }
-        else IconFallback(dl, i, o, bs, ink, k);
-        if (hov && i > 0) {      // nombre al lado
-            const float fs = 16.0f * k; const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, kIconTip[i]);
-            const ImVec2 t0(p1.x + 10.0f * k, o.y - ts.y * 0.5f - 5.0f * k), t1(t0.x + ts.x + 16.0f * k, o.y + ts.y * 0.5f + 5.0f * k);
-            dl->AddRectFilled(t0, t1, IM_COL32(16, 18, 24, 235), 6.0f * k);
-            dl->AddText(font, fs, ImVec2(t0.x + 8.0f * k, o.y - ts.y * 0.5f), IM_COL32(236, 239, 244, 255), kIconTip[i]);
-        }
+    // --- dibujo: Volver ---
+    dl->AddCircleFilled(bc, br, IM_COL32(20, 23, 30, hot == 0 ? 245 : 215), 40);
+    dl->AddCircle(bc, br, IM_COL32(255, 255, 255, hot == 0 ? 150 : 40), 40, 1.2f * k);
+    if (s_icon[0]) { const float h2 = br * 0.62f; dl->AddImage((ImTextureID)(uintptr_t)s_icon[0], ImVec2(bc.x - h2, bc.y - h2), ImVec2(bc.x + h2, bc.y + h2), ImVec2(0, 0), ImVec2(1, 1), ink); }
+    else IconFallback(dl, 0, bc, br * 2.0f, ink, k);
+    {   const char* t = "Motor en tiempo real"; const float fs = 21.0f * k; const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, t);
+        const ImVec2 tp(b1.x + 14.0f * k, bc.y - ts.y * 0.5f);
+        dl->AddText(font, fs, ImVec2(tp.x + 1.0f, tp.y + 1.0f), IM_COL32(0, 0, 0, 170), t); dl->AddText(font, fs, tp, IM_COL32(236, 239, 244, 235), t); }
+    // --- dibujo: capsula ---
+    dl->AddRectFilled(ImVec2(d0.x, d0.y + 3.0f * k), ImVec2(d1.x, d1.y + 5.0f * k), IM_COL32(0, 0, 0, 70), ch * 0.5f);
+    dl->AddRectFilled(d0, d1, IM_COL32(20, 23, 30, 232), ch * 0.5f);
+    dl->AddRect(d0, d1, IM_COL32(255, 255, 255, 34), ch * 0.5f, 0, 1.2f * k);
+    const bool act[4] = { false, open, MotorUiPlayer(), g_cfg.motorGrid != 0 };
+    for (int i = 1; i < 4; i++) {
+        const bool hov = hot == i, down = hov && s_tPress == i; const float rr = (c1[i].y - c0[i].y) * 0.5f;
+        if (hov || act[i]) dl->AddRectFilled(c0[i], c1[i], act[i] ? IM_COL32(86, 156, 255, down ? 70 : hov ? 56 : 40) : IM_COL32(255, 255, 255, down ? 34 : 20), rr);
+        const ImU32 col = act[i] ? acc : hov ? ink : IM_COL32(206, 212, 222, 255);
+        const ImVec2 o((c0[i].x + c1[i].x) * 0.5f, c0[i].y + 22.0f * k); const float h2 = 13.0f * k;
+        if (s_icon[i]) dl->AddImage((ImTextureID)(uintptr_t)s_icon[i], ImVec2(o.x - h2, o.y - h2), ImVec2(o.x + h2, o.y + h2), ImVec2(0, 0), ImVec2(1, 1), col);
+        else IconFallback(dl, i, o, 44.0f * k, col, k);
+        const char* t = i == 1 ? "Vista" : kIconTip[i]; const float fs = 13.5f * k; const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, t);
+        dl->AddText(font, fs, ImVec2(o.x - ts.x * 0.5f, c1[i].y - ts.y - 7.0f * k), col, t);
     }
-    {   // titulo al lado del boton Volver
-        const char* t = "Motor en tiempo real"; const float fs = 22.0f * k; const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, t);
-        const ImVec2 tp(mg + bs + 14.0f * k, mg + (bs - ts.y) * 0.5f);
-        dl->AddText(font, fs, ImVec2(tp.x + 1.0f, tp.y + 1.0f), IM_COL32(0, 0, 0, 190), t);
-        dl->AddText(font, fs, tp, IM_COL32(236, 239, 244, 240), t);
+    // --- dibujo: tarjeta ---
+    if (s_cardA > 0.0f) {
+        const float A = s_cardA; auto al = [&](ImU32 c, float m = 1.0f) { const int a = (int)((float)(c >> 24) * A * m); return (c & 0x00ffffffu) | ((ImU32)a << 24); };
+        const float rad = 20.0f * k;
+        dl->AddRectFilled(ImVec2(k0.x, k0.y + 5.0f * k), ImVec2(k1.x, k1.y + 8.0f * k), al(IM_COL32(0, 0, 0, 80)), rad);
+        dl->AddRectFilled(k0, k1, al(IM_COL32(20, 23, 30, 240)), rad);
+        dl->AddRect(k0, k1, al(IM_COL32(255, 255, 255, 34)), rad, 0, 1.2f * k);
+        { const float tx = (c0[1].x + c1[1].x) * 0.5f, tw = 10.0f * k; dl->AddTriangleFilled(ImVec2(tx - tw, k1.y - 1.0f), ImVec2(tx + tw, k1.y - 1.0f), ImVec2(tx, k1.y + tw), al(IM_COL32(20, 23, 30, 240))); }
+        const float fsS = 12.5f * k, fsC = 15.0f * k;
+        const float ys[3] = { yV, yA, yC };
+        for (int r = 0; r < 3; r++) { char up[40]; const char* nm = MotorViewName(r, -1); int q = 0; for (; nm[q] && q < 38; q++) up[q] = (char)toupper((unsigned char)nm[q]); up[q] = 0;
+            dl->AddText(font, fsS, ImVec2(k0.x + cpad + 2.0f * k, ys[r] + 6.0f * k), al(dim), up); }
+        // fondo comun de los selectores partidos
+        for (int r = 1; r <= 2; r++) { ImVec2 a(0, 0), b(0, 0); bool any = false; for (int i = 0; i < nchip; i++) if (chips[i].row == r) { if (!any) { a = chips[i].a; any = true; } b = chips[i].b; }
+            if (any) dl->AddRectFilled(a, b, al(IM_COL32(255, 255, 255, 14)), chipH * 0.5f); }
+        const int cur[3] = { MotorViewGet(0), MotorViewGet(1), MotorViewGet(2) };
+        for (int i = 0; i < nchip; i++) {
+            const Chip& c = chips[i]; const int id = 100 + c.row * 16 + c.op; const bool on = cur[c.row] == c.op, hov = hot == id, down = hov && s_tPress == id;
+            const ImVec2 a(c.a.x + (c.row ? 3.0f * k : 0.0f), c.a.y + (c.row ? 3.0f * k : 0.0f)), b(c.b.x - (c.row ? 3.0f * k : 0.0f), c.b.y - (c.row ? 3.0f * k : 0.0f)); const float rr = (b.y - a.y) * 0.5f;
+            if (on) dl->AddRectFilled(a, b, al(IM_COL32(86, 156, 255, down ? 255 : 235)), rr);
+            else if (c.row == 0) { dl->AddRectFilled(a, b, al(IM_COL32(255, 255, 255, down ? 40 : hov ? 28 : 12)), rr); if (hov) dl->AddRect(a, b, al(IM_COL32(255, 255, 255, 70)), rr, 0, 1.0f * k); }
+            else if (hov) dl->AddRectFilled(a, b, al(IM_COL32(255, 255, 255, down ? 40 : 24)), rr);
+            const char* t = MotorViewName(c.row, c.op); const ImVec2 ts = font->CalcTextSizeA(fsC, FLT_MAX, 0.0f, t);
+            dl->AddText(font, fsC, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), al(on ? IM_COL32(255, 255, 255, 255) : hov ? ink : IM_COL32(206, 212, 222, 255)), t);
+        }
     }
 }
 
@@ -137,7 +206,7 @@ static void ToolbarDraw() {
 bool MotorGizmoOver(float px, float py) {
     if (Now() - s_drawT.load(std::memory_order_relaxed) > 0.3) return false;
     if (s_dragging.load(std::memory_order_relaxed)) return true;
-    if (MotorUiOn() && px >= s_tx0.load() && px <= s_tx1.load() && py >= s_ty0.load() && py <= s_ty1.load()) return true;   // barra de iconos
+    if (MotorUiOn()) { const int n = s_hrN.load(); for (int i = 0; i < n && i < 3; i++) if (px >= s_hr[i][0].load() && px <= s_hr[i][2].load() && py >= s_hr[i][1].load() && py <= s_hr[i][3].load()) return true; }   // menu propio: volver, capsula, tarjeta
     const float dx = px - s_cx.load(), dy = py - s_cy.load(), r = s_rad.load() * 1.22f;
     if (dx * dx + dy * dy <= r * r) return true;
     return px >= s_bx0.load() && px <= s_bx1.load() && py >= s_by0.load() && py <= s_by1.load();
