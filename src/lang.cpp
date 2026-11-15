@@ -1587,6 +1587,12 @@ static const char* const kPt[][2] = {
 static const char* const kMotor[][3] = {
     { "Motor en tiempo real", "Real-time Engine", "Motor em tempo real" },
     { "MOTOR EN TIEMPO REAL", "REAL-TIME ENGINE", "MOTOR EM TEMPO REAL" },
+    { "Abriendo el Motor", "Opening the Engine", "Abrindo o Motor" },
+    { "Armando la interfaz", "Building the interface", "Montando a interface" },
+    { "Leyendo la escena", "Reading the scene", "Lendo a cena" },
+    { "Cargando los iconos", "Loading the icons", "Carregando os \303\255cones" },
+    { "Volviendo al Editar", "Going back to Edit", "Voltando ao Editar" },
+    { "Listo", "Ready", "Pronto" },
     { "%d a %d de %d  \302\267  rueda del mouse: ver m\303\241s", "%d to %d of %d  \302\267  mouse wheel: see more", "%d a %d de %d  \302\267  roda do mouse: ver mais" },
     { "%d errores", "%d errors", "%d erros" },
     { "1 error", "1 error", "1 erro" },

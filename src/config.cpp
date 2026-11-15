@@ -172,6 +172,8 @@ static bool LoadConfigLocked() {
             else if (kl == "motor_menu_propio") c.motorOwnMenu = atoi(v.c_str()) != 0;        // (15/11) 1 = el Motor abre con su barra de iconos, sin la lista del Editar
             else if (kl == "motor_escala") c.motorScale = std::clamp((float)atof(v.c_str()), 0.8f, 2.0f);   // (15/11 h) tamano de la interfaz del editor del Motor
             else if (kl == "motor_grilla_tamano") c.motorGridSize = std::clamp(atoi(v.c_str()), 10, 400);   // (15/11) lado de la grilla en metros
+            else if (kl == "motor_sonido") c.motorSound = atoi(v.c_str()) != 0 ? 1 : 0;                     // (15/11 m) motorsound.cpp: sonido de la transicion
+            else if (kl == "motor_sonido_volumen") c.motorSoundVol = std::clamp(atoi(v.c_str()), 0, 100);
             else if (kl == "motor_grilla") c.motorGrid = atoi(v.c_str()) != 0;               // (15/11) 1 = fondo con grilla de piso
             else if (kl == "motor_jugador_al_abrir") c.motorStartPlayer = atoi(v.c_str()) != 0;   // (15/11) 1 = carga al jugador al abrir (0 = solo el menu)
             else if (kl == "motor_teclado") c.motorKeys = atoi(v.c_str()) != 0;      // (12/11) 1 = en el Motor el juego no ve el teclado (Esc = salir)
