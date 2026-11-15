@@ -798,6 +798,45 @@ bool MvWindWidget(MvWindIn& in) {
     };
     strip("##w_pa", kSiGrass, "Viento en el pasto", in.grass, ImVec4(0.40f, 0.80f, 0.42f, 1));
     strip("##w_ro", kSiShirt, "Viento en la ropa", in.cloth, ImVec4(0.55f, 0.75f, 1.0f, 1));
+    // (15/11 sk9ema, Agustin: "la altura en el viento no lo veo como un valor en el menu visual de viento") viento por altura: un
+    // dibujo de cuanto sopla a cada altura (flechas mas largas arriba) y sus tres valores, mas la remera por debajo y los banderines
+    auto strip2 = [&](const char* id, int ic, const char* label, float* v, float lo, float hi, ImVec4 fill, const char* tip) {
+        if (!v) return;
+        const ImVec2 lp = ImGui::GetCursorScreenPos(); char sub[80]; snprintf(sub, sizeof sub, "%s  %.2f", TRS(label), *v);
+        SmallIcon(dl, ImVec2(lp.x + 9.0f * k, lp.y + ImGui::GetFontSize() * 0.5f), 18.0f * k, ic, Col(0.85f, 0.87f, 0.9f, 1), in.anim ? (float)fmod(t, 3600.0) : 0.0f);
+        dl->AddText(ImVec2(lp.x + 22.0f * k, lp.y), Col(0.85f, 0.87f, 0.9f, 1), sub); ImGui::Dummy(ImVec2(1, ImGui::GetFontSize() + 2.0f * k));
+        if (Strip(id, v, lo, hi, bwAll, k, nullptr, 0, fill, in.anim)) changed = true;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS(tip));
+    };
+    if (in.profile) {
+        ImGui::Dummy(ImVec2(1, 3.0f * k));
+        const ImVec2 hp0 = ImGui::GetCursorScreenPos(); const float fs = ImGui::GetFontSize(), rowH = fs + 3.0f * k;
+        dl->AddText(hp0, Col(0.95f, 0.96f, 0.98f, 1), TRS("Viento por altura"));
+        static const char* kRow[5] = { "Arriba de la tribuna", "Cabeza", "Banderin", "Ropa", "Pasto" };
+        const float kv[5] = { in.kTop, 1.0f, in.kFlag, in.kCloth, in.kGrass };
+        float lw = 0.0f; for (int i = 0; i < 5; i++) lw = std::max(lw, ImGui::CalcTextSize(TRS(kRow[i])).x);
+        const float x0 = hp0.x + lw + 10.0f * k, vw = ImGui::CalcTextSize("00.0 m/s  x0.00").x + 12.0f * k, x1 = std::max(x0 + 30.0f * k, hp0.x + bwAll - vw);
+        const float mx = std::max(2.0f, in.kTop);
+        for (int i = 0; i < 5; i++) {
+            const float y = hp0.y + rowH * (float)(i + 1), yc = y + fs * 0.5f, u = Sat(kv[i] / mx);
+            const float sway = in.anim && in.live ? sinf((float)fmod(t * (2.0 + i * 0.37), 6.2831853)) * 1.5f * k * u : 0.0f;
+            const float xe = x0 + (x1 - x0) * u + sway;
+            const ImU32 c = Col(0.55f + 0.30f * u, 0.80f + 0.12f * u, 1.0f, 0.95f);
+            dl->AddText(ImVec2(hp0.x, y), Col(0.80f, 0.83f, 0.88f, 1), TRS(kRow[i]));
+            dl->AddLine(ImVec2(x0, yc), ImVec2(x1, yc), Col(1, 1, 1, 0.10f), 1.0f);
+            dl->AddLine(ImVec2(x0, yc), ImVec2(xe, yc), c, 2.2f * k);
+            dl->AddTriangleFilled(ImVec2(xe + 5.0f * k, yc), ImVec2(xe - 1.0f * k, yc - 3.5f * k), ImVec2(xe - 1.0f * k, yc + 3.5f * k), c);
+            char b[48]; if (in.live) snprintf(b, sizeof b, "%.1f m/s  x%.2f", in.speed * kv[i], kv[i]); else snprintf(b, sizeof b, "x%.2f", kv[i]);
+            dl->AddText(ImVec2(x1 + 8.0f * k, y), Col(0.85f, 0.87f, 0.9f, 1), b);
+        }
+        ImGui::Dummy(ImVec2(bwAll, rowH * 6.0f + 2.0f * k));
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Cuanto sopla a cada altura respecto de la cabeza (1.8 m). Arriba sopla mas; contra el pasto el aire se frena."));
+        strip2("##w_hp", kSiWave, "Perfil por altura", in.profile, 0.0f, 1.0f, ImVec4(0.60f, 0.85f, 1.0f, 1), "0 = el mismo viento a cualquier altura. 1 = real: al ras del pasto llega cerca del 30 % del de la cabeza.");
+        strip2("##w_hf", kSiGrass, "Minimo al ras del suelo", in.floorK, 0.0f, 1.0f, ImVec4(0.40f, 0.80f, 0.42f, 1), "Lo menos que le llega al pasto, aunque el perfil diga menos.");
+        strip2("##w_ht", kSiStadium, "Tope arriba", in.topK, 1.0f, 3.0f, ImVec4(0.75f, 0.80f, 0.95f, 1), "Cuanto mas fuerte puede ser arriba (tribunas, techo de la red) que a la altura de la cabeza.");
+    }
+    strip2("##w_he", kSiShirt, "Por debajo de la remera", in.hem, 0.0f, 2.0f, ImVec4(0.55f, 0.75f, 1.0f, 1), "El ruedo de la remera y la boca del short: el aire entra por debajo, les pega mas y los levanta un poco. 0 = sin eso.");
+    strip2("##w_fl", kSiGust, "Viento en los banderines", in.flag, 0.0f, 3.0f, ImVec4(1.0f, 0.82f, 0.35f, 1), "Cuanto viento le llega a la tela de los banderines del corner. 0 = cuelgan siempre.");
     ImGui::EndGroup();
     const float yEnd = std::max(ImGui::GetItemRectMax().y, p0.y + D);
     ImGui::SetCursorScreenPos(ImVec2(p0.x, yEnd + 4.0f * k)); ImGui::Dummy(ImVec2(avail, 1.0f));

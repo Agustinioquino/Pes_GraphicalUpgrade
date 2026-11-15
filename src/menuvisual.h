@@ -58,6 +58,13 @@ struct MvWindIn {
     float* shelter = nullptr;     // y503 reparo a mano
     float* grass = nullptr;       // z503 viento en el pasto
     float* cloth = nullptr;       // w503 viento en la ropa
+    // (15/11 sk9ema, Agustin: "la altura en el viento no lo veo como un valor en el menu visual de viento")
+    float* profile = nullptr;     // x508 perfil por altura (0 parejo .. 1 real)
+    float* floorK = nullptr;      // y508 minimo al ras del suelo
+    float* topK = nullptr;        // z508 tope arriba
+    float* hem = nullptr;         // w508 viento por debajo de la remera (solo el ruedo)
+    float* flag = nullptr;        // y514 viento en los banderines del corner
+    float kGrass = 0.3f, kCloth = 0.9f, kFlag = 0.95f, kTop = 1.6f;   // viento a 0.08 / 1.2 / 1.4 / 20 m sobre el de la cabeza (1.8 m)
     bool anim = true; float k = 1.0f; double now = 0.0;
 };
 bool MvWindWidget(MvWindIn& in);
