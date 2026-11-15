@@ -516,6 +516,18 @@ static bool TeamSelStep(void* win, uint8_t* I, float mx, float my, double now) {
 // la X de la ventana y el nodo de flujo ProcExit, 0x141265760, ponen 1). Primer clic: "Salir? clic otra vez"; segundo clic
 // (dentro de 4 s) cierra. [PES21FX] mouse_boton_salir = 0 lo saca.
 static const uintptr_t kTopModeVt = 0x142676ea8ull, kGameRoot = 0x143713268ull;
+// (Agustin 04:19: "que funcione como la opcion de salir") el boton manda el MISMO evento que la opcion Salir del menu principal:
+// TopMenu/TopMenuNew.json "24_Exit" -> ProcExit (0x141265760, que solo pone [0x143713268]+0xfc = 1, sin guardar nada aparte).
+// Se dispara con 0x140ab1f10 (TopModeSelect: animacion de salida "dmmOut" + 0x140e45290 = evento del flujo, lo mismo que hace su
+// vf49 al aceptar una tarjeta). Si a los 3 s el juego sigue (flujo sin ese evento en otro parche), se pone el 1 directo.
+static const uintptr_t kTopModeNext = 0x140ab1f10ull;
+static const unsigned char kTopModeNextSig[28] = { 0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xec,0x20,0x48,0x8b,0xd9,0x49,0x8b,0xf8,0x48,0x8b,0x89,0xe0,0x00,0x00,0x00 };
+static double s_exitFallT = -1.0;
+static void ExitFallback(double now) {
+    if (s_exitFallT < 0 || now - s_exitFallT < 3.0) return;
+    s_exitFallT = -1.0; uint8_t* gr = *(uint8_t**)kGameRoot;
+    if (Ptr(gr) && gr[0xfc] == 0) { gr[0xfc] = 1; Log("mouse en menus: boton Salir: el flujo no cerro en 3 s -> se cierra como la X de la ventana"); }
+}
 static std::atomic<double> s_exitShowT{-1.0e9}, s_exitArmT{-1.0e9};
 static std::atomic<float> s_exitX{0}, s_exitY{0}, s_exitW{0}, s_exitH{0};
 static std::atomic<bool> s_exitHover{false};
@@ -552,7 +564,7 @@ static void Step(void* win) {
     const bool batch = fresh || now - s_m.t > 0.004;
     s_stepT = now; s_pendWin = nullptr; s_pendAction = -1; s_pendDxWin = nullptr;
     if (fresh) { s_wheelAcc = 0; s_wheel.store(0); s_latchWin = nullptr; s_extraAct = -1; s_wheelOptWin = nullptr; }
-    if (batch) { Sample(now, fresh); GuideSync(now); }   // siempre, para no inventar un clic al volver del menu de PES21FX
+    if (batch) { Sample(now, fresh); GuideSync(now); ExitFallback(now); }   // siempre, para no inventar un clic al volver del menu de PES21FX
     // (12/11) en el Motor el juego no ve el teclado (freecam.cpp FreeCamBlocksKeys): Esc = "volver" lo pone la DLL, este o no el
     // mouse en menus prendido, para que siempre se pueda salir sin mando
     if (g_cfg.motorKeys != 0 && Ptr(win) && MotorPageIs(win) && !g_menuOpen.load(std::memory_order_relaxed)) {
@@ -654,8 +666,12 @@ static void Step(void* win) {
             if (s_m.lEdge && over) {
                 s_m.lEdge = false; s_moveT.store(now);
                 if (now - s_exitArmT.load() < 4.0) {
-                    uint8_t* gr = *(uint8_t**)kGameRoot;
-                    if (Ptr(gr)) { gr[0xfc] = 1; Log("mouse en menus: boton Salir del juego -> se cierra el juego (como la X de la ventana)"); }
+                    if (SigAt(kTopModeNext, kTopModeNextSig, sizeof kTopModeNextSig)) {
+                        ((void (*)(void*, unsigned char, const char*))kTopModeNext)(win, 0, "24_Exit");
+                        Log("mouse en menus: boton Salir del juego -> evento 24_Exit (la opcion Salir del menu principal)");
+                    } else Log("mouse en menus: boton Salir del juego: 0x140ab1f10 no coincide, se cierra como la X de la ventana");
+                    s_exitFallT = SigAt(kTopModeNext, kTopModeNextSig, sizeof kTopModeNextSig) ? now : now - 3.0;
+                    ExitFallback(now);
                     s_exitArmT.store(-1.0e9);
                 } else { s_exitArmT.store(now); Log("mouse en menus: boton Salir del juego: primer clic (falta confirmar)"); }
                 return;

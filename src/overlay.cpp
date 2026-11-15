@@ -3009,10 +3009,15 @@ void OverlayPresent(IDXGISwapChain* sc) {
             dl->PathArcTo(ImVec2(cx, cy), r, -3.14159f * 0.5f + 0.7f, 3.14159f * 1.5f - 0.7f, 20); dl->PathStroke(fg, 0, std::max(2.0f, bh * 0.065f));
             dl->AddLine(ImVec2(cx, cy - r * 1.18f), ImVec2(cx, cy - r * 0.15f), fg, std::max(2.0f, bh * 0.065f));
             if (st >= 1) {                                                   // con el mouse encima, el nombre; armado, el aviso
-                const char* txt = TRS(st == 2 ? "Salir? Clic otra vez" : "Salir del juego"); const ImVec2 ts = ImGui::CalcTextSize(txt), pad(10.0f * k, 6.0f * k);
+                // (Agustin 04:19: "una fuente mas similar a la de game settings y bajarle la opacidad al fondo del texto y al texto")
+                // negrita condensada del menu (Saira Semi Condensed, si esta) en mayusculas, gris claro translucido sobre fondo tenue
+                const char* src = TRS(st == 2 ? "Salir? Clic otra vez" : "Salir del juego");
+                char up[96]; size_t n = 0; for (; src[n] && n < sizeof up - 1; n++) up[n] = (src[n] >= 'a' && src[n] <= 'z') ? (char)(src[n] - 32) : src[n]; up[n] = 0;
+                ImFont* f = s_fontBold ? s_fontBold : ImGui::GetFont(); const float fs = std::max(f->FontSize, bh * 0.42f);
+                const ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, up), pad(12.0f * k, 5.0f * k);
                 const ImVec2 t1(bx - 8.0f * k, cy + ts.y * 0.5f + pad.y), t0(t1.x - ts.x - pad.x * 2, cy - ts.y * 0.5f - pad.y);
-                dl->AddRectFilled(t0, t1, IM_COL32(12, 22, 50, 215), 5.0f * k);
-                dl->AddText(ImVec2(t0.x + pad.x, t0.y + pad.y), IM_COL32(255, 255, 255, 255), txt);
+                dl->AddRectFilled(t0, t1, st == 2 ? IM_COL32(110, 20, 28, 120) : IM_COL32(18, 34, 80, 110), rr);
+                dl->AddText(f, fs, ImVec2(t0.x + pad.x, t0.y + pad.y), IM_COL32(205, 212, 226, 200), up);
             }
         }
     }
