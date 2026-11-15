@@ -521,7 +521,8 @@ static void Step(void* win) {
         static bool s_escWas = true; HWND h = OverlayHwnd();
         const bool esc = h && GetForegroundWindow() == h && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
         const bool edge = esc && !s_escWas && !fresh; s_escWas = esc;
-        if (edge) { s_pendWin = win; s_pendAction = 1; Log("mouse en menus: Esc en el Motor -> volver"); return; }
+        const bool btn = MotorUiTakeBack();              // (15/11) boton Volver de la barra de iconos del Motor (motorgizmo.cpp)
+        if (edge || btn) { s_pendWin = win; s_pendAction = 1; Log("mouse en menus: %s en el Motor -> volver", btn ? "boton Volver" : "Esc"); return; }
     }
     if (!Enabled() || !Ptr(win)) { s_latchWin = nullptr; return; }
     if (s_rWas && FreeCamActive()) { s_liveT.store(now); return; }   // volando con la camara libre del Motor: el mouse no elige filas

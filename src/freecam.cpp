@@ -185,6 +185,12 @@ static float s_homePos[3] = {}, s_homePiv[3] = {}, s_homeYaw = 0, s_homePitch = 
 static std::atomic<int> s_gzAxis{-1}; static std::atomic<int> s_gzHome{0};
 static std::mutex s_gzMx; static float s_gzDYaw = 0, s_gzDPitch = 0;
 static bool MotorFly() { return MotorPageActive() && FreeCamActive(); }
+// (15/11, Agustin 01:51: el Motor abre "solo el menu", sin cargar al jugador) sin modelo el visor del Editar no pide camara y
+// Update no corre: la grilla y el gizmo quedarian muertos. FreeCamMotorTick (hilo de Present, motorpage.cpp) corre Update sobre
+// una camara de mentira cuando la del visor lleva 0.3 s sin llegar. Al volver la camara real (se cargo un jugador) se toma su
+// pose (s_virtual) para que el jugador quede encuadrado como lo encuadra el juego.
+static std::atomic<double> s_realT{-1.0e9}; static bool s_virtual = false;
+static float s_fovOut = 0.364f;
 void FreeCamGizmoOrbit(float dyaw, float dpitch) { std::lock_guard<std::mutex> lk(s_gzMx); s_gzDYaw += dyaw; s_gzDPitch += dpitch; }
 void FreeCamGizmoAxis(int a) { s_gzAxis.store(a); }      // 0 +X, 1 -X, 2 +Y, 3 -Y, 4 +Z, 5 -Z: la camara se pone de ese lado del pivote
 void FreeCamGizmoHome() { s_gzHome.store(1); }
@@ -232,7 +238,15 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
         s_padFly = false; s_padGive = false; memset(s_pv, 0, sizeof s_pv); memset(s_lv, 0, sizeof s_lv); s_kbRplDir = 0; s_r3 = s_l3 = false;
         return false;
     }
+    const bool real = strcmp(origen, "motor") != 0;
+    if (real) s_realT.store(Now(), std::memory_order_relaxed);
+    if (s_on && real && s_virtual) {     // llego la camara del visor despues de la de mentira: se toma su pose
+        s_virtual = false; TakeFromGame(pos, tgt);
+        memcpy(s_homePos, s_pos, 12); memcpy(s_homePiv, s_pivot, 12); s_homeYaw = s_yaw; s_homePitch = s_pitch; s_homeOk = true; s_fovWritten = -1.0f;
+        Log("camara libre: llego la camara del visor (se cargo un modelo): se toma su pose (%.2f, %.2f, %.2f)", s_pos[0], s_pos[1], s_pos[2]);
+    }
     if (!s_on) {
+        s_virtual = !real;
         MvPadPresses(s_padSeen); for (int vk : kTapVk) { s_keySeen[vk & 255] = s_keyPress[vk & 255].load(); s_keyWas[vk & 255] = true; }   // (14/11 n) lo apretado antes de prender no cuenta
         TakeFromGame(pos, tgt);
         memcpy(s_homePos, s_pos, 12); memcpy(s_homePiv, s_pivot, 12); s_homeYaw = s_yaw; s_homePitch = s_pitch; s_homeOk = true;
@@ -579,7 +593,7 @@ static void hk_SetCam(void* rt, unsigned char* cam) {
         o_setCam(rt, cam); return;
     }
     if (cam && FreeCamActive()) {
-        if (!s_on) { memcpy(s_orig, cam + 0x10, sizeof s_orig); s_haveOrig = true; s_restore = true; s_rtMain = rt; s_rtMainT = Now(); }
+        if (!s_on || !s_haveOrig) { memcpy(s_orig, cam + 0x10, sizeof s_orig); s_haveOrig = true; s_restore = true; s_rtMain = rt; s_rtMainT = Now(); }   // (15/11) tambien si la prendio la camara de mentira del Motor
         float* pos = (float*)(cam + 0x10); float* tgt = (float*)(cam + 0x1c); float* up = (float*)(cam + 0x28); float* fov = (float*)(cam + 0x40);
         int proj; memcpy(&proj, cam + 0x3c, 4);
         float extra[3]; memcpy(&extra[0], cam + 0x34, 4); memcpy(&extra[1], cam + 0x38, 4); memcpy(&extra[2], cam + 0x44, 4);
@@ -629,6 +643,19 @@ void FreeCamSetPose(const float* pos, float yaw, float pitch) {
     if (!FreeCamActive()) g_cfg.live[344][0] = 2.0f;
 }
 bool FreeCamGetPose(float* pos, float* yaw, float* pitch) { memcpy(pos, s_pos, 12); *yaw = s_yaw; *pitch = s_pitch; return s_on; }
+// (15/11) Motor sin modelo: mantiene viva la camara libre aunque el visor no pida camara. Camara de mentira = la del estudio del
+// Editar (a 6.5 m, campo de vision 0.364 rad, mirando al centro a 0.95 m del piso). Devuelve el campo de vision vertical que se ve
+void FreeCamMotorTick() {
+    if (!FreeCamActive() || !MotorPageActive()) return;
+    if (Now() - s_realT.load(std::memory_order_relaxed) < 0.3) return;
+    static float pos[3], tgt[3], up[3], fov; static const float extra[3] = { 0.1f, 1000.0f, 1.7778f };
+    if (!s_on) { pos[0] = 0; pos[1] = 0.95f; pos[2] = 6.5f; tgt[0] = 0; tgt[1] = 0.95f; tgt[2] = 0; up[0] = 0; up[1] = 1; up[2] = 0; fov = 0.364f; s_fovWritten = -1.0f; }
+    else if (!s_virtual) { s_virtual = true; fov = s_fovBase > 0.0f ? s_fovBase : 0.364f; s_fovWritten = -1.0f; }
+    Update(pos, tgt, up, &fov, 0, "motor", extra);
+    s_fovOut = fov;
+}
+// para la grilla del Motor (motorgrid.cpp): campo de vision vertical en radianes de la camara libre
+float FreeCamFovNow() { const float f = g_cfg.live[345][3]; return (f > 0.001f && f < 3.0f) ? f : s_fovOut; }
 // se llama desde Update (hilo de render) despues de TakeFromGame al prender
 static void PoseApplyPending() {
     std::lock_guard<std::mutex> lk(s_poseMx);
