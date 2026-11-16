@@ -70,7 +70,9 @@ Texture2D<float4> g_tex_mesh : register(t15);
 #define cmp -
 Texture2D<float4> pesIrisPolar  : register(t20);   // PES21 (19/10) iris en polares: RGB detalle (0.5 = sin cambio), A altura
 Texture2D<float4> pesIrisPolarN : register(t21);   //   normal tangente del iris (x = tangencial, y = radial)
-Texture2D<float4> pesFrame      : register(t22);   //   copia de la imagen final del cuadro anterior (reflejo en pantalla)
+Texture2D<float4> pesFrame      : register(t22);
+Texture2D<float4> pesIrisPolarL  : register(t23);   // (16/11) iris con LUZ (pupila chica: tejido estirado y liso); t20 / t21 = iris en SOMBRA (arrugado)
+Texture2D<float4> pesIrisPolarLN : register(t24);   //   copia de la imagen final del cuadro anterior (reflejo en pantalla)
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 
@@ -158,6 +160,14 @@ void main(
     }
     if (found > 0.0) irisRad = clamp(found, 0.12, 0.30); }
   float irisR = length(irisD) / irisRad;
+  // (16/11 d, Agustin con captura: "el iris se ve raro, el borde negro es raro") la textura de lo blanco del juego trae pintado un disco
+  // gris con borde oscuro debajo del iris; donde la mascara del iris se apaga (borde) ese gris asomaba como un aro negro duro, tipo
+  // lente de contacto. Debajo del iris y en su borde se usa el blanco limpio de un poco mas afuera (misma direccion), asi el iris
+  // pasa a lo blanco sin aro; el limbo suave lo ponen z91 / z318
+  if (P90.w > 0.5) {
+    float2 dUc = irisD / max(length(irisD), 1e-5);
+    float3 sclOut = g_tex_diffuse.SampleLevel(g_sampler_diffuse_s, 0.5 + dUc * irisRad * 1.5, 1).xyz;
+    r2.xyz = lerp(sclOut, r2.xyz, smoothstep(1.2, 1.5, irisR)); }
   // PUPILA REACTIVA (04/11 b, Agustin: "la idea de la pupila reactiva no es cambiar el tamano si no modificar la forma"; "va asi"):
   // como un ojo real, el agujero del medio se abre o se cierra y el iris se estira (luz fuerte: fibras finas y largas) o se arruga
   // (poca luz: fibras juntas), el borde de afuera del iris no se mueve. Se remapea en radio la UV con la que se lee la textura del
@@ -170,7 +180,9 @@ void main(
     if (P93.y > 0.5 && rn < 1.0) {
       float th = atan2(irisD.y, irisD.x);
       float k = 1.0;
-      if (P93.w > 0.5) k = 1.0 + 0.15 * saturate(P93.z) * (1.0 - 2.0 * saturate(P93.x));   // sol pleno -> 0.85, noche -> 1.15
+      // (16/11, Agustin: "la iris mas grande cuando la luz le da") con luz la pupila se cierra mas (hasta -25 %) de lo que se abre de noche (+15 %)
+      float pl = 1.0 - 2.0 * saturate(P93.x);
+      if (P93.w > 0.5) k = 1.0 + saturate(P93.z) * (pl > 0.0 ? 0.15 : 0.25) * pl;   // sol pleno -> 0.75, noche -> 1.15
       float t = IniParams.Load(int2(157, 0)).x;
       k *= 1.0 + 0.012 * sin(t * 1.7) * sin(t * 0.63 + 1.3);                                  // hippus: temblor de decimas de mm
       float shp = 1.0 + 0.025 * cos(2.0 * th) + 0.018 * sin(5.0 * th + 0.7) + 0.012 * sin(9.0 * th + 2.1);   // ovalada e irregular
@@ -185,6 +197,12 @@ void main(
   float2 irisPuv = float2(irisTh, irisVt);
   float4 irisDet = pesIrisPolar.SampleGrad(g_samplerLinear_Wrap_s, irisPuv, float2(ddx(irisTh), ddx(irisVt)) , float2(ddy(irisTh), ddy(irisVt)));
   float3 irisNt = pesIrisPolarN.Sample(g_samplerLinear_Wrap_s, irisPuv).xyz * 2 - 1;
+  // (16/11) dos estados del iris con las mismas estructuras: en sombra (t20 / t21) y con luz (t23 / t24); se mezclan con la luz que mide
+  // la DLL (x93, solo en partido); en el editor o con la pupila reactiva apagada queda el punto medio
+  { float irisLuz = (P93.y > 0.5 && P93.w > 0.5) ? saturate(P93.x) : 0.5;
+    float4 detL = pesIrisPolarL.SampleGrad(g_samplerLinear_Wrap_s, irisPuv, float2(ddx(irisTh), ddx(irisVt)) , float2(ddy(irisTh), ddy(irisVt)));
+    float3 ntL = pesIrisPolarLN.Sample(g_samplerLinear_Wrap_s, irisPuv).xyz * 2 - 1;
+    irisDet = lerp(irisDet, detL, irisLuz); irisNt = lerp(irisNt, ntL, irisLuz); }
   float irisOn = (P90.w > 0.5) ? irisIn * saturate(P90.x) : 0.0;
   r0.xyz = g_tex_base2.Sample(g_sampler_base2_s, r0.xy).xyz;
   // detalle de albedo: fibras, criptas, collarete y surcos multiplican el color del juego
@@ -299,7 +317,9 @@ void main(
   if (P90.w > 0.5) {
     float irisM = irisIn;
     // sombra del parpado/limbo sobre el iris (ambient occlusion suave en el borde)
-    float3 base = eyeBase * lerp(1.0, 1.0 - 0.18 * saturate(P91.z) / 0.5, smoothstep(0.85, 1.0, irisR) * irisOn);
+    // (16/11, Agustin: "el borde del iris tan oscuro no me gusto") el borde se oscurecia en 4 lugares a la vez (textura -35 %, aca -18 %,
+    // z318 -15 % y el bloque viejo del final -22 %: cerca de -60 % de frente). Ahora cada uno es suave: en total ~-16 % de frente
+    float3 base = eyeBase * lerp(1.0, 1.0 - 0.05 * saturate(P91.z) / 0.5, smoothstep(0.85, 1.0, irisR) * irisOn);
     // cornea: Fresnel de Schlick (n = 1.376 -> F0 = 0.025), mas fuerte de costado
     float ndv = saturate(dot(eyeNc, eyeV));
     float F = 0.025 + 0.975 * pow(1 - ndv, 5);
@@ -369,7 +389,7 @@ void main(
       if (bo > 0.001) {
         float ndv2 = saturate(dot(eyeNc, eyeV));
         float limb = smoothstep(0.85, 1.0, irisR) * (1.0 - smoothstep(1.05, 1.3, irisR));
-        base *= 1.0 - bo * limb * (0.10 + 0.30 * (1.0 - ndv2));
+        base *= 1.0 - bo * limb * (0.02 + 0.10 * (1.0 - ndv2));   // (16/11) era 0.10 + 0.30
         float th = irisTh * 6.2831853;
         float vw = fwidth(th * 23.0);
         float vein = pow(saturate(1.0 - abs(sin(th * 23.0 + 2.6 * sin(th * 7.0) + 1.7 * sin(irisR * 3.1)))), 24.0);
@@ -395,7 +415,7 @@ void main(
       float sclera = 1.0 - smoothstep(0.02, 0.22, eyeIris);
       float limbal = smoothstep(0.04, 0.25, eyeIris) * (1.0 - smoothstep(0.3, 0.75, eyeIris));
       c *= lerp(float3(1,1,1), float3(0.96, 0.94, 0.92), sclera);
-      c *= 1.0 - 0.22 * limbal;
+      c *= 1.0 - 0.03 * limbal;   // (16/11) era 0.22: borde del iris menos oscuro
       float l = dot(c, float3(0.2126, 0.7152, 0.0722));
       c = lerp(c, saturate(lerp(l.xxx, c, 1.1)), smoothstep(0.4, 0.8, eyeIris));
       o0.xyz = saturate(c);
