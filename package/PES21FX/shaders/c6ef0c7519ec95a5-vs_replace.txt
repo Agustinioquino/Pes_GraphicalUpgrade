@@ -48,6 +48,7 @@ cbuffer VSBones : register(b6)
 }
 
 Texture1D<float4> IniParams : register(t120);
+#define PES_SHADOW_VS   // (16/11) pasada de sombra: el torso con camiseta proyecta achicado en el menu (pes_skintone PesTorsoRegrow)
 #include "pes_skintone.hlsli"
 #define PES_VARIANT_VS
 #include "pes_variants.hlsli"
