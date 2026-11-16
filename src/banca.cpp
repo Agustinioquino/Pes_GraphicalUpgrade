@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <vector>
 #include <cstdarg>
+#include <cctype>
 
 namespace fx {
 
@@ -424,6 +425,20 @@ bool IsPropMat(const Fm& f, uint16_t mat) {
     size_t len = 0; const uint8_t* me = f.E(4, mat, 0x10); const char* s = me ? FmStr(f, U<uint16_t>(me), len) : nullptr;
     return s && (StrStarts(s, len, "m_pr_") || StrStarts(s, len, "pr_") || StrStarts(s, len, "z_m_pr"));
 }
+// 1i: botellas de utileria (Konami las llama "m_pr_bottole"; se acepta tambien "bottle"), sin importar mayusculas
+bool IsBottleMat(const Fm& f, uint16_t mat) {
+    size_t len = 0; const uint8_t* me = f.E(4, mat, 0x10); const char* s = me ? FmStr(f, U<uint16_t>(me), len) : nullptr;
+    if (!s) return false;
+    static const char* const kW[2] = { "bottole", "bottle" };
+    for (const char* w : kW) {
+        const size_t n = strlen(w);
+        for (size_t i = 0; i + n <= len; i++) {
+            size_t j = 0; while (j < n && (char)tolower((unsigned char)s[i + j]) == w[j]) j++;
+            if (j == n) return true;
+        }
+    }
+    return false;
+}
 
 // el _dir_bench del mismo estadio en la memoria del paquete (si se carga despues que este modelo)
 bool ScanBenchNear(uint8_t* self, const char* pre, float* mn, float* mx) {
@@ -461,7 +476,7 @@ __declspec(noinline) void ProcessFmdlInner(uint8_t* p, size_t avail) {
         // b) figuras sentadas en la caja del banco
         const char* src = "de este estadio";
         if (!BoxGet(pre, mn, mx)) { if (ScanBenchNear(p, pre, mn, mx)) { BoxPut(pre, mn, mx); src = "buscada en el paquete"; } else src = nullptr; }
-        unsigned figs = 0, kept = 0;
+        unsigned figs = 0, kept = 0, bottles = 0;
         if (src) {
             struct Piece { uint16_t mesh; uint32_t root; float mn[3], mx[3]; int grp; };
             std::vector<Piece> pcs; std::vector<std::vector<uint32_t>> rootOf(ms.size());
@@ -505,13 +520,14 @@ __declspec(noinline) void ProcessFmdlInner(uint8_t* p, size_t avail) {
                     const int ra = fd((int)i), rb = fd((int)j); if (ra != rb) par[rb] = ra;
                 }
             }
-            struct Fig { float mn[3], mx[3]; bool person = false, init = false; };
+            struct Fig { float mn[3], mx[3]; bool person = false, init = false, bottle = false; };
             std::vector<Fig> fg(n);
             for (size_t i = 0; i < n; i++) {
                 Fig& g = fg[fd((int)i)]; const Piece& pc = pcs[i];
                 if (!g.init) { memcpy(g.mn, pc.mn, 12); memcpy(g.mx, pc.mx, 12); g.init = true; }
                 for (int a = 0; a < 3; a++) { g.mn[a] = std::min(g.mn[a], pc.mn[a]); g.mx[a] = std::max(g.mx[a], pc.mx[a]); }
                 if (!IsPropMat(f, ms[pc.mesh].mat)) g.person = true;
+                if (IsBottleMat(f, ms[pc.mesh].mat)) g.bottle = true;
             }
             std::vector<std::vector<uint8_t>> hide(ms.size());
             for (size_t i = 0; i < n; i++) {
@@ -520,7 +536,20 @@ __declspec(noinline) void ProcessFmdlInner(uint8_t* p, size_t avail) {
                 if (cx < mn[0] - kMargin || cx > mx[0] + kMargin || cz < mn[2] - kMargin || cz > mx[2] + kMargin) continue;
                 const float h = g.mx[1] - g.mn[1], foot = std::max(g.mx[0] - g.mn[0], g.mx[2] - g.mn[2]);
                 const bool sit = g.person && g.mn[1] <= mn[1] + kGround && h >= kMinH && h <= kMaxH && foot >= kMinFoot;
-                if (!sit) { if (g.person) kept++; continue; }
+                if (!sit) {
+                    if (g.person) { kept++; continue; }
+                    // 1i (prueba 1h, 21:48): en el Sports Park quedaron las botellas que tenian en la mano o al lado los suplentes
+                    // genericos (el suplente era una malla de (a) y la botella otra malla de utileria). Botella suelta dentro de la
+                    // caja del banco (+0.6 m, hasta 0.3 m sobre el techo de la caja): se esconden SOLO sus piezas de botella (si
+                    // toca una conservadora u otra utileria, esa queda). Las botellas del resto del estadio quedan.
+                    if (!g.bottle || (g.mn[1] + g.mx[1]) * 0.5f > mx[1] + 0.3f) continue;
+                    bottles++;
+                    for (size_t j = 0; j < n; j++) if (fd((int)j) == (int)i && IsBottleMat(f, ms[pcs[j].mesh].mat)) {
+                        std::vector<uint8_t>& hv = hide[pcs[j].mesh]; if (hv.empty()) hv.assign(ms[pcs[j].mesh].nv, 0);
+                        hv[pcs[j].root] = 1;
+                    }
+                    continue;
+                }
                 figs++;
                 if (figs <= 6) FmLog("banca: %s_%s: figura sentada en el banco escondida x %.2f..%.2f z %.2f..%.2f alto %.2f", pre, part, g.mn[0], g.mx[0], g.mn[2], g.mx[2], h);
                 for (size_t j = 0; j < n; j++) if (fd((int)j) == (int)i) {
@@ -540,8 +569,8 @@ __declspec(noinline) void ProcessFmdlInner(uint8_t* p, size_t avail) {
                 }
             }
         }
-        FmLog("banca: %s_%s: %u figuras sentadas y %u mallas de suplente escondidas (%u triangulos), %u personas paradas quedan; caja del banco %s",
-                  pre, part, figs, benchMeshes, tris, kept, src ? src : "NO hallada (solo mallas de suplente)");
+        FmLog("banca: %s_%s: %u figuras sentadas, %u botellas del banco y %u mallas de suplente escondidas (%u triangulos), %u personas paradas quedan; caja del banco %s",
+                  pre, part, figs, bottles, benchMeshes, tris, kept, src ? src : "NO hallada (solo mallas de suplente)");
     }
 }
 void ProcessFmdl(void* fileRef) {
