@@ -242,7 +242,7 @@ cbuffer Params : register(b2)
 #define PES_BIB_HANG     0.006    // (m) cuanto cuelga la tela suelta por debajo de su pose de armado
 #define PES_BIB_AIR      0.004    // (m) aire minimo sobre su superficie de armado (lo que tiene abajo)
 #define PES_BIB_SKIN     0.004    // (m) separacion extra de la piel al dibujar, sobre la de la camiseta (y256)
-#define PES_IS_BIB (g_legCount == 0 && g_capsuleCount == 0 && (g_vertexCount == PES_BIB_VERTS0 || (PES_BIB_VERTS1 > 0 && g_vertexCount == PES_BIB_VERTS1)))
+#define PES_IS_BIB (g_legCount == 0 && g_capsuleCount <= 1 && (g_vertexCount == PES_BIB_VERTS0 || (PES_BIB_VERTS1 > 0 && g_vertexCount == PES_BIB_VERTS1)))
 // (15/11 c) pechera de dos capas: la capa de adentro trae la normal hacia adentro, asi que el choque contra el cuerpo por la
 // normal la empujaba para el lado contrario (las capas se separaban). La pechera ya no usa ese choque: la normal se orienta
 // hacia afuera del torso (centro de la prenda, eje vertical) y la tela no puede entrar mas que PES_BIB_IN por debajo de su
@@ -255,6 +255,8 @@ cbuffer Params : register(b2)
 #define PES_JK_TETHER     0.025   // (m) tope de la correa de distancia maxima
 #define PES_JK_DAMP       1.6     // freno relativo al cuerpo (x)
 #define PES_IS_JACKET (g_legCount == 0 && !PES_IS_BIB && g_vertexCount >= PES_JK_MINV)
+// (16/11) cuello de la campera (malla 0 de campera_pes21fx, VS de las pecheras): fijo al esqueleto, sin fisica
+#define PES_IS_COLLAR (g_legCount == 0 && g_capsuleCount == 0 && (g_vertexCount == 1074 || g_vertexCount == 1100))
 #define PES_MENU_JUMP    3.0      // (m/s) en menus, mas rapido que esto = salto de pose: la tela viaja con el cuerpo
 struct ParticleRest { float4 posPin; float4 nrm; uint4 skin; };
 struct Capsule      { float4 a; float4 b; };
@@ -598,7 +600,7 @@ float3 pesRestFollow(float3 pb, float sw)
 }
 // (25/10 b) las costuras (escote, punos, cintura: el mod las sujeta con pin alto) no se corren: el cuello y los punos son mallas
 // aparte que siguen al esqueleto sin la musculatura, y si la tela de la costura se corria quedaba separada del cuello
-float pesPinRest(ParticleRest r) { return (s_flags & 256) ? float((r.skin.w >> 2) & 63) / 63.0 : r.posPin.w; }
+float pesPinRest(ParticleRest r) { if (PES_IS_COLLAR) return 1.0; return (s_flags & 256) ? float((r.skin.w >> 2) & 63) / 63.0 : r.posPin.w; }
 float pesSeamFade(float pin) { return 1.0 - smoothstep(0.25, 0.85, pin); }
 float3 pesMusOf(ParticleRest r) { return pesRestFollow(r.posPin.xyz, g_legCount > 0 ? 0.0 : float((r.skin.w >> 8) & 255) / 255.0) * pesSeamFade(pesPinRest(r)); }
 void restAt(uint p, float t, out float3 pos, out float3 nrm)
@@ -635,6 +637,7 @@ float3 rotateBetween(float3 a, float3 b, float3 v)
 uint packHalf2(float a, float b) { return f32tof16(a) | (f32tof16(b) << 16); }
 float pinOf(uint p)
 {
+    if (PES_IS_COLLAR) return 1.0;   // (16/11) cuello de la campera
     if (s_flags & 256) return float((g_rest[p].skin.w >> 2) & 63) / 63.0;
     return g_rest[p].posPin.w;
 }
@@ -1424,6 +1427,7 @@ float restLength(uint4 cn)
 }
 void solveConstraint(uint4 cn, float L, float hh)
 {
+    if (PES_IS_COLLAR) return;   // (16/11) cuello de la campera: todo fijo
     bool tuckedPins = (s_flags & 256) != 0;
     float wa = (cn.w & (tuckedPins ? 8u : 2u)) ? 0.0 : 1.0;
     float wb = (cn.w & (tuckedPins ? 16u : 4u)) ? 0.0 : 1.0;
