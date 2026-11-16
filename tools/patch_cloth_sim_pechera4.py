@@ -36,6 +36,17 @@ rep("    const float pesJump = s_menu ? PES_MENU_JUMP : 50.0;   // (15/11 c) en 
 rep("#define PES_IS_COLLAR (g_legCount == 0 && g_capsuleCount == 0 && (g_vertexCount == 1074 || g_vertexCount == 1100))",
     "#define PES_IS_COLLAR (g_legCount == 0 && ((g_capsuleCount == 0 && (g_vertexCount == 1074 || g_vertexCount == 1100)) || \\\n"
     "                       (g_capsuleCount >= 4 && (g_vertexCount == 6043 || g_vertexCount == 1158))))   // + brazos y manos (16/11)")
+# (16/11, Agustin: "puedes agregar un boton para apagar las fisicas? con un acceso rapido quizas con el numeral") x181 de
+# PES21FX.ini (Shift+3 = # en el teclado latinoamericano, o el menu): 1 = toda la ropa fija al esqueleto como en el juego original
+# (pin 1 en todas las particulas: sin reinicios de cloth-mod, que con F5 en Editar se reiniciaba miles de veces)
+rep("#define PES_MENU_JUMP_SCALE",
+    "#define PES_CLOTH_OFF (IniParams.Load(int2(181, 0)).x > 0.5)   // (16/11) x181 = 1: fisica de la ropa apagada (Shift+3)\n"
+    "#define PES_MENU_JUMP_SCALE")
+for a0 in ("float pesPinRest(ParticleRest r) { return PES_IS_COLLAR ? 1.0",
+           "    return PES_IS_COLLAR ? 1.0 : pn;"):
+    rep(a0, a0.replace("PES_IS_COLLAR ?", "(PES_IS_COLLAR || PES_CLOTH_OFF) ?"))
+rep("    wa = PES_IS_COLLAR ? 0.0 : wa; wb = PES_IS_COLLAR ? 0.0 : wb;",
+    "    wa = (PES_IS_COLLAR || PES_CLOTH_OFF) ? 0.0 : wa; wb = (PES_IS_COLLAR || PES_CLOTH_OFF) ? 0.0 : wb;")
 if crlf: t = t.replace('\n', '\r\n')
 open(p, 'wb').write(t.encode('latin1'))
 print('ok', p)

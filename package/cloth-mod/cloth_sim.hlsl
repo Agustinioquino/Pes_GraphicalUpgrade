@@ -262,6 +262,7 @@ cbuffer Params : register(b2)
                        (g_capsuleCount >= 4 && (g_vertexCount == 6043 || g_vertexCount == 1158))))   // + brazos y manos (16/11)
 #define PES_BIBW_PUSH    0.008    // (m) separacion extra de las pecheras en pecho y panza
 #define PES_BIBW_ZC      0.05     // (m, pose de armado) eje del torso en z (z mayor = adelante)
+#define PES_CLOTH_OFF (IniParams.Load(int2(181, 0)).x > 0.5)   // (16/11) x181 = 1: fisica de la ropa apagada (Shift+3)
 #define PES_MENU_JUMP_SCALE 0.35  // (16/11) en menus: cambio relativo del determinante de la piel entre cuadros = salto de esqueleto
 struct ParticleRest { float4 posPin; float4 nrm; uint4 skin; };
 struct Capsule      { float4 a; float4 b; };
@@ -605,7 +606,7 @@ float3 pesRestFollow(float3 pb, float sw)
 }
 // (25/10 b) las costuras (escote, punos, cintura: el mod las sujeta con pin alto) no se corren: el cuello y los punos son mallas
 // aparte que siguen al esqueleto sin la musculatura, y si la tela de la costura se corria quedaba separada del cuello
-float pesPinRest(ParticleRest r) { return PES_IS_COLLAR ? 1.0 : ((s_flags & 256) ? float((r.skin.w >> 2) & 63) / 63.0 : r.posPin.w); }
+float pesPinRest(ParticleRest r) { return (PES_IS_COLLAR || PES_CLOTH_OFF) ? 1.0 : ((s_flags & 256) ? float((r.skin.w >> 2) & 63) / 63.0 : r.posPin.w); }
 float pesSeamFade(float pin) { return 1.0 - smoothstep(0.25, 0.85, pin); }
 float3 pesMusOf(ParticleRest r) { return pesRestFollow(r.posPin.xyz, g_legCount > 0 ? 0.0 : float((r.skin.w >> 8) & 255) / 255.0) * pesSeamFade(pesPinRest(r)); }
 float pesBibPush(ParticleRest r)   // (16/11) cuanto sale el reposo de la pechera por su normal (con signo)
@@ -653,7 +654,7 @@ uint packHalf2(float a, float b) { return f32tof16(a) | (f32tof16(b) << 16); }
 float pinOf(uint p)
 {
     float pn = (s_flags & 256) ? float((g_rest[p].skin.w >> 2) & 63) / 63.0 : g_rest[p].posPin.w;
-    return PES_IS_COLLAR ? 1.0 : pn;   // (16/11) cuello de la campera: fijo
+    return (PES_IS_COLLAR || PES_CLOTH_OFF) ? 1.0 : pn;   // (16/11) cuello de la campera: fijo
 }
 // PES21 FX (15/11): cuanto es RUEDO este punto (0..1): tela suelta (pin bajo) en los ~10 cm de mas abajo de la prenda en la pose
 // de reposo (el faldon de la remera, la boca de la pierna del short). Antes "borde libre" era toda la tela con pin < 0.5, o
@@ -1449,7 +1450,7 @@ void solveConstraint(uint4 cn, float L, float hh)
     bool tuckedPins = (s_flags & 256) != 0;
     float wa = (cn.w & (tuckedPins ? 8u : 2u)) ? 0.0 : 1.0;
     float wb = (cn.w & (tuckedPins ? 16u : 4u)) ? 0.0 : 1.0;
-    wa = PES_IS_COLLAR ? 0.0 : wa; wb = PES_IS_COLLAR ? 0.0 : wb;   // (16/11) cuello de la campera: todo fijo
+    wa = (PES_IS_COLLAR || PES_CLOTH_OFF) ? 0.0 : wa; wb = (PES_IS_COLLAR || PES_CLOTH_OFF) ? 0.0 : wb;   // (16/11) cuello de la campera: todo fijo
     float3 d = gx[cn.x] - gx[cn.y];
     float len = length(d);
     if (len < 1e-7) return;
