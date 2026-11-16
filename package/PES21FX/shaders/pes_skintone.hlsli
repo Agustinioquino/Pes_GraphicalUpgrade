@@ -290,11 +290,7 @@ void PesTorsoRegrow(inout float3 mP, float3 mN, float3 rest, float3 org) {
   // (la tela simulada se aparta de la piel real al dibujarse, x256 = 2). La camiseta ajustada no se simula: ahi queda el achicado.
   float kS = PesArmRestore(rest);
   { float z327 = IniParams.Load(int2(327, 0)).z; if (z327 > 0.0 && PesCharShirtType(org) < 3.5) kS = max(kS, saturate(z327)); }
-  // (16/11) sin lista de camisetas (ninguna en escena hace 30 cuadros: menu Apariencia con el jugador sin remera) PesCharHasShirt da 1:
-  // ahi manda z320 (camisetas en escena, la pone la DLL). Agustin: con x349 = 1 en Apariencia "no cambia nada"
-  bool conCam = PesCharHasShirt(org) > 0.5;
-  if (g_torsoNeed.Load(PES_SHIRT_BASE + 1) < 0.5 && IniParams.Load(int2(320, 0)).z < 0.5) conCam = false;
-  float k = conCam ? kS : max(saturate(R.x), PesArmRestore(rest));
+  float k = PesCharHasShirt(org) > 0.5 ? kS : max(saturate(R.x), PesArmRestore(rest));
   float mm = PesTorsoShrinkMM(rest, mN) * k;
   if (mm <= 0.0) return;
   mP += mN * rsqrt(max(dot(mN, mN), 1e-8)) * (mm * 0.001);
