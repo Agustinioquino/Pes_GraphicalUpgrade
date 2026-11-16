@@ -323,7 +323,8 @@ static std::atomic<int> s_bgKnownN{ 0 };
 void EditorBgNoteCompositionCount();
 void EditorBgNoteComposition() { s_edCompT.store(Now(), std::memory_order_relaxed); EditorBgNoteCompositionCount(); }
 static void EditorBgDiagTick(int mode);
-void EditorBgPresent() { s_bgSceneSeen.store(false, std::memory_order_relaxed); EditorBgDiagTick((int)(g_cfg.live[424][0] + 0.5f)); }
+static std::atomic<bool> s_bgMotorNew{ false };   // (15/11) Motor sin modelo: ya se aprendio una textura de fondo nueva en este cuadro
+void EditorBgPresent() { s_bgSceneSeen.store(false, std::memory_order_relaxed); s_bgMotorNew.store(false, std::memory_order_relaxed); MotorGridPresent(); EditorBgDiagTick((int)(g_cfg.live[424][0] + 0.5f)); }
 
 static ID3D11ShaderResourceView* SolidSRV(uint32_t rgba) {
     D3D11_TEXTURE2D_DESC td{}; td.Width = td.Height = 1; td.MipLevels = td.ArraySize = 1; td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -391,9 +392,29 @@ static ID3D11PixelShader* EditorEdgePS(ID3D11DeviceContext* c, const D3D11_TEXTU
     return s_edgePS;
 }
 
+// (15/11 b, Agustin 02:23: "no me gusta el diseño que se parezca tanto al modo editar quiero menus nuevos") con el menu propio del
+// Motor abierto no se dibuja NADA de la interfaz del juego (lista, titulo, logo del parche, ayudas): solo pasan el fondo (que
+// EditorBgFor ya cambio por la grilla; este filtro se llama despues y solo si no lo cambio) y la imagen del jugador (textura
+// render target en t8). [PES21FX] motor_interfaz_juego = 1 la deja a la vista.
+bool MotorUiSkipGameDraw(ID3D11DeviceContext* c, uint64_t ps) {
+    if (ps != kUiPS || g_cfg.motorGameUi != 0 || !MotorUiOn()) return false;
+    ID3D11ShaderResourceView* t8 = nullptr; c->PSGetShaderResources(8, 1, &t8);
+    if (!t8) return true;
+    bool rt = false;
+    { ID3D11Resource* r = nullptr; t8->GetResource(&r);
+      if (r) { ID3D11Texture2D* t2 = nullptr; r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t2); r->Release();
+          if (t2) { D3D11_TEXTURE2D_DESC d; t2->GetDesc(&d); rt = (d.BindFlags & D3D11_BIND_RENDER_TARGET) != 0; t2->Release(); } } }
+    t8->Release();
+    return !rt;
+}
+
 ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps, ID3D11PixelShader** edgePS) {
     if (edgePS) *edgePS = nullptr;
-    const int mode = (int)(g_cfg.live[424][0] + 0.5f);
+    int mode = (int)(g_cfg.live[424][0] + 0.5f);
+    // (11/11, Agustin 23:33: el Motor "sin el fondo del modo editar") con el estudio del Motor abierto el fondo va siempre negro,
+    // sin cambiar lo que tenga guardado en x424 para el Editar ([PES21FX] motor_fondo = 0 lo deja como en el Editar)
+    const bool motorBg = g_cfg.motorBg != 0 && MotorPageActive();
+    if (motorBg) mode = 1;
     if (ps != kUiPS || mode <= 0 || !g_dev.dev) return nullptr;
     s_bgNUi.fetch_add(1, std::memory_order_relaxed); EditorBgDiagTick(mode);
     // (08/11 kd63zh) en la PC de Agustin la composicion f807 no pasa NUNCA por BeforeDraw en el editor (log 04e625e: 0 composiciones
@@ -407,7 +428,7 @@ ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps, ID3D1
     t8->Release();
     if (!ok) return nullptr;
     if (d.BindFlags & D3D11_BIND_RENDER_TARGET) {   // la imagen del jugador: el visor del editor esta en pantalla
-        s_bgNRt.fetch_add(1, std::memory_order_relaxed); s_bgSceneSeen.store(true, std::memory_order_relaxed);
+        s_bgNRt.fetch_add(1, std::memory_order_relaxed); s_bgSceneSeen.store(true, std::memory_order_relaxed); MotorDepthPlayerImage((void*)resId);
         if (d.Width >= 512 && d.Height >= 512) {
             static std::atomic<int> nv{ 0 };
             if (nv.fetch_add(1) < 4) Log("fondo del editor: visor del editor reconocido por la imagen del jugador %ux%u (formato %d)", d.Width, d.Height, (int)d.Format);
@@ -417,7 +438,11 @@ ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps, ID3D1
         return nullptr;
     }
     const double t = s_edCompT.load(std::memory_order_relaxed);
-    if (t < 0 || Now() - t > 0.5) { s_bgNNoComp.fetch_add(1, std::memory_order_relaxed); return nullptr; }   // fuera del visor del editor: nada
+    // (15/11, Agustin 01:51: el Motor abre sin cargar al jugador) sin modelo no hay imagen del jugador que delate al visor: con el
+    // estudio del Motor abierto el fondo se cambia igual; como no hay "antes / despues de la escena", por cuadro se acepta una
+    // sola textura grande nueva (el fondo es lo primero que dibuja el menu) y las ya conocidas
+    const bool noComp = t < 0 || Now() - t > 0.5;
+    if (noComp && !motorBg) { s_bgNNoComp.fetch_add(1, std::memory_order_relaxed); return nullptr; }   // fuera del visor del editor: nada
     // (08/11 kd63zh b) el fondo parpadeaba (log d1ec707: 15606 cambiados, 131421 "despues de la escena"): en muchos cuadros el
     // mismo fondo se dibuja despues de la imagen del jugador. La textura que ya se reconocio como fondo se cambia siempre,
     // aunque venga despues; lo demas dibujado despues de la escena (paneles, textos) sigue sin tocarse.
@@ -428,11 +453,16 @@ ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps, ID3D1
     const bool big = d.Width >= 1024 && ar > 1.45f && ar < 1.95f;      // fondo de pantalla completa (los atlas del menu son cuadrados o 2:1)
     if (s_bgDiag.fetch_add(1) < 12) Log("fondo del editor: dibujo del menu antes de la escena con textura %ux%u -> %s", d.Width, d.Height, big ? "fondo (se cambia)" : "se deja");
     if (!big) { s_bgNSmall.fetch_add(1, std::memory_order_relaxed); return nullptr; }
+    // (15/11 b) ANTES: "if (noComp && !known && s_bgMotorNew.exchange(true)) return nullptr;" (una sola textura nueva por cuadro).
+    // Video de Agustin 23.20.50: el fondo azul de Dream Patch volvia 1 de cada 3 cuadros. El fondo se dibuja ~11 veces por cuadro
+    // (log: 1780 cambios por segundo) con mas de 4 texturas distintas, la lista de conocidas (4) rotaba y por cuadro quedaba una
+    // sin cambiar. Sin ese tope: con el estudio del Motor abierto y sin escena, todo dibujo apaisado grande del menu es fondo.
     if (!known && resId) { const int k = s_bgKnownN.fetch_add(1) & 3; s_bgKnown[k].store(resId, std::memory_order_relaxed); }   // se recuerda la textura del fondo (solo el puntero, sin AddRef)
     std::lock_guard<std::mutex> lk(s_bgMx);
     ID3D11ShaderResourceView* v = nullptr;
     if (mode >= 2) v = LoadUserBg();
     else if (s_bgImgTried) { s_bgImgTried = false; }                   // al volver a "imagen propia" se relee el archivo
+    if (motorBg) { if (ID3D11ShaderResourceView* g = MotorGridSRV(c)) v = g; }   // (15/11) fondo del Motor: gris con grilla de piso (motorgrid.cpp; 15/11 o: con la grilla apagada, gris sin lineas)
     if (!v) { if (!s_bgBlack) s_bgBlack = SolidSRV(0xff000000u); v = s_bgBlack; }
     const int n = s_bgSwaps.fetch_add(1);
     if (n == 0 || n == 20000) Log("fondo del editor (x424 = %d): fondo %ux%u cambiado por %s (%d veces)", mode, d.Width, d.Height, v == s_bgBlack ? "negro" : "la imagen propia", n + 1);

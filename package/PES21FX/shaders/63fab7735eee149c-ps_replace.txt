@@ -333,6 +333,11 @@ void main(
           float3 dnx = ddx(nG), dny = ddy(nG), dpx = ddx(Pv), dpy = ddy(Pv);
           float dp2 = dot(dpx, dpx) + dot(dpy, dpy);
           float curv = dp2 > 1e-12 ? -(dot(dnx, dpx) + dot(dny, dpy)) / dp2 : 0.0;   // 1/m; negativo = convexo, positivo = concavo
+          // (12/11, Agustin: "ves como vibra los dientes") las derivadas son de a 2x2 pixeles: en el borde entre dos dientes (o diente
+          // y fondo) el par de pixeles cae en dos superficies distintas y la "curvatura" sale enorme. Con el corrimiento del TAA ese
+          // par cambia cada cuadro y el borde de las muelas titilaba gris. Un salto de profundidad de mas de 4 veces el paso de lado
+          // no es superficie continua: ahi no hay sombra por forma
+          if (abs(dpx.z) > 4.0 * length(dpx.xy) || abs(dpy.z) > 4.0 * length(dpy.xy)) curv = 0.0;
           float rMm = Q388.y > 0.1 ? Q388.y : 6.0;     // radio de referencia: con ese radio concavo la sombra llega a 1
           float aoC = saturate(max(curv, 0.0) * rMm * 0.001);
           aoC *= aoC * (3.0 - 2.0 * aoC);              // rodilla suave: el ruido de un pixel no pinta rayas

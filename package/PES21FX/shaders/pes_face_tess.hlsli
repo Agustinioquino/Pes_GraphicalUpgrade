@@ -228,9 +228,24 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
 #endif
     float3 mul3 = lerp(float3(1.0, 1.0, 1.0), float3(em, em, em), float3(max(ek.y, ek.z), max(ek.z, ek.x), max(ek.x, ek.y)));
     // arista k = la opuesta al vertice k (convencion de D3D: e[0] entre los puntos 1 y 2)
-    f[0] = clamp(length(s1 - s2) / px * mul3.x, 1.0, min(16.0, fmax * mul3.x));
-    f[1] = clamp(length(s2 - s0) / px * mul3.y, 1.0, min(16.0, fmax * mul3.y));
-    f[2] = clamp(length(s0 - s1) / px * mul3.z, 1.0, min(16.0, fmax * mul3.z));
+    // (14/11 0kygek, Agustin: "las deformaciones de musculo al estar muy cerca a veces se rompen o vibran, asi como las expresiones")
+    // largo de cada arista en pixeles desde la VISTA (pV, metros, sin el temblor de subpixel del antialiasing temporal que trae o0) y la
+    // escala de la proyeccion (P11 de b2): el factor ya no cambia un poco en cada cuadro con la camara quieta, asi los puntos nuevos del
+    // fractional_odd no se deslizan ida y vuelta sobre el relieve (eso hacia vibrar musculo, arrugas y relieve de cerca). Por arista con
+    // sus dos extremos (el mismo valor en los dos triangulos: sin grietas). De perfil la arista cuenta entera (algo mas de detalle en la
+    // silueta, antes se achicaba). Sin b2 (P11 = 0): como antes, desde o0
+    float3 lpx;
+    { const float p11v = abs(hsCb2[5].y);
+      if (p11v > 0.1) {
+        const float kpx = 0.5 * p11v * g_pesTessVp.y;
+        const float3 dv = float3(length(p[0].pV.xyz), length(p[1].pV.xyz), length(p[2].pV.xyz));
+        lpx = float3(length(p[1].pV.xyz - p[2].pV.xyz) / max(0.5 * (dv.y + dv.z), 0.05),
+                     length(p[2].pV.xyz - p[0].pV.xyz) / max(0.5 * (dv.z + dv.x), 0.05),
+                     length(p[0].pV.xyz - p[1].pV.xyz) / max(0.5 * (dv.x + dv.y), 0.05)) * kpx;
+      } else lpx = float3(length(s1 - s2), length(s2 - s0), length(s0 - s1)); }
+    f[0] = clamp(lpx.x / px * mul3.x, 1.0, min(16.0, fmax * mul3.x));
+    f[1] = clamp(lpx.y / px * mul3.y, 1.0, min(16.0, fmax * mul3.y));
+    f[2] = clamp(lpx.z / px * mul3.z, 1.0, min(16.0, fmax * mul3.z));
 #if PES_TESS_BODY
     // (08/11, Agustin: "teselacion a los brazos y manos, piernas") con el relieve del cuerpo (w376) prendido, de cerca (< 1.2..2.2 m)
     // cada arista de mano / brazo / pierna se parte hasta tener ~1.8 mm en el mundo: el detalle (tendones de 1.3 mm, surcos de 3-5 mm)
@@ -251,7 +266,7 @@ PesTessConst PesTessPatch(InputPatch<PesTessVS, 3> p)
           nk = float3(max(gk.y, gk.z), max(gk.z, gk.x), max(gk.x, gk.y));
         }
         float3 lw = float3(length(p[1].pV.xyz - p[2].pV.xyz), length(p[2].pV.xyz - p[0].pV.xyz), length(p[0].pV.xyz - p[1].pV.xyz));
-        float3 ls = float3(length(s1 - s2), length(s2 - s0), length(s0 - s1));
+        float3 ls = lpx;   // (14/11 0kygek) el largo en pantalla sin el temblor del antialiasing (ver arriba)
         float3 fr = clamp(min(lw / 0.0018, ls / 1.5), 1.0, fmax);
         f[0] = max(f[0], lerp(1.0, fr.x, nk.x));
         f[1] = max(f[1], lerp(1.0, fr.y, nk.y));
