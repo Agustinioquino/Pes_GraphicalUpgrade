@@ -50,6 +50,11 @@ const unsigned char kFdhVf1Sig[22] = { 0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x6c,0
 const uintptr_t kSetVisible = 0x1419055f0ull;
 const unsigned char kSetVisibleSig[20] = { 0x38,0x91,0x81,0x00,0x00,0x00,0x74,0x0b,0x88,0x91,0x81,0x00,0x00,0x00,0xe9,0xfd,0x0f,0x00,0x00,0xc3 };
 
+// FUN_141906600 = StadiumModelBody "aplicar" (la llaman vf6 y SetVisible): visible = +0x80 (del nodo) Y +0x81; lo pasa al objeto
+// de dibujo [+0x88] (+0x1b4 bit 0 = escondido). Prologo: mov rax,rsp; push rbp; push r12; push r13; push r14; push r15; lea rbp,[rax-1d8h]
+const uintptr_t kApply = 0x141906600ull;
+const unsigned char kApplySig[19] = { 0x48,0x8b,0xc4,0x55,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8d,0xa8,0x28,0xfe,0xff,0xff };
+
 const uintptr_t kSheetPtr = 0x1438041d0ull;      // ficha del partido de las cinematicas (DAT_1438041d0)
 const uintptr_t kScenes = 0x14374d958ull;        // primera escena (lista circular por +0)
 const uintptr_t kVtModel = 0x142a0a880ull, kVtFunctor = 0x142a72358ull, kVtBody = 0x142a72268ull, kVtStadiumModel = 0x142a721e8ull;
@@ -58,9 +63,11 @@ const uintptr_t kExeLo = 0x140000000ull, kExeHi = 0x143a00000ull;
 typedef void(__fastcall* FdmVf3)(void*);
 typedef void(__fastcall* FdhVf1)(void*, void*, uint32_t, uint8_t, uint64_t, void*);
 typedef void(__fastcall* SetVisibleFn)(void*, char);
-FdmVf3 o_fdm = nullptr; FdhVf1 o_fdh = nullptr; SetVisibleFn o_vis = nullptr;
+typedef void(__fastcall* ApplyFn)(void*);
+FdmVf3 o_fdm = nullptr; FdhVf1 o_fdh = nullptr; SetVisibleFn o_vis = nullptr; ApplyFn o_apply = nullptr;
 
-bool s_tried = false, s_okTick = false, s_okProbe = false, s_okHide = false, s_okVisHook = false;
+bool s_tried = false, s_okTick = false, s_okProbe = false, s_okHide = false, s_okVisHook = false, s_okApply = false;
+std::atomic<unsigned> s_applyBench{0};               // veces que el juego aplico la visibilidad de un banco (con la fila prendida)
 std::atomic<unsigned> s_gameShows{0};               // veces que el juego quiso mostrar el banco (queda escondido)
 
 bool Readable(const void* p, size_t n) {
@@ -187,6 +194,55 @@ void __fastcall hk_Vis(void* body, char vis) {
     o_vis(body, vis);
 }
 
+// 16/11 prueba 2: en el juego el banco que se ve no pasa nunca por SetVisible (otra instancia, creada despues de la
+// presentacion). Toda instancia aplica su visibilidad en FUN_141906600 (+0x80 y +0x81 -> objeto de dibujo): ahi se pone
+// +0x81 = 0 antes de que el juego la aplique, en el hilo del juego.
+void __fastcall hk_Apply(void* body) {
+    if (Live(0, 0.0f) > 0.5f && Live(1, 1.0f) > 0.5f && IsBenchBody((uintptr_t)body)) {
+        s_applyBench.fetch_add(1, std::memory_order_relaxed);
+        *((volatile uint8_t*)body + 0x81) = 0;
+    }
+    o_apply(body);
+}
+
+// solo lectura (desde Present): todos los cuerpos "_dir_bench" de las escenas y su estado
+struct BenchSeen { uintptr_t body; uint8_t node, vis; uint32_t drawFlags; bool drawOk; };
+int ScanBenches(BenchSeen* out, int max) {
+    int n = 0; uintptr_t first = 0; if (!Rd(kScenes, first) || !Heap(first)) return 0;
+    uintptr_t e = first;
+    for (int ne = 0; ne < 64 && Heap(e) && n < max; ne++) {
+        uintptr_t next = 0, arr = 0; uint32_t nl = 0;
+        if (!Rd(e, next) || !Rd(e + 0x28, nl) || !Rd(e + 0x30, arr)) break;
+        if (Heap(arr) && nl >= 1 && nl <= 256) {
+            for (uint32_t li = 0; li < nl && n < max; li++) {
+                uintptr_t lst = 0, head = 0; uint32_t cnt = 0;
+                if (!Rd(arr + 8 * li, lst) || !Heap(lst) || !Rd(lst, head) || !Rd(lst + 0x10, cnt) || !Heap(head) || cnt < 1 || cnt > 100000) continue;
+                uintptr_t o = head;
+                for (int k = 0; k < 8192 && Heap(o) && n < max; k++) {
+                    uintptr_t vt = 0, sg = 0, sc = 0; uint32_t fl = 0;
+                    if (!Rd(o, vt) || !Rd(o + 0x18, sg) || !Rd(o + 0x24, fl) || !Rd(o + 0x28, sc)) break;
+                    if ((fl & 1) != 1 || sc != e) break;
+                    uint32_t nfun = 0; uintptr_t funs = 0;
+                    if (vt == kVtModel && Rd(o + 0x100, nfun) && nfun >= 1 && nfun <= 16 && Rd(o + 0x108, funs) && Heap(funs)) {
+                        for (uint32_t i = 0; i < nfun && n < max; i++) {
+                            uintptr_t f = 0, fvt = 0, c = 0;
+                            if (!Rd(funs + 8 * i, f) || !Heap(f) || !Rd(f, fvt) || fvt != kVtFunctor || !Rd(f + 0x10, c) || !Heap(c) || !IsBenchBody(c)) continue;
+                            BenchSeen& b = out[n++]; b.body = c; b.node = b.vis = 0xff; b.drawFlags = 0; b.drawOk = false;
+                            Rd(c + 0x80, b.node); Rd(c + 0x81, b.vis);
+                            uintptr_t d = 0; if (Rd(c + 0x88, d) && Heap(d) && Rd(d + 0x1b4, b.drawFlags)) b.drawOk = true;
+                        }
+                    }
+                    if (sg == head) break;
+                    o = sg;
+                }
+            }
+        }
+        if (next == first) break;
+        e = next;
+    }
+    return n;
+}
+
 // ---------------------------------------------------------------- convocados
 void ReadSheet() {
     uintptr_t sheet = 0; if (!Rd(kSheetPtr, sheet) || !Heap(sheet)) return;
@@ -273,18 +329,20 @@ void Install() {
     s_okHide = SigAt(kSetVisible, kSetVisibleSig, sizeof kSetVisibleSig);
     if (s_okHide && MH_CreateHook((void*)kSetVisible, (void*)&hk_Vis, (void**)&o_vis) == MH_OK && MH_EnableHook((void*)kSetVisible) == MH_OK) s_okVisHook = true;
     else o_vis = nullptr;
+    if (!SigAt(kApply, kApplySig, sizeof kApplySig)) Log("banca: la firma de 0x141906600 (aplicar visibilidad) no coincide: el banco solo se esconde por SetVisible");
+    else if (MH_CreateHook((void*)kApply, (void*)&hk_Apply, (void**)&o_apply) == MH_OK && MH_EnableHook((void*)kApply) == MH_OK) s_okApply = true;
     if (!SigAt(kFdmVf3, kFdmVf3Sig, sizeof kFdmVf3Sig)) Log("banca: la firma de FixDemoMain::vf3 (0x141f37770) no coincide: sin reloj, no hace nada");
     else if (MH_CreateHook((void*)kFdmVf3, (void*)&hk_Fdm, (void**)&o_fdm) == MH_OK && MH_EnableHook((void*)kFdmVf3) == MH_OK) s_okTick = true;
     if (!SigAt(kFdhVf1, kFdhVf1Sig, sizeof kFdhVf1Sig)) Log("banca: la firma de FixDemoHuman::vf1 (0x141f87e00) no coincide: sin sonda de cinematicas");
     else if (MH_CreateHook((void*)kFdhVf1, (void*)&hk_Fdh, (void**)&o_fdh) == MH_OK && MH_EnableHook((void*)kFdhVf1) == MH_OK) s_okProbe = true;
     Log("banca: reloj %s, sonda de cinematicas %s, esconder el banco %s (fila 516: x %.0f)", s_okTick ? "enganchado" : "NO", s_okProbe ? "enganchada" : "NO",
-        !s_okHide ? "NO (firma de 0x1419055f0 distinta)" : s_okVisHook ? "listo (tambien cuando el juego lo vuelve a mostrar)" : "solo en cinematicas (gancho de SetVisible fallo)", Live(0, 0.0f));
+        !s_okHide ? "NO (firma de 0x1419055f0 distinta)" : s_okVisHook ? (s_okApply ? "listo (SetVisible y al aplicar)" : "solo por SetVisible") : "solo en cinematicas (gancho de SetVisible fallo)", Live(0, 0.0f));
 }
 } // namespace
 
 void BancaPresent() {
     if (!s_tried) Install();
-    if (!s_okTick && !s_okProbe && !s_okVisHook) return;
+    if (!s_okTick && !s_okProbe && !s_okVisHook && !s_okApply) return;
     // lineas de la sonda
     const int k = s_logN.load();
     for (int i = 0; i < k; i++) Log("%s", s_logBuf[i]);
@@ -297,9 +355,14 @@ void BancaPresent() {
     if (on && t >= nextT) {
         const unsigned tk = s_ticks.load(std::memory_order_relaxed);
         if (nextT > 0) Log("banca: reloj del juego %.1f por segundo", (tk - lastTicks) / 10.0);
-        // solo lectura: si el banco conocido volvio a estar visible sin pasar por SetVisible, decirlo
-        const uintptr_t body = s_benchBody; uint8_t v = 0;
-        if (body && Live(1, 1.0f) > 0.5f && Rd(body + 0x81, v) && v) Log("banca: OJO el banco de Konami esta visible (cuerpo +0x81 = %u) sin pedido por SetVisible", v);
+        // solo lectura: todos los bancos de las escenas y si se dibujan
+        BenchSeen bs[8]; const int nb = ScanBenches(bs, 8);
+        char line[512]; int w = sprintf_s(line, "banca: bancos en escena %d, aplicados escondidos %u:", nb, s_applyBench.load(std::memory_order_relaxed));
+        for (int i = 0; i < nb && w > 0 && w < 440; i++)
+            w += sprintf_s(line + w, sizeof line - w, " [%p nodo %u visible %u dibujo %s]", (void*)bs[i].body, bs[i].node, bs[i].vis,
+                           !bs[i].drawOk ? "?" : (bs[i].drawFlags & 1) ? "ESCONDIDO" : "se dibuja");
+        Log("%s", line);
+        ReadSheet();   // convocados tambien sin cinematica (solo lectura)
         lastTicks = tk; nextT = t + 10.0;
     }
     // el juego quiso mostrar el banco y se lo dejo escondido
