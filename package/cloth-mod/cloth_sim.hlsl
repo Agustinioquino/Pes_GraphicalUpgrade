@@ -621,7 +621,7 @@ void restAt(uint p, float t, out float3 pos, out float3 nrm)
     float3x4 M = skinSlot(r.skin.z, r.skin.x, r.skin.y, t);
     pos = xform(M, r.posPin.xyz + pesMusOf(r));
     nrm = normalize(mul((float3x3)M, r.nrm.xyz));
-    if (PES_IS_BIBW) pos += nrm * pesBibPush(r);   // (16/11) pecheras mas separadas en pecho y panza
+    pos += nrm * (PES_IS_BIBW ? pesBibPush(r) : 0.0);   // (16/11) pecheras mas separadas en pecho y panza
 }
 void fillBoneCache(uint gi, float t)
 {
@@ -639,7 +639,7 @@ void restAtC(uint p, out float3 pos, out float3 nrm)
     float3x4 M = skinC(r.skin.z, r.skin.x, r.skin.y);
     pos = xform(M, r.posPin.xyz + pesMusOf(r));
     nrm = normalize(mul((float3x3)M, r.nrm.xyz));
-    if (PES_IS_BIBW) pos += nrm * pesBibPush(r);   // (16/11) pecheras mas separadas en pecho y panza
+    pos += nrm * (PES_IS_BIBW ? pesBibPush(r) : 0.0);   // (16/11) pecheras mas separadas en pecho y panza
 }
 float3 rotateBetween(float3 a, float3 b, float3 v)
 {
@@ -1443,6 +1443,7 @@ void solveConstraint(uint4 cn, float L, float hh)
     bool tuckedPins = (s_flags & 256) != 0;
     float wa = (cn.w & (tuckedPins ? 8u : 2u)) ? 0.0 : 1.0;
     float wb = (cn.w & (tuckedPins ? 16u : 4u)) ? 0.0 : 1.0;
+    wa = PES_IS_COLLAR ? 0.0 : wa; wb = PES_IS_COLLAR ? 0.0 : wb;   // (16/11) cuello de la campera: todo fijo
     float3 d = gx[cn.x] - gx[cn.y];
     float len = length(d);
     if (len < 1e-7) return;

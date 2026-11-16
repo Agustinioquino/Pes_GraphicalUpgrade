@@ -1,4 +1,4 @@
-// TEMPORAL (16/11, d9ybe2): biseccion del X3663 de cloth_sim; se borra despues
+// TEMPORAL (16/11, d9ybe2): cloth_sim sin el cambio de solveConstraint del cuello, por si ese sigue dando X3663; se borra despues
 #define MAXP     2048
 #define THREADS  1024
 #define MAXCAPS  16
@@ -256,10 +256,12 @@ cbuffer Params : register(b2)
 #define PES_JK_TETHER     0.025   // (m) tope de la correa de distancia maxima
 #define PES_JK_DAMP       1.6     // freno relativo al cuerpo (x)
 #define PES_IS_JACKET (g_legCount == 0 && !PES_IS_BIB && g_vertexCount >= PES_JK_MINV)
+// (16/11) las pecheras como las arma el mod hoy (pechera 3542 v, suplente 1226 v, con 1 capsula): solo para la brisa
 #define PES_IS_BIBW (g_legCount == 0 && g_capsuleCount <= 1 && (g_vertexCount == PES_BIB_VERTS0 || g_vertexCount == PES_BIB_VERTS1))
+// (16/11) cuello de la campera (malla 0 de campera_pes21fx, VS de las pecheras): fijo al esqueleto, sin fisica
 #define PES_IS_COLLAR (g_legCount == 0 && g_capsuleCount == 0 && (g_vertexCount == 1074 || g_vertexCount == 1100))
-#define PES_BIBW_PUSH    0.008
-#define PES_BIBW_ZC      0.05
+#define PES_BIBW_PUSH    0.008    // (m) separacion extra de las pecheras en pecho y panza
+#define PES_BIBW_ZC      0.05     // (m, pose de armado) eje del torso en z (z mayor = adelante)
 #define PES_MENU_JUMP    3.0      // (m/s) en menus, mas rapido que esto = salto de pose: la tela viaja con el cuerpo
 struct ParticleRest { float4 posPin; float4 nrm; uint4 skin; };
 struct Capsule      { float4 a; float4 b; };
@@ -603,15 +605,15 @@ float3 pesRestFollow(float3 pb, float sw)
 }
 // (25/10 b) las costuras (escote, punos, cintura: el mod las sujeta con pin alto) no se corren: el cuello y los punos son mallas
 // aparte que siguen al esqueleto sin la musculatura, y si la tela de la costura se corria quedaba separada del cuello
-float pesPinRest(ParticleRest r) { return (s_flags & 256) ? float((r.skin.w >> 2) & 63) / 63.0 : r.posPin.w; }
+float pesPinRest(ParticleRest r) { return PES_IS_COLLAR ? 1.0 : ((s_flags & 256) ? float((r.skin.w >> 2) & 63) / 63.0 : r.posPin.w); }
 float pesSeamFade(float pin) { return 1.0 - smoothstep(0.25, 0.85, pin); }
 float3 pesMusOf(ParticleRest r) { return pesRestFollow(r.posPin.xyz, g_legCount > 0 ? 0.0 : float((r.skin.w >> 8) & 255) / 255.0) * pesSeamFade(pesPinRest(r)); }
-float pesBibPush(ParticleRest r)
+float pesBibPush(ParticleRest r)   // (16/11) cuanto sale el reposo de la pechera por su normal (con signo)
 {
     float3 q = r.posPin.xyz;
     float sgn = dot(r.nrm.xz, float2(q.x, q.z - PES_BIBW_ZC)) < 0.0 ? -1.0 : 1.0;
     float front = smoothstep(PES_BIBW_ZC - 0.01, PES_BIBW_ZC + 0.04, q.z);
-    float band = smoothstep(0.92, 0.98, q.y) * (1.0 - smoothstep(1.42, 1.50, q.y));
+    float band = smoothstep(0.92, 0.98, q.y) * (1.0 - smoothstep(1.42, 1.50, q.y));   // panza y pecho, sin hombros
     return sgn * PES_BIBW_PUSH * front * band;
 }
 void restAt(uint p, float t, out float3 pos, out float3 nrm)
@@ -620,7 +622,7 @@ void restAt(uint p, float t, out float3 pos, out float3 nrm)
     float3x4 M = skinSlot(r.skin.z, r.skin.x, r.skin.y, t);
     pos = xform(M, r.posPin.xyz + pesMusOf(r));
     nrm = normalize(mul((float3x3)M, r.nrm.xyz));
-    if (PES_IS_BIBW) pos += nrm * pesBibPush(r);
+    pos += nrm * (PES_IS_BIBW ? pesBibPush(r) : 0.0);   // (16/11) pecheras mas separadas en pecho y panza
 }
 void fillBoneCache(uint gi, float t)
 {
@@ -638,7 +640,7 @@ void restAtC(uint p, out float3 pos, out float3 nrm)
     float3x4 M = skinC(r.skin.z, r.skin.x, r.skin.y);
     pos = xform(M, r.posPin.xyz + pesMusOf(r));
     nrm = normalize(mul((float3x3)M, r.nrm.xyz));
-    if (PES_IS_BIBW) pos += nrm * pesBibPush(r);
+    pos += nrm * (PES_IS_BIBW ? pesBibPush(r) : 0.0);   // (16/11) pecheras mas separadas en pecho y panza
 }
 float3 rotateBetween(float3 a, float3 b, float3 v)
 {
@@ -650,8 +652,8 @@ float3 rotateBetween(float3 a, float3 b, float3 v)
 uint packHalf2(float a, float b) { return f32tof16(a) | (f32tof16(b) << 16); }
 float pinOf(uint p)
 {
-    if (s_flags & 256) return float((g_rest[p].skin.w >> 2) & 63) / 63.0;
-    return g_rest[p].posPin.w;
+    float pn = (s_flags & 256) ? float((g_rest[p].skin.w >> 2) & 63) / 63.0 : g_rest[p].posPin.w;
+    return PES_IS_COLLAR ? 1.0 : pn;   // (16/11) cuello de la campera: fijo
 }
 // PES21 FX (15/11): cuanto es RUEDO este punto (0..1): tela suelta (pin bajo) en los ~10 cm de mas abajo de la prenda en la pose
 // de reposo (el faldon de la remera, la boca de la pierna del short). Antes "borde libre" era toda la tela con pin < 0.5, o
@@ -1589,7 +1591,8 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                           s_windLen = 2.0; }
             s_pesWindOn = pesWOn; s_windHem = pesEffOk ? pesEff.z : 1.0;
             if (s_menu && PES_MENU_BREEZE > 0.0 && length(windBase) < 0.1) {   // (15/11 b) brisa leve de los menus, con rachas lentas
-                windBase = mul(transpose(W), float3(0.92, 0.0, 0.39)) * (PES_MENU_BREEZE * (PES_IS_BIBW ? 0.8 * sin(g_time * 0.9) * (0.6 + 0.4 * sin(g_time * 0.37 + 1.0)) : (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0))));
+                windBase = mul(transpose(W), float3(0.92, 0.0, 0.39)) * (PES_MENU_BREEZE * (PES_IS_BIBW ? 0.8 * sin(g_time * 0.9) * (0.6 + 0.4 * sin(g_time * 0.37 + 1.0))   // (16/11) pecheras: va y viene
+                                   : (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0))));
                 s_windLen = 1.5; }
             // PES21 FX (25/10): el cuerpo real de este personaje (cuerpo.cpp): de las tablas que la DLL armo en el ultimo Present (una
             // por personaje, con la piel del cuadro anterior), la que tiene su origen en el mundo mas cerca del de la prenda
