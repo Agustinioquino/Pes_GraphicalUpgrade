@@ -573,11 +573,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
         // se escribe base x zoom; si el valor que llega no es el que escribimos, es que el juego lo cambio: nuevo base.
         if (*fov == *fov && *fov > 0.0f && *fov < 180.0f) {
             if (*fov != s_fovWritten) s_fovBase = *fov;
-            // (16/11 b, Agustin 18:26: "apoyado en el piso ... lente mas abierto") en el Motor el lente del Editar (0.364 rad = 21 grados
-            // de alto, un teleobjetivo) aplasta al jugador; como en un editor, el Motor arranca con 36 grados de alto (~60 de ancho en 16:9)
-            const float base = motor ? std::max(s_fovBase, 0.63f) : s_fovBase;
-            { static bool sl = false; if (motor && !sl && base != s_fovBase) { sl = true; Log("camara libre (Motor): lente mas abierto, campo de vision %.3f -> %.3f rad", s_fovBase, base); } }
-            *fov = base * z; s_fovWritten = *fov; fovApplied = *fov;
+            *fov = s_fovBase * z; s_fovWritten = *fov; fovApplied = *fov;
         }
         // (15/11 q) ortografica: alejar a lo largo de la mirada y cerrar el angulo en la misma proporcion (tan), con el pivote quieto
         const float want = (motor && !s_follow && s_pivotOk && s_orthoWant.load()) ? 1.0f : 0.0f;
