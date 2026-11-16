@@ -306,16 +306,6 @@ void PesCrowdVariety(inout uint4 vPos, inout uint4 vNrm, inout uint4 vTan, uint 
 }
 void PesCrowdFace(inout uint4 vPos, inout uint4 vNrm, inout uint4 vTan, inout uint4 vCol, uint persona, uint4 vIdx, uint4 vWgt, inout uint4 vUV)
 {
-    // (16/11 8z607v, banco de suplentes) los munecos del banco en el juego son publico: con x516 / y516 prendidos, la DLL pone en
-    // 517 / 518 la caja del banco del estadio (st*_dir_bench) y aca se esconde (todos los vertices al origen del modelo) a
-    // quien tenga los pies ahi. 517 = x min, x max, z min, z max; 518 = y desde, y hasta, z 1 = valida.
-    {
-        const float4 bx = IniParams.Load(int2(517, 0)), by = IniParams.Load(int2(518, 0));
-        if (by.z > 0.5) {
-            const float3 r = float3(asfloat(t0[persona].v[0]), asfloat(t0[persona].v[1]), asfloat(t0[persona].v[2]));
-            if (r.x >= bx.x && r.x <= bx.y && r.z >= bx.z && r.z <= bx.w && r.y >= by.x && r.y <= by.y) { vPos.xyz = 0u; return; }
-        }
-    }
     const float mk0 = asfloat(vCol.x) * 255.0;
     PesCrowdFace0(vPos, vNrm, vTan, vCol, persona, vIdx, vWgt, vUV);
     if (mk0 < 199.5 || mk0 > 203.5) PesCrowdVariety(vPos, vNrm, vTan, persona);
