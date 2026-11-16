@@ -356,9 +356,13 @@ ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash
     // (01/11) con la tarjeta de brazos apagada (x321 0) pero el cuello de las caras reales prendido (x322) igual se reconoce el
     // tono del torso dibujado (solo para t29 de la cara, ArmsTorsoTextureForFace): no se cambia ninguna textura del cuerpo
     const bool arms = g_cfg.live[321][0] > 0.5f, collar = g_cfg.live[322][0] > 0.5f;
-    if (vsHash != kSkinVS || (!arms && !collar) || !g_dev.dev) return nullptr;
+    // (16/11, Agustin: no reemplazar las texturas arm / thigh de la cara, igualar "el color del torso") x327 = 2, SOLO EL TORSO: con la
+    // tarjeta de brazos apagada el brazo de la cara real se mide igual (no se le cambia nada) y el torso del mismo personaje pasa a
+    // torso_M del tono mas cercano a ese brazo
+    const bool soloTorso = !arms && g_cfg.live[327][0] > 1.5f;
+    if (vsHash != kSkinVS || (!arms && !collar && !soloTorso) || !g_dev.dev) return nullptr;
     const bool torso = In(kTorsoIdx, 3, indexCount);
-    if (!arms && !torso) return nullptr;
+    if (!arms && !torso && !soloTorso) return nullptr;
     const bool arm = In(kArmIdx, 4, indexCount) || (indexCount && (indexCount == (UINT)(g_cfg.live[302][0] + 0.5f) || indexCount == (UINT)(g_cfg.live[302][1] + 0.5f)));
     const bool thigh = !arm && g_cfg.live[321][1] > 0.5f && In(kThighIdx, 6, indexCount);
     if (!torso && !arm && !thigh) return nullptr;
@@ -379,7 +383,7 @@ ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash
         }
         r->Release();
         if (tone <= 0) return nullptr;
-        if (!arms) { t_lastTone = tone; return nullptr; }   // solo el tono para el cuello (el torso queda con su textura)
+        if (!arms && !soloTorso) { t_lastTone = tone; return nullptr; }   // solo el tono para el cuello (el torso queda con su textura)
         ID3D11Buffer* b = nullptr; UINT f = 0;
         const bool key = KeyOf(c, &b, &f);
         int use = tone;
@@ -401,6 +405,14 @@ ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash
     }
     // brazo, mano o muslo: solo si la textura no es la de TorsoBody (la de una cara real: el atlas de Konami a 2048 / 1024)
     if (td.Width >= 4096 || td.Width < 1024 || td.Width != td.Height) { r->Release(); return nullptr; }
+    if (soloTorso) {   // (16/11) solo medir el brazo de la cara y anotarlo para su torso: la textura queda como esta
+        if (arm) {
+            const int ft = FaceToneOf(c, r, td);
+            ID3D11Buffer* b = nullptr; UINT f = 0;
+            if (ft > 0 && KeyOf(c, &b, &f)) { bool had = false; for (KeyN& k : s_faceKeys) if (k.b == b && k.f == f) { k.n = ft; had = true; break; } if (!had && s_faceKeys.size() < 256) s_faceKeys.push_back({ b, f, ft }); }
+        }
+        r->Release(); return nullptr;
+    }
     int tone = (int)(g_cfg.live[321][2] + 0.5f);
     if (tone < 1 || tone > kTones) {
         tone = 0;
