@@ -494,6 +494,13 @@ static void PitchFlatPresent() {
     static double s_fG = -1e9, s_fR = -1.0; float dt = GameStep(s_fG, s_fR); s_flatT = Now(); s_flatFrame++;   // (11/11) reloj del juego
     static int s_flatPlGen = -1; const bool newPl = s_plGen != s_flatPlGen; s_flatPlGen = s_plGen;
     if (g_matchGen.load() != s_flatMatch) { s_flatMatch = g_matchGen.load(); float z[4] = {}; g_dev.imm->ClearRenderTargetView(s_flatRTV, z); s_ballOk = false; }
+    // (16/11, video de Agustin 00.20.27: el pasto alrededor de la pelota se hunde de golpe al empezar la repeticion) el reloj del juego que
+    // vuelve atras (empieza la repeticion o se rebobina) es un salto: la pelota anterior es de otro momento. Sin esto, la primera lectura de
+    // la repeticion se comparaba con la ultima del partido (en el aire = "pique" en el piso, o un tramo de hasta 4 m) y estampaba un disco
+    { static double s_gJump = -1e9; const double gNow = (double)g_cfg.live[157][0];
+      if (g_cfg.live[157][3] > 0.5f && s_gJump > -1e8 && gNow < s_gJump - 0.05 && gNow > s_gJump - 50000.0) {
+          s_ballOk = false; static int s_jLog = 0; if (s_jLog < 4) { s_jLog++; Log("pasto aplastado: el reloj del juego volvio %.2f s (repeticion): la pelota empieza de cero", s_gJump - gNow); } }
+      s_gJump = gNow; }
     // pelota: el staging mas viejo ya listo (anillo de 8, ver kStageMinAge)
     static int s_ballPresN = 0; int ballNewN = 0; s_ballPresN = std::min(s_ballPresN + 1, 1000);   // (13/11 tanda 2) z446: Presents desde la lectura anterior (0 = sin lectura nueva)
     { int w = s_ballW.load(); s_ballStamp[w] = s_ballStageFrame[w] >= 0 ? s_ballPres : -1; s_ballStageFrame[w] = -1; s_ballPres++;
@@ -571,7 +578,10 @@ static void PitchFlatPresent() {
         // 0.04 (no dependia de dt) mientras el mapa no se recupera (fB = exp(-dt / tau) = 1): el disco aplastado crecia hasta saturar.
         // Ahora sin tiempo de juego la pelota no marca nada (ni rastro ni pique), como los jugadores
         const bool ballClk = dt > 1e-5f;
-        if (ballClk && onGround > 0.5f && s_ballPrev[1] > 0.4f && nb < kMaxPlayers) {
+        // (16/11) el pique se estampa UNA vez, con la lectura nueva que lo muestra (antes en cada cuadro hasta la lectura siguiente, 3-4 veces)
+        // y solo si la lectura anterior es reciente (una pelota que no se vio un rato no "cae" de donde estaba)
+        static int s_lastBallGap = 0; if (ballNewN > 0) s_lastBallGap = ballNewN;
+        if (ballClk && ballNewN > 0 && s_lastBallGap <= 12 && onGround > 0.5f && s_ballPrev[1] > 0.4f && nb < kMaxPlayers) {
             brush[nb][0] = s_ball[0] / 140.f + 0.5f; brush[nb][1] = s_ball[2] / 79.f + 0.5f; brush[nb][2] = 0.6f * k * (F[3] > 0.f ? F[3] : 1.0f) / zS; brush[nb][3] = 0.26f * zS; nb++;
         }
         float dx = s_ball[0] - s_ballPrev[0], dz = s_ball[2] - s_ballPrev[2]; float dist = sqrtf(dx * dx + dz * dz);
@@ -584,7 +594,11 @@ static void PitchFlatPresent() {
         // (15/11, videos de Agustin en pausa / camara libre: disco pelado de ~80 cm con borde duro alrededor de la pelota quieta) la pelota
         // quieta (< 1 cm por lectura) ya no estampa: con x0.25 por lectura seguia sumando mas rapido de lo que el mapa se recupera (tau 30 s)
         // y el disco se saturaba hasta el corte del pincel (1.5 x radio). La pelota apoyada la hace el VS (corona / asiento), no el mapa
-        const float segK = (dist < 0.01f) ? 0.f : (!segOnce ? 1.f : (segN > 0 ? (float)segN : 0.f));
+        // (16/11, mismo video: pelota rodando MUY despacio en el saque) con un solo paso cada lectura estampaba la fuerza entera en casi el mismo
+        // lugar: la pelota lenta aplastaba mucho mas por metro que la rapida y armaba el disco igual. Ahora el paso unico pesa lo que avanzo
+        // contra el paso normal de 8 cm: por metro recorrido marca lo mismo a cualquier velocidad
+        const float slowK = std::clamp(dist / 0.08f, 0.f, 1.f);
+        const float segK = (dist < 0.01f) ? 0.f : (!segOnce ? 1.f : (segN > 0 ? (float)segN : 0.f)) * slowK;
         const float dtSp = (segOnce && segN > 0) ? dt * (float)segN : dt;   // z446: la velocidad sobre el tiempo del tramo entero
         float kb = (F[3] > 0.f ? F[3] : 1.0f) * k * onGround;
         { const float kv = std::clamp(g_cfg.live[177][2], 0.f, 2.f); float spd = dtSp > 0.002f ? std::min(dist / dtSp / 12.f, 1.5f) : 0.f;   // (2/11) rapida: aplasta mas; lenta: menos

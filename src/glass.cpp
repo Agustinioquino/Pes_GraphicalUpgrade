@@ -428,7 +428,7 @@ ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps, ID3D1
     t8->Release();
     if (!ok) return nullptr;
     if (d.BindFlags & D3D11_BIND_RENDER_TARGET) {   // la imagen del jugador: el visor del editor esta en pantalla
-        s_bgNRt.fetch_add(1, std::memory_order_relaxed); s_bgSceneSeen.store(true, std::memory_order_relaxed);
+        s_bgNRt.fetch_add(1, std::memory_order_relaxed); s_bgSceneSeen.store(true, std::memory_order_relaxed); MotorDepthPlayerImage((void*)resId);
         if (d.Width >= 512 && d.Height >= 512) {
             static std::atomic<int> nv{ 0 };
             if (nv.fetch_add(1) < 4) Log("fondo del editor: visor del editor reconocido por la imagen del jugador %ux%u (formato %d)", d.Width, d.Height, (int)d.Format);

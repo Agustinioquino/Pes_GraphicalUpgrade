@@ -679,10 +679,10 @@ void LightMeterAfterComposition(ID3D11DeviceContext* c); void LightMeterPresent(
 void AutoCapturePresent(ID3D11Texture2D* frame);   // hooks.cpp
 // (08/11) panel en vivo (panel.cpp): HTTP solo en 127.0.0.1 para la pagina tools\visor; camara libre y camara del juego para el panel
 void PanelStart(int port); void PanelPresent(ID3D11Texture2D* frame);
-void FreeCamSetPose(const float* pos, float yaw, float pitch); bool FreeCamGetPose(float* pos, float* yaw, float* pitch);
+void FreeCamSetPose(const float* pos, float yaw, float pitch); bool FreeCamGetPose(float* pos, float* yaw, float* pitch); bool FreeCamWrittenCam(float* pos, float* tgt, float* up, float* fov, float* asp);
 void FreeCamGizmoOrbit(float dyaw, float dpitch); void FreeCamGizmoAxis(int a); void FreeCamGizmoHome(); void FreeCamOrthoSet(int on); bool FreeCamOrtho(); void FreeCamExtraSet(int on); bool FreeCamExtra(); void FreeCamExtraSwap(); void FreeCamExtraTick(); bool FreeCamExtraBFrame(); void FreeCamExtraOrbit(float dyaw, float dpitch); void FreeCamExtraZoom(float f); void FreeCamExtraPreset(int p); void MotorExtraPresent(IDXGISwapChain* sc); void* MotorExtraSRV(float* aspect);   /* (15/11 q) vista ortografica del Motor (Num 5) */   // (11/11) gizmo de camara del Motor
 bool MotorGizmoPoll(); void MotorGizmoDraw(); void MotorPreCoverDraw(); void MotorGlitchCover(float a, float side); void MotorPreCoverPoll(); double MotorEditMenuSeenT(); void MotorCoverArrive(); void MotorCoverCancel(); void MotorGlitchSound(int which); void MotorCoverFlush(); ImFont* MotorFont(int i); void MenuFontsDirty(); bool MotorUiReady(); bool MotorGizmoOver(float px, float py);
-void MotorGridPresent(); ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx);   // (15/11) motorgrid.cpp: fondo con grilla del Motor
+void MotorGridPresent(); ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx); void MotorDepthPlayerImage(void* res); void MotorDepthDiagRT(UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d); void MotorDepthDiagClear(ID3D11DepthStencilView* d, float depth);   // (15/11) motorgrid.cpp: fondo con grilla del Motor
 void FreeCamMotorTick(); float FreeCamFovNow();                                              // (15/11) freecam.cpp: camara del Motor sin modelo
 // (15/11) menu propio del Motor (motorpage.cpp): estado y pedidos de la barra de iconos (motorgizmo.cpp)
 // (15/11) motorscene.cpp: luces y conteo de objetos de la escena grafica del motor, para el editor del Motor
@@ -806,7 +806,7 @@ void KeyBlockInstall();
 // (11/11 3icxbh) mouse en los menus nativos del juego (menumouse.cpp): ganchos en el primer Present; la rueda llega por la ventana; cursor para overlay.cpp
 void MotorPagePresent();   // (11/11) motorpage.cpp: filas nativas del Motor en el estudio 3D
 void MotorPageSeen(void* win); bool MotorPageActive(); bool MotorPageIs(void* win); bool MotorPageDrag(void* win, float mx, float my, bool down, bool edge, float tx, float ty, float tw);   // el estudio del Motor esta abierto (lo confirma menumouse.cpp en cada cuadro)
-void MenuMousePresent(); void MenuMouseWheel(int delta); bool MenuMouseCursor(float* x, float* y); bool MenuMouseOverRow(); bool MenuExitButton(float* x, float* y, float* w, float* h, int* state); bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save); bool MenuViewCamHint(); bool MenuViewCamPulse(float* x, float* y, float* age, int* kind); bool MenuViewCamCenter(float* x, float* y); bool MenuViewCamDragging(); bool MenuViewCamWantsHead(); HWND OverlayHwnd(); bool MotorPanelOpen();
+void MenuMousePresent(); void MenuMouseWheel(int delta); bool MenuMouseCursor(float* x, float* y); bool MenuMouseOverRow(); bool MenuExitButton(float* x, float* y, float* w, float* h, int* state); bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save); bool MenuViewCamMoving(); bool MenuViewCamHint(); bool MenuViewCamPulse(float* x, float* y, float* age, int* kind); bool MenuViewCamCenter(float* x, float* y); bool MenuViewCamDragging(); bool MenuViewCamWantsHead(); HWND OverlayHwnd(); bool MotorPanelOpen();
 extern std::atomic<int> g_replacedCount, g_failedCount;
 extern std::vector<std::string> g_compileErrors;
 extern std::mutex g_errMutex;

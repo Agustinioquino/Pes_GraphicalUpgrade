@@ -674,12 +674,12 @@ template<int V> static void STDMETHODCALLTYPE hk_Dispatch(ID3D11DeviceContext* c
 }
 template<int V> static void STDMETHODCALLTYPE hk_OMSetRT(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d) { PerfDrawScope pds_(c, false);
     GrassBaseFlush(c, 1, 0, v ? n : 0, v, d);
-    o_OMSetRT[V](c, n, v, d);
+    o_OMSetRT[V](c, n, v, d); MotorDepthDiagRT(n, v, d);
     Ctx(c).shadowDSV = HeadShadowBind(n, v, d); Ctx(c).gameShadow = HeadShadowIsGameRes(d);
 }
 template<int V> static void STDMETHODCALLTYPE hk_OMSetRTU(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d, UINT us, UINT un, ID3D11UnorderedAccessView* const* u, const UINT* ic) { PerfDrawScope pds_(c, false);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) GrassBaseFlush(c, 1, 0, v ? n : 0, v, d);   // solo UAVs: los targets no cambian
-    o_OMSetRTU[V](c, n, v, d, us, un, u, ic);
+    o_OMSetRTU[V](c, n, v, d, us, un, u, ic); if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) MotorDepthDiagRT(n, v, d);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) { Ctx(c).shadowDSV = HeadShadowBind(n, v, d); Ctx(c).gameShadow = HeadShadowIsGameRes(d); }
 }
 template<int V> static void STDMETHODCALLTYPE hk_ClearState(ID3D11DeviceContext* c) { PerfDrawScope pds_(c, false);
@@ -901,6 +901,7 @@ std::atomic<int> g_depthClearZero{0}, g_depthClearOne{0};
 template<int V> static void STDMETHODCALLTYPE hk_ClearDSV(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, UINT f, FLOAT d, UINT8 st) { PerfDrawScope pds_(c, false);
     if (f & D3D11_CLEAR_DEPTH) { if (d < 0.5f) g_depthClearZero++; else g_depthClearOne++; HeadShadowOnClear(c, v, d); }   // (27/10 c) el atlas de la cabeza se limpia con el shadow map del juego
     GrassBaseFlush(c, 2, 0);   // (26/10 g) antes de borrar la profundidad de la pasada
+    if (f & D3D11_CLEAR_DEPTH) MotorDepthDiagClear(v, d);
     o_ClearDSV[V](c, v, f, d, st);
 }
 
