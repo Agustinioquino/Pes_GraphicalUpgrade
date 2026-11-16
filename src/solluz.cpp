@@ -64,7 +64,12 @@ void SolLuzPresent() {
     const bool want = test && (nearSun || tlOn) && SolEditorBody() != nullptr;
     if (!want) {
         if (s_on) { const float d[3] = { 0, 1, 0 }, c[3] = { 1, 1, 1 }; SolEditorSet(d, c, 5600.0f, 0.0f, false); s_on = false; Log("sol real del editor: apagado"); }
-        if (g_cfg.solEditorExpoAuto) SolEditorExposicion(true, 0.0f, g_cfg.solEditorExpoMin, g_cfg.solEditorExpoMax, -7.1f);
+        // (16/11, Agustin 16:57 con capturas: "las luces en el modo editar con la remera, y sin luz de editor de shader estan rotas":
+        // jugador plano y lavado) con la luz del editor APAGADA el estudio vuelve a la exposicion FIJA de su archivo (-7.1 EV, la que
+        // el aprobo el 08/11 con LucesEditor). Antes la DLL dejaba la automatica (clave 0.18) tambien aca: con el fondo azul del
+        // Editar la adaptacion subia o bajaba la imagen y aplastaba el sombreado de los focos. La automatica queda solo con x297
+        if (!test) SolEditorExposicion(false, 0.0f, 0.0f, 0.0f, 0.0f);
+        else if (g_cfg.solEditorExpoAuto) SolEditorExposicion(true, 0.0f, g_cfg.solEditorExpoMin, g_cfg.solEditorExpoMax, -7.1f);
         g_solRealActivo = 0.0f; return;
     }
     float az = 0, el = 0, kelvin, lux; float rgb[3] = { 1, 1, 1 }; float d[3];
