@@ -64,6 +64,7 @@ Texture2D<float4> pesSkinNeck  : register(t41);   // (04/11 poros v5) cuello
 Texture2D<float4> pesFacePores2 : register(t42);  // (04/11 poros v5) guia 2: R frente, G sobre las cejas, B cuello
 Texture2D<float4> pesFacePores : register(t28);
 Texture2D<float4> pesArmAnatN  : register(t26);   // (02/11) separaciones de los grupos musculares del brazo (tools/fox/torso/arm_anatomy.py; la DLL la enlaza solo en los brazos)
+Texture2D<float4> pesTorsoArm  : register(t46);   // (16/11) torso_N del jugador en los brazos de cara real (brazos.cpp, x327 = 2): franja de union
 Texture2D<float4> pesArmAnatC  : register(t30);   // (02/11) cavidad de esos surcos (1 = nada)
 Texture2D<float4> pesArmAnatG  : register(t36);   // (02/11) grupo de cada texel: x deltoides, y biceps + braquial, z triceps, w antebrazo
 Texture2D<float4> pesVeins     : register(t29);   // (26/10, v12.7) venas de brazos y manos (la DLL la enlaza solo en esos dibujos)
@@ -92,6 +93,7 @@ Texture2D<float4> StereoParams : register(t125);
 #include "pes_nailfix.hlsli"   // (26/10, v12.6) unas de los jugadores con textura de brazo propia (x304)
 #include "pes_limb_relief.hlsli"   // (08/11) relieve 3D de manos y piernas
 #include "pes_skin2.hlsli"   // (12/11) PIEL v2 (w124): misma sangre, cavidades y rugosidad que la cara
+#include "pes_debug_cuerpo.hlsli"   // (16/11) vistas de diagnostico del cuerpo (fila 519): torso a traves, costuras, texturas
 #include "pes_sweat2.hlsli"  // (13/11) SUDOR 2 (x457): sudor por jugador + lluvia aparte
 #ifdef PES_HL_ACC
 RWByteAddressBuffer gHlAcc : register(u5);   // por marca y lado: suma x, suma y, pixeles (4 x 16 bytes)
@@ -194,6 +196,8 @@ void main(
   float vrWa = max(vrT, 0.0), vrWr = max(-vrT, 0.0);
   float vrTm = vrBody ? PesSkinTorso(v6.w) : 0.0;
   float vrArm = vrBody ? saturate((abs(pR.x) - 0.20) / 0.05) * step(1.0, pR.y) * (1.0 - vrTm) : 0.0;
+  float4 dbgC = PesDbgCuerpo();   // (16/11) x519: el torso se ve a traves (pes_debug_cuerpo.hlsli)
+  if (vrTm > 0.5 && PesDbgSeeThrough(dbgC, v0.xy)) discard;
   float vrDefK = P285.z > 0.0 ? P285.z : 1.0, vrTexK = P285.y > 0.0 ? P285.y : 1.0;
   // (26/10) los normal maps propios de TorsoBody (4096: torsob_nrm, arm_nrm, thigh_nrm) tienen el verde al reves para el juego:
   // la vista del juego es de mano izquierda y B = cross(N, T) * w queda invertida respecto de la textura (el relieve se veia
@@ -507,6 +511,34 @@ void main(
   r1.w = max(0.730000019, r1.w);
   r1.w = min(0.930000007, r1.w);
   r2.yzw = g_tex_diffuse.SampleBias(g_samplerLinear_Clamp_s, v2.xy, bBD).xyz;
+  const float3 dbgTex = r2.yzw;   // (16/11) z519 = 2: la textura tal cual
+  {   // (16/11, Agustin: franja clara arriba del brazo sin camiseta) el arm_bsm de las caras reales viene palido donde lo tapa la manga.
+      // Sin cambiar la textura: en los primeros 5 cm desde la union (fundido hasta 12) el PROMEDIO del brazo se lleva al del torso del
+      // mismo jugador (t46, lo enlaza la DLL solo en brazos de cara real con x327 = 2). La correccion nunca pasa de la que pide la franja
+      // de union: donde el brazo ya tiene el tono del torso, o hay un tatuaje, queda como esta.
+    uint abW = 0, abH = 0; pesTorsoArm.GetDimensions(abW, abH);
+    if (abW > 16 && pR.w > 0.5 && pR.w < 9.0) {
+      float3 abQ = float3(abs(pR.x), pR.y, pR.z) - float3(0.2631, 1.3704, 0.0195);
+      float abS = dot(abQ, float3(0.7611, -0.6432, -0.0839));
+      float abK = (abS > -0.01 && dot(abQ, abQ) < 0.18 * 0.18) ? 1.0 - smoothstep(0.05, 0.12, abS) : 0.0;
+      if (abK > 0.001) {
+        bool abR = pR.x > 0.0;
+        float3 abT = 0.25 * (pesTorsoArm.SampleLevel(g_samplerLinear_Clamp_s, abR ? float2(0.504, 0.096) : float2(0.409, 0.096), 5.0).xyz
+                           + pesTorsoArm.SampleLevel(g_samplerLinear_Clamp_s, abR ? float2(0.458, 0.132) : float2(0.046, 0.136), 5.0).xyz
+                           + pesTorsoArm.SampleLevel(g_samplerLinear_Clamp_s, abR ? float2(0.507, 0.174) : float2(0.502, 0.188), 5.0).xyz
+                           + pesTorsoArm.SampleLevel(g_samplerLinear_Clamp_s, abR ? float2(0.564, 0.136) : float2(0.938, 0.136), 5.0).xyz);
+        uint abDW = 0, abDH = 0; g_tex_diffuse.GetDimensions(abDW, abDH);
+        float abM = max(log2(max((float)abDW, 128.0)) - 7.0, 0.0);
+        float abU0 = abR ? 0.600 : 0.400, abU1 = abR ? 0.675 : 0.325, abU2 = abR ? 0.732 : 0.268, abU3 = abR ? 0.663 : 0.337;
+        float3 abB = 0.25 * (g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, float2(abU0, 0.973), abM).xyz + g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, float2(abU1, 0.978), abM).xyz
+                           + g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, float2(abU2, 0.978), abM).xyz + g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, float2(abU3, 0.974), abM).xyz);
+        float3 abRb = clamp(abT / max(abB, 0.002), 0.6, 1.6);                                              // lo que pide la franja de union
+        float3 abRl = abT / max(g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, v2.xy, abM).xyz, 0.002);   // lo que pide este punto
+        float3 abRr = clamp(abRl, min(abRb, 1.0), max(abRb, 1.0));
+        r2.yzw *= lerp(float3(1.0, 1.0, 1.0), abRr, abK);
+      }
+    }
+  }
   const float3 tAlb0 = r2.yzw;   // (27/10 d) color del torso tal cual la textura (como el juego: pedido de Agustin)
   const bool tOrig = vrTm > 0.5 && !pel;   // torso de TorsoBody: sin retoques de color del mod (definicion, costura, rubor, tono propio)
   if (shW > 0.001) r2.yzw = lerp(r2.yzw, g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, v2.xy, 6.0).xyz, shW);   // (27/10) solo el color medio
@@ -701,6 +733,7 @@ void main(
       o0.xyz = lerp(heat, float3(1.0, 0.95, 0.1), smoothstep(0.15, 0.8, mv));
     }
   }
+  o0.xyz = PesDbgColor(dbgC, o0.xyz, dbgTex, v2.xy, vrTm > 0.5 ? 0 : (vrArm > 0.5 ? 1 : 2));   // (16/11) z519: cuadricula de costuras / solo la textura
   o0.w = 1;
   r0.w = abs(r0.x) + abs(r0.y);
   r0.w = r0.w + abs(r0.z);

@@ -1505,6 +1505,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     LeakCheck(c, ps, vs);
     MouthDrawDiag(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawKind == 1 ? t_drawVerts : 0u);   // (09/11) diagnostico del recuadro de la boca
     if (vs) if (ID3D11ShaderResourceView* at = ArmsTextureFor(c, vs->hash, t_drawVerts)) { ArmSwapNote(ps, t_drawVerts); Remember(c, d, true, true, 0); c->PSSetShaderResources(0, 1, &at); }
+    if (vs) if (ID3D11ShaderResourceView* tt = ArmsTorsoForArm()) { Remember(c, d, true, true, 46); c->PSSetShaderResources(46, 1, &tt); }   // (16/11) franja alta del brazo de cara real: tono del torso (PS aa7d t46)
     if (g_cfg.bypass) return d.n > 0;
     if (g_skinDiagArmed.load(std::memory_order_relaxed)) SkinDiagDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts);   // (24/10) skintone.cpp
     if (g_toneChkArmed.load(std::memory_order_relaxed)) SkinToneCheckDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0);   // (24/10 c) punto de los dibujos de piel
