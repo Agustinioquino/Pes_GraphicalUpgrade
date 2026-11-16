@@ -1662,7 +1662,7 @@ void MvZoomIconDraw(ImDrawList* dl, ImVec2 c, int dir, float k, float age) {
     if (a <= 0.0f) return;
     const float sc = k * (1.0f + 0.18f * expf(-age * 14.0f)), R = 9.0f * sc, th = 3.2f * sc;
     const ImVec4 grn(0.20f, 0.91f, 0.50f, 1.0f);
-    const ImVec2 h0(c.x + R * 0.72f, c.y + R * 0.72f), h1(c.x + R * 1.85f, c.y + R * 1.85f);
+    const ImVec2 h0(c.x + R * 0.62f, c.y + R * 0.62f), h1(c.x + R * 1.85f, c.y + R * 1.85f);   // (16/11 b) el mango arranca DENTRO del trazo del aro: union sin corte
     for (int i = 6; i >= 1; i--) { const ImU32 g = ColA(grn, 0.07f * a * (1.0f - (float)i / 7.5f)); const float w = th + (float)i * 2.2f * k;   // brillo
         dl->AddCircle(c, R, g, 32, w); dl->AddLine(h0, h1, g, w); }
     auto shape = [&](ImU32 col, float w, ImVec2 o) {
