@@ -206,7 +206,7 @@ void __fastcall hk_Apply(void* body) {
 }
 
 // solo lectura (desde Present): todos los cuerpos "_dir_bench" de las escenas y su estado
-struct BenchSeen { uintptr_t body; uint8_t node, vis; uint32_t drawFlags; bool drawOk; };
+struct BenchSeen { uintptr_t body; uint8_t node, vis; uint32_t drawFlags; bool drawOk; float box[6]; };
 int ScanBenches(BenchSeen* out, int max) {
     int n = 0; uintptr_t first = 0; if (!Rd(kScenes, first) || !Heap(first)) return 0;
     uintptr_t e = first;
@@ -228,6 +228,7 @@ int ScanBenches(BenchSeen* out, int max) {
                             uintptr_t f = 0, fvt = 0, c = 0;
                             if (!Rd(funs + 8 * i, f) || !Heap(f) || !Rd(f, fvt) || fvt != kVtFunctor || !Rd(f + 0x10, c) || !Heap(c) || !IsBenchBody(c)) continue;
                             BenchSeen& b = out[n++]; b.body = c; b.node = b.vis = 0xff; b.drawFlags = 0; b.drawOk = false;
+                            for (int q = 0; q < 6; q++) { b.box[q] = 0.0f; Rd(o + 0x80 + (q < 3 ? 4 * q : 0x10 + 4 * (q - 3)), b.box[q]); }
                             Rd(c + 0x80, b.node); Rd(c + 0x81, b.vis);
                             uintptr_t d = 0; if (Rd(c + 0x88, d) && Heap(d) && Rd(d + 0x1b4, b.drawFlags)) b.drawOk = true;
                         }
@@ -242,6 +243,9 @@ int ScanBenches(BenchSeen* out, int max) {
     }
     return n;
 }
+
+// caja del banco para el VS del publico (filas 517 / 518, las escribe BancaFrame; no van al ini)
+float s_crowdBox[6] = {}; bool s_crowdBoxOk = false;
 
 // ---------------------------------------------------------------- convocados
 void ReadSheet() {
@@ -340,6 +344,17 @@ void Install() {
 }
 } // namespace
 
+// filas 517 / 518 para el VS del publico (UpdateTimeParams, con g_cfgMutex tomado): 517 = x min, x max, z min, z max;
+// 518 = y desde, y hasta (pies de la figura), z 1 = valida. Margenes: 0,5 m a lo ancho, 1 m de fondo; altura: del piso del banco
+// - 0,6 m a + 0,8 m (la tribuna de adelante esta mas arriba).
+void BancaFrame(float (*p)[4], double) {
+    const bool on = s_crowdBoxOk && Live(0, 0.0f) > 0.5f && Live(1, 1.0f) > 0.5f;
+    if (!on) { for (int k = 0; k < 4; k++) p[517][k] = p[518][k] = 0.0f; return; }
+    const float* b = s_crowdBox;
+    p[517][0] = b[0] - 0.5f; p[517][1] = b[3] + 0.5f; p[517][2] = b[2] - 1.0f; p[517][3] = b[5] + 1.0f;
+    p[518][0] = b[1] - 0.6f; p[518][1] = b[1] + 0.8f; p[518][2] = 1.0f; p[518][3] = 0.0f;
+}
+
 void BancaPresent() {
     if (!s_tried) Install();
     if (!s_okTick && !s_okProbe && !s_okVisHook && !s_okApply) return;
@@ -357,7 +372,9 @@ void BancaPresent() {
         if (nextT > 0) Log("banca: reloj del juego %.1f por segundo", (tk - lastTicks) / 10.0);
         // solo lectura: todos los bancos de las escenas y si se dibujan
         BenchSeen bs[8]; const int nb = ScanBenches(bs, 8);
-        char line[512]; int w = sprintf_s(line, "banca: bancos en escena %d, aplicados escondidos %u:", nb, s_applyBench.load(std::memory_order_relaxed));
+        char line[512];
+        if (nb > 0) Log("banca: caja del banco para el publico x %.2f..%.2f, y %.2f..%.2f, z %.2f..%.2f (figuras del publico con los pies ahi = escondidas)",
+                        bs[0].box[0], bs[0].box[3], bs[0].box[1], bs[0].box[4], bs[0].box[2], bs[0].box[5]); int w = sprintf_s(line, "banca: bancos en escena %d, aplicados escondidos %u:", nb, s_applyBench.load(std::memory_order_relaxed));
         for (int i = 0; i < nb && w > 0 && w < 440; i++)
             w += sprintf_s(line + w, sizeof line - w, " [%p nodo %u visible %u dibujo %s]", (void*)bs[i].body, bs[i].node, bs[i].vis,
                            !bs[i].drawOk ? "?" : (bs[i].drawFlags & 1) ? "ESCONDIDO" : "se dibuja");
@@ -368,6 +385,14 @@ void BancaPresent() {
     // el juego quiso mostrar el banco y se lo dejo escondido
     static unsigned seenShows = 0; const unsigned shows = s_gameShows.load(std::memory_order_relaxed);
     if (shows != seenShows) { Log("banca: el juego pidio mostrar el banco de Konami (%u veces en total): queda escondido", shows); seenShows = shows; }
+    // caja del banco cada segundo (los munecos del banco en el juego son publico: los esconde el VS del publico, pes_crowd_face.hlsli)
+    static double nextBox = 0;
+    if (!on) s_crowdBoxOk = false;
+    else if (t >= nextBox) {
+        nextBox = t + 1.0;
+        BenchSeen bs[8]; const int nb = ScanBenches(bs, 8);
+        if (nb > 0) { for (int q = 0; q < 6; q++) s_crowdBox[q] = bs[0].box[q]; s_crowdBoxOk = true; } else s_crowdBoxOk = false;
+    }
     // cambios de convocados / banco
     static unsigned seenSheet = 0, seenBench = 0;
     State st; { std::lock_guard<std::mutex> lk(s_mx); st = s_st; }

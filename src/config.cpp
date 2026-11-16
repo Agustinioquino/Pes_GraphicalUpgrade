@@ -1211,6 +1211,7 @@ void UpdateTimeParams() {
     SolLibreFrame(p, t);   // (12/11 hefeaf) sol libre: filas 452 / 453 y la direccion para el motor
     UpdatePhysSky(p);   // (21/10) cielo fisico: color de la luz del cielo para la sombra y la luz de cielo (150)
     SudorFrame(p, t);   // (13/11) sudor 2: tabla por jugador (filas 460..492)
+    BancaFrame(p, t);   // (16/11 8z607v) filas 517 / 518: caja del banco (el VS del publico esconde a los del banco)
     UpdateClothWet(t);
     UpdateClothFit(t);
 }
