@@ -2379,6 +2379,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     { static ULONGLONG t = 0; ULONGLONG n = GetTickCount64(); if (n - t > 10000) { t = n; RastroFlush(false); } }
     FaceInjectPresent();   // (09/11) matrices del rig: donde se arma la cara (solo mide, expr_inyeccion)
     SolEditorPresent();   // (09/11) sol real del editor: ganchos (primer Present), aplicar pendiente, log cada 10 s
+    BancaPresent();     // (16/11 8z607v) banco de suplentes paso 1: ganchos en el primer Present, registro
     RedesPresent();     // (13/11 sk9ema) redes de los arcos con el viento unico (ganchos en el primer Present)
     BanderinPresent();  // (14/11 sk9ema) banderin del corner: simula la tela y sube pes_flag (despues de UpdateTimeParams: filas 494 / 157 de este cuadro)
     CamHookPresent();   // (23/10) camara del motor: ganchos (primer Present), cortes de camara -> 160, log
