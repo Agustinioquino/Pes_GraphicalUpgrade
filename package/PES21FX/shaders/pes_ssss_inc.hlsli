@@ -110,6 +110,7 @@ float3 DecodeN(float2 uv) {   // normal del G-buffer (octaedro 10/10 + 2 bits), 
 // 0.0047), pasos de la traza (calidad) y alcance (m): los fija main desde la fila 379 / 379 antes de trazar
 static float g_shRad = 0.0047, g_shLen = 0.45;
 static int g_shSteps = 24;
+static bool g_shSoft = true;   // (16/11) false = cortes de golpe como antes (boca y cavidades: la boca no se toca)
 float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, float zA, float2 uv, float2 pxy, float shK) {
   if (shK <= 0.001 || rawNL <= 0.02) return 1.0;
   float fr = floor(frac(m_timeParam.x * 0.25) * 4096.0);   // cambia cada cuadro (si el reloj corre)
@@ -140,7 +141,15 @@ float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, flo
     float zS = LinZ(uvR);
     float dz = (R.z - zS) * zSgn;
     float thick = 0.10 + 0.25 * t + 0.0015 * RzA;
-    if (dz > 0.003 + 0.0008 * RzA && dz < thick && (zC - zS) * zSgn > 0.03 + 0.002 * zA) {
+    // (16/11, Agustin: cuello roto con la luz del editor, foto de Paredes) los dos cortes eran de golpe: "el que tapa esta 3 cm o mas
+    // por delante" y "el rayo pasa a menos de 'thick' detras". Debajo del menton, con la luz alta, el rayo de cada punto del cuello
+    // cruza la barbilla cerca de esos dos limites y cada triangulo de la barbilla caia de un lado o del otro: sombra en picos
+    // (estalactitas) claros y oscuros. Ahora los dos limites entran de a poco (guarda 2..4 cm, grosor 0.75..1.5 x): borde parejo.
+    // Mismo promedio que antes; solo se ablanda el salto. Se queda con el oclusor mas fuerte del recorrido
+    float gC = 0.03 + 0.002 * zA, front = (zC - zS) * zSgn;
+    float wHit = (1.0 - smoothstep(0.75 * thick, 1.5 * thick, dz)) * smoothstep(gC - 0.01, gC + 0.01, front);
+    if (!g_shSoft) wHit = (dz < thick && front > gC) ? 1.0 : 0.0;
+    if (dz > 0.003 + 0.0008 * RzA && wHit > 0.001) {
       // biseccion: el punto exacto donde el rayo entra detras de la superficie (borde de la sombra sin escalones)
       float ta0 = tPrev, ta1 = t, dzH = dz;
       [unroll] for (int bi = 0; bi < 4; bi++) {
@@ -150,14 +159,15 @@ float PesTraceShadow(float3 Pv, float3 L, float rawNL, float zC, float zSgn, flo
         if (dzm > 0.003 + 0.0008 * Rm.z * zSgn) { ta1 = tm; dzH = dzm; } else ta0 = tm;
       }
       float fh = sqrt(saturate(ta1 / csLen));
-      occ = (1.0 - 0.5 * fh) * saturate(dzH / (0.2 * thick) + 0.35);
+      float occH = (1.0 - 0.5 * fh) * saturate(dzH / (0.2 * thick) + 0.35) * wHit;
       // (09/11, Agustin: "los cortes de la sombra se ven raros") el pelo (marca 252/255 de 02f1d510 / c75f6047, fila 339) llega
       // al buffer de profundidad como placas solidas: el flequillo tiraba sobre la frente una sombra entera de borde recto y
       // duro. El pelo real deja pasar luz entre las hebras: sombra parcial y blanda, mas tenue cuanto mas lejos esta el mechon
       { float2 sH = (Q.xy + L.xy * ta1) / ((Q.z + L.z * ta1) * m_projectionParam.xy) + m_cameraCenterOffset.xy;
         float mz = inMat.SampleLevel(sPoint, sH * float2(0.5, -0.5) + 0.5, 0).z;
-        if (abs(mz - 0.98823529) < 0.002) occ *= 0.45 * (1.0 - 0.5 * fh) * (0.6 + 0.4 * ign); }
-      break;
+        if (abs(mz - 0.98823529) < 0.002) occH *= 0.45 * (1.0 - 0.5 * fh) * (0.6 + 0.4 * ign); }
+      occ = max(occ, occH);
+      if (wHit > 0.99) break;
     }
     tPrev = t;
   }
@@ -649,6 +659,7 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
     }
   }
   float3 dif = 0, spec = 0;
+  g_shSoft = !legacy;   // (16/11) boca y cavidades con la sombra de siempre
   float sh = geo ? PesTraceShadow(Pv, L, dot(n, L), zC, zSgn, zA, uv, pos.xy, shK) : 1.0;
   if (geo) PesOneLight(L, lcol, sh, n, V, skin, rough, trans, thickM, silK, legacy, dif, spec);
   // (07/11 d) segunda luz libre en Manual (otra torre, un flash o un contraluz): rumbo / altura propios, misma calidez, con sombra
