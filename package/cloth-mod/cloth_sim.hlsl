@@ -259,6 +259,8 @@ cbuffer Params : register(b2)
 #define PES_IS_BIBW (g_legCount == 0 && g_capsuleCount <= 1 && (g_vertexCount == PES_BIB_VERTS0 || g_vertexCount == PES_BIB_VERTS1))
 // (16/11) cuello de la campera (malla 0 de campera_pes21fx, VS de las pecheras): fijo al esqueleto, sin fisica
 #define PES_IS_COLLAR (g_legCount == 0 && g_capsuleCount == 0 && (g_vertexCount == 1074 || g_vertexCount == 1100))
+#define PES_BIBW_PUSH    0.008    // (m) separacion extra de las pecheras en pecho y panza
+#define PES_BIBW_ZC      0.05     // (m, pose de armado) eje del torso en z (z mayor = adelante)
 #define PES_MENU_JUMP    3.0      // (m/s) en menus, mas rapido que esto = salto de pose: la tela viaja con el cuerpo
 struct ParticleRest { float4 posPin; float4 nrm; uint4 skin; };
 struct Capsule      { float4 a; float4 b; };
@@ -605,12 +607,21 @@ float3 pesRestFollow(float3 pb, float sw)
 float pesPinRest(ParticleRest r) { return PES_IS_COLLAR ? 1.0 : ((s_flags & 256) ? float((r.skin.w >> 2) & 63) / 63.0 : r.posPin.w); }
 float pesSeamFade(float pin) { return 1.0 - smoothstep(0.25, 0.85, pin); }
 float3 pesMusOf(ParticleRest r) { return pesRestFollow(r.posPin.xyz, g_legCount > 0 ? 0.0 : float((r.skin.w >> 8) & 255) / 255.0) * pesSeamFade(pesPinRest(r)); }
+float pesBibPush(ParticleRest r)   // (16/11) cuanto sale el reposo de la pechera por su normal (con signo)
+{
+    float3 q = r.posPin.xyz;
+    float sgn = dot(r.nrm.xz, float2(q.x, q.z - PES_BIBW_ZC)) < 0.0 ? -1.0 : 1.0;
+    float front = smoothstep(PES_BIBW_ZC - 0.01, PES_BIBW_ZC + 0.04, q.z);
+    float band = smoothstep(0.92, 0.98, q.y) * (1.0 - smoothstep(1.42, 1.50, q.y));   // panza y pecho, sin hombros
+    return sgn * PES_BIBW_PUSH * front * band;
+}
 void restAt(uint p, float t, out float3 pos, out float3 nrm)
 {
     ParticleRest r = g_rest[p];
     float3x4 M = skinSlot(r.skin.z, r.skin.x, r.skin.y, t);
     pos = xform(M, r.posPin.xyz + pesMusOf(r));
     nrm = normalize(mul((float3x3)M, r.nrm.xyz));
+    if (PES_IS_BIBW) pos += nrm * pesBibPush(r);   // (16/11) pecheras mas separadas en pecho y panza
 }
 void fillBoneCache(uint gi, float t)
 {
@@ -628,6 +639,7 @@ void restAtC(uint p, out float3 pos, out float3 nrm)
     float3x4 M = skinC(r.skin.z, r.skin.x, r.skin.y);
     pos = xform(M, r.posPin.xyz + pesMusOf(r));
     nrm = normalize(mul((float3x3)M, r.nrm.xyz));
+    if (PES_IS_BIBW) pos += nrm * pesBibPush(r);   // (16/11) pecheras mas separadas en pecho y panza
 }
 float3 rotateBetween(float3 a, float3 b, float3 v)
 {

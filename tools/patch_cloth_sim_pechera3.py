@@ -44,6 +44,29 @@ rep("* (PES_MENU_BREEZE * (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 +
     "* (PES_MENU_BREEZE * (PES_IS_BIBW ? 0.8 * sin(g_time * 0.9) * (0.6 + 0.4 * sin(g_time * 0.37 + 1.0))   // (16/11) pecheras: va y viene\n"
     "                                   : (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0))));\n")
 
+# (16/11, Agustin: "aveces se ve que las pecheras atraviesan y se ve la remera por debajo podrias aumentar la distancia un poco
+# en el pecho y en la panza solo para las pecheras") el reposo de las pecheras sale PES_BIBW_PUSH mas afuera en el frente del
+# torso (pecho y panza). Las dos capas por igual (la de adentro trae la normal hacia adentro: se da vuelta mirando la pose de
+# armado desde el eje del torso). Mueve el anclaje, la correa y el choque con su pose, asi que la tela queda mas lejos.
+rep("#define PES_MENU_JUMP    3.0",
+    "#define PES_BIBW_PUSH    0.008    // (m) separacion extra de las pecheras en pecho y panza\n"
+    "#define PES_BIBW_ZC      0.05     // (m, pose de armado) eje del torso en z (z mayor = adelante)\n"
+    "#define PES_MENU_JUMP    3.0")
+rep("void restAt(uint p, float t, out float3 pos, out float3 nrm)\n",
+    "float pesBibPush(ParticleRest r)   // (16/11) cuanto sale el reposo de la pechera por su normal (con signo)\n"
+    "{\n"
+    "    float3 q = r.posPin.xyz;\n"
+    "    float sgn = dot(r.nrm.xz, float2(q.x, q.z - PES_BIBW_ZC)) < 0.0 ? -1.0 : 1.0;\n"
+    "    float front = smoothstep(PES_BIBW_ZC - 0.01, PES_BIBW_ZC + 0.04, q.z);\n"
+    "    float band = smoothstep(0.92, 0.98, q.y) * (1.0 - smoothstep(1.42, 1.50, q.y));   // panza y pecho, sin hombros\n"
+    "    return sgn * PES_BIBW_PUSH * front * band;\n"
+    "}\n"
+    "void restAt(uint p, float t, out float3 pos, out float3 nrm)\n")
+a = "    pos = xform(M, r.posPin.xyz + pesMusOf(r));\n    nrm = normalize(mul((float3x3)M, r.nrm.xyz));\n}\n"
+if t.count(a) != 2: sys.exit('no encuentro restAt / restAtC')
+t = t.replace(a, "    pos = xform(M, r.posPin.xyz + pesMusOf(r));\n    nrm = normalize(mul((float3x3)M, r.nrm.xyz));\n"
+                 "    if (PES_IS_BIBW) pos += nrm * pesBibPush(r);   // (16/11) pecheras mas separadas en pecho y panza\n}\n")
+
 if crlf: t = t.replace('\n', '\r\n')
 open(p, 'wb').write(t.encode('latin1'))
 print('ok', p)
