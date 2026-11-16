@@ -41,6 +41,7 @@ static void MotorFeetPoll(void*) {}
 #endif
 void MotorGridPresent() { s_fresh.store(false, std::memory_order_relaxed);
 #ifndef MOTORGRID_TEST
+    MotorVistaPresent();
     MotorDepthDiagTick();
 #endif
 }

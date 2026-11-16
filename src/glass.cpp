@@ -477,6 +477,7 @@ ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps, ID3D1
     ID3D11ShaderResourceView* v = nullptr;
     if (mode >= 2) v = LoadUserBg();
     else if (s_bgImgTried) { s_bgImgTried = false; }                   // al volver a "imagen propia" se relee el archivo
+    if (motorBg && MotorVistaLive()) { static std::atomic<int> nl{0}; if (nl.fetch_add(1) == 0) Log("fondo del editor (Motor): jugador en la escena principal: el fondo del menu no se dibuja"); return nullptr; }   // (16/11) motorvista.cpp
     if (motorBg) { if (ID3D11ShaderResourceView* g = MotorGridSRV(c)) v = g; }   // (15/11) fondo del Motor: gris con grilla de piso (motorgrid.cpp; 15/11 o: con la grilla apagada, gris sin lineas)
     if (!v) { if (!s_bgBlack) s_bgBlack = SolidSRV(0xff000000u); v = s_bgBlack; }
     const int n = s_bgSwaps.fetch_add(1);
