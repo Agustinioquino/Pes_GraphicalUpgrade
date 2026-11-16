@@ -1,0 +1,193 @@
+// PES 2021 - Luz diferida de FOCO / PUNTO (sin sombra, solo difusa)  [hash 68d58aa84c0256f5]
+// (04/11) Es la luz de estudio del editor (corre x48 por cuadro) y aparece en los focos del partido. No tenia reemplazo: en la
+// piel daba la difusa comun del juego (NdotL envuelto por la translucidez: borde ancho y gris, sin contraluz ni brillo) y la cara
+// del editor no se veia como en el partido. Ahora la piel usa el modelo de las pasadas del sol (pes_skinlight.hlsli): terminador
+// suave por canal, contraluz y el brillo fino de piel (el juego no le da brillo a esta luz: o1 quedaba en 0). Lo demas, identico.
+// Base: tools/asm2hlsl.py sobre el ensamblador del catalogo del mod (traduccion mecanica, identica al juego), con los nombres de
+// los cbuffers del juego. Agustin (03/11): "la piel en general en todos los menus y modos".
+
+cbuffer cPSScene : register(b2)
+{
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_psScene : packoffset(c0);
+}
+
+cbuffer cPSLight : register(b3)
+{
+  struct
+  {
+    float4 m_lightDir0;
+    float4 m_lightColor0;
+    float4 m_lightColor1;
+    float4 m_lightSourcePos;
+    float4 m_lightSourceColor;
+    float4 m_lightSourceDir;
+    float4 m_lightSourceParam1;
+    float4 m_lightSourceParam2;
+    float4 m_lightSourceParam3;
+    float4 m_lightPos0;
+    float4 m_lightParam2;
+  } g_psLight : packoffset(c0);
+}
+
+cbuffer cPSMaterial : register(b4)
+{
+  struct
+  {
+    float4 m_materials[8];
+  } g_psMaterial : packoffset(c0);
+}
+
+SamplerState g_samplerPoint_Wrap_s : register(s8);
+SamplerState g_samplerPoint_Clamp_s : register(s9);
+SamplerState g_samplerLinear_Clamp_s : register(s11);
+Texture2D<float4> g_NormalTexture : register(t0);
+Texture2D<float4> g_SpecularTexture : register(t1);
+Texture2D<float4> g_DepthTexture : register(t2);
+Texture2D<float4> g_lut1 : register(t9);
+Texture2D<float4> g_MaterialTexture : register(t10);
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+uint4 PESBfi(uint4 w, uint4 o, uint4 ins, uint4 b) { uint4 m = (w >= 32u) ? 0xffffffffu : (((1u << w) - 1u) << o); return ((ins << o) & m) | (b & ~m); }
+#include "pes_common.hlsli"
+float3 PESSunColor() { return g_psLight.m_lightSourceColor.xyz; }   // para pes_skinlight: el tinte del brillo sigue al color del foco
+Texture2D<float> pesMouthMask : register(t43);   // (10/11) mascara del interior de la boca (mouthmask.cpp): sin sombra nueva ahi
+#define PES_SK_FACESHADOW 1
+#include "pes_skinlight.hlsli"
+
+void main(
+  float4 i_texcoord0 : TEXCOORD0,
+  float4 i_texcoord1 : TEXCOORD1,
+  float4 i_pos : SV_Position0,
+  out float4 o0 : SV_Target0,
+  out float4 o1 : SV_Target1,
+  out float4 o2 : SV_Target2)
+{
+  float4 r0, r1, r2, r3, r4, r5;
+  float4 v0 = 0;
+  v0.xyzw = i_texcoord0;
+  float4 v1 = 0;
+  v1.xyzw = i_texcoord1;
+  float4 v2 = 0;
+  v2.xyzw = i_pos;
+  r0.xy = ((v1.xyxx / v1.wwww)).xy;
+  float4 skSt = g_SpecularTexture.Sample(g_samplerPoint_Wrap_s, r0.xy);   // (04/11) piel: z marca, x aspereza, y intensidad
+  r1.xyzw = ((g_NormalTexture.Sample(g_samplerPoint_Wrap_s, (r0.xyxx).xy)).xyzw).xyzw;
+  r1.xyw = ((r1.xyxw * float4(asfloat(0x447fc000U), asfloat(0x447fc000U), 0.0, asfloat(0x40400000U)))).xyw;
+  r1.xyw = (float4(uint4(r1.xyxw))).xyw;
+  r0.z = (float4((int4(r1.xxxx) << (uint4(1U, 1U, 1U, 1U) & 31)))).z;
+  r0.w = (float4((uint4(int4(r1.wwww)) >> (uint4(1U, 1U, 1U, 1U) & 31)))).w;
+  r0.z = (float4(0.0, 0.0, (float)((int)r0.w | (int)r0.z), 0.0)).z;
+  r0.w = (float4(PESBfi(uint4(31U, 31U, 31U, 31U), uint4(1U, 1U, 1U, 1U), uint4(int4(r1.yyyy)), uint4(int4(r1.wwww))))).w;
+  r1.xy = (float4(uint4(int4(r0.zwzz)))).xy;
+  r0.zw = ((r1.xxxy * float4(0.0, 0.0, asfloat(0x3a801002U), asfloat(0x3a801002U)) + float4(0.0, 0.0, asfloat(0xbf800000U), asfloat(0xbf800000U)))).zw;
+  r1.xyw = ((-(abs(r0.zwzz)) + float4(asfloat(0x3f800000U), asfloat(0x3f800000U), 0.0, asfloat(0x3f800000U)))).xyw;
+  r2.z = ((-(abs(r0.wwww)) + r1.xxxx)).z;
+  r1.x = (((r2.zzzz >= float4(0.0, 0.0, 0.0, 0.0)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).x;
+  r3.xy = (((r0.zwzz >= float4(0.0, 0.0, 0.0, 0.0)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).xy;
+  r3.xy = (((r3.xyxx != 0) ? float4(asfloat(0x3f800000U), asfloat(0x3f800000U), 0.0, 0.0) : float4(asfloat(0xbf800000U), asfloat(0xbf800000U), 0.0, 0.0))).xy;
+  r1.yw = ((r1.yyyw * r3.xxxy)).yw;
+  r2.xy = (((r1.xxxx != 0) ? r0.zwzz : r1.ywyy)).xy;
+  r0.z = ((dot((r2.xyzx).xyz, (r2.xyzx).xyz)).xxxx).z;
+  r0.z = (rsqrt(r0.zzzz)).z;
+  r2.xyz = ((r0.zzzz * r2.xyzx)).xyz;
+  r0.z = ((r1.zzzz * float4(asfloat(0x447fc000U), asfloat(0x447fc000U), asfloat(0x447fc000U), asfloat(0x447fc000U)) + float4(asfloat(0x3f000000U), asfloat(0x3f000000U), asfloat(0x3f000000U), asfloat(0x3f000000U)))).z;
+  r0.z = (float4(uint4(r0.zzzz))).z;
+  r0.w = (float4(0.0, 0.0, 0.0, (float)((int)r0.z & 15))).w;
+  int skMat = (int)r0.w;
+  r1.x = (((int4(r0.wwww) == int4(1, 1, 1, 1)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).x;
+  if ((r1.xxxx).x != 0) {
+    r3.y = (float4(0.0, 0.0, 0.0, 0.0)).y;
+    r4.x = (float4(0.0, 0.0, 0.0, 0.0)).x;
+  } else {
+    r0.z = (float4((uint4(int4(r0.zzzz)) >> (uint4(4U, 4U, 4U, 4U) & 31)))).z;
+    r1.y = (((int4(r0.wwww) == int4(3, 3, 3, 3)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).y;
+    if ((r1.yyyy).x != 0) {
+      r1.y = (float4(uint4(int4(r0.zzzz)))).y;
+      r3.y = ((r1.yyyy * float4(asfloat(0x3c820821U), asfloat(0x3c820821U), asfloat(0x3c820821U), asfloat(0x3c820821U)))).y;
+      r4.x = (float4(0.0, 0.0, 0.0, 0.0)).x;
+    } else {
+      r4.x = ((g_SpecularTexture.Sample(g_samplerPoint_Wrap_s, (r0.xyxx).xy)).wxyz).x;
+      r0.z = (float4(uint4(int4(r0.zzzz)))).z;
+      r3.y = ((r0.zzzz * float4(asfloat(0x3c820821U), asfloat(0x3c820821U), asfloat(0x3c820821U), asfloat(0x3c820821U)))).y;
+    }
+  }
+  r0.x = ((g_DepthTexture.Sample(g_samplerPoint_Wrap_s, (r0.xyxx).xy)).xyzw).x;
+  r0.yz = ((v0.xxyx / v0.wwww)).yz;
+  r0.yz = ((r0.yyzy + -(g_psScene.m_cameraCenterOffset.xxyx))).yz;
+  r0.yz = ((r0.yyzy * g_psScene.m_projectionParam.xxyx)).yz;
+  r0.x = ((r0.xxxx + -(g_psScene.m_projectionParam.wwww))).x;
+  r5.z = ((g_psScene.m_projectionParam.zzzz / r0.xxxx)).z;
+  r5.xy = ((r0.yzyy * r5.zzzz)).xy;
+  float3 skP = r5.xyz;
+  r0.xyz = ((-(r5.xyzx) + g_psLight.m_lightSourcePos.xyzx)).xyz;
+  r1.y = ((dot((r0.xyzx).xyz, (r0.xyzx).xyz)).xxxx).y;
+  r1.z = (rsqrt(r1.yyyy)).z;
+  r0.xyz = ((r0.xyzx * r1.zzzz)).xyz;
+  float3 skL = r0.xyz;
+  r1.y = ((r1.yyyy * g_psLight.m_lightSourceParam1.wwww)).y;
+  r1.y = ((r1.zzzz * r1.zzzz + -(r1.yyyy))).y;
+  r1.y = (min(r1.yyyy, g_psMaterial.m_materials[7].wwww)).y;
+  r1.z = ((dot((g_psLight.m_lightSourceDir.xyzx).xyz, (-(r0.xyzx)).xyz)).xxxx).z;
+  r1.z = ((r1.zzzz + -(g_psLight.m_lightSourceParam2.xxxx))).z;
+  r1.z = (saturate((r1.zzzz * g_psLight.m_lightSourceParam2.yyyy))).z;
+  r1.z = (log2(r1.zzzz)).z;
+  r1.z = ((r1.zzzz * g_psLight.m_lightSourceParam2.zzzz)).z;
+  r1.z = (exp2(r1.zzzz)).z;
+  r1.y = (max(r1.yyyy, float4(0.0, 0.0, 0.0, 0.0))).y;
+  r5.xyz = ((r1.yyyy * g_psLight.m_lightSourceColor.xyzx)).xyz;
+  r1.yzw = ((r1.zzzz * r5.xxyz)).yzw;
+  r1.yzw = ((r1.yyzw * g_psScene.m_exposure.zzzz)).yzw;
+  float3 skC = r1.yzw;
+  if ((r1.xxxx).x != 0) {
+    r3.xy = (float4(0.0, 0.0, 0.0, 0.0)).xy;
+  } else {
+    r0.w = (((int4(r0.wwww) == int4(3, 3, 3, 3)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).w;
+    if ((r0.wwww).x != 0) {
+      r3.x = (float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))).x;
+    } else {
+      r4.y = (float4(asfloat(0x3e800000U), asfloat(0x3e800000U), asfloat(0x3e800000U), asfloat(0x3e800000U))).y;
+      r3.x = ((g_MaterialTexture.SampleLevel(g_samplerPoint_Clamp_s, (r4.xyxx).xy, (float4(0.0, 0.0, 0.0, 0.0)).x)).wxyz).x;
+    }
+  }
+  r2.w = (-(r2.zzzz)).w;
+  float3 skN = normalize(r2.xyw);
+  float skCurv = PesSkCurv(skN, skP.z);   // fuera de los if: usa derivadas
+  float skCurvT = PesSkCurvConvex(skN, float3((v0.xy / v0.w - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * skP.z, skP.z));   // (10/11 d) para la contraluz de costado
+  float4 skAB = PesSkUvMap(v0, v1); float skFS = 1.0;   // (10/11) sombra fina del foco sobre la cara
+  bool skOn = PesSkIsSkin(skMat, r3.y, skSt.z);
+  float3 skV = -normalize(skP);
+  float skTF = r3.x * r3.y;
+  r0.x = ((dot((r0.xyzx).xyz, (r2.xywx).xyz)).xxxx).x;
+  float skNL = r0.x;
+  r0.y = ((-(r0.xxxx) * r0.xxxx + float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U)))).y;
+  r0.x = ((r0.yyyy * r3.yyyy + r0.xxxx)).x;
+  r0.y = ((r3.xxxx * r3.yyyy)).y;
+  r0.x = (saturate(max(r0.yyyy, r0.xxxx))).x;
+  r0.xyz = ((r1.yzwy * r0.xxxx)).xyz;
+  if (skOn) { skFS = PesSkFaceShadow(skAB, v0, v2.xy, skP.z, skL, skNL, skC); r0.xyz = (PesSkDiffuse(skNL, r3.y, skTF, skP.z, skCurv) * skFS + PesSkTransAll(skN, skV, skL, skNL, r3.y, skCurvT, v2.xy)) * skC; }   // (04/11) piel
+  o0.xyz = ((r0.xyzx * g_psLight.m_lightSourceParam3.yyyy)).xyz;
+  o0.w = (float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))).w;
+  o1.xyzw = (float4(0.0, 0.0, 0.0, asfloat(0x3f800000U))).xyzw;
+  if (skOn) o1.xyz = min(PesSkSpec(0.0.xxx, skN, skV, skL, skSt.x, skSt.y, skC * g_psLight.m_lightSourceParam3.y, 1.0) * skFS, 10000.0.xxx);   // (04/11) brillo de piel
+  o2.xyzw = (float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))).xyzw;
+  { float skMS = PesSkMouthShadow(skAB, v0, v2.xy, skP.z, skL); o0.xyz *= skMS; o1.xyz *= skMS; }   // (10/11 e) sombra de esta luz dentro de la boca (w388)
+  return;
+}
