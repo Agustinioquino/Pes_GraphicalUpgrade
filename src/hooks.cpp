@@ -1682,7 +1682,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     // (07/11) Agustin: de lejos el torso atraviesa la camiseta. El catalogo tiene otras 3 variantes del G-buffer del kit con las
     // mismas texturas (patron + marking / badge) pero sin SV_IsFrontFace (no se dibujaron en la captura del menu): candidatas a la
     // camiseta de lejos / del arbitro. Sin ellas el personaje no entra en la lista y su torso queda entero (sin x320).
-    if (const int sk = ps ? ShirtPSKind(ps->hash) : -1; sk >= 0) {
+    if (const int sk = ps ? ShirtPSKind(ps->hash) : -1; sk >= 0 && KitDrawIsShirt(c, t_drawVerts, t_drawBase)) {   // (16/11) el short y las medias no cuentan
         g_shirtSeen.store(true, std::memory_order_relaxed);
         if (sk >= 8) ShirtPSNoteNew(ps->hash, t_drawVerts);
         TorsoShirtNote(c, (sk & 3) | ((t_drawVerts == 7284 || t_drawVerts == 6006 || t_drawVerts == 7512 || t_drawVerts == 5550) ? 4 : 0) | (int)((t_drawVerts & 0x7fffffu) << 8));   // (16/11) + indices del dibujo en los bits altos (registro)   // (01/11) +4 = camiseta ajustada (indices de [shirt_tight] detect de cloth.ini)   // (31/10 b) camiseta por jugador

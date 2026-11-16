@@ -715,8 +715,81 @@ void TorsoShirtNote(ID3D11DeviceContext* c, int kind) {
     }
     for (CBSlot* q : { &g2, &g5 }) if (q->b) q->b->Release();
 }
+// (16/11) CAMISETA O NO: el short y las medias se dibujan con el mismo PS que la camiseta, asi que un jugador sin remera figuraba
+// "con camiseta" (Agustin: con "Tamano sin camiseta" en 1 "no cambia nada"; ademas el torso se le hundia 9 mm bajo el cuello).
+// Se mira la malla: las posiciones de reposo del kit van solas en el buffer 0 (12 bytes por vertice); se leen una vez los primeros
+// vertices del dibujo y si ninguno pasa de 1.25 m de alto no es una camiseta. El resultado queda guardado EN el buffer
+// (SetPrivateData: muere con el). Hasta leerlo, y si el formato no es el esperado, vale lo de antes (camiseta).
+static const GUID kKitGuid = { 0x3b8e51c7, 0x52a4, 0x4f0d, { 0x8c, 0x16, 0x2a, 0x91, 0x7e, 0x40, 0xd3, 0x65 } };
+struct KitNote { uint32_t cnt; struct { uint32_t first, n; int32_t st; } e[8]; };   // st: 0 pendiente, 1 camiseta, 2 otra prenda
+struct KitPend { ID3D11Buffer* vb; UINT first, n, idx; };
+static std::mutex s_kitMx; static std::vector<KitPend> s_kitPend;
+bool KitDrawIsShirt(ID3D11DeviceContext* c, UINT count, INT base) {
+    if (count < 30) return true;
+    ID3D11Buffer* vb = nullptr; UINT st = 0, of = 0; c->IAGetVertexBuffers(0, 1, &vb, &st, &of);
+    if (!vb) return true;
+    bool shirt = true;
+    if (st == 12) {
+        const UINT first = of + (UINT)(base > 0 ? base : 0) * 12u, n = count / 3;
+        std::lock_guard<std::mutex> lk(s_kitMx);
+        KitNote k{}; UINT sz = sizeof k;
+        if (FAILED(vb->GetPrivateData(kKitGuid, &sz, &k)) || sz != sizeof k) { k = KitNote{}; }
+        bool had = false;
+        for (uint32_t i = 0; i < k.cnt && i < 8; i++) if (k.e[i].first == first && k.e[i].n == n) { had = true; shirt = k.e[i].st != 2; break; }
+        if (!had && k.cnt < 8 && s_kitPend.size() < 64) {
+            k.e[k.cnt].first = first; k.e[k.cnt].n = n; k.e[k.cnt].st = 0; k.cnt++;
+            vb->SetPrivateData(kKitGuid, sizeof k, &k);
+            vb->AddRef(); s_kitPend.push_back({ vb, first, n, count });
+        }
+    }
+    vb->Release();
+    return shirt;
+}
+// Present (contexto inmediato): leer hasta 2 mallas de kit pendientes
+static void KitClsPresent() {
+    if (!g_dev.imm || !g_dev.dev) return;
+    for (int round = 0; round < 2; round++) {
+        KitPend p{};
+        { std::lock_guard<std::mutex> lk(s_kitMx); if (s_kitPend.empty()) return; p = s_kitPend.back(); s_kitPend.pop_back(); }
+        D3D11_BUFFER_DESC d; p.vb->GetDesc(&d);
+        int st = 1; float y0 = 0.0f, y1 = 0.0f; bool read = false;
+        if (p.first + 12 <= d.ByteWidth) {
+            const UINT n = (std::min)(p.n, (d.ByteWidth - p.first) / 12u), bytes = n * 12u;
+            ID3D11Buffer* sg = nullptr;
+            D3D11_BUFFER_DESC qd{}; qd.ByteWidth = bytes; qd.Usage = D3D11_USAGE_STAGING; qd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            if (n >= 8 && SUCCEEDED(g_dev.dev->CreateBuffer(&qd, nullptr, &sg)) && sg) {
+                D3D11_BOX bx = { p.first, 0, 0, p.first + bytes, 1, 1 };
+                g_dev.imm->CopySubresourceRegion(sg, 0, 0, 0, 0, p.vb, 0, &bx);
+                D3D11_MAPPED_SUBRESOURCE m;
+                if (SUCCEEDED(g_dev.imm->Map(sg, 0, D3D11_MAP_READ, 0, &m))) {
+                    const float* f = (const float*)m.pData; bool ok = true; y0 = 1e9f; y1 = -1e9f;
+                    for (UINT i = 0; i < n; i++) {
+                        const float x = f[i * 3], y = f[i * 3 + 1], z = f[i * 3 + 2];
+                        if (!(fabsf(x) < 3.0f && fabsf(y) < 3.0f && fabsf(z) < 3.0f)) { ok = false; break; }   // no son posiciones de un personaje
+                        y0 = (std::min)(y0, y); y1 = (std::max)(y1, y);
+                    }
+                    g_dev.imm->Unmap(sg, 0);
+                    if (ok) { read = true; st = y1 > 1.25f ? 1 : 2; }
+                }
+                sg->Release();
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lk(s_kitMx);
+            KitNote k{}; UINT sz = sizeof k;
+            if (SUCCEEDED(p.vb->GetPrivateData(kKitGuid, &sz, &k)) && sz == sizeof k) {
+                for (uint32_t i = 0; i < k.cnt && i < 8; i++) if (k.e[i].first == p.first && k.e[i].n == p.n) k.e[i].st = st;
+                p.vb->SetPrivateData(kKitGuid, sizeof k, &k);
+            }
+        }
+        static int nlog = 0;
+        if (nlog++ < 60) { if (read) Log("kit: malla de %u indices, alto %.2f..%.2f m -> %s", p.idx, y0, y1, st == 1 ? "camiseta" : "otra prenda (no cuenta como camiseta)"); else Log("kit: malla de %u indices sin leer (queda como camiseta)", p.idx); }
+        p.vb->Release();
+    }
+}
 // (31/10 b) en Present: cierra el cuadro de las camisetas y lee el de hace 2 (sin esperar a la GPU)
 static void TorsoShirtPresent() {
+    KitClsPresent();
     if (!s_map || !s_shStage[0]) return;
     const int w = s_shW.load();
     s_shN[w] = (std::min)(s_shCount.exchange(0), (int)kShDraws);
