@@ -204,7 +204,8 @@ static bool LoadConfigLocked() {
             else if (kl == "motor_grilla") c.motorGrid = atoi(v.c_str()) != 0;               // (15/11) 1 = fondo con grilla de piso
             else if (kl == "motor_jugador_al_abrir") c.motorStartPlayer = atoi(v.c_str()) != 0;   // (15/11) 1 = carga al jugador al abrir (0 = solo el menu)
             else if (kl == "motor_teclado") c.motorKeys = atoi(v.c_str()) != 0;      // (12/11) 1 = en el Motor el juego no ve el teclado (Esc = salir)
-            else if (kl == "motor_fondo") c.motorBg = atoi(v.c_str()) != 0;          // (11/11) 1 = fondo negro en el estudio del Motor
+            else if (kl == "motor_fondo") c.motorBg = atoi(v.c_str()) != 0;
+            else if (kl == "motor_escena") c.motorScene = atoi(v.c_str());   // (16/11) 1 = el jugador del Motor en la escena principal (como en el partido)          // (11/11) 1 = fondo negro en el estudio del Motor
             else if (kl == "motor_camara") c.motorCam = atoi(v.c_str()) != 0;        // (11/11) 1 = el Motor abre con la camara libre
             else if (kl == "motor_gizmo") c.motorGizmo = atoi(v.c_str()) != 0;       // (11/11) 1 = gizmo de ejes arriba a la derecha
             else if (kl == "motor_botones") c.motorHelpBar = atoi(v.c_str()) != 0;   // (11/11) 1 = deja la barra de botones del mando en la pagina del Motor
@@ -673,6 +674,8 @@ static const DebugParam kDebugParams[] = {
     { 147, 1, 0.5f, 0.0f, "Borde de la mascara de la cara", "Piel", kV1, 1 },
     { 322, 3, 0.5f, 0.0f, "Franja de la union cuello / cuerpo", "Piel", kV1, 1 },
     { 360, 0, 0.5f, 0.0f, "Teselacion: inflar cara y cuerpo / ver teselacion del cuerpo", "Piel", kV27, 2 },
+    { 519, 0, 0.5f, 0.0f, "Cuerpo: ver a traves del torso", "Piel", kV1, 1 },   // (16/11 d9ybe2) pes_debug_cuerpo.hlsli
+    { 519, 2, 0.5f, 0.0f, "Cuerpo: cuadricula de costuras / solo la textura", "Piel", kV27, 2 },
 };
 static const int kDebugN = (int)(sizeof(kDebugParams) / sizeof(kDebugParams[0]));
 int DebugParamCount() { return kDebugN; }

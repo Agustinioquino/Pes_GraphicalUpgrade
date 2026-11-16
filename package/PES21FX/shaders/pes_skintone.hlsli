@@ -275,7 +275,7 @@ float PesTorsoShrinkMM(float3 rest, float3 n) {
   float rr = 0.07043 - 0.00015 * c1 - 0.01002 * c2 + 0.00154 * c3 + 0.00102 * c4;
   float yy = 1.53524 - 0.01994 * c1 - 0.01021 * c2 + 0.00642 * c3 - 0.00158 * c4;
   float dn = length(float2(max(rho - rr, 0.0), min(p.y - yy, 0.0)));
-  float n0 = R.z > 0.5 ? R.z * 0.01 : 0.0, n1 = R.z > 0.5 ? n0 + 0.03 : 0.025;
+  float n0 = R.z > 0.5 ? R.z * 0.01 : 0.0, n1 = R.z > 0.5 ? n0 + 0.09 : 0.025;   // (16/11) 0.03 -> 0.09: el torso nuevo (cuerpo_a/b/c, torso_shrink_suave.py) funde el cuello de 3 a 11 cm; medido con z349 1.8: media 0.2 mm, sobra max 1.7 mm (antes 7.9)
   float t = (base + (14.0 - base) * wx) * belly * PesShrinkSS((dn - n0) / (n1 - n0));
   float sA = dot(p - float3(0.2631, 1.3704, 0.0195), float3(0.7611, -0.6432, -0.0839));   // a lo largo del brazo desde el hombro
   if (sA > 0.0) { float own = 2.0 * (1.0 - PesShrinkSS((sA - 0.15) / 0.07)); t = lerp(t, own, PesShrinkSS(sA / 0.025)); }
@@ -286,7 +286,11 @@ void PesTorsoRegrow(inout float3 mP, float3 mN, float3 rest, float3 org) {
   float4 R = IniParams.Load(int2(349, 0));
   if (R.w < 0.5) return;
   // con camiseta (o sin lista): solo el brazo debajo de la manga (y351 / z351); sin camiseta: todo x349
-  float k = PesCharHasShirt(org) > 0.5 ? PesArmRestore(rest) : max(saturate(R.x), PesArmRestore(rest));
+  // (15/11, Agustin: "evita que se deforme el torso y los brazos") z327: tambien CON camiseta el torso vuelve a su tamano original
+  // (la tela simulada se aparta de la piel real al dibujarse, x256 = 2). La camiseta ajustada no se simula: ahi queda el achicado.
+  float kS = PesArmRestore(rest);
+  { float z327 = IniParams.Load(int2(327, 0)).z; if (z327 > 0.0 && PesCharShirtType(org) < 3.5) kS = max(kS, saturate(z327)); }
+  float k = PesCharHasShirt(org) > 0.5 ? kS : max(saturate(R.x), PesArmRestore(rest));
   float mm = PesTorsoShrinkMM(rest, mN) * k;
   if (mm <= 0.0) return;
   mP += mN * rsqrt(max(dot(mN, mN), 1e-8)) * (mm * 0.001);
