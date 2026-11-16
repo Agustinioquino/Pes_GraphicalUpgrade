@@ -1,5 +1,5 @@
 --[[
-  CuerpoPropio.lua 0.2  -  PES21 FX (15/11/2026)  -  Sider 7 / PES 2021 1.07.02 (Steam)
+  CuerpoPropio.lua 0.3  -  PES21 FX (16/11/2026)  -  Sider 7 / PES 2021 1.07.02 (Steam)
   Necesita en sider.ini:  luajit.ext.enabled = 1
 
   QUE HACE
@@ -21,6 +21,10 @@
         40352 = no                                                    ese id, sin pieza aunque haya *
         7511 = /Assets/.../cuerpo_c_#.fmdl | sin_brazo                ademas el juego NO carga su brazo para ese jugador
     Un # en la ruta se cambia por el tono de piel del jugador (1..6; el juego lo deja en config+0x160; 0 y 7 valen 1).
+    Una @ en la ruta se cambia por la FORMA del torso que el juego usaria para ese jugador (0.3): a = remera afuera,
+    b = remera adentro del pantalon (config+0x64 == 0), c = remera afuera y uniforme ajustado (dato "tight" del kit:
+    K = *(FUN_1419ab080(*0x1437d9af0, config+0x60) + 8), byte K+0x18; lo mismo que mira UniformUnit para pants_out_sub_tight).
+    Si el kit todavia no esta en la lista del juego vale "a".
     "| sin_brazo" apaga la unidad Arm del juego (bit 8 de la mascara config+0x44): solo para modelos que traen los brazos.
     Lineas que empiezan con ; no cuentan.
 
@@ -30,7 +34,7 @@
   SEGURIDAD: antes de escribir comprueba los bytes del juego en los tres lugares que usa; si algo no coincide no toca nada.
   Al apagar (tecla 2) el desvio queda puesto pero el codigo propio no hace nada.
 ]]
-local m = { version = "0.2" }
+local m = { version = "0.3" }
 
 local SITIO      = 0x141ecd521          -- call 0x141ea44d0 (el que se desvia)
 local SIGUE      = 0x141ea44d0          -- destino original de ese call
@@ -42,12 +46,18 @@ local N_RUTAS    = 254                  -- entradas de la lista: indices 1..254 
 local ANTES_DIR  = SITIO - 12
 local ANTES      = "\x49\x8B\xD7\x48\x8D\x4D\xA0\xE8\x9F\xF0\xFF\xFF\xE8\xAA\x6F\xFD\xFF\x48\x85\xC0"
 local PONER_INI  = "\x48\x89\x5C\x24\x08\x57\x48\x83\xEC\x20\x48\x8B\x79\x10\x48\x8B\xC2"   -- comienzo de FUN_141a09fe0
+local KITS_GLOBAL = 0x1437d9af0         -- lo que devuelve FUN_1419aa670 (mov rax, [rip+0x1e2f479] / ret)
+local KITS_LEE    = 0x1419aa670
+local KITS_LEE_INI = "\x48\x8B\x05\x79\xF4\xE2\x01\xC3"
+local KIT_BUSCA   = 0x1419ab080         -- FUN_1419ab080(lista, id de kit): busqueda en un arbol, sin llamadas ni candados
+local KIT_BUSCA_INI = "\x48\x8B\x41\x08\x48\x8B\x48\x08\x48\x85\xC9\x0F\x85\x8F\xE7\xFB\xFF\x33\xC0\xC3"
 local SIGUE_INI  = "\x48\x83\xEC\x38\x48\xC7\x44\x24\x20\xFE\xFF\xFF\xFF"                   -- comienzo de FUN_141ea44d0
 
--- bloque propio: +0 codigo, +0x800 estado, +0xc00 banderas por entrada, +0x1000 punteros a rutas (entrada x 8 tonos),
--- +0x5000 textos de las rutas, +0x85000 tabla por id (un byte: entrada)
-local O_ESTADO, O_BAND, O_PUNT, O_RUTAS, O_TABLA = 0x800, 0xC00, 0x1000, 0x5000, 0x85000
+-- bloque propio: +0 codigo, +0x800 estado, +0xc00 banderas por entrada, +0x1000 punteros a rutas (entrada x 8 tonos x 4 formas),
+-- +0x11000 textos de las rutas, +0x91000 tabla por id (un byte: entrada)
+local O_ESTADO, O_BAND, O_PUNT, O_RUTAS, O_TABLA = 0x800, 0xC00, 0x1000, 0x11000, 0x91000
 local TAM_RUTAS = O_TABLA - O_RUTAS
+local FORMAS = { "a", "b", "c", "a" }
 local TAM = O_TABLA + MAX_ID
 
 local S = { estado = "sin iniciar", base = nil, p8 = nil, on = false, rutas = {}, n_ids = 0, defecto = 0, archivo = nil }
@@ -82,7 +92,7 @@ local function armar(partes)
     end
     return table.concat(out)
 end
-local JE, JA, JAE = "\x0F\x84", "\x0F\x87", "\x0F\x83"
+local JE, JA, JAE, JNE, JMP = "\x0F\x84", "\x0F\x87", "\x0F\x83", "\x0F\x85", "\x90\xE9"   -- JMP = nop + jmp de 32 bits
 
 -- codigo propio (se puede armar sin el juego: lo comprueba y lo EJECUTA tools/sim/cuerpo_propio_asm.py)
 function m.codigo(base)
@@ -106,11 +116,39 @@ function m.codigo(base)
         "\x81\xF9\xFF\x00\x00\x00", { "salto", JE, "fin" },   -- cmp ecx, 0xff / je fin    "no"
         "\x4D\x8B\x4F\x10",                              -- mov r9, [r15+0x10]            C = datos de la configuracion
         "\x4D\x85\xC9", { "salto", JE, "fin" },          -- test r9, r9 / je fin
+        -- (0.3) forma del torso: 0 = remera afuera, 1 = adentro, 2 = afuera y ajustada. [rsp+0x20] = entrada, [rsp+0x24] = forma
+        "\x89\x4C\x24\x20",                              -- mov [rsp+0x20], ecx
+        "\xC7\x44\x24\x24\x00\x00\x00\x00",              -- mov dword [rsp+0x24], 0
+        "\x41\x83\x79\x64\x00", { "salto", JNE, "afuera" }, -- cmp dword [r9+0x64], 0 / jne afuera
+        "\xC7\x44\x24\x24\x01\x00\x00\x00",              -- mov dword [rsp+0x24], 1       remera adentro
+        { "salto", JMP, "forma" },                       -- jmp forma
+        { "etq", "afuera" },
+        "\x48\xB8" .. u64le(KITS_GLOBAL),                -- mov rax, &lista de kits
+        "\x48\x8B\x08",                                  -- mov rcx, [rax]
+        "\x48\x85\xC9", { "salto", JE, "forma" },         -- test rcx, rcx / je forma
+        "\x48\x8B\x41\x08",                              -- mov rax, [rcx+8]
+        "\x48\x85\xC0", { "salto", JE, "forma" },         -- test rax, rax / je forma
+        "\x41\x8B\x51\x60",                              -- mov edx, [r9+0x60]            id del kit
+        "\x48\xB8" .. u64le(KIT_BUSCA),                  -- mov rax, FUN_1419ab080
+        "\xFF\xD0",                                      -- call rax
+        "\x48\x85\xC0", { "salto", JE, "forma" },         -- test rax, rax / je forma      kit sin cargar
+        "\x48\x8B\x40\x08",                              -- mov rax, [rax+8]              K
+        "\x48\x85\xC0", { "salto", JE, "forma" },         -- test rax, rax / je forma
+        "\x80\x78\x18\x00", { "salto", JE, "forma" },     -- cmp byte [rax+0x18], 0 / je forma
+        "\xC7\x44\x24\x24\x02\x00\x00\x00",              -- mov dword [rsp+0x24], 2       ajustada
+        { "etq", "forma" },
+        "\x4D\x8B\x4F\x10",                              -- mov r9, [r15+0x10]            (la llamada pudo pisar r9 / r10 / rcx)
+        "\x49\xBA" .. u64le(base + O_ESTADO),            -- mov r10, estado
+        "\x8B\x4C\x24\x20",                              -- mov ecx, [rsp+0x20]           entrada
         "\x41\x8B\x81\x60\x01\x00\x00",                  -- mov eax, [r9+0x160]           tono de piel
         "\x83\xE0\x07",                                  -- and eax, 7
         "\x41\x89\x42\x20",                              -- mov [r10+0x20], eax           ultimo tono
         "\x49\xBB" .. u64le(base + O_PUNT),              -- mov r11, punteros
         "\x8D\x04\xC8",                                  -- lea eax, [rax+rcx*8]          entrada * 8 + tono
+        "\xC1\xE0\x02",                                  -- shl eax, 2
+        "\x8B\x54\x24\x24",                              -- mov edx, [rsp+0x24]           forma
+        "\x41\x89\x52\x24",                              -- mov [r10+0x24], edx           ultima forma
+        "\x03\xC2",                                      -- add eax, edx                  (entrada * 8 + tono) * 4 + forma
         "\x49\x8B\x14\xC3",                              -- mov rdx, [r11+rax*8]          ruta
         "\x48\x85\xD2", { "salto", JE, "fin" },          -- test rdx, rdx / je fin
         "\x49\xBB" .. u64le(base + O_BAND),              -- mov r11, banderas
@@ -195,7 +233,7 @@ local function cargar_lista()
     estado[1] = 0
     ffi.fill(p8 + O_TABLA, MAX_ID, 0)
     ffi.fill(p8 + O_BAND, 256, 0)
-    ffi.fill(p8 + O_PUNT, 256 * 8 * 8, 0)
+    ffi.fill(p8 + O_PUNT, 256 * 8 * 4 * 8, 0)
     local punt = ffi.cast("uint64_t *", p8 + O_PUNT)
     local libre, textos = 0, {}
     local function texto(t)                    -- un mismo texto se guarda una sola vez
@@ -212,7 +250,10 @@ local function cargar_lista()
         local r = rutas[i]
         for tono = 0, 7 do
             local n = (tono >= 1 and tono <= 6) and tono or 1
-            punt[i * 8 + tono] = texto((string.gsub(r.ruta, "#", tostring(n))))
+            local t = string.gsub(r.ruta, "#", tostring(n))
+            for forma = 0, 3 do
+                punt[(i * 8 + tono) * 4 + forma] = texto((string.gsub(t, "@", FORMAS[forma + 1])))
+            end
         end
         p8[O_BAND + i] = r.sin_brazo and 1 or 0
     end
@@ -251,6 +292,8 @@ local function iniciar(ctx)
         S.estado = "el juego no tiene los bytes esperados en 0x141ecd515 (otra version u otro mod): no toco nada"; return
     end
     if leer(PONER_RUTA, #PONER_INI) ~= PONER_INI then S.estado = "FUN_141a09fe0 no es la esperada: no toco nada"; return end
+    if leer(KITS_LEE, #KITS_LEE_INI) ~= KITS_LEE_INI then S.estado = "FUN_1419aa670 no es la esperada: no toco nada"; return end
+    if leer(KIT_BUSCA, #KIT_BUSCA_INI) ~= KIT_BUSCA_INI then S.estado = "FUN_1419ab080 no es la esperada: no toco nada"; return end
     if leer(SIGUE, #SIGUE_INI) ~= SIGUE_INI then S.estado = "FUN_141ea44d0 no es la esperada: no toco nada"; return end
 
     -- 2) bloque propio cerca del exe (para que el call de 5 bytes llegue)
@@ -293,8 +336,8 @@ function m.overlay_on(ctx)
     local paso, puso = e32[2], e32[4]          -- parte baja de los contadores de 64 bits
     local r1 = string.format("CuerpoPropio %s: %s, %s [2] | lista [3]: %d entradas, %d ids",
         m.version, tostring(S.estado), S.on and "PRENDIDO" or "apagado", #S.rutas, S.n_ids)
-    local r2 = string.format("paso %d, puso %d | ultimo: id %d tipo %d tono %d",
-        tonumber(paso), tonumber(puso), tonumber(e32[7]), tonumber(e32[6]), tonumber(e32[8]))
+    local r2 = string.format("paso %d, puso %d | ultimo: id %d tipo %d tono %d forma %s",
+        tonumber(paso), tonumber(puso), tonumber(e32[7]), tonumber(e32[6]), tonumber(e32[8]), FORMAS[tonumber(e32[9]) % 4 + 1])
     local r3 = "para todos: " .. (S.defecto > 0 and tostring(S.rutas[S.defecto].ruta) or "nada")
     return string.sub(r1, 1, 112) .. "\n" .. string.sub(r2, 1, 112) .. "\n" .. string.sub(r3, 1, 112)
 end
