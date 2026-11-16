@@ -12,6 +12,8 @@
 #include <cstring>
 #include <algorithm>
 #include <vector>
+#include <mutex>
+#include <map>
 
 namespace fx {
 
@@ -25,7 +27,12 @@ static std::atomic<bool> s_fresh{false};       // ya se dibujo en este cuadro
 // Agustin, 2560 x 1080) la grilla se proyectaba como 16:9 y quedaba estirada de costado (no seguia a la camara como el jugador)
 static float s_asp = 16.0f / 9.0f;
 
-void MotorGridPresent() { s_fresh.store(false, std::memory_order_relaxed); }
+static void MotorDepthDiagTick();
+void MotorGridPresent() { s_fresh.store(false, std::memory_order_relaxed);
+#ifndef MOTORGRID_TEST
+    MotorDepthDiagTick();
+#endif
+}
 
 static inline void Plot(int x, int y, uint32_t rgb, float a) {
     if ((unsigned)x >= (unsigned)kW || (unsigned)y >= (unsigned)kH || a <= 0.0f) return;
@@ -243,6 +250,48 @@ ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx) {
         ctx->Unmap(s_tex, 0);
     }
     return s_srv;
+}
+
+// ---- (16/11, Agustin 06:44: "pero no tiene profundidad el jugador") DIAGNOSTICO para meter la grilla en la escena 3D del visor:
+// el jugador se pega como imagen encima del fondo con grilla. Para dibujar la grilla con la profundidad del jugador hace falta saber
+// que profundidad (DSV) usa el visor, su formato y su borrado (0 = Z invertida). Dentro del Motor, cada 20 s (hasta 4 veces) se mira
+// medio segundo: cada combinacion imagen de destino + profundidad que el juego pone (tamano, formato, si es la imagen del jugador que
+// despues lee el menu) y con que valor se borra cada profundidad. Solo anota; no cambia nada.
+static std::mutex s_ddMx; static std::atomic<bool> s_ddOn{false}; static double s_ddT0 = 0.0; static int s_ddDumps = 0;
+struct DdKey { uint32_t rw, rh, rf, dw, dh, df; uintptr_t rres, dres; bool operator<(const DdKey& o) const { return memcmp(this, &o, sizeof *this) < 0; } };
+static std::map<DdKey, int> s_ddRt; static std::map<uintptr_t, float> s_ddClear; static std::atomic<uintptr_t> s_ddPlayerImg{0};
+void MotorDepthPlayerImage(void* res) { s_ddPlayerImg.store((uintptr_t)res, std::memory_order_relaxed); }
+static void DdDesc(ID3D11View* v, uint32_t& w, uint32_t& h, uint32_t& f, uintptr_t& res) {
+    w = h = f = 0; res = 0; if (!v) return;
+    ID3D11Resource* r = nullptr; v->GetResource(&r); if (!r) return; res = (uintptr_t)r;
+    ID3D11Texture2D* t = nullptr; r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t); r->Release();
+    if (t) { D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); w = d.Width; h = d.Height; f = (uint32_t)d.Format; t->Release(); }
+}
+void MotorDepthDiagRT(UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d) {
+    if (!s_ddOn.load(std::memory_order_relaxed) || !d) return;
+    DdKey k{}; DdDesc(n > 0 && v ? v[0] : nullptr, k.rw, k.rh, k.rf, k.rres); DdDesc(d, k.dw, k.dh, k.df, k.dres);
+    if (k.dw < 512) return;
+    std::lock_guard<std::mutex> lk(s_ddMx); s_ddRt[k]++;
+}
+void MotorDepthDiagClear(ID3D11DepthStencilView* d, float depth) {
+    if (!s_ddOn.load(std::memory_order_relaxed) || !d) return;
+    uint32_t w, h, f; uintptr_t res; DdDesc(d, w, h, f, res); if (w < 512) return;
+    std::lock_guard<std::mutex> lk(s_ddMx); s_ddClear[res] = depth;
+}
+static void MotorDepthDiagTick() {
+    const double now = Now();
+    if (!MotorPageActive() || s_ddDumps >= 4) { s_ddOn.store(false); s_ddT0 = 0.0; return; }
+    if (s_ddT0 == 0.0) { s_ddT0 = now; return; }
+    if (!s_ddOn.load() && now - s_ddT0 > 20.0) { std::lock_guard<std::mutex> lk(s_ddMx); s_ddRt.clear(); s_ddClear.clear(); s_ddOn.store(true); s_ddT0 = now; return; }
+    if (s_ddOn.load() && now - s_ddT0 > 0.5) {
+        s_ddOn.store(false); s_ddT0 = now; s_ddDumps++;
+        std::lock_guard<std::mutex> lk(s_ddMx); const uintptr_t pi = s_ddPlayerImg.load();
+        Log("motor (profundidad %d): %d combinaciones imagen + profundidad en 0.5 s (imagen del jugador del menu %p)", s_ddDumps, (int)s_ddRt.size(), (void*)pi);
+        int i = 0;
+        for (const auto& e : s_ddRt) { if (i++ >= 24) break; const DdKey& k = e.first; auto c = s_ddClear.find(k.dres);
+            Log("motor (profundidad %d):  imagen %ux%u fmt %u %p%s | profundidad %ux%u fmt %u %p borrada a %s | %d veces", s_ddDumps, k.rw, k.rh, k.rf, (void*)k.rres, k.rres && k.rres == pi ? " (LA DEL JUGADOR)" : "",
+                k.dw, k.dh, k.df, (void*)k.dres, c == s_ddClear.end() ? "-" : (c->second < 0.5f ? "0 (Z invertida)" : "1"), e.second); }
+    }
 }
 
 #endif
