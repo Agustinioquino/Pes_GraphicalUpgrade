@@ -76,11 +76,6 @@ void HeadShadowPresent() {
     float* I = g_cfg.live[kHsRowInfo];
     s_count = 0; I[0] = 0.0f;
     s_body = false; g_cfg.live[kHsRowBody][3] = 0.0f;
-    // (16/11, Agustin con capturas 15:28: "es la sombra la que esta mal", "solo en el modo editar y los menus prematch") en las escenas
-    // de menu sin cancha (w255: Editar, previa) con la luz del editor APAGADA el juego no proyecta sombra del cuerpo: el atlas metia
-    // la sombra de la cabeza, el pelo y los brazos sobre el pecho, la espalda y el short con la luz de estudio. Ahi queda como el
-    // juego; con la luz del editor (x297) y en el partido no cambia nada
-    if (g_cfg.live[255][3] > 0.5f && g_cfg.live[297][0] < 0.5f) return;
     if (U[0] < 0.5f || (g_cfg.live[101][0] > 0.5f && g_cfg.live[452][3] < 1.5f)) return;   // apagado, o "sol libre" solo en el shader (la luz no es la del LightCB); con w452 = 2 el motor ya tiene el sol libre
     if (!Ensure() || !g_dev.imm) return;
     std::vector<float> L, S; int lf = -1, sf = -1;
