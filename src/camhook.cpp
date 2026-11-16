@@ -106,11 +106,24 @@ static bool ReadView(void* view, unsigned* fl, int* w, int* h) {
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 
+// (16/11, Agustin 06:44: rastros al mover con el mouse la camara del visor en Apariencia) mientras la camara a mano se mueve
+// (menumouse.cpp) se prende el bit 0x80 de la camara de la vista: el TAA del juego dibuja "Cancel Temporal Pass" y no mezcla
+// cuadros viejos. Quieta, vuelve el TAA normal
+static bool CancelView(void* view) {
+    __try {
+        if (!view) return false;
+        void* cam = *(void* volatile*)((char*)view + 0x4a0);
+        if (!cam) return false;
+        *(volatile unsigned*)((char*)cam + 0xf0) |= 0x80u;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
 static std::atomic<int> s_aaW{0}, s_aaH{0};
 static uintptr_t __fastcall hk_AA(void* self, void* a2, void* a3, void* view) {
     unsigned fl = 0; int w = 0, h = 0;
     s_aaCalls++;
     if (!s_aaTid.load()) s_aaTid = GetCurrentThreadId();
+    if (MenuViewCamMoving() && CancelView(view)) { static std::atomic<int> n{0}; if (n.fetch_add(1) < 3) Log("camara del motor: camara del visor movida con el mouse: el TAA del juego descarta la historia mientras se mueve"); }
     if (ReadView(view, &fl, &w, &h)) {
         s_aaW = w; s_aaH = h;
         if (fl & 0x80) {

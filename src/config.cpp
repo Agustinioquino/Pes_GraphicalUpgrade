@@ -142,6 +142,7 @@ static bool LoadConfigLocked() {
             else if (kl == "bloquear_mando") c.blockPad = std::clamp(atoi(v.c_str()), 0, 1);       // (14/11) el juego no ve el mando con el menu abierto
             else if (kl == "camara_hud") c.camHud = std::clamp(atoi(v.c_str()), 0, 2);              // (14/11) HUD de la camara libre / modo foto
             else if (kl == "camara_mando") c.camPad = std::clamp(atoi(v.c_str()), 0, 1);           // (14/11) el mando mueve la camara libre (modo foto)
+            else if (kl == "cursor_tamano") c.cursorScale = std::clamp((float)atof(v.c_str()), 0.75f, 2.0f);   // (15/11 p) tamano del cursor (menu Insert)
             else if (kl == "menu_cursor") { const int cv = std::clamp(atoi(v.c_str()), 0, 3); c.menuCursor = cv == 3 ? 1 : cv; }   // 0 no, 1 dardo + mano, 2 Windows           // (14/11) cursor del menu
             else if (kl == "menu_mando_abrir") c.menuPadOpen = atoi(v.c_str()) != 0;             // (14/11) L3 + R3 abre / cierra el menu
             else if (kl == "repeticion_barra") c.replayBar = atoi(v.c_str()) != 0 ? 1 : 0;      // (14/11 9vcq5h) barra propia de la repeticion
@@ -154,9 +155,15 @@ static bool LoadConfigLocked() {
             else if (kl == "mouse_menus_dibujo") c.menuMouseDrawn = atoi(v.c_str()) != 0 ? 1 : 0;        // (14/11 e)
             else if (kl == "mouse_elegir_equipo") c.menuMouseTeamSel = atoi(v.c_str()) != 0 ? 1 : 0;
             else if (kl == "mouse_oculta_botones") c.menuMouseHideGuide = atoi(v.c_str()) != 0 ? 1 : 0;
+            else if (kl == "mouse_mando_reinicia") c.menuMousePadReset = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 g)
+            else if (kl == "mouse_puntero_propio") c.menuMouseOwnPtr = atoi(v.c_str()) != 0 ? 1 : 0;   // (15/11)
+            else if (kl == "mouse_camara_editar") c.menuViewCam = atoi(v.c_str()) != 0 ? 1 : 0;   // (15/11)
+            else if (kl == "mouse_boton_salir") c.menuExitBtn = atoi(v.c_str()) != 0 ? 1 : 0;   // (15/11)
             else if (kl == "ayuda_mouse") c.mouseHint = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 d) botones del mouse abajo a la derecha
             else if (kl == "camara_share") c.camShareHold = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 j)
             else if (kl == "camara_sin_dof") c.camNoDof = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 h)
+            else if (kl == "camara_sin_desenfoque_mov") c.camNoMblur = atoi(v.c_str()) != 0 ? 1 : 0;   // (15/11)
+            else if (kl == "camara_vertical") c.camVert = std::clamp((float)atof(v.c_str()), 0.1f, 5.0f);   // (15/11)
             else if (kl == "repeticion_lenta") c.replaySlow = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 g)
             else if (kl == "tecla_cursor") c.cursorKey = (v == "0" || v.empty()) ? 0 : VkFromName(v);   // (14/11 c) F1 de fabrica
             else if (kl == "tecla_mouse_menus") c.menuMouseKey = (v == "0" || v.empty()) ? 0 : VkFromName(v);
@@ -164,6 +171,38 @@ static bool LoadConfigLocked() {
             else if (kl == "motor_pagina") c.motorPage = atoi(v.c_str()) != 0 ? 1 : 0;   // (11/11) filas nativas del Motor en el estudio
             else if (kl == "motor_panel_x") c.motorPanelX = (float)atof(v.c_str());   // (11/11) panel del Motor corrido con el mouse (escenario 1920 x 1080)
             else if (kl == "motor_panel_y") c.motorPanelY = (float)atof(v.c_str());
+            else if (kl == "motor_interfaz_juego") c.motorGameUi = atoi(v.c_str()) != 0;      // (15/11 b) 1 = con el menu propio del Motor igual se ve la interfaz del juego
+            else if (kl == "motor_menu_propio") c.motorOwnMenu = atoi(v.c_str()) != 0;        // (15/11) 1 = el Motor abre con su barra de iconos, sin la lista del Editar
+            else if (kl == "motor_escala") c.motorScale = std::clamp((float)atof(v.c_str()), 0.8f, 2.0f);   // (15/11 h) tamano de la interfaz del editor del Motor
+            else if (kl == "motor_panel_izq") c.motorPanelLW = std::clamp((float)atof(v.c_str()), 160.0f, 900.0f);   // (15/11 o) ancho del panel Escena (en puntos de 1080p)
+            else if (kl == "motor_panel_der") c.motorPanelRW = std::clamp((float)atof(v.c_str()), 200.0f, 900.0f);   // (15/11 o) ancho del panel Inspector
+            else if (kl == "motor_panel_izq_abierto") c.motorPanelLOn = atoi(v.c_str()) != 0 ? 1 : 0;
+            else if (kl == "motor_panel_der_abierto") c.motorPanelROn = atoi(v.c_str()) != 0 ? 1 : 0;
+            else if (kl == "motor_grilla_intensidad") c.motorGridAlpha = std::clamp(atoi(v.c_str()), 0, 200);   // (15/11 o) opciones de la grilla
+            else if (kl == "motor_grilla_celda") c.motorGridCell = std::clamp((float)atof(v.c_str()), 0.1f, 10.0f);
+            else if (kl == "motor_grilla_linea_fuerte") c.motorGridMajor = std::clamp(atoi(v.c_str()), 0, 50);
+            else if (kl == "motor_cerca") c.motorNear = std::clamp((float)atof(v.c_str()), 0.0f, 10.0f);      // (15/11 o) plano cercano de la camara del visor en el Motor (0 = como el juego)
+            else if (kl == "motor_lejos") c.motorFar = std::clamp((float)atof(v.c_str()), 0.0f, 100000.0f);   // (15/11 o) plano lejano (0 = como el juego)
+            // (15/11 p) segunda cadena: MSVC no acepta mas de ~128 "else if" seguidos (C1061)
+            if (kl == "motor_deshacer_pasos") c.motorUndoSteps = std::clamp(atoi(v.c_str()), 10, 200);   // (15/11 p) Editar > Preferencias: pasos de Ctrl+Z
+            else if (kl == "motor_panel_lugar") { int d0 = 0, d1 = 1; if (sscanf(v.c_str(), "%d,%d", &d0, &d1) == 2) { c.motorDock[0] = std::clamp(d0, 0, 2); c.motorDock[1] = std::clamp(d1, 0, 2); } }   // (15/11 q) 0 izquierda, 1 derecha, 2 flotante
+            else if (kl == "motor_resolucion") c.motorRes = std::clamp(atoi(v.c_str()), 0, 200);   // (15/11 q) visor del Motor: % de la pantalla (0 = como el Editar)
+            else if (kl == "motor_panel_division") c.motorSplit = std::clamp((float)atof(v.c_str()), 0.15f, 0.85f);
+            else if (kl == "motor_panel_arriba") c.motorStackTop = atoi(v.c_str()) != 0 ? 1 : 0;
+            else if (kl == "motor_panel_flotante") { float f[8]; if (sscanf(v.c_str(), "%f,%f,%f,%f,%f,%f,%f,%f", &f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6], &f[7]) == 8) for (int q = 0; q < 8; q++) c.motorFloat[q / 4][q % 4] = f[q]; }
+            else if (kl == "motor_autoguardado") c.motorAutoSave = atoi(v.c_str()) != 0 ? 1 : 0;                 // (15/11 p) guarda la escena sola (escena_autoguardado.txt)
+            else if (kl == "motor_autoguardado_minutos") c.motorAutoSaveMin = std::clamp(atoi(v.c_str()), 1, 60);
+            else if (kl == "motor_texto") c.motorText = std::clamp((float)atof(v.c_str()), 0.8f, 1.5f);            // (15/11 p) tamano del texto del editor (x el tamano de la interfaz)
+            else if (kl == "motor_camara_velocidad") c.motorCamSpeed = std::clamp((float)atof(v.c_str()), 0.0f, 50.0f);   // (15/11 p) 0 = la de la camara libre
+            else if (kl == "motor_camara_sensibilidad") c.motorCamSens = std::clamp((float)atof(v.c_str()), 0.0f, 10.0f);
+            else if (kl == "motor_grilla_ejes") c.motorGridAxes = atoi(v.c_str()) != 0 ? 1 : 0;
+            else if (kl == "motor_grilla_tamano") { const int gs = atoi(v.c_str()); c.motorGridSize = (gs <= 0 || gs >= 200) ? 0 : std::clamp(gs, 10, 400); }   // (15/11 r) 200 (lo que guardaban las DLL viejas) o mas = Maxima   // (15/11 q) 0 = maxima (hasta el horizonte)   // (15/11) lado de la grilla en metros
+            else if (kl == "motor_sonido") c.motorSound = atoi(v.c_str()) != 0 ? 1 : 0;                     // (15/11 m) motorsound.cpp: sonido de la transicion
+            else if (kl == "motor_sonido_volumen") c.motorSoundVol = std::clamp(atoi(v.c_str()), 0, 100);
+            else if (kl == "motor_carga_tiempos") c.motorLoadTimes = v;                                       // (15/11 n) tiempos aprendidos de la barra de carga
+            else if (kl == "motor_letra") c.motorFont = atoi(v.c_str()) != 0 ? 1 : 0;                       // (15/11 m) letra Lack UA del editor (textures\pes_motor*.ttf)
+            else if (kl == "motor_grilla") c.motorGrid = atoi(v.c_str()) != 0;               // (15/11) 1 = fondo con grilla de piso
+            else if (kl == "motor_jugador_al_abrir") c.motorStartPlayer = atoi(v.c_str()) != 0;   // (15/11) 1 = carga al jugador al abrir (0 = solo el menu)
             else if (kl == "motor_teclado") c.motorKeys = atoi(v.c_str()) != 0;      // (12/11) 1 = en el Motor el juego no ve el teclado (Esc = salir)
             else if (kl == "motor_fondo") c.motorBg = atoi(v.c_str()) != 0;          // (11/11) 1 = fondo negro en el estudio del Motor
             else if (kl == "motor_camara") c.motorCam = atoi(v.c_str()) != 0;        // (11/11) 1 = el Motor abre con la camara libre
@@ -188,6 +227,8 @@ static bool LoadConfigLocked() {
             else if (kl == "menu_autoguardar") c.menuAutoSave = std::clamp(atoi(v.c_str()), 0, 2);    // (08/11) guardado automatico de los cambios del menu
             else if (kl == "menu_letra") c.menuFont = atoi(v.c_str()) != 0;                       // (08/11) letra Saira (textures\pes_ui.ttf)
             else if (kl == "language" || kl == "idioma") { const std::string lv = Lower(v); c.lang = (lv == "en" || lv == "english" || v == "1") ? 1 : (lv == "pt" || lv == "portugues" || lv == "portuguese" || v == "2") ? 2 : 0; }
+            else if (kl == "idioma_auto") c.langAuto = atoi(v.c_str()) != 0;                     // (15/11) el menu sigue el idioma de textos del juego
+            else if (kl == "idioma_juego_ids") { int a = -1, b = -1, d = -1; if (sscanf(v.c_str(), "%d , %d , %d", &a, &b, &d) >= 1) { c.langGame[0] = a; c.langGame[1] = b; c.langGame[2] = d; } }   // (15/11) numeros del juego para es, en, pt
             else if (kl == "auto_captura") c.autoCap = atoi(v.c_str()) != 0;
             else if (kl == "auto_captura_seg") c.autoCapSec = std::clamp((float)atof(v.c_str()), 3.0f, 600.0f);
             else if (kl == "auto_captura_max") c.autoCapMax = std::clamp(atoi(v.c_str()), 1, 2000);
@@ -211,6 +252,7 @@ static bool LoadConfigLocked() {
             else if (kl == "expr_paleta_blindaje") c.optExprBlindaje = atoi(v.c_str()) != 0;
             else if (kl == "expr_paleta_error") c.optExprPaletteErr = (float)atof(v.c_str());
             else if (kl == "congelado_seg") c.optHangSec = atoi(v.c_str());
+            else if (kl == "ventana_sin_bordes") c.borderless = atoi(v.c_str()) != 0 ? 1 : 0;   // (15/11) borderless.cpp
             else if (kl == "vigia_estados") c.relWatch = atoi(v.c_str()) != 0;
             else if (kl == "cobertura") c.coverOn = atoi(v.c_str()) != 0;
             else if (kl == "rastro") c.rastroOn = atoi(v.c_str()) != 0;
@@ -550,20 +592,23 @@ bool SaveCloth() {
 }
 
 // (02/11) fila 353: el viento cambia de partido a partido (pedido de Agustin: segun la hora, el clima, la estacion). Al leer un
-// match.ini nuevo (modulo de Sider PES21FX_match.lua: dia/noche, despejado/lluvia, verano/invierno) se escribe en cloth.ini
-// [sim] wind_x / wind_y / wind_z / wind_gust a partir del viento base del usuario (el de cloth.ini al abrir el juego):
-// rumbo al azar, fuerza x de noche 0.7, lluvia 1.6, invierno 1.25, verano 0.9, y un azar de partido (y353 = cuanto, 0..1).
-// x353 escala total, w353 on. El pelo toma la misma direccion (SaveCloth). wind_response (cuanto reacciona la tela) no se toca.
+// match.ini nuevo (modulo de Sider PES21FX_match.lua: dia/noche, despejado/lluvia, verano/invierno) sale la fuerza y el rumbo del
+// partido: rumbo al azar, fuerza x de noche 0.7, lluvia 1.6, invierno 1.25, verano 0.9, y un azar de partido (y353 = cuanto, 0..1).
+// x353 escala total, w353 on. wind_response (cuanto reacciona la tela) no se toca.
+// (15/11 sk9ema, Agustin: "el viento en la ropa ... se rompio un poco") ARREGLO DE UNA REALIMENTACION: antes el viento base se leia
+// de cloth.ini al abrir el juego y el resultado (base x fuerza del partido) se guardaba en las MISMAS claves, asi que la sesion
+// siguiente partia del valor ya multiplicado. Con la fuerza general alta (fuerza >= 2) wind_y se duplicaba en cada arranque: en su
+// PC llego a 296.96 m/s (2.32 x 2^7) y las rafagas se fueron a 0.02. Ahora:
+//  - la base es fija (2 m/s de costado, rafagas 3: lo que trae el cloth.ini del paquete) y nunca se lee de lo que se escribio;
+//  - wind_y (viento vertical) no se escribe nunca mas; si quedo en un valor imposible (> 3 m/s) se repara a 0.02 (el de fabrica);
+//  - con el viento unico prendido (z353) no se escribe nada en cloth.ini: la tela, el pasto, el pelo, las redes y los banderines
+//    leen la fila 494, que sale de g_matchWind (fuerza y rumbo) en wind.cpp. Solo sin viento unico se escribe wind_x / wind_z /
+//    wind_gust, como el 02/11.
 MatchWindOut g_matchWind;
 void MatchWind(const MatchInfo& m, unsigned long long seed) {
     Config& c = g_cfg;
     if (c.live[353][3] < 0.5f) return;
-    static bool haveBase = false; static float bx = 2.0f, by = 1.5f, bz = 0.0f, bg = 3.0f;
-    if (!haveBase) {
-        auto get = [&](const char* k, float d) { auto it = c.clothLoaded.find(k); return it != c.clothLoaded.end() ? it->second : d; };
-        bx = get("sim.wind_x", 2.0f); by = get("sim.wind_y", 1.5f); bz = get("sim.wind_z", 0.0f); bg = get("sim.wind_gust", 3.0f);
-        haveBase = true;
-    }
+    constexpr float kBaseSpeed = 2.0f, kBaseGust = 3.0f;
     unsigned long long h = seed ^ (0x9E3779B97F4A7C15ull * (unsigned long long)(m.stadium + 7)) ^ ((unsigned long long)(m.timeofday + 3) << 40) ^ ((unsigned long long)(m.weather + 5) << 48);
     auto rnd = [&]() { h ^= h >> 33; h *= 0xff51afd7ed558ccdull; h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ull; h ^= h >> 33; return (double)(h >> 11) * (1.0 / 9007199254740992.0); };
     const float var = std::clamp(c.live[353][1], 0.0f, 1.0f), sc = std::clamp(c.live[353][0], 0.0f, 3.0f);
@@ -571,19 +616,32 @@ void MatchWind(const MatchInfo& m, unsigned long long seed) {
     const double r1 = rnd(), r2 = rnd(), r3 = rnd();
     k *= (float)(1.0 + var * (r1 * 1.3 - 0.55));   // 0.45 .. 1.75 con var = 1
     k *= sc;
-    const float sp = sqrtf(bx * bx + bz * bz) * k, ang = (float)(r2 * 6.283185307);
-    // (13/11 sk9ema) el viento unico usa esto aunque no haya mod de ropa o su viento base sea 0 (PC de Agustin: base 0 -> todo en 0)
+    const float sp = kBaseSpeed * k, ang = (float)(r2 * 6.283185307);
+    // (13/11 sk9ema) el viento unico usa esto (wind.cpp)
     g_matchWind.valid = true; g_matchWind.k = k; g_matchWind.ang = ang;
     if (!c.clothFound) { Log("viento del partido (sin mod de ropa): fuerza x%.2f, rumbo %.0f grados", k, ang * 57.2958f); return; }
-    const float gust = bg * (m.weather == 1 ? 1.4f : 1.0f) * (float)(1.0 + var * (r3 * 0.6 - 0.3));
+    // reparacion del viento vertical que dejo la realimentacion (una vez: despues queda en 0.02 y no se vuelve a escribir)
+    bool repaired = false;
+    { auto it = c.clothVals.find("sim.wind_y");
+      if (it != c.clothVals.end() && !(fabsf(it->second) <= 3.0f)) {
+          Log("viento del partido: cloth.ini traia wind_y = %g m/s (valor imposible, lo dejo la DLL anterior al duplicarlo en cada arranque): reparado a 0.02", it->second);
+          it->second = 0.02f; repaired = true; } }
+    const bool unico = c.live[353][2] > 0.5f;
+    if (unico) {
+        if (repaired) SaveCloth();
+        Log("viento del partido: estadio %d, %s, %s, %s -> fuerza x%.2f, rumbo %.0f grados, %.2f m/s (viento unico: cloth.ini no se toca)",
+            m.stadium, m.timeofday == 1 ? "noche" : m.timeofday == 0 ? "dia" : "hora ?", m.weather == 1 ? "lluvia" : m.weather == 0 ? "despejado" : "clima ?",
+            m.season == 1 ? "invierno" : m.season == 0 ? "verano" : "estacion ?", k, ang * 57.2958f, sp);
+        return;
+    }
+    const float gust = kBaseGust * (m.weather == 1 ? 1.4f : 1.0f) * (float)(1.0 + var * (r3 * 0.6 - 0.3));
     c.clothVals["sim.wind_x"] = roundf(sp * cosf(ang) * 100.0f) / 100.0f;
     c.clothVals["sim.wind_z"] = roundf(sp * sinf(ang) * 100.0f) / 100.0f;
-    c.clothVals["sim.wind_y"] = roundf(by * std::clamp(k, 0.3f, 2.0f) * 100.0f) / 100.0f;
     c.clothVals["sim.wind_gust"] = roundf(gust * 100.0f) / 100.0f;
     SaveCloth();
-    Log("viento del partido: estadio %d, %s, %s, %s -> fuerza x%.2f, rumbo %.0f grados (wind_x %.2f, wind_z %.2f, wind_y %.2f, rafagas %.2f)",
+    Log("viento del partido: estadio %d, %s, %s, %s -> fuerza x%.2f, rumbo %.0f grados (wind_x %.2f, wind_z %.2f, rafagas %.2f; wind_y no se toca)",
         m.stadium, m.timeofday == 1 ? "noche" : m.timeofday == 0 ? "dia" : "hora ?", m.weather == 1 ? "lluvia" : m.weather == 0 ? "despejado" : "clima ?",
-        m.season == 1 ? "invierno" : m.season == 0 ? "verano" : "estacion ?", k, ang * 57.2958f, c.clothVals["sim.wind_x"], c.clothVals["sim.wind_z"], c.clothVals["sim.wind_y"], c.clothVals["sim.wind_gust"]);
+        m.season == 1 ? "invierno" : m.season == 0 ? "verano" : "estacion ?", k, ang * 57.2958f, c.clothVals["sim.wind_x"], c.clothVals["sim.wind_z"], c.clothVals["sim.wind_gust"]);
 }
 
 // (08/11) vistas de depuracion: Agustin: "opciones de diagnostico y debug de opciones avanzadas, sombras, efectos". Se juntan aca

@@ -30,8 +30,10 @@ static ID3D11RenderTargetView* s_rtv = nullptr;
 static bool s_keyWas = false;
 static std::string s_status;
 static std::string s_btnPending;   // accion de un "button =" del ini (se ejecuta fuera de g_cfgMutex)
-static ImFont* s_fontBig = nullptr; static ImFont* s_fontBold = nullptr;
+static ImFont* s_motorFont[4] = {};   // (15/11 m) letra del editor del Motor (Lack UA): 0 normal, 1 cursiva, 2 de contorno, 3 contorno cursiva (nombre de la barra)
+static ImFont* s_fontBig = nullptr; static ImFont* s_fontBold = nullptr; static ImFont* s_fontPad = nullptr;   // (14/11 n) s_fontPad: letras de los simbolos del mando
 static ID3D11ShaderResourceView* s_logo = nullptr; static float s_logoAspect = 1.0f;
+void* MenuLogoTex(float* aspect) { if (aspect) *aspect = s_logoAspect; return s_logo; }   // (15/11) el editor del Motor lo dibuja en su barra
 // (04/11) el menu se adapta a la resolucion (pedido de Agustin): letras, espacios y anchos crecen con el alto de la pantalla (1080 = 1)
 // y las letras base son mas grandes (19 -> 22 px a 1080). ui_scale queda como ajuste fino encima. Las fuentes se rasterizan al tamano
 // final (nitidas) y se rehacen si cambia la resolucion
@@ -57,7 +59,48 @@ static void BuildFonts(float H) {
         if (!io.Fonts->AddFontFromFileTTF(reg.c_str(), std::round(19.0f * k * up), nullptr, io.Fonts->GetGlyphRangesDefault())) io.Fonts->AddFontDefault();
         s_fontBig = io.Fonts->AddFontFromFileTTF(bold.c_str(), std::round(27.0f * k * up), nullptr, io.Fonts->GetGlyphRangesDefault());
         s_fontBold = io.Fonts->AddFontFromFileTTF(bold.c_str(), std::round((ui ? 20.5f : 19.0f) * k * up), nullptr, io.Fonts->GetGlyphRangesDefault());
+        {   // (14/11 n) negrita chica para L1 / R1 / OPTIONS de los simbolos del mando: a su tamano (antes la letra del menu achicada a la mitad)
+            ImFontConfig pc; pc.OversampleH = 3; pc.OversampleV = 2; pc.PixelSnapH = true;
+            static const ImWchar kPadRanges[] = { 0x0020, 0x007E, 0 };
+            s_fontPad = io.Fonts->AddFontFromFileTTF(bold.c_str(), std::round(19.0f * k * up * 0.70f), &pc, kPadRanges);
+            MvSetPadFont(s_fontPad);
+        }
+        {   // (15/11, Agustin 04:28) letra de la guia del mouse de abajo a la derecha: Lack (la que mando), a su tamano; si no esta, la del menu
+            ImFont* gf = nullptr;
+            if (GetFileAttributesW((g_cfg.baseDir + L"textures\\pes_guia.ttf").c_str()) != INVALID_FILE_ATTRIBUTES) {
+                ImFontConfig gc; gc.OversampleH = 3; gc.OversampleV = 2;
+                gf = io.Fonts->AddFontFromFileTTF((dir + "textures\\pes_guia.ttf").c_str(), std::round(21.0f * k), &gc, io.Fonts->GetGlyphRangesDefault());
+            }
+            MvSetGuideFont(gf);
+            Log("menu: guia del mouse con %s", gf ? "textures\\pes_guia.ttf" : "la letra del menu (falta textures\\pes_guia.ttf)");
+        }
         Log("menu: letra %s", ui ? "Saira Semi Condensed (textures\\pes_ui.ttf)" : "Segoe UI");
+    }
+    {   // (15/11 m) letra del editor del Motor: Lack UA (Agustin 04:29: "para el motor podes usar esta fuente?"), textures\pes_motor*.ttf.
+        // Se arma al tamano de las letras del editor (15 px x escala del editor, como UiK de motorgizmo.cpp) para que quede nitida; la de
+        // contorno al tamano del subtitulo de la transicion (16 x alto / 540). Si falta un archivo, MotorFont da la normal o la del menu.
+        // Cambiar el tamano del editor (Ver > Tamano) rehace las letras (MenuFontsDirty). [PES21FX] motor_letra = 0 la apaga.
+        s_motorFont[0] = s_motorFont[1] = s_motorFont[2] = s_motorFont[3] = nullptr;
+        if (g_cfg.motorFont) {
+            int len = WideCharToMultiByte(CP_UTF8, 0, g_cfg.baseDir.c_str(), -1, nullptr, 0, nullptr, nullptr);
+            std::string dir(len > 0 ? len - 1 : 0, '\0');
+            if (len > 1) WideCharToMultiByte(CP_UTF8, 0, g_cfg.baseDir.c_str(), -1, &dir[0], len, nullptr, nullptr);
+            const float km = std::max(1.0f, H / 1080.0f) * std::clamp(g_cfg.motorScale, 0.8f, 2.0f);
+            static const char* const kFile[4] = { "textures\\pes_motor.ttf", "textures\\pes_motor_italic.ttf", "textures\\pes_motor_line.ttf", "textures\\pes_motor_line_italic.ttf" };
+            const float kt = std::clamp(g_cfg.motorText, 0.8f, 1.5f);   // (15/11 p) Editar > Preferencias > Tamano del texto
+            const float px[4] = { std::round(15.0f * km * kt), std::round(15.0f * km * kt), std::round(16.0f * H / 540.0f), std::round(17.0f * km * kt) };
+            int n = 0;
+            for (int i = 0; i < 4; i++) {
+                const std::string p = dir + kFile[i];
+                int wl = MultiByteToWideChar(CP_UTF8, 0, p.c_str(), -1, nullptr, 0); std::wstring w(wl > 0 ? wl - 1 : 0, L'\0');
+                if (wl > 1) MultiByteToWideChar(CP_UTF8, 0, p.c_str(), -1, &w[0], wl);
+                if (GetFileAttributesW(w.c_str()) == INVALID_FILE_ATTRIBUTES) continue;
+                ImFontConfig fc; fc.OversampleH = 2; fc.OversampleV = 2;
+                s_motorFont[i] = io.Fonts->AddFontFromFileTTF(p.c_str(), std::max(8.0f, px[i]), &fc, io.Fonts->GetGlyphRangesDefault());
+                if (s_motorFont[i]) n++;
+            }
+            Log("motor: letra Lack UA, %d de 4 archivos (textures\\pes_motor*.ttf)%s", n, n ? "" : ": se usa la del menu");
+        }
     }
     {   // (04/11 n) iconos del menu (Font Awesome Free, recortado): se mezclan en la letra normal y en la negrita
         static const ImWchar kIcoRanges[] = { 0xe000, 0xf8ff, 0 };
@@ -83,6 +126,8 @@ static void BuildFonts(float H) {
     s_fontsH = H;
     Log("menu: letras para %.0f px de alto (x%.2f)", H, k);
 }
+ImFont* MotorFont(int i) { i = std::clamp(i, 0, 3); if (s_motorFont[i]) return s_motorFont[i]; if (i == 3 && s_motorFont[2]) return s_motorFont[2]; return s_motorFont[0] ? s_motorFont[0] : ImGui::GetFont(); }
+void MenuFontsDirty() { s_fontsH = -1.0f; }   // (15/11 m) las letras se rehacen en el proximo cuadro (antes del NewFrame)
 
 
 // ---------------------------------------------------------------- (11/11) ultima tecla apretada
@@ -91,7 +136,7 @@ static void BuildFonts(float H) {
 // ventana del juego al frente; no toca lo que recibe el juego.
 // (22:48, Agustin: "me referia que aparezca solo en el motor") solo se ve con el Motor en tiempo real abierto: su estudio 3D
 // (MotorPageActive, motorpage.cpp) o su panel (MotorPanelOpen). Fuera del Motor no se mira el teclado ni se dibuja nada.
-static int s_khVk = 0, s_khN = 0; static double s_khT = -1.0e9; static unsigned char s_khWas[256] = {};
+static int s_khVk = 0, s_khN = 0, s_khMods = 0; static double s_khT = -1.0e9; static unsigned char s_khWas[256] = {};   // (15/11 p) s_khMods: 1 Ctrl, 2 Shift, 4 Alt apretadas junto con la tecla
 static const char* KeyHudName(int vk, char* buf, size_t n) {
     if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) { snprintf(buf, n, "%c", (char)vk); return buf; }
     if (vk >= VK_F1 && vk <= VK_F24) { snprintf(buf, n, "F%d", vk - VK_F1 + 1); return buf; }
@@ -117,7 +162,10 @@ static bool KeyHudPoll() {
         for (int vk = 8; vk < 255; vk++) {
             if (vk >= VK_LSHIFT && vk <= VK_RMENU) continue;            // ya entran como Shift / Ctrl / Alt
             const unsigned char d = (GetAsyncKeyState(vk) & 0x8000) ? 1 : 0;
-            if (d && !s_khWas[vk]) { s_khN = (vk == s_khVk && Now() - s_khT < 1.5) ? s_khN + 1 : 1; s_khVk = vk; s_khT = Now(); }
+            if (d && !s_khWas[vk]) {
+                const bool mod = vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU;
+                const int mods = mod ? 0 : ((GetAsyncKeyState(VK_CONTROL) & 0x8000) ? 1 : 0) | ((GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 2 : 0) | ((GetAsyncKeyState(VK_MENU) & 0x8000) ? 4 : 0);
+                s_khN = (vk == s_khVk && mods == s_khMods && Now() - s_khT < 1.5) ? s_khN + 1 : 1; s_khVk = vk; s_khMods = mods; s_khT = Now(); }
             s_khWas[vk] = d;
         }
     } else memset(s_khWas, 0, sizeof s_khWas);
@@ -125,42 +173,58 @@ static bool KeyHudPoll() {
 }
 // (11/11, Agustin 22:29: "que muestre un icono de la tecla") la tecla se dibuja como una tecla de teclado: base oscura, cara clara
 // con brillo arriba y el nombre adentro; las flechas van con su triangulo y la barra espaciadora ancha.
+// (15/11 p, Agustin 05:37: "que tambien funcione el atajo, y que se muestre el icono abajo a la derecha que ya se muestran las teclas") los
+// atajos se ven enteros: Ctrl / Shift / Alt apretadas con la tecla van como teclas propias unidas con "+" (Ctrl + Z), y si la tecla hizo
+// algo en el editor del Motor, arriba va el nombre de lo que hizo (MotorKeyLabel: "Deshacer", "Preferencias"...).
 static void KeyHudDraw() {
     char nb[64]; const char* nm = KeyHudName(s_khVk, nb, sizeof nb);
     const int arrow = s_khVk == VK_UP ? 1 : s_khVk == VK_DOWN ? 2 : s_khVk == VK_LEFT ? 3 : s_khVk == VK_RIGHT ? 4 : 0;
     ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
     const float k = std::max(1.0f, ds.y / 1080.0f), fs = 24.0f * k, mg = 22.0f * k, pad = 8.0f * k;
-    ImFont* f = ImGui::GetFont(); const ImVec2 ts = arrow ? ImVec2(fs, fs) : f->CalcTextSizeA(fs, FLT_MAX, 0.0f, nm);
-    const float kh = 50.0f * k;                                                                   // alto de la tecla
-    float kw = std::max(kh, ts.x + 26.0f * k); if (s_khVk == VK_SPACE) kw = std::max(kw, 170.0f * k);   // ancho: cuadrada si es una letra
+    ImFont* f = ImGui::GetFont(); const float kh = 50.0f * k, fr = 17.0f * k, plusW = 22.0f * k;                    // alto de la tecla
+    const char* modName[3] = { "Ctrl", "Shift", "Alt" }; const char* caps[4]; int nc = 0;
+    for (int i = 0; i < 3; i++) if (s_khMods & (1 << i)) caps[nc++] = modName[i];
+    auto capW = [&](const char* t, int arw, bool space) { const ImVec2 ts = arw ? ImVec2(fs, fs) : f->CalcTextSizeA(fs, FLT_MAX, 0.0f, t);
+        float w2 = std::max(kh, ts.x + 26.0f * k); if (space) w2 = std::max(w2, 170.0f * k); return w2; };   // ancho: cuadrada si es una letra
+    float kwAll = 0.0f; for (int i = 0; i < nc; i++) kwAll += capW(caps[i], 0, false) + plusW;
+    const float kwMain = capW(nm, arrow, s_khVk == VK_SPACE); kwAll += kwMain;
     char rep[16] = ""; if (s_khN > 1) snprintf(rep, sizeof rep, "x%d", s_khN);
-    const float fr = 17.0f * k; const ImVec2 rs = rep[0] ? f->CalcTextSizeA(fr, FLT_MAX, 0.0f, rep) : ImVec2(0, 0);
-    const float w = pad * 2.0f + kw + (rep[0] ? rs.x + 8.0f * k : 0.0f), h = pad * 2.0f + kh; const int c = std::clamp(g_cfg.keyHud, 1, 4);
+    const ImVec2 rs = rep[0] ? f->CalcTextSizeA(fr, FLT_MAX, 0.0f, rep) : ImVec2(0, 0);
+    double lt = -1.0e9; const char* lab = MotorKeyLabel(&lt); const bool hasLab = lab && lab[0] && lt >= s_khT - 0.25 && lt - s_khT < 1.0;
+    const ImVec2 ls = hasLab ? f->CalcTextSizeA(fr, FLT_MAX, 0.0f, lab) : ImVec2(0, 0); const float labH = hasLab ? ls.y + 6.0f * k : 0.0f;
+    const float w = std::max(pad * 2.0f + kwAll + (rep[0] ? rs.x + 8.0f * k : 0.0f), hasLab ? ls.x + pad * 2.0f : 0.0f), h = pad * 2.0f + kh + labH; const int c = std::clamp(g_cfg.keyHud, 1, 4);
     const float x = (c == 1 || c == 3) ? mg : ds.x - mg - w, y = (c <= 2) ? mg : ds.y - mg - h;
     const double age = Now() - s_khT; const float a = age < 1.2 ? 1.0f : (age < 2.0 ? 1.0f - 0.5f * (float)((age - 1.2) / 0.8) : 0.5f);   // recien apretada se ve fuerte; despues queda tenue
     const float push = age < 0.12 ? 2.5f * k : 0.0f;                                              // recien apretada: la tecla baja un poco
     auto A = [a](int v) { return (int)((float)v * a); };
     dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), IM_COL32(8, 12, 20, A(120)), 9.0f * k);                       // fondo semitransparente
-    const float kx = x + pad, ky = y + pad, r = 7.0f * k, lip = 6.0f * k;                         // lip = canto de abajo de la tecla
-    dl->AddRectFilled(ImVec2(kx, ky + push), ImVec2(kx + kw, ky + kh), IM_COL32(38, 42, 52, A(235)), r);                // base (canto)
-    const ImVec2 f0(kx + 2.0f * k, ky + push + 1.0f * k), f1(kx + kw - 2.0f * k, ky + kh - lip + push * 0.6f);         // cara de arriba
-    dl->AddRectFilled(f0, f1, IM_COL32(236, 239, 244, A(240)), r - 1.0f * k);
-    dl->AddRectFilled(f0, ImVec2(f1.x, f0.y + (f1.y - f0.y) * 0.45f), IM_COL32(255, 255, 255, A(70)), r - 1.0f * k);    // brillo
-    dl->AddRect(ImVec2(kx, ky + push), ImVec2(kx + kw, ky + kh), IM_COL32(0, 0, 0, A(170)), r, 0, 1.2f * k);
-    const ImVec2 ctr((f0.x + f1.x) * 0.5f, (f0.y + f1.y) * 0.5f); const ImU32 ink = IM_COL32(22, 26, 34, A(255));
-    if (arrow) {
-        const float q = 9.0f * k; ImVec2 p0, p1, p2;
-        if (arrow == 1) { p0 = ImVec2(ctr.x, ctr.y - q); p1 = ImVec2(ctr.x - q, ctr.y + q * 0.7f); p2 = ImVec2(ctr.x + q, ctr.y + q * 0.7f); }
-        else if (arrow == 2) { p0 = ImVec2(ctr.x, ctr.y + q); p1 = ImVec2(ctr.x + q, ctr.y - q * 0.7f); p2 = ImVec2(ctr.x - q, ctr.y - q * 0.7f); }
-        else if (arrow == 3) { p0 = ImVec2(ctr.x - q, ctr.y); p1 = ImVec2(ctr.x + q * 0.7f, ctr.y + q); p2 = ImVec2(ctr.x + q * 0.7f, ctr.y - q); }
-        else { p0 = ImVec2(ctr.x + q, ctr.y); p1 = ImVec2(ctr.x - q * 0.7f, ctr.y - q); p2 = ImVec2(ctr.x - q * 0.7f, ctr.y + q); }
-        dl->AddTriangleFilled(p0, p1, p2, ink);
-    } else if (s_khVk == VK_SPACE) {
-        dl->AddRectFilled(ImVec2(ctr.x - kw * 0.28f, ctr.y + 5.0f * k), ImVec2(ctr.x + kw * 0.28f, ctr.y + 8.0f * k), ink, 1.5f * k);   // la rayita de la barra
-        const ImVec2 t2 = f->CalcTextSizeA(fr, FLT_MAX, 0.0f, nm);
-        dl->AddText(f, fr, ImVec2(ctr.x - t2.x * 0.5f, ctr.y - t2.y * 0.5f - 6.0f * k), ink, nm);
-    } else dl->AddText(f, fs, ImVec2(ctr.x - ts.x * 0.5f, ctr.y - ts.y * 0.5f), ink, nm);
-    if (rep[0]) dl->AddText(f, fr, ImVec2(kx + kw + 8.0f * k, y + (h - rs.y) * 0.5f), IM_COL32(255, 255, 255, A(230)), rep);
+    if (hasLab) dl->AddText(f, fr, ImVec2(x + pad, y + pad * 0.6f), IM_COL32(120, 236, 160, A(240)), lab);             // lo que hizo el atajo
+    const float r = 7.0f * k, lip = 6.0f * k, ky = y + pad + labH;                                 // lip = canto de abajo de la tecla
+    auto cap = [&](float kx, float kw, const char* t, int arw, bool space) {
+        dl->AddRectFilled(ImVec2(kx, ky + push), ImVec2(kx + kw, ky + kh), IM_COL32(38, 42, 52, A(235)), r);            // base (canto)
+        const ImVec2 f0(kx + 2.0f * k, ky + push + 1.0f * k), f1(kx + kw - 2.0f * k, ky + kh - lip + push * 0.6f);     // cara de arriba
+        dl->AddRectFilled(f0, f1, IM_COL32(236, 239, 244, A(240)), r - 1.0f * k);
+        dl->AddRectFilled(f0, ImVec2(f1.x, f0.y + (f1.y - f0.y) * 0.45f), IM_COL32(255, 255, 255, A(70)), r - 1.0f * k);    // brillo
+        dl->AddRect(ImVec2(kx, ky + push), ImVec2(kx + kw, ky + kh), IM_COL32(0, 0, 0, A(170)), r, 0, 1.2f * k);
+        const ImVec2 ctr((f0.x + f1.x) * 0.5f, (f0.y + f1.y) * 0.5f); const ImU32 ink = IM_COL32(22, 26, 34, A(255));
+        if (arw) {
+            const float q = 9.0f * k; ImVec2 p0, p1, p2;
+            if (arw == 1) { p0 = ImVec2(ctr.x, ctr.y - q); p1 = ImVec2(ctr.x - q, ctr.y + q * 0.7f); p2 = ImVec2(ctr.x + q, ctr.y + q * 0.7f); }
+            else if (arw == 2) { p0 = ImVec2(ctr.x, ctr.y + q); p1 = ImVec2(ctr.x + q, ctr.y - q * 0.7f); p2 = ImVec2(ctr.x - q, ctr.y - q * 0.7f); }
+            else if (arw == 3) { p0 = ImVec2(ctr.x - q, ctr.y); p1 = ImVec2(ctr.x + q * 0.7f, ctr.y + q); p2 = ImVec2(ctr.x + q * 0.7f, ctr.y - q); }
+            else { p0 = ImVec2(ctr.x + q, ctr.y); p1 = ImVec2(ctr.x - q * 0.7f, ctr.y - q); p2 = ImVec2(ctr.x - q * 0.7f, ctr.y + q); }
+            dl->AddTriangleFilled(p0, p1, p2, ink);
+        } else if (space) {
+            dl->AddRectFilled(ImVec2(ctr.x - kw * 0.28f, ctr.y + 5.0f * k), ImVec2(ctr.x + kw * 0.28f, ctr.y + 8.0f * k), ink, 1.5f * k);   // la rayita de la barra
+            const ImVec2 t2 = f->CalcTextSizeA(fr, FLT_MAX, 0.0f, t);
+            dl->AddText(f, fr, ImVec2(ctr.x - t2.x * 0.5f, ctr.y - t2.y * 0.5f - 6.0f * k), ink, t);
+        } else { const ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, t); dl->AddText(f, fs, ImVec2(ctr.x - ts.x * 0.5f, ctr.y - ts.y * 0.5f), ink, t); }
+    };
+    float kx = x + pad;
+    for (int i = 0; i < nc; i++) { const float cw = capW(caps[i], 0, false); cap(kx, cw, caps[i], 0, false); kx += cw;
+        const ImVec2 ps = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, "+"); dl->AddText(f, fs, ImVec2(kx + (plusW - ps.x) * 0.5f, ky + (kh - ps.y) * 0.5f), IM_COL32(255, 255, 255, A(210)), "+"); kx += plusW; }
+    cap(kx, kwMain, nm, arrow, s_khVk == VK_SPACE); kx += kwMain;
+    if (rep[0]) dl->AddText(f, fr, ImVec2(kx + 8.0f * k, ky + (kh - rs.y) * 0.5f), IM_COL32(255, 255, 255, A(230)), rep);
 }
 
 HWND OverlayHwnd() { return s_hwnd; }   // (11/11) menumouse.cpp
@@ -178,7 +242,7 @@ static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                 if (ri.data.mouse.usButtonFlags & RI_MOUSE_WHEEL) wd = (int)(short)ri.data.mouse.usButtonData;
             }
         }
-        if (wd != 0) { if (FreeCamActive()) FreeCamWheel(wd); else MenuMouseWheel(wd); }
+        if (wd != 0) { if (MotorUiWheel(wd)) {} else if (FreeCamActive()) FreeCamWheel(wd); else MenuMouseWheel(wd); }   // (15/11 h) sobre un panel del editor del Motor la rueda es del panel
     }
     if ((g_menuOpen || g_inspectOn) && s_init) {
         ImGui_ImplWin32_WndProcHandler(h, m, w, l);
@@ -279,6 +343,8 @@ static bool s_rail = false;                       // barra lateral solo con icon
 static bool s_slim = false;                       // botones de arriba solo con iconos (ventana muy angosta)
 static int s_winReq = -1;                         // 0 ventana, 1 grande, 2 panel a la derecha: se aplica al proximo Begin
 static MvPad s_pad;                               // (14/11) el mando de este cuadro (menuvisual.cpp)
+static double s_shareTapT = -1.0;                 // (15/11) ultimo toque CORTO de SHARE, medido desde que se apreto de verdad (HUD de la camara libre)
+static bool s_hudFresh = false, s_hudNewCam = false;   // (15/11) el HUD de la camara libre recien aparece (camara prendida o menu cerrado) / la camara recien se prendio
 // (14/11, Agustin: "el menu debe reconocer si esta usando mando o teclado para adaptarse con lo ultimo tocado") 0 teclado / mouse, 1 mando
 static int s_lastDev = 0;
 static bool PadUi() { return s_lastDev == 1 && s_pad.connected; }
@@ -978,7 +1044,7 @@ static void DrawWindNowPanel() {
     if (!w.on) {
         ImGui::TextDisabled("%s", TRS("Viento unico apagado: prende 'Viento distinto en cada partido' y 'Viento unico (rachas reales)'."));
         if (Anim()) {   // (14/11) igual se puede elegir el rumbo fijo en la cancha
-            MvWindIn wi; wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now(); { auto& L = g_cfg.live; wi.preset = &L[501][0]; wi.change = &L[501][3]; wi.gusts = &L[502][0]; wi.gustLen = &L[502][1]; wi.turbP = &L[502][2]; wi.veer = &L[502][3]; wi.shelterMode = &L[503][0]; wi.shelter = &L[503][1]; wi.grass = &L[503][2]; wi.cloth = &L[503][3]; }
+            MvWindIn wi; wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now(); { auto& L = g_cfg.live; wi.preset = &L[501][0]; wi.change = &L[501][3]; wi.gusts = &L[502][0]; wi.gustLen = &L[502][1]; wi.turbP = &L[502][2]; wi.veer = &L[502][3]; wi.shelterMode = &L[503][0]; wi.shelter = &L[503][1]; wi.grass = &L[503][2]; wi.cloth = &L[503][3]; if (L[500][2] < 0.05f) L[500][2] = 1.8f; wi.height = &L[500][2]; wi.hem = &L[508][3]; wi.flag = &L[514][1]; const WindHeight hp{ std::clamp(L[508][0], 0.0f, 1.0f), std::clamp(L[508][1], 0.0f, 1.0f), std::clamp(L[508][2], 1.0f, 3.0f), std::clamp(L[500][2], 0.2f, 10.0f) }; wi.kGrass = WindHeightK(hp, 0.08f); wi.kCloth = WindHeightK(hp, 1.2f); wi.kFlag = WindHeightK(hp, 1.4f); wi.kHead = WindHeightK(hp, 1.8f); wi.kTop = WindHeightK(hp, 20.0f); }
             MvWindWidget(wi);
         }
         return;
@@ -990,11 +1056,11 @@ static void DrawWindNowPanel() {
     }
     { const WindHeight hp = g_windHeight;   // (14/11) viento a cada altura (fila 508)
       ImGui::TextDisabled(TRS("Al ras del pasto %.1f m/s, ropa %.1f, cabeza %.1f, arriba de la tribuna (20 m) %.1f"),
-          w.speed * w.grassK, w.speed * w.clothK, w.speed, w.speed * WindHeightK(hp, 20.0f)); }
+          w.speed * w.grassK, w.speed * w.clothK, w.speed * WindHeightK(hp, 1.8f), w.speed * WindHeightK(hp, 20.0f)); }
     if (Anim()) {   // (14/11) la cancha con el viento que vuela; arrastrar fija el rumbo
         ImGui::TextDisabled(TRS("En 2 s: %.1f m/s. Promedio del partido: %.1f m/s"), w.soonSpeed, w.base);
         MvWindIn wi; wi.live = true; wi.speed = w.speed; wi.dirDeg = w.dirDeg; wi.soonSpeed = w.soonSpeed; wi.soonDirDeg = w.soonDirDeg; wi.gust = w.gust; wi.turb = w.turb;
-        wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now(); { auto& L = g_cfg.live; wi.preset = &L[501][0]; wi.change = &L[501][3]; wi.gusts = &L[502][0]; wi.gustLen = &L[502][1]; wi.turbP = &L[502][2]; wi.veer = &L[502][3]; wi.shelterMode = &L[503][0]; wi.shelter = &L[503][1]; wi.grass = &L[503][2]; wi.cloth = &L[503][3]; }
+        wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now(); { auto& L = g_cfg.live; wi.preset = &L[501][0]; wi.change = &L[501][3]; wi.gusts = &L[502][0]; wi.gustLen = &L[502][1]; wi.turbP = &L[502][2]; wi.veer = &L[502][3]; wi.shelterMode = &L[503][0]; wi.shelter = &L[503][1]; wi.grass = &L[503][2]; wi.cloth = &L[503][3]; if (L[500][2] < 0.05f) L[500][2] = 1.8f; wi.height = &L[500][2]; wi.hem = &L[508][3]; wi.flag = &L[514][1]; const WindHeight hp{ std::clamp(L[508][0], 0.0f, 1.0f), std::clamp(L[508][1], 0.0f, 1.0f), std::clamp(L[508][2], 1.0f, 3.0f), std::clamp(L[500][2], 0.2f, 10.0f) }; wi.kGrass = WindHeightK(hp, 0.08f); wi.kCloth = WindHeightK(hp, 1.2f); wi.kFlag = WindHeightK(hp, 1.4f); wi.kHead = WindHeightK(hp, 1.8f); wi.kTop = WindHeightK(hp, 20.0f); }
         MvWindWidget(wi);
     } else {
     ImGui::TextDisabled(TRS("En 2 s: %.1f m/s. Promedio del partido: %.1f m/s"), w.soonSpeed, w.base);
@@ -1143,9 +1209,13 @@ static void DrawGroup(MenuGroup& g, int gid) {
         ci.rmb = front && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
         ci.anim = Anim(); ci.k = UIK(); ci.now = Now();
         ci.pad = s_pad; ci.padOn = &g_cfg.camPad; ci.padFly = FreeCamPadWanted() && s_pad.connected; ci.padGiven = FreeCamPadState().given; ci.padUi = PadUi();   // (14/11) iconos del mando con su funcion
+        ci.vert = &g_cfg.camVert;   // (15/11) subir / bajar mas rapido o mas lento
         const int padWas = g_cfg.camPad;
         if (MvCamWidget(ci)) PushRecent(g.title);
         if (g_cfg.camPad != padWas) { SaveOption("camara_mando", g_cfg.camPad ? "1" : "0"); if (g_cfg.camPad) FreeCamPadTake(); }
+        {   // (15/11) camara_vertical va al ini al soltar el mouse (no en cada cuadro del arrastre); SaveOption lee y reescribe el ini
+            static float s_vSaved = -1.0f; if (s_vSaved < 0.0f) s_vSaved = g_cfg.camVert;
+            if (fabsf(g_cfg.camVert - s_vSaved) > 1e-4f && !ImGui::IsMouseDown(0)) { s_vSaved = g_cfg.camVert; char vb[24]; snprintf(vb, sizeof vb, "%.3f", g_cfg.camVert); SaveOption("camara_vertical", vb); Log("camara libre: subir / bajar x%.2f de la velocidad", g_cfg.camVert); } }
     }
     if (Anim() && g.id == "CamaraLenta") {
         ImGui::Spacing();
@@ -1929,12 +1999,15 @@ static void DrawSettingsPage() {
     const float lw = 230.0f * UIK();
     auto row = [&](const char* label) { ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(label); ImGui::SameLine(lw); };
     {   // (27/10) idioma del menu: se guarda en [PES21FX] language
-        static const char* const kLangs[3] = { "Espa\xC3\xB1ol", "English", "Portugu\xC3\xAAs" };
+        const char* const kLangs[4] = { "Espa\xC3\xB1ol", "English", "Portugu\xC3\xAAs", TRS("Como el juego (autom\xC3\xA1tico)") };
         static const char* const kLangKey[3] = { "es", "en", "pt" };
-        int lg = (g_cfg.lang >= 0 && g_cfg.lang <= 2) ? g_cfg.lang : 0;
+        int lg = g_cfg.langAuto ? 3 : (g_cfg.lang >= 0 && g_cfg.lang <= 2) ? g_cfg.lang : 0;
         row("Idioma / Language / Idioma");
         ImGui::SetNextItemWidth(200 * UIK());
-        if (ImGui::Combo("##idioma", &lg, kLangs, 3)) { g_cfg.lang = lg; SaveOption("language", kLangKey[lg]); LoadMenuLang(); }
+        if (ImGui::Combo("##idioma", &lg, kLangs, 4)) {      // (15/11) elegir un idioma a mano apaga el automatico
+            if (lg == 3) { g_cfg.langAuto = 1; SaveOption("idioma_auto", "1"); }
+            else { g_cfg.langAuto = 0; g_cfg.lang = lg; SaveOption("idioma_auto", "0"); SaveOption("language", kLangKey[lg]); LoadMenuLang(); } }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("'Como el juego' usa el idioma de textos que elegiste en el juego. Si el juego est\xC3\xA1 en un idioma que el men\xC3\xBA no tiene, queda el \xC3\xBAltimo elegido."));
     }
     {   // (31/10) que el juego no reciba las teclas mientras se escribe en el menu: [PES21FX] bloquear_teclado
         const char* kBlk[3] = { TRS("Siempre"), TRS("No mientras escribo"), TRS("No con el menu abierto") };
@@ -1943,6 +2016,13 @@ static void DrawSettingsPage() {
         ImGui::SetNextItemWidth(260 * UIK());
         if (ImGui::Combo("##bloqteclas", &bk, kBlk, 3)) { g_cfg.blockKeys = bk; SaveOption("bloquear_teclado", std::to_string(bk)); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Que el juego no reciba las teclas mientras escribis en el menu (buscador, nombres). 'No al escribir' = solo con un campo de texto activo; 'No con el menu' = mientras el menu esta abierto."));
+    }
+    {   // (15/11) ventana sin bordes a pantalla completa: [PES21FX] ventana_sin_bordes (borderless.cpp); vale al volver a abrir el juego
+        bool bl = g_cfg.borderless != 0;
+        row(TRS("Ventana sin bordes a pantalla completa"));
+        if (ImGui::Checkbox("##ventanasinbordes", &bl)) { g_cfg.borderless = bl ? 1 : 0; SaveOption("ventana_sin_bordes", bl ? "1" : "0"); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("El juego ocupa toda la pantalla pero sigue siendo una ventana: se puede pasar a otro programa sin que se minimice ni parpadee. Hay que elegir Ventana y la resolucion del monitor en la configuracion del juego (settings.exe). Vale al volver a abrir el juego."));
+        ImGui::SameLine(); ImGui::TextDisabled("%s", TRS("(al volver a abrir el juego)"));
     }
     {   // (11/11) mouse en los menus nativos del juego: [PES21FX] mouse_menus
         bool mm = g_cfg.menuMouse != 0;
@@ -2025,10 +2105,20 @@ static void DrawSettingsPage() {
         int cc = std::clamp(g_cfg.menuCursor, 0, 2); ImGui::SetNextItemWidth(320.0f * UIK());
         if (ImGui::Combo(TRS("Cursor del menu"), &cc, cn, 3)) { if (g_cfg.menuCursor) s_curOn = g_cfg.menuCursor; g_cfg.menuCursor = cc; char b[8]; snprintf(b, sizeof(b), "%d", cc); SaveOption("menu_cursor", b); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Tambien con el boton Cursor de arriba o F1. Es el mismo con el menu abierto o cerrado. Con un mando conectado se esconde solo si no moves el mouse."));
+        {   // (15/11 p, Agustin 05:38: "una opcion para agrandar el cursor general un poco o achicarlo") [PES21FX] cursor_tamano
+            int pc = (int)std::lround(g_cfg.cursorScale * 100.0f); ImGui::SetNextItemWidth(320.0f * UIK());
+            if (ImGui::SliderInt(TRS("Tamano del cursor"), &pc, 75, 200, "%d %%")) g_cfg.cursorScale = std::clamp((float)pc / 100.0f, 0.75f, 2.0f);
+            if (ImGui::IsItemDeactivatedAfterEdit()) { char b[16]; snprintf(b, sizeof(b), "%.2f", g_cfg.cursorScale); SaveOption("cursor_tamano", b); }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Agranda o achica el cursor dibujado: el del menu, el de los menus del juego, el de la repeticion y los del Motor (tambien la flecha doble de los paneles). 100 % = como venia."));
+            }
     }
     {   bool nd = g_cfg.camNoDof != 0;   // (14/11 h) camara libre sin desenfoque de profundidad
         if (ImGui::Checkbox(TRS("Camara libre sin desenfoque de profundidad"), &nd)) { g_cfg.camNoDof = nd ? 1 : 0; SaveOption("camara_sin_dof", nd ? "1" : "0"); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con la camara libre prendida se apaga el desenfoque de profundidad del juego (fondo y primer plano) y el bokeh: todo queda nitido."));
+    }
+    {   bool nm = g_cfg.camNoMblur != 0;   // (15/11, Agustin: "permitirme apagar o prender el desenfoque de movimiento")
+        if (ImGui::Checkbox(TRS("Camara libre sin desenfoque de movimiento"), &nm)) { g_cfg.camNoMblur = nm ? 1 : 0; SaveOption("camara_sin_desenfoque_mov", nm ? "1" : "0"); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con la camara libre prendida no hay desenfoque de movimiento (ni el barrido de los cortes de la repeticion): al moverla todo queda nitido. Con el mando L3, con el teclado M."));
     }
     {   bool rs = g_cfg.replaySlow != 0;   // (14/11 g) la repeticion normal en camara lenta (velocidad de la flecha derecha / SlowMoServer)
         if (ImGui::Checkbox(TRS("Repeticion en camara lenta"), &rs)) { g_cfg.replaySlow = rs ? 1 : 0; SaveOption("repeticion_lenta", rs ? "1" : "0"); }
@@ -2746,17 +2836,24 @@ void OverlayPresent(IDXGISwapChain* sc) {
     {   // (14/11 j, Agustin: "al mantener presionado el boton select o share, se habilite directamente la camara libre en el modo
         // repeticion") SHARE / SELECT mantenido 0.6 s: x344 = 3 (camara libre solo en la repeticion: si ya esta en la repeticion vuela
         // enseguida); otra vez mantenido: vuelve a lo que habia. Apretarlo corto sigue mostrando / escondiendo el HUD
-        static double s_shT = -1.0; static bool s_shDone = false; static float s_shPrev = 0.0f; static MvPad s_sp;
+        static double s_shT = -1.0; static bool s_shDone = false; static float s_shPrev = 0.0f; static MvPad s_sp; static uint32_t s_shCnt = 0; static bool s_shCntOk = false;
+        // (14/11 n) en la repeticion el juego no ve SHARE mantenido (su barra no se esconde al prender la camara libre): keyblock.cpp
+        g_shareMask = g_cfg.camShareHold && !g_menuOpen && !MotorPageActive() && GetForegroundWindow() == s_hwnd && (ReplayViewerCalled() || ReplayNow());
         if (g_cfg.camShareHold && !g_menuOpen && !MotorPageActive() && GetForegroundWindow() == s_hwnd && MvPadPoll(s_sp) && s_sp.connected) {
             const double tn = Now();
-            if (!s_sp.b[kPadShare]) { s_shT = -1.0; s_shDone = false; }
+            // (15/11, Agustin: "al activar la camara libre con el mando no se muestra ese menu que me gustaba de dll abajo") el HUD media el
+            // toque desde que EL veia SHARE (recien con la camara prendida, 0.6 s despues de apretarlo): soltar SHARE al prenderla contaba
+            // como toque corto y lo escondia. El toque corto se mide aca, desde que se apreto de verdad (tambien uno que cae entre dos
+            // cuadros: la cuenta de MvPadPresses), y el HUD solo mira s_shareTapT
+            uint32_t pc[kPadCount]; MvPadPresses(pc); const bool cnt = s_shCntOk && pc[kPadShare] != s_shCnt; s_shCnt = pc[kPadShare]; s_shCntOk = true;
+            if (!s_sp.b[kPadShare]) { if ((s_shT >= 0.0 && !s_shDone && tn - s_shT < 0.5) || (s_shT < 0.0 && cnt)) s_shareTapT = tn; s_shT = -1.0; s_shDone = false; }
             else { if (s_shT < 0.0) s_shT = tn;
                    if (!s_shDone && tn - s_shT > 0.6) { s_shDone = true;
                        std::lock_guard<std::mutex> lk(g_cfgMutex);
                        if (g_cfg.live[344][0] > 2.5f || FreeCamActive()) { g_cfg.live[344][0] = s_shPrev > 2.5f ? 0.0f : s_shPrev; s_toastMsg = TRS("Camara libre apagada"); }
                        else { s_shPrev = g_cfg.live[344][0]; g_cfg.live[344][0] = 1.0f; FreeCamPadTake(); s_toastMsg = TRS(ReplayNow() ? "Camara libre en la repeticion" : "Camara libre prendida"); }   // (14/11 k, Agustin: "al no estar activa el modo repeticion funcione normal con sus botones") x344 = 1: en la repeticion los controles del visor, fuera de ella los de siempre
                        s_curToastT = tn; Log("camara libre: SHARE mantenido, x344 = %.0f", g_cfg.live[344][0]); } }
-        } else { s_shT = -1.0; s_shDone = false; }
+        } else { s_shT = -1.0; s_shDone = false; s_shCntOk = false; }
     }
     const bool curToast = Now() - s_curToastT < 1.8;
     float mouseHintA = 0.0f;
@@ -2769,6 +2866,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     RastroReplayHookEnsure();   // (14/11 g) gancho del visor de repeticiones si la camara libre / lenta van solo en la repeticion
     const bool camFree = FreeCamActive() && !MotorPageActive(); const float camSlow = TiempoFactor();   // (1/11) aviso en pantalla
     const bool camHud = !g_menuOpen && camFree;   // (14/11 g) la camara lenta sola ya no muestra nada abajo
+    { static bool s_hudRan = false, s_camWas = false; if (camHud && !s_hudRan) s_hudFresh = true; if (camFree && !s_camWas) s_hudNewCam = true; s_hudRan = camHud; s_camWas = camFree; }   // (15/11) antes de las salidas tempranas
     const bool lightIcons = g_cfg.live[319][0] > 0.5f && g_cfg.live[297][0] > 0.5f && g_cfg.live[378][2] < 0.5f && SSSSEditorLightAge() < 0.5;   // (08/11) con la luz fija al mundo (z378) el icono (relativo a la camara) mentiria: no se dibuja   // (1/11) iconos de la luz del editor
     const bool sunCompass = g_cfg.live[175][0] > 0.5f && g_cfg.live[93][3] > 0.5f;   // (2/11) brujula del sol, solo en partido
     {   // (08/11) el menu aparece y se desvanece en ~0.16 s
@@ -2823,15 +2921,43 @@ void OverlayPresent(IDXGISwapChain* sc) {
         const bool camPad = FreeCamPadWanted();   // (14/11) modo foto: el mando mueve la camara libre
         if ((menuShown && (g_cfg.menuPad || g_cfg.menuPadDraw)) || comboOn || s_padHold || camPad) MvPadPoll(s_pad); else s_pad = MvPad();
         if (camPad) FreeCamPadFeed(s_pad);
-        {   // lo ultimo que se toco: el mando (palancas, gatillos o un boton) o el teclado / mouse (mover, clic, rueda, una tecla)
-            bool padIn = s_pad.connected && (fabsf(s_pad.lx) + fabsf(s_pad.ly) + fabsf(s_pad.rx) + fabsf(s_pad.ry) > 0.35f || s_pad.l2 > 0.25f || s_pad.r2 > 0.25f);
-            if (s_pad.connected) for (int i = 0; i < kPadCount; i++) padIn |= s_pad.b[i];
-            bool kbIn = fabsf(io2.MouseDelta.x) + fabsf(io2.MouseDelta.y) > 2.0f || io2.MouseWheel != 0.0f || io2.MouseDown[0] || io2.MouseDown[1];
-            if (!kbIn) for (int kk = ImGuiKey_NamedKey_BEGIN; kk < ImGuiKey_GamepadStart; kk++) if (ImGui::IsKeyDown((ImGuiKey)kk)) { kbIn = true; break; }
+        {   // lo ultimo que se toco: el mando o el teclado / mouse.
+            // (14/11 n, Agustin: "el teclado y el control deberian ser inputs diferentes con switcher o detectores para cambiar y que las
+            // cosas funcionen bien con ambos") en su log cambiaba 8 veces en 3 s: contaba como "teclado" cualquier tecla mantenida y
+            // cualquier movimiento del mouse (tambien el que pone el propio menu o el que manda el mando por Steam / DS4Windows). Ahora
+            // solo cuentan los CAMBIOS: un boton recien apretado o una palanca / gatillo que recien sale del centro = mando; una tecla
+            // recien apretada, un clic, la rueda o el mouse movido de verdad (mas de 24 px en un cuarto de segundo) = teclado y mouse,
+            // y eso no le gana al mando hasta medio segundo despues de soltarlo.
+            static bool s_dB[kPadCount] = {}, s_dStick = false, s_dTrig = false; static bool s_dKey[256] = {}; static POINT s_dCur{ -32000, -32000 };
+            static float s_dMouse = 0.0f; static double s_dPadT = -1.0e9, s_dPrevT = 0.0; static int s_dLogs = 0, s_dQuiet = 0; static double s_dLogT = 0.0;
+            const double tn = Now(); const float dtd = (float)std::clamp(tn - s_dPrevT, 0.0, 0.25); s_dPrevT = tn;
+            bool padEdge = false, padHeld = false;
+            if (s_pad.connected) {
+                for (int i = 0; i < kPadCount; i++) { padEdge |= s_pad.b[i] && !s_dB[i]; padHeld |= s_pad.b[i]; s_dB[i] = s_pad.b[i]; }
+                const bool stick = std::max(std::max(fabsf(s_pad.lx), fabsf(s_pad.ly)), std::max(fabsf(s_pad.rx), fabsf(s_pad.ry))) > 0.5f, trig = s_pad.l2 > 0.5f || s_pad.r2 > 0.5f;
+                padEdge |= (stick && !s_dStick) || (trig && !s_dTrig); padHeld |= stick || trig; s_dStick = stick; s_dTrig = trig;
+            } else { memset(s_dB, 0, sizeof s_dB); s_dStick = s_dTrig = false; }
+            if (padHeld || padEdge) s_dPadT = tn;
+            // teclado y mouse leidos directo de Windows (con el menu cerrado ImGui no recibe las teclas): solo con el juego al frente
+            bool kbEdge = false;
+            if (GetForegroundWindow() == s_hwnd) {
+                static unsigned char s_vkList[160]; static int s_vkN = 0;   // teclas que cuentan: letras, numeros, F1-F12, flechas, edicion, OEM, botones del mouse
+                if (!s_vkN) { auto add = [](int a, int b) { for (int v = a; v <= b && s_vkN < 160; v++) s_vkList[s_vkN++] = (unsigned char)v; };
+                    add(VK_LBUTTON, VK_RBUTTON); add(VK_MBUTTON, VK_XBUTTON2); add(VK_BACK, VK_TAB); add(VK_RETURN, VK_RETURN); add(VK_SHIFT, VK_CONTROL); add(VK_ESCAPE, VK_ESCAPE);
+                    add(VK_SPACE, VK_DOWN); add(VK_INSERT, VK_DELETE); add('0', '9'); add('A', 'Z'); add(VK_NUMPAD0, VK_DIVIDE); add(VK_F1, VK_F12);
+                    add(VK_OEM_1, VK_OEM_3); add(VK_OEM_4, VK_OEM_7); add(VK_OEM_102, VK_OEM_102); }
+                for (int i = 0; i < s_vkN; i++) { const int vk = s_vkList[i]; const bool d = (GetAsyncKeyState(vk) & 0x8000) != 0; kbEdge |= d && !s_dKey[vk]; s_dKey[vk] = d; }
+                POINT cp{}; if (GetCursorPos(&cp)) { if (s_dCur.x != -32000) s_dMouse = s_dMouse * expf(-dtd * 4.0f) + (float)(std::abs(cp.x - s_dCur.x) + std::abs(cp.y - s_dCur.y)); s_dCur = cp; }
+                if (s_dMouse > 24.0f * UIK()) { kbEdge = true; s_dMouse = 0.0f; }
+            } else { memset(s_dKey, 1, sizeof s_dKey); s_dCur.x = -32000; s_dMouse = 0.0f; }   // al volver al juego, lo que ya estaba apretado no cuenta
             const int was = s_lastDev;
-            if (padIn) s_lastDev = 1; else if (kbIn) s_lastDev = 0;
+            if (padEdge) s_lastDev = 1;
+            else if (kbEdge && tn - s_dPadT > 0.5) s_lastDev = 0;
             if (!s_pad.connected) s_lastDev = 0;
-            if (was != s_lastDev) Log("menu: se adapta a %s", s_lastDev ? "el mando" : "teclado y mouse");
+            if (was != s_lastDev) {   // al log: los primeros 12 cambios y despues uno cada 30 s con cuantos hubo
+                if (s_dLogs < 12) { s_dLogs++; Log("menu: se adapta a %s", s_lastDev ? "el mando" : "teclado y mouse"); }
+                else if (++s_dQuiet, tn - s_dLogT > 30.0) { s_dLogT = tn; Log("menu: se adapta a %s (%d cambios mas desde el ultimo aviso)", s_lastDev ? "el mando" : "teclado y mouse", s_dQuiet); s_dQuiet = 0; }
+            }
         }
         {   // (14/11, Agustin: "al abrir el menu con l3+r3 por ejemplo") L3 + R3 juntos abren y cierran el menu
             const bool combo = s_pad.b[kPadL3] && s_pad.b[kPadR3];
@@ -2863,6 +2989,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         s_optWas = opt;
     }
     if (menuShown && MvVkVisible()) MvVirtualKeyboard(s_search, (int)sizeof(s_search), s_pad, UIK(), Ease(s_menuVis), g_cfg.menuVisual, &GlassBackdrop);   // (14/11 b) mismo vidrio y colores del menu
+    MvSetCursorScale(g_cfg.cursorScale);   // (15/11 p) tamano de los cursores dibujados
     if (g_menuOpen && g_cfg.menuCursor == 1) {   // (14/11) cursor nuevo: flecha con sombra, verde sobre lo que se toca, onda al clic, barra I en texto
         ImGuiIO& mio = ImGui::GetIO();
         static float s_curA = 1.0f; static double s_mMoveT = 0.0;   // con el mando: si el mouse no se mueve en 2.5 s el cursor se va
@@ -2871,8 +2998,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
         s_curA = std::clamp(s_curA + (idle ? -1.0f : 1.0f) * mio.DeltaTime * (idle ? 3.0f : 10.0f), 0.0f, 1.0f);
         if (ImGui::IsMousePosValid()) {
             const ImGuiMouseCursor mc = ImGui::GetMouseCursor();
-            const int kind = mc == ImGuiMouseCursor_TextInput ? 2 : (ImGui::IsAnyItemHovered() || mc == ImGuiMouseCursor_Hand) ? 1 : 0;
-            if (mc == ImGuiMouseCursor_Arrow || mc == ImGuiMouseCursor_Hand || mc == ImGuiMouseCursor_TextInput)
+            const int kind = mc == ImGuiMouseCursor_ResizeEW ? 3 : mc == ImGuiMouseCursor_ResizeNS ? 4 : mc == ImGuiMouseCursor_TextInput ? 2 : (ImGui::IsAnyItemHovered() || mc == ImGuiMouseCursor_Hand) ? 1 : 0;
+            if (mc == ImGuiMouseCursor_Arrow || mc == ImGuiMouseCursor_Hand || mc == ImGuiMouseCursor_TextInput || mc == ImGuiMouseCursor_ResizeEW || mc == ImGuiMouseCursor_ResizeNS)   // (15/11 p) las flechas de cambiar el tamano: las propias
                 MvCursorDraw(ImGui::GetForegroundDrawList(), mio.MousePos, kind, ImGui::IsMouseDown(0), UIK(), s_curA * Ease(s_menuVis), g_cfg.menuVisual);
             else mio.MouseDrawCursor = true;   // flechas de agrandar / mover ventana: las de ImGui
         }
@@ -2897,6 +3024,15 @@ void OverlayPresent(IDXGISwapChain* sc) {
         const double tn = Now(); const float dth = (float)std::clamp(tn - s_hudLast, 0.0, 0.1); s_hudLast = tn;
         const FreeCamPadInfo pi = FreeCamPadState();
         const bool front = GetForegroundWindow() == s_hwnd;
+        static double s_tapSeen = -1.0;
+        if (s_hudFresh) {   // (15/11) camara recien prendida (o menu recien cerrado): se ve 3 s aunque no se toque nada. Antes quedaba la hora
+            // del ultimo uso (se apagaba enseguida). Al PRENDER la camara tambien se olvida lo escondido con SHARE / H la vez anterior
+            // (camara_hud 0 sigue escondido hasta SHARE / H); al cerrar el menu queda como estaba
+            s_hudFresh = false; s_hudT = tn; s_tapSeen = s_shareTapT;
+            s_shWas = pi.flying && s_pad.b[kPadShare]; s_hWas = front && (GetAsyncKeyState('H') & 0x8000) != 0;
+            if (s_hudNewCam) { s_hudNewCam = false; s_hudHide = g_cfg.camHud == 0;
+                Log("camara libre: HUD %s", s_hudHide ? "escondido al prenderla (camara_hud 0: SHARE corto o H lo muestran)" : g_cfg.camHud == 2 ? "a la vista al prenderla (siempre)" : "a la vista al prenderla (se apaga a los 3 s sin tocar nada)"); }
+        }
         bool input = false;
         if (pi.flying && s_pad.connected) { input = fabsf(s_pad.lx) + fabsf(s_pad.ly) + fabsf(s_pad.rx) + fabsf(s_pad.ry) > 0.15f || s_pad.l2 > 0.1f || s_pad.r2 > 0.1f;   // sticks, gatillos y botones; la cruceta no
                                             for (int i = 0; i < kPadUp; i++) if (i != kPadShare) input |= s_pad.b[i]; }
@@ -2905,7 +3041,10 @@ void OverlayPresent(IDXGISwapChain* sc) {
         if (input || s_hudT == 0.0) s_hudT = tn;
         { const bool sh = pi.flying && s_pad.b[kPadShare], hk = front && camFree && (GetAsyncKeyState('H') & 0x8000) != 0;
           static double s_shDown = 0.0; if (sh && !s_shWas) s_shDown = tn;   // (14/11 j) SHARE: al soltarlo y solo si fue corto (mantenido = camara libre)
-          if ((!sh && s_shWas && tn - s_shDown < 0.5) || (hk && !s_hWas)) { s_hudHide = !s_hudHide; s_hudT = tn; Log("camara libre: HUD %s", s_hudHide ? "escondido" : "a la vista"); }
+          // (15/11) con SHARE mantenido = camara libre (camara_share 1) el toque lo mide el bloque de SHARE desde que se apreto de verdad
+          const bool shTap = g_cfg.camShareHold ? s_shareTapT != s_tapSeen && pi.flying : !sh && s_shWas && tn - s_shDown < 0.5;
+          s_tapSeen = s_shareTapT;
+          if (shTap || (hk && !s_hWas)) { s_hudHide = !s_hudHide; s_hudT = tn; Log("camara libre: HUD %s", s_hudHide ? "escondido" : "a la vista"); }
           s_shWas = sh; s_hWas = hk; }
         // (14/11 i, Agustin: "que el menu se apague de la camara libre con mando pasados unos tres segundos sin presionar nada")
         // 3 s sin tocar nada: se APAGA del todo (antes se achicaba). camara_hud 1 vuelve al tocar algo; camara_hud 0 (mostrado con
@@ -2918,7 +3057,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
             MvHudIn h; h.pad = s_pad; h.padMode = PadUi(); h.freeCam = camFree;
             h.status = TRS(ReplayNow() ? "REPETICION" : "EN VIVO"); h.speed = g_cfg.live[344][1]; h.zoom = g_cfg.live[344][2]; h.follow = g_cfg.live[346][2] > 0.5f;
             h.photo = pi.scale > 0.0f; h.clock = pi.scale > 0.0f ? pi.scale : camSlow; h.paused = pi.paused; h.adv = pi.advancing; h.step = pi.step; h.steps = FreeCamPhotoSteps(&h.nSteps);
-            h.replay = ReplayNow(); h.dofOff = g_cfg.camNoDof != 0; h.compact = s_hudC; h.k = UIK(); h.alpha = s_hudA; h.anim = Anim(); h.now = tn;
+            h.replay = ReplayNow(); h.dofOff = g_cfg.camNoDof != 0; h.mblurOff = g_cfg.camNoMblur != 0; h.compact = s_hudC; h.k = UIK(); h.alpha = s_hudA; h.anim = Anim(); h.now = tn;
             const ImGuiViewport* vp = ImGui::GetMainViewport();
             MvPhotoHud(ImGui::GetForegroundDrawList(), vp->Pos, ImVec2(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y), h);
         }
@@ -2926,20 +3065,70 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (lightIcons) DrawEditorLightIcons();
     if (sunCompass && !g_menuOpen) DrawSunCompass();
     if (g_cfg.live[426][0] > 0.5f) DrawSkeletonView();   // (09/11 f) vista del esqueleto (Diagnostico)
-    if (mmCur && g_cfg.menuCursor == 1) {   // (14/11 c / d, Agustin: "que se mantenga igual con el menu abierto o cerrado", "que muestre donde puede clickear")
+    {   // (15/11) boton "Salir del juego" del menu principal (menumouse.cpp MenuExitButton: lugar, mouse encima, primer clic)
+        float bx, by, bw, bh; int st = 0;
+        if (!g_menuOpen && MenuExitButton(&bx, &by, &bw, &bh, &st)) {
+            ImDrawList* dl = ImGui::GetForegroundDrawList(); const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);
+            // estilo de las pestanas / cartas del menu: azul translucido, borde fino claro, esquinas apenas redondeadas; con el mouse encima
+            // borde blanco grueso como la carta elegida; primer clic: rojo y el aviso a la izquierda
+            const ImVec2 a0(bx, by), b0(bx + bw, by + bh); const float rr = bh * 0.14f;
+            const ImU32 fill = st == 2 ? IM_COL32(150, 30, 36, 215) : (st == 1 ? IM_COL32(40, 70, 140, 200) : IM_COL32(22, 42, 100, 150));
+            dl->AddRectFilled(a0, b0, fill, rr);
+            dl->AddRect(a0, b0, st ? IM_COL32(255, 255, 255, 245) : IM_COL32(160, 172, 196, 190), rr, 0, (st ? 3.0f : 1.6f) * k);
+            const ImU32 fg = st ? IM_COL32(255, 255, 255, 255) : IM_COL32(200, 208, 222, 235);
+            const float r = bh * 0.24f, cx = bx + bw * 0.5f, cy = by + bh * 0.5f + r * 0.08f;           // icono de apagar
+            dl->PathArcTo(ImVec2(cx, cy), r, -3.14159f * 0.5f + 0.7f, 3.14159f * 1.5f - 0.7f, 20); dl->PathStroke(fg, 0, std::max(2.0f, bh * 0.065f));
+            dl->AddLine(ImVec2(cx, cy - r * 1.18f), ImVec2(cx, cy - r * 0.15f), fg, std::max(2.0f, bh * 0.065f));
+            if (st >= 1) {                                                   // con el mouse encima, el nombre; armado, el aviso
+                // (Agustin 04:19: "una fuente mas similar a la de game settings y bajarle la opacidad al fondo del texto y al texto")
+                // negrita condensada del menu (Saira Semi Condensed, si esta) en mayusculas, gris claro translucido sobre fondo tenue
+                const char* src = TRS("Salir del juego");   // (Agustin 04:21: "que no se muestre lo de quieres salir si o no") sin aviso: el primer clic solo pone el boton en rojo
+                char up[96]; size_t n = 0; for (; src[n] && n < sizeof up - 1; n++) up[n] = (src[n] >= 'a' && src[n] <= 'z') ? (char)(src[n] - 32) : src[n]; up[n] = 0;
+                ImFont* f = s_fontBold ? s_fontBold : ImGui::GetFont(); const float fs = std::max(f->FontSize, bh * 0.42f);
+                const ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, up), pad(12.0f * k, 5.0f * k);
+                const ImVec2 t1(bx - 8.0f * k, cy + ts.y * 0.5f + pad.y), t0(t1.x - ts.x - pad.x * 2, cy - ts.y * 0.5f - pad.y);
+                dl->AddRectFilled(t0, t1, st == 2 ? IM_COL32(110, 20, 28, 120) : IM_COL32(18, 34, 80, 110), rr);
+                dl->AddText(f, fs, ImVec2(t0.x + pad.x, t0.y + pad.y), IM_COL32(205, 212, 226, 200), up);
+            }
+        }
+    }
+    MotorPreCoverDraw();   // (15/11 j) tapa negra desde que se acepta el boton 12 del Editar hasta que el Motor dibuja su entrada
+    if (gizmo) MotorGizmoDraw();   // (15/11 h, Agustin 03:17: "el cursor parece estar atras") el editor del Motor se dibuja ANTES que el cursor, asi la flecha queda arriba de los paneles
+    // (15/11 p, Agustin 05:33: "cuando se vaya a agrandar o se pueda arrastrar para el tamano de las cartas ... darle al cursor un icono") en el
+    // borde de un panel del editor del Motor: la flecha doble (con cualquiera de los dos cursores)
+    const int motorCur = gizmo ? MotorCursorKind() : 0;
+    if (mmCur && g_cfg.menuCursor != 0 && motorCur) {
+        const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);
+        MvCursorDraw(ImGui::GetForegroundDrawList(), ImVec2(mmx, mmy), motorCur, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, k, 1.0f, g_cfg.menuVisual);
+    }
+    else if (mmCur && g_cfg.menuCursor == 1) {   // (14/11 c / d, Agustin: "que se mantenga igual con el menu abierto o cerrado", "que muestre donde puede clickear")
         const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);   // el mismo dardo del menu; mano justo sobre una fila del juego
-        MvCursorDraw(ImGui::GetForegroundDrawList(), ImVec2(mmx, mmy), MenuMouseOverRow() ? 1 : 0, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, k, 1.0f, g_cfg.menuVisual);
+        MvCursorDraw(ImGui::GetForegroundDrawList(), ImVec2(mmx, mmy), MenuViewCamDragging() ? 5 : MenuMouseOverRow() ? 1 : 0, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0 || (MenuViewCamDragging() && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0), k, 1.0f, g_cfg.menuVisual);
     }
     else if (mmCur && g_cfg.menuCursor != 0) {   // (11/11) el juego esconde el cursor de Windows: una flecha chica donde esta el mouse (los menus son los del juego)
-        ImDrawList* dl = ImGui::GetForegroundDrawList(); const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);
+        ImDrawList* dl = ImGui::GetForegroundDrawList(); const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f) * MvCursorScale();
         const ImVec2 a(mmx, mmy), b(mmx, mmy + 19.0f * k), c(mmx + 5.2f * k, mmy + 14.6f * k), d(mmx + 13.5f * k, mmy + 13.5f * k);
         dl->AddTriangleFilled(a, b, c, IM_COL32(255, 255, 255, 255)); dl->AddTriangleFilled(a, c, d, IM_COL32(255, 255, 255, 255));
         const ImVec2 pts[4] = { a, b, c, d }; dl->AddPolyline(pts, 4, IM_COL32(0, 0, 0, 255), ImDrawFlags_Closed, 1.4f * k);
     }
+    {   // (15/11 ythnmm) destello del doble clic sobre el visor del Editar: viaja con el punto hasta el centro mientras la camara se acerca
+        float px, py, age; int kind;
+        if (!g_menuOpen && MenuViewCamPulse(&px, &py, &age, &kind)) {
+            ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
+            float vcx = ds.x * 0.5f, vcy = ds.y * 0.5f; MenuViewCamCenter(&vcx, &vcy);   // (15/11 e) viaja al centro del visor, no al de la ventana
+            const float e = kind == 1 ? expf(-9.0f * age) : 1.0f; const ImVec2 c(vcx + (px - vcx) * e, vcy + (py - vcy) * e);
+            const float t = age / 0.9f, fade = (1.0f - t) * (1.0f - t); const ImVec4 g = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+            for (int i = 7; i >= 1; i--) dl->AddCircleFilled(c, (10.0f + (float)i * 9.0f) * k * (0.7f + 0.6f * t), ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 0.035f * fade)), 40);   // brillo suave
+            dl->AddCircle(c, (16.0f + 70.0f * t) * k, ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 0.55f * fade)), 48, 2.0f * k);                                       // aro que se abre
+            dl->AddCircle(c, (8.0f + 34.0f * t) * k, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.35f * fade)), 40, 1.2f * k);
+        }
+    }
     float hintH = 0.0f;
-    if (mouseHintA > 0.0f) {   // (14/11 d) "clic izquierdo seleccionar / avanzar, clic derecho volver" en el idioma del menu
+    if (mouseHintA > 0.0f && !MotorUiOn()) {   // (15/11 b: en el Motor no va, tiene su menu)   // (14/11 d) "clic izquierdo seleccionar / avanzar, clic derecho volver" en el idioma del menu
         const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
-        hintH = MvMouseHint(ImGui::GetForegroundDrawList(), ImVec2(ds.x - 18.0f * k, ds.y - 18.0f * k), k, mouseHintA, TRS("Seleccionar / avanzar"), TRS("Volver")) + 6.0f * k;
+        char kb[16]; const char* kn = g_cfg.cursorKey ? KeyHudName(g_cfg.cursorKey, kb, sizeof(kb)) : nullptr;   // (15/11) + la tecla del cursor (F1)
+        const bool vc = MenuViewCamHint();   // (15/11 ythnmm) sobre el visor del Editar: girar / mover / zoom
+        hintH = MvMouseHint(ImGui::GetForegroundDrawList(), ImVec2(ds.x - 18.0f * k, ds.y - 18.0f * k), k, mouseHintA, vc ? TRS("Girar camara") : TRS("Seleccionar / avanzar"), vc ? TRS("Mover camara / Volver") : TRS("Volver"), kn, TRS("Cursor"), vc ? TRS("Zoom") : nullptr, vc, vc ? TRS("Zoom en la zona") : nullptr) + 6.0f * k;
     }
     if (curToast) {   // (14/11 c) "Cursor apagado / prendido (F1)" chico, abajo a la derecha, en el idioma del menu; se va solo en 1.8 s
         const float t = (float)(Now() - s_curToastT), a = std::min(1.0f, std::min(t / 0.12f, (1.8f - t) / 0.35f));
@@ -2952,8 +3141,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         dl->AddRectFilled(ImVec2(a0.x, a0.y + 4.0f * k), ImVec2(a0.x + 3.0f * k, b.y - 4.0f * k), ImGui::GetColorU32(ImGuiCol_CheckMark, a), 1.5f * k);
         dl->AddText(ImVec2(a0.x + pad.x, a0.y + pad.y), IM_COL32(235, 240, 245, (int)(255 * a)), msg.c_str());
     }
-    if (gizmo) MotorGizmoDraw();
-    if (repe && !camFree) RepeticionDraw();   // (14/11 k, Agustin: "que no se muestre el menu raro del tiempo de abajo") con la camara libre no se dibuja la barra de la repeticion
+    if (repe) RepeticionDraw(mmCur);   // (14/11 n) solo la marca y el minuto al pasar el mouse sobre la barra DEL JUEGO, con o sin camara libre (antes no se dibujaba nada con la camara libre)
     if (keyHud) KeyHudDraw();
     InspectDrawOverlay();
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
@@ -2999,6 +3187,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         if (g_cfg.clothDirty && Now() - g_cfg.clothChangeT > 0.4) SaveCloth();
     }
+    MotorCoverFlush();   // (15/11 n) la tapa del Motor arriba de todo lo demas (motorgizmo.cpp)
     ImGui::Render();
     if (glassBB) { GlassBlur(glassBB); glassBB->Release(); }
     ID3D11RenderTargetView* oldRT[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};

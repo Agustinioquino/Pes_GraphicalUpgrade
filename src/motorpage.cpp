@@ -77,6 +77,12 @@ static const PFN_HelpText g_HelpText = (PFN_HelpText)0x140e43500ull;
 static const PFN_GetMv g_GetMv = (PFN_GetMv)0x141f05cd0ull;
 static const PFN_MvHold g_MvHold = (PFN_MvHold)0x141f06e10ull;
 static const PFN_Dress g_Dress = (PFN_Dress)0x141f06920ull;
+typedef void (*PFN_NodeShow)(void* node, char on, unsigned mask);           // 0x140e4e650: bandera de visible del nodo (+0xc) y aplicar
+typedef void (*PFN_ClipVisible)(void* clip, unsigned char on);              // 0x141f96bc0: propiedad 0x1007 (visible) del clip del nodo
+typedef void (*PFN_MvShow)(void* mv, char on);                              // 0x141f05f50: mostrar / esconder el modelo del visor
+static const PFN_NodeShow g_NodeShow = (PFN_NodeShow)0x140e4e650ull;
+static const PFN_ClipVisible g_ClipVisible = (PFN_ClipVisible)0x141f96bc0ull;
+static const PFN_MvShow g_MvShow = (PFN_MvShow)0x141f05f50ull;
 static const uintptr_t kCtx = 0x1438040a8ull, kInvalidTeam = 0x143528f44ull, kVtMv = 0x142ba7c68ull;
 
 static PFN_Factory o_factory = nullptr;
@@ -88,6 +94,13 @@ static std::atomic<int> s_nPages{0};
 // (22:48, Agustin: el icono de la ultima tecla "solo en el motor") la pagina del estudio del Motor que esta viva: la anota la fabrica y
 // la confirma en cada cuadro el gancho de entrada de los menus (menumouse.cpp llama a MotorPageSeen con cada ventana activa)
 static std::atomic<void*> s_motorWin{nullptr}; static std::atomic<double> s_motorT{-1.0e9};
+// (15/11, Agustin 01:51: "enfocate en el menu en si, sin fondo con grilla, sin el menu tipico del modo editar con un boton para
+// volver atras ... evita que cargue el jugador al principio solo el menu del motor") MENU PROPIO: el estudio abre vacio (fondo con
+// grilla, motorgrid.cpp), con una barra de iconos y el boton Volver (motorgizmo.cpp). El panel nativo de filas queda escondido y
+// se abre desde su icono; el jugador se carga / se quita desde el suyo. Los pedidos llegan del hilo de Present (atomicos) y se
+// cumplen en el hilo del juego, en MotorPageSeen. [PES21FX] motor_menu_propio = 0 vuelve a la lista de siempre.
+static std::atomic<bool> s_uiPanel{false}, s_uiPlayer{false}, s_uiBack{false};
+static void* s_uiWin = nullptr; static bool s_uiPlayerShown = false; static int s_uiPanelApplied = -1;
 
 static bool Readable(const void* p, size_t n) {
     MEMORY_BASIC_INFORMATION mi{};
@@ -263,7 +276,7 @@ static uintptr_t my_Build(void* page) {
     g_RowTexts(page);                                                    // nombres de las filas (ranuras 85 / 86)
     uint8_t* top = Ptr(I) ? P8(I + 0x90) : nullptr;
     void* head = Ptr(top) ? Sub(top, "headline") : nullptr;
-    if (Ptr(head)) g_Headline(head, "Motor en tiempo real");
+    if (Ptr(head)) g_Headline(head, TRS("Motor en tiempo real"));
     // (Agustin 23:12: "ni que muestres los botones abajo del mando") la barra de ayuda se arma con el texto de cada boton
     // (Impl+0x168 + 0x20 x boton, 17 botones; 0x140e73660 saca los que no tienen texto y esconde la barra si no queda ninguno).
     // Se vacian los que tienen texto; los modos de las acciones (Impl+0x120) no cambian: "volver" sigue andando
@@ -289,9 +302,30 @@ static void my_Value(void*, int group, int row, int value) {
     static int n = 0; if (n++ < 40) Log("motor (pagina): %s -> %s", kFilas[row].nombre, kFilas[row].op[v]);
 }
 
+static uintptr_t my_ReadyPlayer(void* page);
 // ranura 75: la pagina espera al visor 3D y le pide el modelo. Justo antes se viste al visor (equipo + camiseta), con las mismas
 // guardas que usa el juego para su maniqui
+// el visor del Editar listo para recibir un pedido (las mismas guardas que la ranura 75 del juego, 0x140c09280)
+static uint8_t* MvReady() {
+    uint8_t* ctx = *(uint8_t**)kCtx; uint8_t* mv = (uint8_t*)g_GetMv();
+    if (!Ptr(ctx) || !Ptr(mv) || !Readable(mv, 0x118) || *(uintptr_t*)mv != kVtMv) return nullptr;
+    if (U32(mv + 0x90) != 0 || U32(mv + 0x8c) - 4u >= 2u) return nullptr;
+    return mv;
+}
 static uintptr_t my_Ready(void* page) {
+    if (g_cfg.motorOwnMenu != 0 && page == s_uiWin && !s_uiPlayer.load(std::memory_order_relaxed)) {
+        // menu propio sin jugador al abrir: no se pide el modelo. La pagina sigue apenas el visor esta en reposo, como siempre
+        uint8_t* mv = MvReady(); if (!mv) return 0;
+        g_MvShow(mv, 0);                                    // por si quedo a la vista de la pagina anterior
+        s_uiPlayerShown = false;
+        static int n = 0; if (n++ < 8) Log("motor (pagina): menu propio: el estudio abre sin jugador (se carga desde su icono)");
+        return 1;
+    }
+    const uintptr_t r = my_ReadyPlayer(page);
+    if (r && page == s_uiWin) s_uiPlayerShown = true;
+    return r;
+}
+static uintptr_t my_ReadyPlayer(void* page) {
     if (g_cfg.motorDress) {
         uint8_t* ctx = *(uint8_t**)kCtx; uint8_t* mv = (uint8_t*)g_GetMv();
         if (Ptr(ctx) && Ptr(mv) && Readable(ctx + 0xe0, 0x10) && Readable(mv, 0x118) && *(uintptr_t*)mv == kVtMv && Ptr(P8(mv + 0x78)) &&
@@ -329,20 +363,127 @@ static void* hk_Factory(void* key, void* name, void* flag) {
     if (k < 12) Log("motor (pagina): pagina de Apariencia %p creada para el nodo \"%s\" -> %s", page, okName ? nm : "?",
                     swap ? "filas del Motor" : mine ? "es la del Motor, pero motor_pagina = 0: quedan las filas de Apariencia" : "se deja como es");
     if (mine) { s_motorWin.store(page); s_motorT.store(Now()); }
-    if (swap) *(void***)page = &s_vt[1];
+    if (swap) {
+        *(void***)page = &s_vt[1];
+        s_uiWin = page; s_uiPanel.store(false); s_uiPlayer.store(g_cfg.motorStartPlayer != 0); s_uiBack.store(false); s_uiPlayerShown = false; s_uiPanelApplied = -1;
+    }
     return page;
 }
 
+// ---------------------------------------------------------------- menu propio: panel nativo a pedido y jugador a pedido
+// El panel de filas son dos nodos de la ventana: Impl+0x90 (titulo) e Impl+0x98 (raiz con la lista). Se esconden como lo hace el
+// juego con sus nodos: 0x140e4e650(nodo, on, 2) (bandera +0xc y aplicar) y ademas la propiedad "visible" de su clip (0x1007,
+// 0x141f96bc0), que es lo que mira el reproductor de la pantalla al dibujar.
+static void PanelShow(void* page, bool on) {
+    uint8_t* I = P8((uint8_t*)page + 0x88); if (!Ptr(I) || !Readable(I, 0xa0)) return;
+    int hechos = 0;
+    for (int k = 0; k < 2; k++) {
+        uint8_t* n = P8(I + (k ? 0x98 : 0x90));
+        if (!Ptr(n) || !Readable(n, 0x48)) continue;
+        void** vt = *(void***)n; if (!Ptr(vt) || !Readable(vt, 0x30) || !Ptr(vt[4])) continue;
+        if (((U32(n + 0xc) & 2u) != 0) != on) g_NodeShow(n, on ? 1 : 0, 2);
+        uint8_t* clip = P8(n + 0x40);
+        if (Ptr(clip) && Readable(clip, 0x10)) { g_ClipVisible(clip, on ? 1 : 0); hechos++; }
+    }
+    if (s_uiPanelApplied != (on ? 1 : 0)) {
+        s_uiPanelApplied = on ? 1 : 0;
+        static int n = 0; if (n++ < 12) Log("motor (pagina): menu propio: panel de filas %s (%d de 2 nodos)", on ? "a la vista" : "escondido", hechos);
+    }
+}
+// hilo del juego, una vez por cuadro con la pagina del Motor activa
+static std::atomic<double> s_uiTick0{ -1.0e9 }, s_uiTickLast{ -1.0e9 };
+// (15/11 j, Agustin 04:05: "verifica que la animacion tape la carga de la interfaz de el motor") listo = la pagina del Motor ya paso
+// 0.3 s seguidos por UiTick (lista del Editar escondida cada cuadro, estudio dibujando); hasta eso el editor sigue tapado
+bool MotorUiReady() { const double n = Now(); return n - s_uiTickLast.load() < 0.2 && n - s_uiTick0.load() > 0.3; }
+static void UiTick(void* win) {
+    { const double n = Now(); if (n - s_uiTickLast.load() > 0.2) s_uiTick0.store(n); s_uiTickLast.store(n); }
+    const bool wantPanel = false;      // (15/11 b, Agustin 02:23) la lista del Editar no se muestra nunca: "Vista" abre el panel propio (motorgizmo.cpp)
+    if (!wantPanel || s_uiPanelApplied != 1) PanelShow(win, wantPanel);      // escondido: se sostiene en cada cuadro
+    const bool wantPlayer = s_uiPlayer.load(std::memory_order_relaxed);
+    if (wantPlayer != s_uiPlayerShown) {
+        static double askT = -1.0;
+        if (wantPlayer) {
+            if (askT < 0.0) askT = Now();
+            if (my_ReadyPlayer(win)) { s_uiPlayerShown = true; askT = -1.0; Log("motor (pagina): menu propio: jugador pedido al visor"); }
+            else if (Now() - askT > 4.0) {      // (15/11 f) 4 s sin que el visor lo acepte: se avisa y se deja de pedir
+                askT = -1.0; s_uiPlayer.store(false);
+                MotorErr("El jugador no se pudo cargar: el visor de modelos del Editar no acept\xC3\xB3 el pedido en 4 segundos (no est\xC3\xA1 listo o est\xC3\xA1 cargando otra cosa). Prob\xC3\xA1 de nuevo en unos segundos.");
+            }
+        } else {
+            askT = -1.0;
+            uint8_t* mv = (uint8_t*)g_GetMv();
+            if (Ptr(mv) && Readable(mv, 0x118) && *(uintptr_t*)mv == kVtMv) { g_MvShow(mv, 0); Log("motor (pagina): menu propio: jugador quitado de la vista"); }
+            s_uiPlayerShown = false;
+        }
+    }
+}
+// (15/11 b) las mismas opciones de las filas, para el panel propio (hilo de Present)
+int MotorViewCount(int row) { return row >= 0 && row < kNFilas ? kFilas[row].n : 0; }
+const char* MotorViewName(int row, int op) { if (row < 0 || row >= kNFilas) return ""; return op < 0 ? kFilas[row].nombre : op < kFilas[row].n ? kFilas[row].op[op] : ""; }
+int MotorViewGet(int row) { return row >= 0 && row < kNFilas ? FilaActual(row) : 0; }
+void MotorViewSet(int row, int op) { my_Value(nullptr, 0, row, op); }
+bool MotorUiOn() { return g_cfg.motorOwnMenu != 0 && g_cfg.motorPage != 0 && s_ok && MotorPageActive(); }
+bool MotorUiPanel() { return s_uiPanel.load(std::memory_order_relaxed); }
+bool MotorUiPlayer() { return s_uiPlayer.load(std::memory_order_relaxed); }
+void MotorUiTogglePanel() { s_uiPanel.store(!s_uiPanel.load()); }
+void MotorUiTogglePlayer() { s_uiPlayer.store(!s_uiPlayer.load()); }
+void MotorUiBack() { s_uiBack.store(true); }
+bool MotorUiTakeBack() { return s_uiBack.exchange(false); }
+
 // la ventana que esta recibiendo entrada en este cuadro (la pasa menumouse.cpp): si es la del estudio del Motor, sigue viva
+// (15/11 j, Agustin 04:04: "evita que cargue el menu de editar al abrir el menu o que se muestre por un segundo") el menu de
+// Editar (menu::MenuEditMenu, tabla 0x1427012b0) recibe entrada mientras se elige; si la ultima vez que se lo vio tenia el cursor
+// en el boton 12 (fila 11, el del Motor) y deja de recibir entrada sin que otra ventana la reciba, se acepto el Motor: desde ese
+// cuadro se tapa la pantalla (MotorPreCoverDraw en motorgizmo.cpp) hasta que el editor del Motor dibuja su propia entrada. Si a los 0.25 s otra
+// ventana recibe entrada (por ejemplo se volvio atras), se destapa enseguida. Tope 2.5 s.
+static const uintptr_t kVtEditMenu = 0x1427012b0ull;
+static std::atomic<double> s_edSeenT{ -1.0e9 }, s_coverT{ -1.0e9 }; static std::atomic<bool> s_ed12{ false }, s_coverArmed{ false };
+static void EditMenuSeen(void* win) {
+    const uintptr_t vp = *(uintptr_t*)win;
+    if (vp == kVtEditMenu) {
+        uint8_t* I = Readable((uint8_t*)win + 0x88, 8) ? *(uint8_t**)((uint8_t*)win + 0x88) : nullptr;
+        const int row = Readable(I, 0xe0) ? (int)*(uint32_t*)(I + 0xd8) : -1;
+        static int lastRow = -2; if (row != lastRow) { lastRow = row; static int n = 0; if (n++ < 30) Log("motor (pagina): menu de Editar, cursor en la fila %d", row); }
+        s_ed12.store(row == 11); s_edSeenT.store(Now()); s_coverArmed.store(!g_menuOpen.load());
+        if (Now() - s_coverT.load() < 2.8 && Now() - s_coverT.load() > 0.05) { s_coverT.store(-1.0e9); MotorCoverCancel(); }   // el menu de Editar sigue: no era el Motor
+        return;
+    }
+    if (win == s_motorWin.load(std::memory_order_relaxed)) return;
+    s_coverArmed.store(false);                                           // otra ventana: no se acepto el Motor (o ya paso)
+    if (Now() - s_coverT.load() > 0.25 && Now() - s_coverT.load() < 2.5 && !MotorPageActive()) { s_coverT.store(-1.0e9); MotorCoverCancel(); Log("motor (pagina): tapa de entrada sacada (otra ventana)"); }
+}
+// overlay.cpp, cada cuadro, antes del editor del Motor
+// la llama motorgizmo.cpp (MotorPreCoverDraw) en cada cuadro: el menu de Editar dejo de recibir entrada con el cursor en el boton 12?
+void MotorPreCoverPoll() {
+    const double now = Now();
+    if (s_coverArmed.load() && !g_menuOpen.load() && s_ed12.load() && now - s_edSeenT.load() > 0.05 && now - s_edSeenT.load() < 0.5) {
+        s_coverArmed.store(false); s_coverT.store(now); MotorCoverArrive(); Log("motor (pagina): se acepto el boton 12 -> tapa de entrada");
+    }
+}
+double MotorEditMenuSeenT() { return s_edSeenT.load(); }
+
 void MotorPageSeen(void* win) {
+    if (win) EditMenuSeen(win);
     if (!win || win != s_motorWin.load(std::memory_order_relaxed)) return;
     const uintptr_t vp = *(uintptr_t*)win;
     if (vp == (uintptr_t)&s_vt[1] || vp == kVtApp) s_motorT.store(Now(), std::memory_order_relaxed);
+    if (vp == (uintptr_t)&s_vt[1] && g_cfg.motorOwnMenu != 0 && win == s_uiWin) UiTick(win);
     else s_motorWin.store(nullptr, std::memory_order_relaxed);         // esa memoria ya es de otra ventana
 }
 // el estudio del Motor esta abierto (su pagina recibio entrada hace menos de 0.6 s)
 bool MotorPageIs(void* win) { return win && win == s_motorWin.load(std::memory_order_relaxed); }
-bool MotorPageActive() { return Now() - s_motorT.load(std::memory_order_relaxed) < 0.6; }
+// (15/11 n, Agustin 05:08: "al abrir el menu insert se recarga el motor") con el menu del mod abierto el juego deja de pasar por el
+// gancho que marca la pagina (s_motorT) y a los 0.6 s el Motor parecia cerrado: al cerrar el menu volvia a entrar con transicion,
+// sonido y carga. Si la pagina estaba activa al abrir el menu se la sigue dando por activa mientras este abierto y 1 s despues.
+bool MotorPageActive() {
+    static bool s_hold = false; static double s_closeT = -1.0e9; static bool s_wasOpen = false;
+    const double n = Now(); const bool act = n - s_motorT.load(std::memory_order_relaxed) < 0.6, open = g_menuOpen.load(std::memory_order_relaxed);
+    if (open) { if (act) s_hold = true; s_wasOpen = true; return act || s_hold; }
+    if (s_wasOpen) { s_wasOpen = false; s_closeT = n; }
+    if (act) { s_hold = false; return true; }
+    if (s_hold && n - s_closeT < 1.0) return true;
+    s_hold = false; return false;
+}
 
 void MotorPagePresent() {
     if (s_panelSave.exchange(false)) {
@@ -366,6 +507,7 @@ void MotorPagePresent() {
             if (what == 2) Log("motor (pagina): estudio cerrado -> camara libre apagada");
         }
     }
+    FreeCamMotorTick();                                 // (15/11) sin modelo el visor no pide camara: la camara libre sigue viva igual
     if (s_tried) return;
     s_tried = true;
     if (!g_cfg.motorPatch) { Log("motor (pagina): parches en memoria apagados (motor = 0): el estudio queda con las filas de Apariencia"); return; }

@@ -418,6 +418,16 @@ PE.NOMBRE, PE.NOMBRE_ERA = 0x1434c44f8, 0x142700fd3
 PE.TEXTO, PE.ID = 0x1427011ec, 0x7ffe0001
 PE.SIN_TEXTO, PE.SIN_TEXTO_ERA = 0x14350a9a0, 0x142972e40
 PE.ETIQUETA = "Motor en tiempo real"
+-- (15/11, Agustin: selector de idioma) el nombre de la pestana sigue el idioma del mod grafico (la DLL lo deja en +0x38
+-- de la memoria compartida: 0 castellano, 1 ingles, 2 portugues). Las tres valen como "mi etiqueta".
+PE.ETIQUETAS = { PE.ETIQUETA, "Real-time Engine", "Motor em tempo real" }
+function PE.es_mia(p)
+    for _, t in ipairs(PE.ETIQUETAS) do
+        local n = #t + 1
+        if leer(p, n) and ffi.string(B8, n) == t .. "\0" then return true end
+    end
+    return false
+end
 PE.ARCH, PE.CLAVE = "script\\flow\\edit\\editmenu.json", "mtrpe1|"
 -- el flujo que el juego lee al SALIR del modo Editar (el "return" del menu de Editar): ahi la pestana se saca
 PE.ARCH_SALIDA = "script\\flow\\edit\\editdataautosaveprocess.json"
@@ -452,7 +462,7 @@ function PE.mirar()
     else
         -- no es el de fabrica: solo vale si apunta a mi etiqueta (la puso este modulo, quiza antes de que Sider lo recargara)
         local n = #PE.ETIQUETA + 1
-        if not sin or (sin >= BASE and sin < EXE_FIN) or not leer(sin, n) or ffi.string(B8, n) ~= PE.ETIQUETA .. "\0" then
+        if not sin or (sin >= BASE and sin < EXE_FIN) or not PE.es_mia(sin) then
             return nil, "el texto de reemplazo del juego ('No String') ya lo cambio otro"
         end
         mia = true
@@ -494,7 +504,7 @@ end
 function PE.etiqueta()
     local n = #PE.ETIQUETA + 1
     local p = G.pe_etiqueta
-    if type(p) == "number" and leer(p, n) and ffi.string(B8, n) == PE.ETIQUETA .. "\0" then return p end
+    if type(p) == "number" and PE.es_mia(p) then return p end
     p = tonumber(C.mtr_VirtualAlloc(0, 0x1000, 0x3000, 4))        -- reservar y comprometer, lectura y escritura
     if not p or p < DIR_MIN or p >= DIR_MAX then return nil end
     ffi.copy(W8, PE.ETIQUETA, n - 1)
@@ -503,6 +513,21 @@ function PE.etiqueta()
     if not leer(p, n) or ffi.string(B8, n) ~= PE.ETIQUETA .. "\0" then return nil end
     G.pe_etiqueta = p
     return p
+end
+
+-- pone en mi pagina el nombre en el idioma del mod grafico (solo escribe en la pagina propia, nunca en el exe)
+function PE.idioma()
+    local p = rptr(PE.SIN_TEXTO)
+    if not p or (p >= BASE and p < EXE_FIN) or not PE.es_mia(p) then return end
+    local i = 0
+    if RX.dll_abrir and RX.dll and RX.dll_abrir() then i = RX.dll.u32[14] end
+    if i ~= 1 and i ~= 2 then i = 0 end
+    local t = PE.ETIQUETAS[i + 1]
+    local n = #t + 1
+    if leer(p, n) and ffi.string(B8, n) == t .. "\0" then return end
+    ffi.copy(W8, t, n - 1)
+    W8[n - 1] = 0
+    C.mtr_WriteProcessMemory(PROC, p, W8, n, NR)
 end
 
 -- saca la pestana. v = lo que devolvio PE.mirar(). Primero la cantidad de botones: si no vuelve a 11, el texto se queda
@@ -555,6 +580,7 @@ function PE.asegurar(quiero, motivo)
             return false
         end
     end
+    PE.idioma()
     PE.puesta, PE.estado = true, "puesta (boton 12 del menu de Editar)"
     return true
 end

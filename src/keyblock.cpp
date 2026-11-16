@@ -8,6 +8,9 @@
 // 2 = siempre que el menu esta abierto.
 #include "core.h"
 #include <MinHook.h>
+#include "menuvisual.h"   // (14/11 n) MvPadPolling: la lectura del mando de la DLL por winmm pasa siempre
+#include <mutex>
+#include <vector>
 #include <intrin.h>
 #define DIRECTINPUT_VERSION 0x0800
 #include <dinput.h>
@@ -21,6 +24,21 @@ std::atomic<bool> g_blockGameKeys{false};
 // DualSense sin Steam Input) devuelve los botones sueltos, la cruceta al centro y los ejes como estaban al abrir. El menu lee el
 // mando desde esta DLL (menuvisual.cpp e ImGui): esas llamadas pasan siempre. [PES21FX] bloquear_mando 0 = nunca, 1 = con el menu abierto
 std::atomic<bool> g_blockGamePad{false};
+// (14/11 n) SHARE / SELECT en la repeticion: mantenido 0.6 s prende / apaga la camara libre (overlay.cpp), pero el juego usa el mismo
+// boton para esconder / mostrar su barra de la repeticion, asi que al mantenerlo la barra tambien se escondia y despues no habia barra
+// para pasar el mouse. Con g_shareMask (visor de repeticiones abierto, camara_share 1) el juego no ve SHARE mientras esta apretado; si
+// se suelta antes de 0.6 s el juego recibe un toque corto (120 ms): esconder / mostrar la barra anda igual que siempre.
+std::atomic<bool> g_shareMask{false};
+static std::mutex s_shMx; static bool s_shHeld = false; static ULONGLONG s_shDownT = 0, s_shInjUntil = 0;
+static bool ShareSee(bool down) {   // lo que el juego debe ver de SHARE con el boton fisico 'down'
+    std::lock_guard<std::mutex> lk(s_shMx);
+    const ULONGLONG now = GetTickCount64();
+    if (!g_shareMask.load(std::memory_order_relaxed) && !s_shHeld) return down || now < s_shInjUntil;
+    if (down) { if (!s_shHeld) { s_shHeld = true; s_shDownT = now; } return false; }
+    if (s_shHeld) { s_shHeld = false; if (now - s_shDownT < 600) s_shInjUntil = now + 120; }
+    return now < s_shInjUntil;
+}
+static bool ShareActive() { if (g_shareMask.load(std::memory_order_relaxed)) return true; std::lock_guard<std::mutex> lk(s_shMx); return s_shHeld || GetTickCount64() < s_shInjUntil; }
 static uintptr_t s_selfB = 0, s_selfE = 0;
 static std::atomic<int> s_hits[7];   // + 5 XInput, 6 DirectInput joystick   // 0 DirectInput estado, 1 DirectInput datos, 2 GetAsyncKeyState, 3 GetKeyState, 4 GetKeyboardState
 static const char* const kHitName[7] = { "DirectInput (estado)", "DirectInput (buffer)", "GetAsyncKeyState", "GetKeyState", "GetKeyboardState", "XInput (mando)", "DirectInput (mando)" };
@@ -77,7 +95,9 @@ static void JoyBlock(IDirectInputDevice8W* d, DWORD cb, void* data) {
     DIJOYSTATE2* last = nullptr; for (auto& j : s_joyLast) if (j.first == d) { last = &j.second; break; }
     if (!g_blockGamePad.load(std::memory_order_relaxed)) {   // sin bloquear: se guarda
         if (!last) { if (s_joyLast.size() >= 16) return; s_joyLast.push_back({ d, DIJOYSTATE2{} }); last = &s_joyLast.back().second; }
-        memcpy(last, data, std::min<size_t>(cb, sizeof(DIJOYSTATE2))); return;
+        memcpy(last, data, std::min<size_t>(cb, sizeof(DIJOYSTATE2)));
+        if (ShareActive()) { BYTE* bt = ((DIJOYSTATE*)data)->rgbButtons; bt[8] = ShareSee((bt[8] & 0x80) != 0) ? 0x80 : 0; }   // (14/11 n) SHARE / CREATE = boton 9 del DualShock / DualSense
+        return;
     }
     DIJOYSTATE* js = (DIJOYSTATE*)data;
     if (last) memcpy(js, last, offsetof(DIJOYSTATE, rgdwPOV)); else memset(js, 0, offsetof(DIJOYSTATE, rgdwPOV));   // ejes
@@ -89,13 +109,13 @@ static void JoyBlock(IDirectInputDevice8W* d, DWORD cb, void* data) {
 template<int W> static HRESULT STDMETHODCALLTYPE hk_GDS(IDirectInputDevice8W* d, DWORD cb, LPVOID data) {
     const HRESULT hr = o_GDS[W](d, cb, data);
     if (SUCCEEDED(hr) && data && cb == 256 && g_blockGameKeys.load(std::memory_order_relaxed) && !FromSelf(_ReturnAddress())) { memset(data, 0, cb); Hit(0); }
-    else if (SUCCEEDED(hr) && data && (cb == sizeof(DIJOYSTATE) || cb == sizeof(DIJOYSTATE2)) && !FromSelf(_ReturnAddress()) && IsPad(d)) JoyBlock(d, cb, data);
+    else if (SUCCEEDED(hr) && data && (cb == sizeof(DIJOYSTATE) || cb == sizeof(DIJOYSTATE2)) && !FromSelf(_ReturnAddress()) && !MvPadPolling() && IsPad(d)) JoyBlock(d, cb, data);
     return hr;
 }
 template<int W> static HRESULT STDMETHODCALLTYPE hk_GDD(IDirectInputDevice8W* d, DWORD cb, LPDIDEVICEOBJECTDATA od, LPDWORD n, DWORD fl) {
     const HRESULT hr = o_GDD[W](d, cb, od, n, fl);   // se vacia el buffer igual: al cerrar el menu no llegan las teclas viejas
     if (SUCCEEDED(hr) && n && g_blockGameKeys.load(std::memory_order_relaxed) && !FromSelf(_ReturnAddress()) && IsKeyboard(d)) { *n = 0; Hit(1); }
-    else if (SUCCEEDED(hr) && n && *n && g_blockGamePad.load(std::memory_order_relaxed) && !FromSelf(_ReturnAddress()) && IsPad(d)) { *n = 0; Hit(6); }
+    else if (SUCCEEDED(hr) && n && *n && g_blockGamePad.load(std::memory_order_relaxed) && !FromSelf(_ReturnAddress()) && !MvPadPolling() && IsPad(d)) { *n = 0; Hit(6); }
     return hr;
 }
 
@@ -139,6 +159,9 @@ template<int I> static DWORD WINAPI hk_XGS(DWORD user, XStateB* st) {
     const DWORD r = o_XGS[I](user, st);
     if (r == 0 && st && g_blockGamePad.load(std::memory_order_relaxed) && !FromSelf(_ReturnAddress())) {
         const DWORD pk = st->dwPacketNumber; memset(st, 0, sizeof(*st)); st->dwPacketNumber = pk ^ 0x80000000u; Hit(5);
+    } else if (r == 0 && st && !FromSelf(_ReturnAddress()) && ShareActive()) {   // (14/11 n) SHARE / BACK mantenido: no lo ve el juego
+        const bool down = (st->Gamepad.wButtons & 0x0020) != 0, see = ShareSee(down);
+        if (see != down) { st->Gamepad.wButtons = (WORD)(see ? (st->Gamepad.wButtons | 0x0020) : (st->Gamepad.wButtons & ~0x0020)); st->dwPacketNumber ^= 0x20000000u; }
     }
     return r;
 }

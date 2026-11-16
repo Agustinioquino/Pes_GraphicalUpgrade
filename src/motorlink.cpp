@@ -39,7 +39,7 @@ struct MotorLink {
     float escala;                   // +0x2c pedido del modulo: escala de la vista de profundidad (0 = automatica)
     float escalaAct;                // +0x30 lo que rige
     uint32_t panel;                 // +0x34 (11/11) el modulo lo cambia en cada cuadro con su panel abierto: el mouse es del Motor (menumouse.cpp)
-    uint32_t res[2];                // +0x38
+    uint32_t res[2];                // +0x38 res[0] = idioma del mod (0 es, 1 en, 2 pt; 15/11)
 };
 #pragma pack(pop)
 static_assert(sizeof(MotorLink) == 64, "MotorLink debe medir 64 bytes (lo lee MotorTiempoReal.lua)");
@@ -109,7 +109,65 @@ void MotorWireEnd(ID3D11DeviceContext* c, ID3D11RasterizerState* prev) {
 // ---------------------------------------------------------------- una vez por cuadro (antes de subir t120)
 static float Limpio(float v, float lo, float hi) { return (v >= lo && v <= hi) ? v : 0.0f; }   // NaN o fuera de rango = 0
 
+// ---------------------------------------------------------------- (15/11, Agustin 03:29) idioma de textos del juego
+// CONFIRMADO en el C (menu::LanguageSelectText::vf75 0x140b22e80): al elegir idioma de textos el juego guarda su numero en
+// *(*(0x143714240) + 0x50) + 0x13024 (u32). Que numero es cada idioma NO se saco del exe: se anota en el registro cada vez que
+// cambia y la tabla numero -> es / en / pt va en el ini ([PES21FX] idioma_juego_ids = es,en,pt). Con idioma_auto = 1 y un numero
+// conocido el menu pasa a ese idioma; elegir un idioma a mano apaga idioma_auto.
+static bool RdOk(const void* p, size_t n) {
+    MEMORY_BASIC_INFORMATION mi{};
+    if (!p || !VirtualQuery(p, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return false;
+    return (const uint8_t*)p + n <= (const uint8_t*)mi.BaseAddress + mi.RegionSize;
+}
+int GameTextLang() {
+    static int ok = -1;
+    if (ok < 0) { const HMODULE m = GetModuleHandleW(nullptr); ok = 0;
+        if ((uintptr_t)m == 0x140000000ull) { const auto* dos = (const IMAGE_DOS_HEADER*)m; const auto* nt = (const IMAGE_NT_HEADERS*)((const uint8_t*)m + dos->e_lfanew);
+            if (nt->FileHeader.TimeDateStamp == 0x62787C6Au) ok = 1; }
+        if (!ok) Log("idioma del juego: exe distinto, no se lee"); }
+    if (!ok) return -1;
+    const void* const* g = (const void* const*)0x143714240ull;
+    if (!RdOk(g, 8) || !*g) return -1;
+    const uint8_t* a = (const uint8_t*)*g;
+    if (!RdOk(a + 0x50, 8)) return -1;
+    const uint8_t* b = *(const uint8_t* const*)(a + 0x50);
+    if (!b || !RdOk(b + 0x13024, 4)) return -1;
+    return (int)*(const uint32_t*)(b + 0x13024);
+}
+// (15/11, Agustin 03:59: el idioma lo elige Steam en Propiedades > Idioma; el juego no deja cambiarlo adentro) Steam deja el idioma
+// del juego en steamapps\appmanifest_<appid>.acf, clave "language" (dentro de "UserConfig"). La carpeta del juego es
+// steamapps\common\<nombre>\, asi que el archivo esta dos niveles arriba del exe. Se lee al arrancar y cada 30 s (solo lectura).
+static int SteamLang() {
+    static double t = -100.0; static int last = -1;
+    if (Now() - t < 30.0) return last; t = Now();
+    wchar_t exe[MAX_PATH] = {}; if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return last;
+    std::wstring d(exe); for (int up = 0; up < 3; up++) { const size_t k = d.find_last_of(L"\\/"); if (k == std::wstring::npos) return last; d.resize(k); }
+    WIN32_FIND_DATAW fd{}; HANDLE h = FindFirstFileW((d + L"\\appmanifest_*.acf").c_str(), &fd); if (h == INVALID_HANDLE_VALUE) return last;
+    int found = -1; std::string lang;
+    do { FILE* f = _wfopen((d + L"\\" + fd.cFileName).c_str(), L"rb"); if (!f) continue;
+        std::string txt; char buf[4096]; size_t n; while ((n = fread(buf, 1, sizeof buf, f)) > 0 && txt.size() < 65536) txt.append(buf, n); fclose(f);
+        if (txt.find("\"1259970\"") == std::string::npos && txt.find("PES 2021") == std::string::npos) continue;   // PES 2021 = app 1259970
+        size_t k = txt.find("\"language\""); if (k == std::string::npos) continue;
+        k = txt.find('"', k + 10); const size_t e = k == std::string::npos ? k : txt.find('"', k + 1); if (e == std::string::npos) continue;
+        lang = txt.substr(k + 1, e - k - 1); for (char& c : lang) c = (char)tolower((unsigned char)c);
+        found = (lang == "english") ? 1 : (lang == "portuguese" || lang == "brazilian") ? 2 : (lang == "spanish" || lang == "latam") ? 0 : 3;
+        break; } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    if (found != last) Log("idioma de Steam del juego: %s (%s)", lang.empty() ? "no encontrado" : lang.c_str(), found == 0 ? "castellano" : found == 1 ? "ingles" : found == 2 ? "portugues" : found == 3 ? "otro: queda el ultimo elegido" : "-");
+    last = found; return last;
+}
+static void GameLangPoll() {
+    static double t = 0; if (Now() - t < 1.0) return; t = Now();
+    static int last = -2; const int id = GameTextLang();
+    if (id < 0) { if (g_cfg.langAuto) { const int sl = SteamLang(); if (sl >= 0 && sl <= 2 && g_cfg.lang != sl) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.lang = sl; LoadMenuLang(); } } return; }
+    if (id != last) { last = id; static int n = 0; if (n++ < 40) Log("idioma del juego: textos = numero %d (idioma_auto %d, tabla es %d en %d pt %d)", id, g_cfg.langAuto, g_cfg.langGame[0], g_cfg.langGame[1], g_cfg.langGame[2]); }
+    if (!g_cfg.langAuto) return;
+    { const int sl = SteamLang(); if (sl >= 0 && sl <= 2) { if (g_cfg.lang != sl) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.lang = sl; LoadMenuLang(); Log("idioma del menu: sigue a Steam -> %d", sl); } return; } }
+    for (int i = 0; i < 3; i++) if (g_cfg.langGame[i] == id && g_cfg.lang != i) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.lang = i; LoadMenuLang(); Log("idioma del menu: sigue al juego -> %d", i); }
+}
+
 void MotorLinkPresent() {
+    GameLangPoll();
     static bool tried = false;
     if (!tried) {
         tried = true;
@@ -156,6 +214,7 @@ void MotorLinkPresent() {
     if (s_ml) {
         s_ml->vistaAct = v[0]; s_ml->alambreAct = v[1]; s_ml->corteAct = v[2]; s_ml->escalaAct = v[3];
         s_ml->alambreDibujos = nd;
+        s_ml->res[0] = (g_cfg.lang == 1 || g_cfg.lang == 2) ? (uint32_t)g_cfg.lang : 0u;   // (15/11) idioma del mod: el modulo de Sider nombra la pestana del Editar con esto
         s_ml->dllSeq = s_ml->dllSeq + 1;
     }
     if (wire) {   // cada 10 s con el alambre prendido: cuantos dibujos se cambiaron (0 = ningun dibujo de G-buffer: avisar)

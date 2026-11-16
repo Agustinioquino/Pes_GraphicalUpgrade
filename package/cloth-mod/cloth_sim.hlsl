@@ -260,6 +260,7 @@ static float3 s_center; // PES21 FX: origen de la prenda
 static float  s_windLen; // PES21 FX (13/11): largo del viento de cloth.ini (fijo en el partido): marca la velocidad de la onda de turbulencia
 static bool   s_pesWindOn;   // PES21 FX (14/11): esta prenda usa el viento unico de la DLL (fila 494)
 static float  s_windHem;     // PES21 FX (14/11): z509 (w508) = cuanto viento le llega por debajo al borde libre (faldon de la remera)
+static float  s_hemLow;      // PES21 FX (15/11): altura en la pose de reposo (m) del punto suelto mas bajo de la prenda: de ahi sale el ruedo
 static bool   s_menu;   // PES21 FX (25/10): escena de menu (editor, presentacion): sin empujes por movimiento del cuerpo
 static float3 s_ref;    // PES21 FX (25/10): punto cerca de la prenda; las sumas en enteros van relativas a el
 COH RWByteAddressBuffer             g_outPos    : register(u0);
@@ -283,6 +284,7 @@ StructuredBuffer<uint4>         g_bodyV     : register(t123);
 StructuredBuffer<uint>          g_bodyNext  : register(t124);
 groupshared uint gBodyKey;
 groupshared uint gBodyIdx;
+groupshared uint gHemLow;   // PES21 FX (15/11): altura de reposo + 10 m del punto suelto mas bajo (float positivo como uint, para InterlockedMin)
 groupshared uint gBodyCnt[3];  // diagnostico: puntos con piel cerca, empujes, mayor penetracion (0.1 mm)
 // diagnostico (lo lee la DLL cada 20 s): [0] camisetas simuladas, [1] con cuerpo, [2] puntos con piel cerca, [3] empujes,
 // [4] 0xffffffff - menor distancia a una tabla valida (mm), [5] tablas validas vistas, [6] / [7] con piel de este cuadro / del anterior,
@@ -595,6 +597,13 @@ float pinOf(uint p)
     if (s_flags & 256) return float((g_rest[p].skin.w >> 2) & 63) / 63.0;
     return g_rest[p].posPin.w;
 }
+// PES21 FX (15/11): cuanto es RUEDO este punto (0..1): tela suelta (pin bajo) en los ~10 cm de mas abajo de la prenda en la pose
+// de reposo (el faldon de la remera, la boca de la pierna del short). Antes "borde libre" era toda la tela con pin < 0.5, o
+// sea casi toda la remera, y el viento por debajo movia el pecho y la espalda.
+float pesHemOf(uint p, float pin)
+{
+    return saturate(1.0 - pin * 2.0) * (1.0 - smoothstep(0.02, 0.12, g_rest[p].posPin.y - s_hemLow));
+}
 void loadParticle(uint p, uint mode, out float3 xPrev, out float3 vel, out float3 restPrev)
 {
     float3 rp, rn;
@@ -656,6 +665,7 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
     float3 n = rnrm1;
     float3 wind = 0;
     float k = g_airDrag, kW = 0.0, pesWs = 0.0;
+    float3 pesSlow = 0;
     if (any(windBase != 0)) {
         float  ws = length(windBase);
         float3 wd = windBase / ws;
@@ -674,7 +684,7 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
         float  T = g_windTurbulence;
         float3 slow = windBase * max(0.0, gust);
         wind = slow + ws * T * (wd * 0.5 * e1 + side * 0.6 * e2 + up * 0.35 * e3);
-        if (s_pesWindOn) { kW = g_windResponse; pesWs = ws; } else k += g_windResponse;
+        if (s_pesWindOn) { kW = g_windResponse; pesWs = ws; pesSlow = slow; } else k += g_windResponse;
     }
     // PES21 FX: resistencia del aire con la velocidad del cuerpo (correr pega la tela; frenar la deja flamear)
     float pesSpeed = length(vBody);
@@ -696,17 +706,19 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
         const float wn = dot(wind, n);
         v -= n * (dot(v, n) - wn) * min(k * h, 1.0);
         float dn = wn - dot(v, n);
-        if (dn * wn > 0.0) v += n * dn * min(kW * h, 1.0);
-        // (14/11, Agustin: "que el viento tambien afecte a la remera en la parte de abajo") el borde libre (faldon, punos) no
-        // solo recibe el viento de frente: el aire que pasa lo arrastra de costado, se mete por debajo y lo hace aletear.
-        // Solo donde la tela esta suelta (pin bajo) y con la fuerza del viento; tampoco frena lo que ya va mas rapido que el aire.
-        const float fr = saturate(1.0 - pin * 2.0) * s_windHem;
-        if (fr > 0.0 && pesWs > 0.05) {
-            const float3 wt = wind - n * wn, vt = v - n * dot(v, n), dt3 = wt - vt;
-            if (dot(dt3, wt) > 0.0) v += dt3 * min(0.35 * kW * h, 1.0) * fr;
-            const float ph = g_time * 13.0 + dot(g_rest[p].posPin.xyz, float3(19.0, 23.0, 31.0)) + float(s) * h * 13.0;
-            v += n * (sin(ph) * 0.7 + sin(ph * 1.71 + 1.3) * 0.3) * (3.0 * pesWs) * fr * h;   // aleteo: ~1 cm a 5 m/s
-            v.y += 0.15 * pesWs * fr * h;                                                     // el aire que entra por debajo lo levanta un poco
+        // (14/11, Agustin: "que el viento tambien afecte a la remera en la parte de abajo"; 15/11: "desde que pusimos que afecte
+        // la parte de abajo se rompio un poco") el efecto de abajo se aplicaba a TODA la tela suelta, con una onda fija de varios
+        // cm (3 x viento m/s2 a 2 Hz = 9 cm a 5 m/s, no 1 cm) que temblaba aun en calma, y con los remolinos tirando de costado.
+        // Ahora solo el ruedo de verdad (pesHemOf), y sin onda propia: al ruedo el viento le pega mas (el aire entra por debajo:
+        // x1.6 con w508 = 1), el viento MEDIO lo arrastra apenas de costado y lo levanta un poco. El aleteo sale de los remolinos
+        // del propio viento, que viajan con el. Con menos de 0.3 m/s no hay nada; entra de a poco hasta 1 m/s.
+        const float hem = pesHemOf(p, pin) * s_windHem * saturate((pesWs - 0.3) / 0.7);
+        if (dn * wn > 0.0) v += n * dn * min(kW * (1.0 + 0.6 * hem) * h, 1.0);
+        if (hem > 0.0) {
+            const float3 wt = pesSlow - n * dot(pesSlow, n), vt = v - n * dot(v, n), dt3 = wt - vt;
+            if (dot(dt3, wt) > 0.0) v += dt3 * min(0.10 * kW * h, 1.0) * min(hem, 1.0);
+            const float gl = length(s_grav);                                            // arriba = contra la gravedad de la prenda
+            if (gl > 1e-4) v -= (s_grav / gl) * (min(0.10 * pesWs, 1.2) * hem * h);    // el aire que entra por debajo lo levanta un poco
         }
     }
     vel = v;
@@ -1493,16 +1505,23 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             float4 pesEff = IniParams.Load(int2(509, 0));
             const bool pesEffOk = pesEff.w > 0.5;
             // x511 (la escribe la DLL) = viento vertical en m/s (+ = desde abajo); hoy solo lo usa "Probar el viento" del menu
-            if (pesWOn) { const float kC = pesEffOk ? pesEff.y : IniParams.Load(int2(503, 0)).w; pesWU.z *= kC;
-                          windBase = mul(transpose(W), float3(pesWU.x * pesWU.z, g_wind.y + IniParams.Load(int2(511, 0)).x * kC, pesWU.y * pesWU.z)); }
+            // (15/11) el viento vertical ya NO sale de cloth.ini (wind_y): la DLL lo habia dejado en 296.96 m/s al duplicarlo en cada
+            // arranque y la tela salia disparada para arriba. Con el viento unico la vertical es solo la de la fila 511, con tope;
+            // la velocidad total tambien tiene tope (40 m/s) y la onda de turbulencia va a velocidad fija (no depende de cloth.ini)
+            if (pesWOn) { const float kC = pesEffOk ? pesEff.y : IniParams.Load(int2(503, 0)).w; pesWU.z = min(pesWU.z * kC, 40.0);
+                          windBase = mul(transpose(W), float3(pesWU.x * pesWU.z, clamp(IniParams.Load(int2(511, 0)).x * kC, -15.0, 15.0), pesWU.y * pesWU.z));
+                          s_windLen = 2.0; }
             s_pesWindOn = pesWOn; s_windHem = pesEffOk ? pesEff.z : 1.0;
             // PES21 FX (25/10): el cuerpo real de este personaje (cuerpo.cpp): de las tablas que la DLL armo en el ultimo Present (una
             // por personaje, con la piel del cuadro anterior), la que tiene su origen en el mundo mas cerca del de la prenda
             s_bodyTab = 0xffffffffu; s_bodyTc = 0.0;
             s_bodyPrm = IniParams.Load(int2(256, 0));
             s_bv[0][0] = uint2(0, 0); s_bv[0][1] = uint2(0, 0); s_bv[1][0] = uint2(0, 0); s_bv[1][1] = uint2(0, 0);
-            if (gi == 0) { gBodyKey = 0; gBodyIdx = 0xffffffffu; gBodyCnt[0] = 0; gBodyCnt[1] = 0; gBodyCnt[2] = 0; }
+            if (gi == 0) { gBodyKey = 0; gBodyIdx = 0xffffffffu; gBodyCnt[0] = 0; gBodyCnt[1] = 0; gBodyCnt[2] = 0; gHemLow = 0x7f7fffffu; }
             GroupMemoryBarrierWithGroupSync();
+            // (15/11) ruedo: cada hilo aporta la altura de reposo de sus dos puntos si estan sueltos (pin < 0.5)
+            if (gi < P && pinOf(gi) < 0.5) InterlockedMin(gHemLow, asuint(g_rest[gi].posPin.y + 10.0));
+            if (gi + THREADS < P && pinOf(gi + THREADS) < 0.5) InterlockedMin(gHemLow, asuint(g_rest[gi + THREADS].posPin.y + 10.0));
             uint bodyKey = 0;
             s_bodyWant = PES_BODY && s_bodyPrm.x > 0.5 && g_legCount == 0;
             if (s_bodyWant && gi < PES_BODY_TABLES) {
@@ -1524,6 +1543,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             GroupMemoryBarrierWithGroupSync();
             s_bodyTab = gBodyIdx;
             s_bodyTc = 0.0;
+            s_hemLow = asfloat(gHemLow) - 10.0;   // (15/11) sin puntos sueltos queda enorme: pesHemOf da 0 igual (pin alto)
 #if PES_BODY_DIAG
             if (gi == 0 && s_bodyWant) {
                 uint dg; InterlockedAdd(g_bodyDiag[0], 1u, dg);

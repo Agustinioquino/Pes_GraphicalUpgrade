@@ -28,10 +28,12 @@ WindNow g_windNow;
 WindHeight g_windHeight;
 // cuanto viento hay a la altura h (m) respecto del de 1.8 m: perfil logaritmico ln(h / z0) / ln(1.8 / z0), z0 = 3 cm (pasto),
 // mezclado con parejo segun hp.prof, con piso hp.ground abajo y tope hp.top arriba
+// (15/11, Agustin: "y altura general del viento mejor?") hp.ref = la altura del viento (z500, m): a esa altura sopla lo que dice la
+// fila 494; mas abajo llega menos y mas arriba mas. De fabrica 1.8 m (la cabeza), que es lo que habia fijo hasta ahora.
 float WindHeightK(const WindHeight& hp, float h) {
-    const float z0 = 0.03f, lg = logf((std::max)(h, z0 * 1.05f) / z0) / logf(1.8f / z0);
+    const float z0 = 0.03f, ref = std::clamp(hp.ref, 0.2f, 20.0f), lg = logf((std::max)(h, z0 * 1.05f) / z0) / logf(ref / z0);
     float f = 1.0f + (lg - 1.0f) * hp.prof;
-    return h < 1.8f ? (std::max)(f, hp.ground) : (std::min)(f, hp.top);
+    return h < ref ? (std::max)(f, hp.ground) : (std::min)(f, hp.top);
 }
 namespace {
 double Hash1(long long i, unsigned seed) {
@@ -85,17 +87,21 @@ void WindFrame(float (*p)[4], double tReal) {
     // (13/11 arreglo, primer partido de Agustin con la tanda 2: "base 0.00 m/s" todo el partido) si cloth.ini no trae viento de
     // costado (claves ausentes o wind_x / wind_z en 0: su viento base es 0 y MatchWind lo multiplica), la base es 2 m/s con la fuerza
     // y el rumbo del partido de MatchWind (hora, clima, estacion, azar, x353); sin partido leido, el rumbo de las nubes (z84)
-    float tx = 0.0f, tz = 0.0f; int src = 0;   // 0 cloth.ini, 1 partido sin cloth, 2 nubes
-    { auto wx = c.clothVals.find("sim.wind_x"), wz = c.clothVals.find("sim.wind_z");
+    // (15/11) el partido leido manda SIEMPRE (2 m/s x su fuerza, con su rumbo): MatchWind ya no escribe cloth.ini con el viento unico
+    // prendido (se realimentaba), asi que el viento de costado de cloth.ini solo vale mientras no se leyo ningun partido
+    float tx = 0.0f, tz = 0.0f; int src = 0;   // 0 cloth.ini, 1 partido, 2 nubes
+    if (g_matchWind.valid) { const float s = 2.0f * g_matchWind.k; tx = cosf(g_matchWind.ang) * s; tz = sinf(g_matchWind.ang) * s; src = 1; }
+    else {
+      auto wx = c.clothVals.find("sim.wind_x"), wz = c.clothVals.find("sim.wind_z");
       if (c.clothFound && (wx != c.clothVals.end() || wz != c.clothVals.end())) {
-          tx = wx != c.clothVals.end() ? wx->second : 2.0f; tz = wz != c.clothVals.end() ? wz->second : 0.0f; }
+          tx = wx != c.clothVals.end() ? wx->second : 2.0f; tz = wz != c.clothVals.end() ? wz->second : 0.0f;
+          const float l = sqrtf(tx * tx + tz * tz); if (l > 6.0f) { tx *= 6.0f / l; tz *= 6.0f / l; } }   // tope: un cloth.ini roto no hace una tormenta
       if (!c.clothFound || tx * tx + tz * tz < 0.05f * 0.05f) {
-          if (g_matchWind.valid) { const float s = 2.0f * g_matchWind.k; tx = cosf(g_matchWind.ang) * s; tz = sinf(g_matchWind.ang) * s; src = 1; }
-          else { const float a = c.live[84][2] * 0.0174533f, s = 2.0f * std::clamp(c.live[353][0], 0.0f, 3.0f); tx = cosf(a) * s; tz = sinf(a) * s; src = 2; }
-      } }
+          const float a = c.live[84][2] * 0.0174533f, s = 2.0f * std::clamp(c.live[353][0], 0.0f, 3.0f); tx = cosf(a) * s; tz = sinf(a) * s; src = 2; }
+    }
     { static int lastSrc = -1; if (src != lastSrc) { lastSrc = src;
         auto wx = c.clothVals.find("sim.wind_x"), wz = c.clothVals.find("sim.wind_z");
-        Log("viento unico: base desde %s (cloth.ini wind_x %.2f wind_z %.2f%s) -> %.2f m/s", src == 0 ? "cloth.ini" : src == 1 ? "el partido (cloth.ini sin viento de costado)" : "las nubes z84 (sin partido leido)",
+        Log("viento unico: base desde %s (cloth.ini wind_x %.2f wind_z %.2f%s) -> %.2f m/s", src == 0 ? "cloth.ini (sin partido leido)" : src == 1 ? "el partido" : "las nubes z84 (sin partido leido)",
             wx != c.clothVals.end() ? wx->second : 0.0f, wz != c.clothVals.end() ? wz->second : 0.0f, c.clothFound ? "" : ", sin mod de ropa", sqrtf(tx * tx + tz * tz)); } }
     // la semilla de las rachas sale del viento del partido (antes de preajustes y rumbo fijo: cambiarlos no hace saltar la racha)
     { const unsigned s = (unsigned)(int)lroundf(tx * 100.0f) * 2654435761u ^ (unsigned)(int)lroundf(tz * 100.0f) * 40503u ^ 0x5bd1e995u; if (s != seed) seed = s; }
@@ -111,7 +117,8 @@ void WindFrame(float (*p)[4], double tReal) {
     // cosa recibe K(altura): pasto 8 cm, ropa 1.2 m, red (cada punto, redes.cpp), banderas arriba. x508 = cuanto perfil (0 parejo,
     // 1 real), y508 = minimo al ras del suelo, z508 = tope arriba. La fila 509 (la escribe la DLL, nunca se guarda: c.live es lo
     // que se guarda, por eso no se toca la 503) lleva x pasto = z503 x K(0.08), y ropa = w503 x K(1.2), z borde = w508, w = 1
-    const WindHeight hp{ std::clamp(P(508, 0, 0.5f), 0.0f, 1.0f), std::clamp(P(508, 1, 0.3f), 0.0f, 1.0f), std::clamp(P(508, 2, 2.0f), 1.0f, 3.0f) };
+    const float hRef = c.live[500][2] < 0.05f ? 1.8f : std::clamp(c.live[500][2], 0.2f, 10.0f);   // (15/11) z500 altura del viento; sin la clave (0) = 1.8 m
+    const WindHeight hp{ std::clamp(P(508, 0, 0.5f), 0.0f, 1.0f), std::clamp(P(508, 1, 0.3f), 0.0f, 1.0f), std::clamp(P(508, 2, 2.0f), 1.0f, 3.0f), hRef };
     g_windHeight = hp;
     p[509][0] = std::clamp(P(503, 2, 1.0f), 0.0f, 3.0f) * WindHeightK(hp, 0.08f);
     p[509][1] = std::clamp(P(503, 3, 1.0f), 0.0f, 3.0f) * WindHeightK(hp, 1.2f);
