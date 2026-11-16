@@ -1,0 +1,52 @@
+
+==== cloth_sim.hlsl
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(420,40): warning X4000: use of potentially uninitialized variable (skinC)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(803,40): warning X4000: use of potentially uninitialized variable (pesSkinModel)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(420,40): warning X4000: use of potentially uninitialized variable (skinC)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(803,40): warning X4000: use of potentially uninitialized variable (pesSkinModel)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(420,40): warning X4000: use of potentially uninitialized variable (skinC)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(803,40): warning X4000: use of potentially uninitialized variable (pesSkinModel)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(420,40): warning X4000: use of potentially uninitialized variable (skinC)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(1664,21-53): error X3663: thread sync operation found in varying flow control, consider reformulating your algorithm so all threads will hit the sync simultaneously
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(1770,42-48): error X3663: this variable dependent on potentially varying data: gi
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(1770,51-56): error X3663: this variable dependent on potentially varying data: pb
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(1771,40-58): error X3663: this variable dependent on potentially varying data: nrm
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(1772,51-61): error X3663: this variable dependent on potentially varying data: rn
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\package\cloth-mod\cloth_sim.hlsl(1770,51-56): error X3663: this variable dependent on potentially varying data: pb
+
+compilation failed; no code produced
+
+==== bisect_solo_brisa_push.hlsl
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_brisa_push.hlsl(419,40): warning X4000: use of potentially uninitialized variable (skinC)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_brisa_push.hlsl(802,40): warning X4000: use of potentially uninitialized variable (pesSkinModel)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_brisa_push.hlsl(419,40): warning X4000: use of potentially uninitialized variable (skinC)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_brisa_push.hlsl(802,40): warning X4000: use of potentially uninitialized variable (pesSkinModel)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_brisa_push.hlsl(419,40): warning X4000: use of potentially uninitialized variable (skinC)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_brisa_push.hlsl(802,40): warning X4000: use of potentially uninitialized variable (pesSkinModel)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_brisa_push.hlsl(419,40): warning X4000: use of potentially uninitialized variable (skinC)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_brisa_push.hlsl(1662,21-53): error X3663: thread sync operation found in varying flow control, consider reformulating your algorithm so all threads will hit the sync simultaneously
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_brisa_push.hlsl(1768,42-48): error X3663: this variable dependent on potentially varying data: gi
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_brisa_push.hlsl(1768,51-56): error X3663: this variable dependent on potentially varying data: pb
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_brisa_push.hlsl(1769,40-58): error X3663: this variable dependent on potentially varying data: nrm
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_brisa_push.hlsl(1770,51-61): error X3663: this variable dependent on potentially varying data: rn
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_brisa_push.hlsl(1768,51-56): error X3663: this variable dependent on potentially varying data: pb
+
+compilation failed; no code produced
+
+==== bisect_solo_solve.hlsl
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_solve.hlsl(419,40): warning X4000: use of potentially uninitialized variable (skinC)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_solve.hlsl(792,40): warning X4000: use of potentially uninitialized variable (pesSkinModel)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_solve.hlsl(419,40): warning X4000: use of potentially uninitialized variable (skinC)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_solve.hlsl(792,40): warning X4000: use of potentially uninitialized variable (pesSkinModel)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_solve.hlsl(419,40): warning X4000: use of potentially uninitialized variable (skinC)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_solve.hlsl(792,40): warning X4000: use of potentially uninitialized variable (pesSkinModel)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_solve.hlsl(419,40): warning X4000: use of potentially uninitialized variable (skinC)
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_solve.hlsl(1653,21-53): error X3663: thread sync operation found in varying flow control, consider reformulating your algorithm so all threads will hit the sync simultaneously
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_solve.hlsl(1819,39-45): error X3663: this variable dependent on potentially varying data: gi
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_solve.hlsl(1819,58-63): error X3663: this variable dependent on potentially varying data: i
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_solve.hlsl(1819,25-78): error X3663: this loop dependent on potentially varying data
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\tools\asmcheck\bisect_solo_solve.hlsl(1819,58-63): error X3663: this variable dependent on potentially varying data: i
+
+compilation failed; no code produced
+
+shaders: 166, con errores: 3 (fxc: C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\fxc.exe)
