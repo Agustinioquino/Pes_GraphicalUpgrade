@@ -261,7 +261,7 @@ cbuffer Params : register(b2)
 #define PES_IS_COLLAR (g_legCount == 0 && g_capsuleCount == 0 && (g_vertexCount == 1074 || g_vertexCount == 1100))
 #define PES_BIBW_PUSH    0.008    // (m) separacion extra de las pecheras en pecho y panza
 #define PES_BIBW_ZC      0.05     // (m, pose de armado) eje del torso en z (z mayor = adelante)
-#define PES_MENU_JUMP    3.0      // (m/s) en menus, mas rapido que esto = salto de pose: la tela viaja con el cuerpo
+#define PES_MENU_JUMP_SCALE 0.35  // (16/11) en menus: cambio relativo del determinante de la piel entre cuadros = salto de esqueleto
 struct ParticleRest { float4 posPin; float4 nrm; uint4 skin; };
 struct Capsule      { float4 a; float4 b; };
 ByteAddressBuffer               g_bindPos   : register(t0);
@@ -693,8 +693,13 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
     float3 vBody = (rest1 - restPrev) / h;
     if (pin >= 0.999) { gx[p] = rest1; vel = vBody; return; }
     // cloth-mod 0.9.9: salto del cuerpo (> 50 m/s, teletransporte / cambio de pose): la tela viaja con el cuerpo, sin velocidad
-    const float pesJump = s_menu ? PES_MENU_JUMP : 50.0;   // (15/11 c) en menus, un cambio de pose de golpe no es movimiento
-    if (dot(vBody, vBody) > pesJump * pesJump) {
+    // (16/11) en menus, el salto de esqueleto (escala de huesos 1.0 <-> 0.6) se reconoce por la escala de la piel, no por la
+    // velocidad: con 3 m/s las piernas al correr pasaban el limite y el short quedaba quieto
+    float3x4 pesSk0 = skinSlot(g_rest[p].skin.z, g_rest[p].skin.x, g_rest[p].skin.y, 0.0);
+    float3x4 pesSk1 = skinSlot(g_rest[p].skin.z, g_rest[p].skin.x, g_rest[p].skin.y, 1.0);
+    float pesDet0 = abs(determinant((float3x3)pesSk0)), pesDet1 = abs(determinant((float3x3)pesSk1));
+    bool pesScaleJump = s_menu && abs(pesDet1 - pesDet0) > PES_MENU_JUMP_SCALE * max(max(pesDet0, pesDet1), 1e-6);
+    if (dot(vBody, vBody) > 2500.0 || pesScaleJump) {
         gx[p] += rest1 - restPrev;
         xPrev = gx[p];
         vel = 0;
