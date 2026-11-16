@@ -33,6 +33,8 @@
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
+#include <vector>
+#include <cstdarg>
 
 namespace fx {
 
@@ -242,6 +244,320 @@ void __fastcall hk_ImplShow(void* impl, float dt, char show) {
     o_implShow(impl, dt, show);
 }
 
+// ---------------------------------------------------------------- 16/11 paso 1h: figuras sentadas que NO estan en el _dir_bench
+// Prueba de 1g (18:20): Monumental perfecto, pero en el Sports Park de Konami (st045_sc2018) quedan sentadas en el banco algunas
+// figuras de staff (camperas oscura / blanca / negra con botella / amarilla). No son del _dir_bench: Konami las pone dentro de los
+// otros modelos de espantapajaros del estadio (stNNN_scYYYY_front_others / _stand / dir_demoRoute ...), donde TODAS las figuras
+// del costado van juntas en pocas mallas por material (ver st009_sc2018_front_others: 32 mallas, 1 grupo). Esconder el modelo o
+// la malla entera sacaria tambien a los parados del costado (guardias, utileros, camarografos). El paquete que usa el juego para
+// el st045 no se puede leer (no esta en Data ni en los mods; la copia del mod Stade Bauer trae otras cajas), asi que la regla es
+// general y vale para todos los estadios:
+//   Al cargar cada fmdl (antes de que el juego lo suba a la placa), si es un espantapajaros de estadio (grupo de mallas
+//   "MESH_stNNN_scYYYY_<parte>") y no es el _dir_bench:
+//    a) mallas de suplente genericas fuera del _dir_bench (grupo "MESH_so_benchmen*" o material "so_benchmember*", como hace el
+//       mod Stade Bauer en su front_stand): se esconden enteras.
+//    b) dentro de la caja de los suplentes del _dir_bench de ese estadio (+0.6 m): cada pieza conectada de cada malla (pies de
+//       hasta 1.2 m) se junta con las que se tocan en x / z (de todas las mallas) = una figura. Se esconde la figura si esta
+//       SENTADA: apoya en el piso del banco (abajo <= piso + 0.35 m), mide entre 1.0 y 1.55 m, ocupa >= 0.35 m y tiene algun
+//       material que no es de utileria (m_pr_ / pr_ / z_m_pr). Parados (1.8 m), conservadoras y botellas sueltas quedan.
+//   Esconder = los triangulos de esa figura quedan degenerados (los 3 indices iguales) en TODOS los LOD de la malla: no se dibuja
+//   ni da sombra. Es el mismo fmdl en memoria; se rehace al cargar otra vez el estadio. La fila 516 (x y y) tiene que estar
+//   prendida al CARGAR el estadio; apagarla en el partido no las vuelve a mostrar hasta la proxima carga.
+//   La caja del banco sale del _dir_bench (o de las mallas de suplente de (a)) de ese mismo estadio: si todavia no se cargo, se
+//   busca el fmdl del _dir_bench en la memoria del paquete (+-64 MB del fmdl actual, dentro de la misma region) .
+// Donde: FUN_141738a30 / FUN_141739530 (datos del modelo, &archivo): si [archivo+0x40] == 2 y [archivo+0x60] empieza con "FMDL",
+// llaman al dispositivo grafico (vf 0x220 / 0x228) que crea los buffers de la placa con esos bytes. Se engancha la entrada.
+const uintptr_t kFmdlUp1 = 0x141738a30ull;
+const unsigned char kFmdlUp1Sig[25] = { 0x40,0x55,0x56,0x57,0x48,0x83,0xec,0x60,0x48,0xc7,0x44,0x24,0x20,0xfe,0xff,0xff,0xff,0x48,0x89,0x9c,0x24,0x90,0x00,0x00,0x00 };
+const uintptr_t kFmdlUp2 = 0x141739530ull;
+const unsigned char kFmdlUp2Sig[21] = { 0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xec,0x20,0x48,0x8b,0xf2,0x48,0x8b,0xf9 };
+typedef void(__fastcall* FmdlUp1Fn)(void*, void*);
+typedef uint64_t(__fastcall* FmdlUp2Fn)(void*, void*);
+FmdlUp1Fn o_fmdlUp1 = nullptr; FmdlUp2Fn o_fmdlUp2 = nullptr; bool s_okFmdl = false;
+
+const float kMargin = 0.6f, kMaxFoot = 1.2f, kGround = 0.35f, kMinH = 1.0f, kMaxH = 1.55f, kMinFoot = 0.35f;
+
+// registro desde el hilo de carga: lo pasa Present
+std::mutex s_fmMx; char s_fmLog[16][220]; int s_fmLogN = 0; unsigned s_fmLost = 0;
+void FmLog(const char* fmt, ...) {
+    char b[220]; va_list ap; va_start(ap, fmt); vsnprintf(b, sizeof b, fmt, ap); va_end(ap);
+    std::lock_guard<std::mutex> lk(s_fmMx);
+    if (s_fmLogN < 16) strcpy_s(s_fmLog[s_fmLogN++], b); else s_fmLost++;
+}
+
+// caja de los suplentes por estadio ("stNNN_scYYYY"); se junta lo visto en la misma carga (60 s), si no se reemplaza
+struct BenchBox { char pre[16] = {}; float mn[3], mx[3]; ULONGLONG t = 0; bool ok = false; };
+std::mutex s_boxMx; BenchBox s_boxes[16];
+void BoxPut(const char* pre, const float* mn, const float* mx) {
+    std::lock_guard<std::mutex> lk(s_boxMx); const ULONGLONG t = GetTickCount64();
+    BenchBox* slot = nullptr; BenchBox* old = &s_boxes[0];
+    for (auto& b : s_boxes) { if (b.ok && !strcmp(b.pre, pre)) { slot = &b; break; } if (!b.ok || b.t < old->t) old = &b; }
+    if (slot && t - slot->t < 60000) { for (int i = 0; i < 3; i++) { slot->mn[i] = std::min(slot->mn[i], mn[i]); slot->mx[i] = std::max(slot->mx[i], mx[i]); } slot->t = t; return; }
+    if (!slot) slot = old;
+    strcpy_s(slot->pre, pre); memcpy(slot->mn, mn, 12); memcpy(slot->mx, mx, 12); slot->t = t; slot->ok = true;
+}
+bool BoxGet(const char* pre, float* mn, float* mx) {
+    std::lock_guard<std::mutex> lk(s_boxMx); const ULONGLONG t = GetTickCount64();
+    for (auto& b : s_boxes) if (b.ok && !strcmp(b.pre, pre) && t - b.t < 60000) { memcpy(mn, b.mn, 12); memcpy(mx, b.mx, 12); return true; }
+    return false;
+}
+
+// lector de fmdl 2.03 con limites (mismo formato que tools/fox/fmdl.py)
+struct Fm {
+    uint8_t* p = nullptr; size_t size = 0;
+    struct { uint16_t cnt; uint32_t off; bool ok; } b0[32] = {};
+    struct { uint32_t off, len; bool ok; } b1[8] = {};
+    const uint8_t* E(int t, size_t i, size_t sz) const {
+        if (t < 0 || t >= 32 || !b0[t].ok || i >= b0[t].cnt) return nullptr;
+        const size_t o = (size_t)b0[t].off + sz * i; return (o + sz <= size) ? p + o : nullptr;
+    }
+};
+template <class T> T U(const uint8_t* q) { T v; memcpy(&v, q, sizeof v); return v; }
+bool FmOpen(Fm& f, uint8_t* p, size_t avail) {
+    if (avail < 56 || U<uint32_t>(p) != 0x4c444d46u) return false;
+    const float ver = U<float>(p + 4); if (!(ver > 1.99f && ver < 2.11f)) return false;
+    const uint64_t info = U<uint64_t>(p + 8); const uint32_t n0 = U<uint32_t>(p + 32), n1 = U<uint32_t>(p + 36);
+    const uint32_t s0 = U<uint32_t>(p + 40), s0len = U<uint32_t>(p + 44), s1 = U<uint32_t>(p + 48), s1len = U<uint32_t>(p + 52);
+    const uint64_t end = std::max<uint64_t>((uint64_t)s0 + s0len, (uint64_t)s1 + s1len);
+    if (end > avail || end < 56 || n0 > 64 || n1 > 16 || info < 56 || info + 8ull * n0 + 12ull * n1 > end) return false;
+    f.p = p; f.size = (size_t)end;
+    for (uint32_t i = 0; i < n0; i++) {
+        const uint8_t* e = p + info + 8 * i; const uint16_t t = U<uint16_t>(e);
+        if (t < 32) { f.b0[t].cnt = U<uint16_t>(e + 2); f.b0[t].off = s0 + U<uint32_t>(e + 4); f.b0[t].ok = true; }
+    }
+    for (uint32_t i = 0; i < n1; i++) {
+        const uint8_t* e = p + info + 8 * n0 + 12 * i; const uint32_t t = U<uint32_t>(e);
+        if (t < 8) { f.b1[t].off = s1 + U<uint32_t>(e + 4); f.b1[t].len = U<uint32_t>(e + 8); f.b1[t].ok = true; }
+    }
+    return f.b0[3].ok && f.b0[9].ok && f.b0[10].ok && f.b0[11].ok && f.b0[14].ok && f.b1[2].ok && f.b0[12].ok && f.b1[3].ok;
+}
+// cadena n (bloque 12 -> seccion 1 bloque 3), sin copiar: devuelve largo
+const char* FmStr(const Fm& f, uint32_t id, size_t& len) {
+    const uint8_t* e = f.E(12, id, 8); if (!e) return nullptr;
+    len = U<uint16_t>(e + 2); const size_t o = (size_t)f.b1[3].off + U<uint32_t>(e + 4);
+    return (o + len <= f.size) ? (const char*)f.p + o : nullptr;
+}
+bool StrStarts(const char* s, size_t len, const char* pre) { const size_t n = strlen(pre); return len >= n && !memcmp(s, pre, n); }
+
+struct FmMesh {
+    uint32_t nv = 0; const uint8_t* pos = nullptr; uint32_t stride = 0;   // posicion float3
+    uint16_t* idx = nullptr; uint32_t nidx = 0;                             // indices de todos los LOD de la malla
+    uint16_t mat = 0, group = 0xffff; bool bench = false;
+};
+bool FmMeshes(const Fm& f, std::vector<FmMesh>& out) {
+    const uint16_t nm = f.b0[3].cnt; out.assign(nm, FmMesh{});
+    uint32_t ibOff = 0; bool ib = false;
+    for (uint16_t i = 0; i < f.b0[14].cnt && !ib; i++) { const uint8_t* b = f.E(14, i, 16); if (b && U<uint32_t>(b) == 1) { ibOff = f.b1[2].off + U<uint32_t>(b + 8); ib = true; } }
+    if (!ib) return false;
+    uint32_t lods = 1; if (f.b0[16].ok) { const uint8_t* l = f.E(16, 0, 4); if (l) lods = std::min<uint32_t>(std::max<uint32_t>(U<uint32_t>(l), 1u), 16u); }
+    for (uint16_t k = 0; k < nm; k++) {
+        const uint8_t* e = f.E(3, k, 0x30); if (!e) return false;
+        FmMesh& m = out[k]; m.mat = U<uint16_t>(e + 4); m.nv = U<uint16_t>(e + 0xA);
+        const uint16_t fmt = U<uint16_t>(e + 8); const uint32_t ff = U<uint32_t>(e + 0x10), fc = U<uint32_t>(e + 0x14); const uint64_t fi = U<uint64_t>(e + 0x18);
+        // posicion: formato de malla -> buffers -> formato de vertice (uso 0, tipo 1 = float3)
+        const uint8_t* fa = f.E(9, fmt, 8); if (!fa) return false;
+        const uint8_t nmf = fa[0]; const uint16_t fmf = U<uint16_t>(fa + 4), fvf = U<uint16_t>(fa + 6); uint32_t vi = 0;
+        for (uint8_t j = 0; j < nmf && !m.pos; j++) {
+            const uint8_t* mf = f.E(10, (size_t)fmf + j, 8); if (!mf) return false;
+            const uint8_t bidx = mf[0], nf = mf[1], stride = mf[2]; const uint32_t moff = U<uint32_t>(mf + 4);
+            const uint8_t* bo = f.E(14, bidx, 16);
+            for (uint8_t q = 0; q < nf && bo; q++) {
+                const uint8_t* vf = f.E(11, (size_t)fvf + vi + q, 4); if (!vf) return false;
+                if (vf[0] == 0 && vf[1] == 1) {
+                    const size_t base = (size_t)f.b1[2].off + U<uint32_t>(bo + 8) + moff + U<uint16_t>(vf + 2);
+                    if (m.nv && stride >= 12 && base + (size_t)stride * (m.nv - 1) + 12 <= f.size) { m.pos = f.p + base; m.stride = stride; }
+                }
+            }
+            vi += nf;
+        }
+        // indices: rango de todos los LOD (bloque 17 relativo a la primera cara de la malla)
+        uint32_t lo = 0, hi = fc;
+        for (uint32_t j = 0; j < lods; j++) { const uint8_t* l = f.E(17, (size_t)fi + j, 8); if (!l) break; const uint32_t a = U<uint32_t>(l), c = U<uint32_t>(l + 4); lo = std::min(lo, a); hi = std::max(hi, a + c); }
+        const size_t io = (size_t)ibOff + 2ull * ((size_t)ff + lo); const uint32_t n = (hi - lo) / 3 * 3;
+        if (io + 2ull * n <= f.size) { m.idx = (uint16_t*)(f.p + io); m.nidx = n; }
+    }
+    // grupo de cada malla (bloque 2: +4 grupo, nmallas, primera)
+    for (uint16_t g = 0; g < f.b0[2].cnt; g++) {
+        const uint8_t* a = f.E(2, g, 0x20); if (!a) break;
+        const uint16_t grp = U<uint16_t>(a + 4), n = U<uint16_t>(a + 6), first = U<uint16_t>(a + 8);
+        for (uint32_t k = first; k < (uint32_t)first + n && k < nm; k++) out[k].group = grp;
+    }
+    return true;
+}
+// prefijo "stNNN_scYYYY" y parte ("front_others", "dir_bench"...) del grupo "MESH_stNNN_scYYYY_<parte>"
+bool FmStadium(const Fm& f, char* pre, char* part, size_t partN) {
+    for (uint16_t g = 0; g < f.b0[1].cnt; g++) {
+        const uint8_t* e = f.E(1, g, 8); if (!e) return false;
+        size_t len = 0; const char* s = FmStr(f, U<uint16_t>(e), len); if (!s || len < 19 || len > 80) continue;
+        if (memcmp(s, "MESH_st", 7) || memcmp(s + 10, "_sc", 3) || s[17] != '_') continue;
+        bool dig = true; for (int i : {7, 8, 9, 13, 14, 15, 16}) dig = dig && s[i] >= '0' && s[i] <= '9';
+        if (!dig) continue;
+        memcpy(pre, s + 5, 12); pre[12] = 0;
+        const size_t pl = std::min(len - 18, partN - 1); memcpy(part, s + 18, pl); part[pl] = 0;
+        return true;
+    }
+    return false;
+}
+void FmBenchFlags(const Fm& f, std::vector<FmMesh>& ms, bool wholeFile) {
+    for (auto& m : ms) {
+        if (wholeFile) { m.bench = true; continue; }
+        size_t len = 0; const char* s = nullptr;
+        const uint8_t* ge = (m.group != 0xffff) ? f.E(1, m.group, 8) : nullptr;
+        if (ge && (s = FmStr(f, U<uint16_t>(ge), len)) && StrStarts(s, len, "MESH_so_benchmen")) { m.bench = true; continue; }
+        const uint8_t* me = f.E(4, m.mat, 0x10);
+        if (me && (s = FmStr(f, U<uint16_t>(me), len)) && StrStarts(s, len, "so_benchmember")) m.bench = true;
+    }
+}
+bool FmBenchBox(const std::vector<FmMesh>& ms, float* mn, float* mx) {
+    bool any = false;
+    for (auto& m : ms) {
+        if (!m.bench || !m.pos) continue;
+        for (uint32_t v = 0; v < m.nv; v++) {
+            float q[3]; memcpy(q, m.pos + (size_t)v * m.stride, 12);
+            for (int i = 0; i < 3; i++) { if (!any || q[i] < mn[i]) mn[i] = q[i]; if (!any || q[i] > mx[i]) mx[i] = q[i]; }
+            any = true;
+        }
+    }
+    return any;
+}
+bool IsPropMat(const Fm& f, uint16_t mat) {
+    size_t len = 0; const uint8_t* me = f.E(4, mat, 0x10); const char* s = me ? FmStr(f, U<uint16_t>(me), len) : nullptr;
+    return s && (StrStarts(s, len, "m_pr_") || StrStarts(s, len, "pr_") || StrStarts(s, len, "z_m_pr"));
+}
+
+// el _dir_bench del mismo estadio en la memoria del paquete (si se carga despues que este modelo)
+bool ScanBenchNear(uint8_t* self, const char* pre, float* mn, float* mx) {
+    MEMORY_BASIC_INFORMATION mi{};
+    if (!VirtualQuery(self, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return false;
+    const uintptr_t rb = (uintptr_t)mi.BaseAddress, re = rb + mi.RegionSize, s = (uintptr_t)self;
+    const uintptr_t lo = std::max<uintptr_t>(rb, s > (64ull << 20) ? s - (64ull << 20) : 0), hi = std::min<uintptr_t>(re, s + (64ull << 20));
+    for (uintptr_t q = s - ((s - lo) / 16) * 16; q + 56 <= hi; q += 16) {
+        if (q == s || U<uint32_t>((const uint8_t*)q) != 0x4c444d46u) continue;
+        Fm f; if (!FmOpen(f, (uint8_t*)q, re - q)) continue;
+        char p2[16], part[40]; if (!FmStadium(f, p2, part, sizeof part) || strcmp(p2, pre) || strcmp(part, "dir_bench")) continue;
+        std::vector<FmMesh> ms; if (!FmMeshes(f, ms)) continue;
+        FmBenchFlags(f, ms, true);
+        if (FmBenchBox(ms, mn, mx)) return true;
+    }
+    return false;
+}
+
+__declspec(noinline) void ProcessFmdlInner(uint8_t* p, size_t avail) {
+    {
+        Fm f; if (!FmOpen(f, p, avail)) return;
+        char pre[16], part[40]; if (!FmStadium(f, pre, part, sizeof part)) return;   // no es espantapajaros de estadio
+        std::vector<FmMesh> ms; if (!FmMeshes(f, ms)) { FmLog("banca: %s_%s: no se pudo leer el fmdl, sin tocar", pre, part); return; }
+        const bool isBench = !strcmp(part, "dir_bench");
+        FmBenchFlags(f, ms, isBench);
+        float mn[3], mx[3];
+        if (FmBenchBox(ms, mn, mx)) BoxPut(pre, mn, mx);
+        if (isBench) { FmLog("banca: %s_dir_bench cargado: caja de los suplentes x %.2f..%.2f z %.2f..%.2f", pre, mn[0], mx[0], mn[2], mx[2]); return; }
+        // a) mallas de suplente fuera del _dir_bench
+        unsigned benchMeshes = 0, tris = 0;
+        for (auto& m : ms) if (m.bench && m.idx) {
+            for (uint32_t t = 0; t + 2 < m.nidx; t += 3) if (m.idx[t + 1] != m.idx[t] || m.idx[t + 2] != m.idx[t]) { m.idx[t + 1] = m.idx[t + 2] = m.idx[t]; tris++; }
+            benchMeshes++;
+        }
+        // b) figuras sentadas en la caja del banco
+        const char* src = "de este estadio";
+        if (!BoxGet(pre, mn, mx)) { if (ScanBenchNear(p, pre, mn, mx)) { BoxPut(pre, mn, mx); src = "buscada en el paquete"; } else src = nullptr; }
+        unsigned figs = 0, kept = 0;
+        if (src) {
+            struct Piece { uint16_t mesh; uint32_t root; float mn[3], mx[3]; int grp; };
+            std::vector<Piece> pcs; std::vector<std::vector<uint32_t>> rootOf(ms.size());
+            const float ex = kMargin + 1.0f;
+            for (size_t k = 0; k < ms.size(); k++) {
+                FmMesh& m = ms[k]; if (m.bench || !m.pos || !m.idx || !m.nv) continue;
+                std::vector<uint32_t> par(m.nv); for (uint32_t v = 0; v < m.nv; v++) par[v] = v;
+                auto fd = [&](uint32_t a) { while (par[a] != a) { par[a] = par[par[a]]; a = par[a]; } return a; };
+                std::vector<uint8_t> used(m.nv, 0);
+                for (uint32_t t = 0; t + 2 < m.nidx; t += 3) {
+                    const uint32_t a = m.idx[t], b = m.idx[t + 1], c = m.idx[t + 2];
+                    if (a >= m.nv || b >= m.nv || c >= m.nv || (a == b && b == c)) continue;
+                    used[a] = used[b] = used[c] = 1;
+                    uint32_t ra = fd(a), rb = fd(b); if (ra != rb) par[rb] = ra;
+                    ra = fd(a); const uint32_t rc = fd(c); if (ra != rc) par[rc] = ra;
+                }
+                std::vector<int> slot(m.nv, -1); const size_t first = pcs.size();
+                std::vector<uint32_t>& ro = rootOf[k]; ro.assign(m.nv, 0xffffffffu);
+                for (uint32_t v = 0; v < m.nv; v++) {
+                    if (!used[v]) continue;
+                    const uint32_t r = fd(v); ro[v] = r; float q[3]; memcpy(q, m.pos + (size_t)v * m.stride, 12);
+                    if (slot[r] < 0) { slot[r] = (int)pcs.size(); Piece pc{ (uint16_t)k, r, { q[0], q[1], q[2] }, { q[0], q[1], q[2] }, -1 }; pcs.push_back(pc); }
+                    Piece& pc = pcs[slot[r]]; for (int i = 0; i < 3; i++) { pc.mn[i] = std::min(pc.mn[i], q[i]); pc.mx[i] = std::max(pc.mx[i], q[i]); }
+                }
+                // solo piezas chicas cerca del banco
+                size_t w = first;
+                for (size_t i = first; i < pcs.size(); i++) {
+                    const Piece& pc = pcs[i]; const float cx = (pc.mn[0] + pc.mx[0]) * 0.5f, cz = (pc.mn[2] + pc.mx[2]) * 0.5f;
+                    if (pc.mx[0] - pc.mn[0] > kMaxFoot || pc.mx[2] - pc.mn[2] > kMaxFoot) continue;
+                    if (cx < mn[0] - ex || cx > mx[0] + ex || cz < mn[2] - ex || cz > mx[2] + ex) continue;
+                    pcs[w++] = pc;
+                }
+                pcs.resize(w);
+            }
+            // figuras: piezas (de cualquier malla) cuyas cajas x / z se tocan (3 cm)
+            const size_t n = pcs.size(); std::vector<int> par(n); for (size_t i = 0; i < n; i++) par[i] = (int)i;
+            auto fd = [&](int a) { while (par[a] != a) { par[a] = par[par[a]]; a = par[a]; } return a; };
+            for (size_t i = 0; i < n; i++) for (size_t j = i + 1; j < n; j++) {
+                const Piece& a = pcs[i]; const Piece& b = pcs[j];
+                if (a.mn[0] - 0.03f <= b.mx[0] && b.mn[0] - 0.03f <= a.mx[0] && a.mn[2] - 0.03f <= b.mx[2] && b.mn[2] - 0.03f <= a.mx[2]) {
+                    const int ra = fd((int)i), rb = fd((int)j); if (ra != rb) par[rb] = ra;
+                }
+            }
+            struct Fig { float mn[3], mx[3]; bool person = false, init = false; };
+            std::vector<Fig> fg(n);
+            for (size_t i = 0; i < n; i++) {
+                Fig& g = fg[fd((int)i)]; const Piece& pc = pcs[i];
+                if (!g.init) { memcpy(g.mn, pc.mn, 12); memcpy(g.mx, pc.mx, 12); g.init = true; }
+                for (int a = 0; a < 3; a++) { g.mn[a] = std::min(g.mn[a], pc.mn[a]); g.mx[a] = std::max(g.mx[a], pc.mx[a]); }
+                if (!IsPropMat(f, ms[pc.mesh].mat)) g.person = true;
+            }
+            std::vector<std::vector<uint8_t>> hide(ms.size());
+            for (size_t i = 0; i < n; i++) {
+                if (fd((int)i) != (int)i) continue;
+                const Fig& g = fg[i]; const float cx = (g.mn[0] + g.mx[0]) * 0.5f, cz = (g.mn[2] + g.mx[2]) * 0.5f;
+                if (cx < mn[0] - kMargin || cx > mx[0] + kMargin || cz < mn[2] - kMargin || cz > mx[2] + kMargin) continue;
+                const float h = g.mx[1] - g.mn[1], foot = std::max(g.mx[0] - g.mn[0], g.mx[2] - g.mn[2]);
+                const bool sit = g.person && g.mn[1] <= mn[1] + kGround && h >= kMinH && h <= kMaxH && foot >= kMinFoot;
+                if (!sit) { if (g.person) kept++; continue; }
+                figs++;
+                if (figs <= 6) FmLog("banca: %s_%s: figura sentada en el banco escondida x %.2f..%.2f z %.2f..%.2f alto %.2f", pre, part, g.mn[0], g.mx[0], g.mn[2], g.mx[2], h);
+                for (size_t j = 0; j < n; j++) if (fd((int)j) == (int)i) {
+                    std::vector<uint8_t>& hv = hide[pcs[j].mesh]; if (hv.empty()) hv.assign(ms[pcs[j].mesh].nv, 0);
+                    hv[pcs[j].root] = 1;
+                }
+            }
+            for (size_t k = 0; k < ms.size(); k++) {
+                if (hide[k].empty()) continue;
+                FmMesh& m = ms[k]; const std::vector<uint32_t>& ro = rootOf[k];
+                // la marca va en la raiz de la pieza; cada vertice usado sabe su raiz (primera pasada)
+                std::vector<uint8_t> hv(m.nv, 0); for (uint32_t v = 0; v < m.nv; v++) if (ro[v] != 0xffffffffu && hide[k][ro[v]]) hv[v] = 1;
+                for (uint32_t t = 0; t + 2 < m.nidx; t += 3) {
+                    const uint32_t a = m.idx[t], b = m.idx[t + 1], c = m.idx[t + 2];
+                    if (a >= m.nv || b >= m.nv || c >= m.nv || (a == b && b == c)) continue;
+                    if (hv[a] || hv[b] || hv[c]) { m.idx[t + 1] = m.idx[t + 2] = m.idx[t]; tris++; }
+                }
+            }
+        }
+        FmLog("banca: %s_%s: %u figuras sentadas y %u mallas de suplente escondidas (%u triangulos), %u personas paradas quedan; caja del banco %s",
+                  pre, part, figs, benchMeshes, tris, kept, src ? src : "NO hallada (solo mallas de suplente)");
+    }
+}
+void ProcessFmdl(void* fileRef) {
+    if (!(Live(0, 0.0f) > 0.5f && Live(1, 1.0f) > 0.5f)) return;
+    uintptr_t file = 0, data = 0; int st = 0;
+    if (!Rd((uintptr_t)fileRef, file) || !Heap(file) || !Rd(file + 0x40, st) || st != 2 || !Rd(file + 0x60, data) || !Heap(data)) return;
+    MEMORY_BASIC_INFORMATION mi{};
+    if (!VirtualQuery((void*)data, &mi, sizeof mi) || mi.State != MEM_COMMIT || !(mi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) || (mi.Protect & PAGE_GUARD)) return;
+    uint32_t magic = 0; if (!Rd(data, magic) || magic != 0x4c444d46u) return;
+    const size_t avail = (uintptr_t)mi.BaseAddress + mi.RegionSize - data;
+    __try { ProcessFmdlInner((uint8_t*)data, avail); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { FmLog("banca: error al leer un fmdl de estadio (%p): sin tocar", (void*)data); }
+}
+void __fastcall hk_FmdlUp1(void* mdl, void* fileRef) { ProcessFmdl(fileRef); o_fmdlUp1(mdl, fileRef); }
+uint64_t __fastcall hk_FmdlUp2(void* mdl, void* fileRef) { ProcessFmdl(fileRef); return o_fmdlUp2(mdl, fileRef); }
+
 // solo lectura (desde Present): todos los cuerpos "_dir_bench" de las escenas y su estado
 struct BenchSeen { uintptr_t body; uint8_t node, vis; uint32_t drawFlags; bool drawOk; char name[40]; };
 int ScanBenches(BenchSeen* out, int max) {
@@ -377,6 +693,15 @@ void Install() {
     else if (MH_CreateHook((void*)kFdmVf3, (void*)&hk_Fdm, (void**)&o_fdm) == MH_OK && MH_EnableHook((void*)kFdmVf3) == MH_OK) s_okTick = true;
     if (!SigAt(kFdhVf1, kFdhVf1Sig, sizeof kFdhVf1Sig)) Log("banca: la firma de FixDemoHuman::vf1 (0x141f87e00) no coincide: sin sonda de cinematicas");
     else if (MH_CreateHook((void*)kFdhVf1, (void*)&hk_Fdh, (void**)&o_fdh) == MH_OK && MH_EnableHook((void*)kFdhVf1) == MH_OK) s_okProbe = true;
+    {   // 16/11 paso 1h: figuras sentadas de los otros espantapajaros, al cargar cada fmdl
+        const bool a = SigAt(kFmdlUp1, kFmdlUp1Sig, sizeof kFmdlUp1Sig), b = SigAt(kFmdlUp2, kFmdlUp2Sig, sizeof kFmdlUp2Sig);
+        if (!a || !b) Log("banca: la firma de 0x141738a30 / 0x141739530 (fmdl a la placa) no coincide (%d %d): las figuras sentadas de otros modelos quedan", a, b);
+        else if (MH_CreateHook((void*)kFmdlUp1, (void*)&hk_FmdlUp1, (void**)&o_fmdlUp1) == MH_OK && MH_EnableHook((void*)kFmdlUp1) == MH_OK) {
+            if (MH_CreateHook((void*)kFmdlUp2, (void*)&hk_FmdlUp2, (void**)&o_fmdlUp2) == MH_OK && MH_EnableHook((void*)kFmdlUp2) == MH_OK) s_okFmdl = true;
+            else { MH_DisableHook((void*)kFmdlUp1); MH_RemoveHook((void*)kFmdlUp1); o_fmdlUp1 = nullptr; }
+        }
+        Log("banca: figuras sentadas en el banco de los otros modelos del estadio (al cargar) %s", s_okFmdl ? "enganchado" : "NO");
+    }
     Log("banca: escondido por la escena del estadio (cada cuadro) %s", s_okImpl ? "enganchado" : "NO");
     Log("banca: reloj %s, sonda de cinematicas %s, esconder el banco %s (fila 516: x %.0f)", s_okTick ? "enganchado" : "NO", s_okProbe ? "enganchada" : "NO",
         !s_okHide ? "NO (firma de 0x1419055f0 distinta)" : s_okVisHook ? (s_okApply ? "listo (SetVisible y al aplicar)" : "solo por SetVisible") : "solo en cinematicas (gancho de SetVisible fallo)", Live(0, 0.0f));
@@ -385,7 +710,13 @@ void Install() {
 
 void BancaPresent() {
     if (!s_tried) Install();
-    if (!s_okTick && !s_okProbe && !s_okVisHook && !s_okApply && !s_okImpl) return;
+    if (!s_okTick && !s_okProbe && !s_okVisHook && !s_okApply && !s_okImpl && !s_okFmdl) return;
+    {   // lineas del hilo de carga (paso 1h)
+        char tmp[16][220]; int n = 0; unsigned lost = 0;
+        { std::lock_guard<std::mutex> lk(s_fmMx); n = s_fmLogN; for (int i = 0; i < n; i++) strcpy_s(tmp[i], s_fmLog[i]); s_fmLogN = 0; lost = s_fmLost; s_fmLost = 0; }
+        for (int i = 0; i < n; i++) Log("%s", tmp[i]);
+        if (lost) Log("banca: (%u lineas de figuras del banco no anotadas)", lost);
+    }
     // lineas de la sonda
     const int k = s_logN.load();
     for (int i = 0; i < k; i++) Log("%s", s_logBuf[i]);
