@@ -58,9 +58,10 @@ const uintptr_t kExeLo = 0x140000000ull, kExeHi = 0x143a00000ull;
 typedef void(__fastcall* FdmVf3)(void*);
 typedef void(__fastcall* FdhVf1)(void*, void*, uint32_t, uint8_t, uint64_t, void*);
 typedef void(__fastcall* SetVisibleFn)(void*, char);
-FdmVf3 o_fdm = nullptr; FdhVf1 o_fdh = nullptr;
+FdmVf3 o_fdm = nullptr; FdhVf1 o_fdh = nullptr; SetVisibleFn o_vis = nullptr;
 
-bool s_tried = false, s_okTick = false, s_okProbe = false, s_okHide = false;
+bool s_tried = false, s_okTick = false, s_okProbe = false, s_okHide = false, s_okVisHook = false;
+std::atomic<unsigned> s_gameShows{0};               // veces que el juego quiso mostrar el banco (queda escondido)
 
 bool Readable(const void* p, size_t n) {
     MEMORY_BASIC_INFORMATION mi{};
@@ -164,8 +165,26 @@ void BenchSetVisible(bool vis) {
     if (!s_okHide || !BenchStillValid()) return;
     uint8_t cur = 0; if (!Rd(s_benchBody + 0x81, cur)) return;
     if ((cur != 0) == vis) return;
-    ((SetVisibleFn)kSetVisible)((void*)s_benchBody, vis ? 1 : 0);
+    (o_vis ? o_vis : (SetVisibleFn)kSetVisible)((void*)s_benchBody, vis ? 1 : 0);
     std::lock_guard<std::mutex> lk(s_mx); s_st.benchHidden = !vis; s_st.benchSeq++;
+}
+
+// cuerpo -> asa (+0x30) -> entidad (+0x18) StadiumModel con nombre "..._dir_bench..."
+bool IsBenchBody(uintptr_t body) {
+    uintptr_t vt = 0, h = 0, e = 0, evt = 0; char nm[64];
+    if (!Rd(body, vt) || vt != kVtBody || !Rd(body + 0x30, h) || !Heap(h) || !Rd(h + 0x18, e) || !Heap(e) || !Rd(e, evt) || evt != kVtStadiumModel) return false;
+    return FoxStr(e + 0x28, nm, sizeof nm) && strstr(nm, "_dir_bench") != nullptr;
+}
+
+// 16/11 prueba 1: el juego vuelve a mostrar el banco al terminar la cinematica (FUN_14191d410 -> FUN_14191d830 -> SetVisible
+// con los grupos de objetos de cada modo) y el reloj de FixDemoMain no corre en el juego. Por eso el escondido se aplica aca:
+// si el juego pide mostrar el banco con la fila prendida, se lo deja escondido.
+void __fastcall hk_Vis(void* body, char vis) {
+    if (vis && Live(0, 0.0f) > 0.5f && Live(1, 1.0f) > 0.5f && IsBenchBody((uintptr_t)body)) {
+        s_gameShows.fetch_add(1, std::memory_order_relaxed);
+        vis = 0;                                       // si ya estaba escondido, el original no hace nada
+    }
+    o_vis(body, vis);
 }
 
 // ---------------------------------------------------------------- convocados
@@ -252,18 +271,20 @@ void Install() {
     auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
     if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("banca: exe distinto (sello %08X): sin ganchos", (unsigned)nt->FileHeader.TimeDateStamp); return; }
     s_okHide = SigAt(kSetVisible, kSetVisibleSig, sizeof kSetVisibleSig);
+    if (s_okHide && MH_CreateHook((void*)kSetVisible, (void*)&hk_Vis, (void**)&o_vis) == MH_OK && MH_EnableHook((void*)kSetVisible) == MH_OK) s_okVisHook = true;
+    else o_vis = nullptr;
     if (!SigAt(kFdmVf3, kFdmVf3Sig, sizeof kFdmVf3Sig)) Log("banca: la firma de FixDemoMain::vf3 (0x141f37770) no coincide: sin reloj, no hace nada");
     else if (MH_CreateHook((void*)kFdmVf3, (void*)&hk_Fdm, (void**)&o_fdm) == MH_OK && MH_EnableHook((void*)kFdmVf3) == MH_OK) s_okTick = true;
     if (!SigAt(kFdhVf1, kFdhVf1Sig, sizeof kFdhVf1Sig)) Log("banca: la firma de FixDemoHuman::vf1 (0x141f87e00) no coincide: sin sonda de cinematicas");
     else if (MH_CreateHook((void*)kFdhVf1, (void*)&hk_Fdh, (void**)&o_fdh) == MH_OK && MH_EnableHook((void*)kFdhVf1) == MH_OK) s_okProbe = true;
     Log("banca: reloj %s, sonda de cinematicas %s, esconder el banco %s (fila 516: x %.0f)", s_okTick ? "enganchado" : "NO", s_okProbe ? "enganchada" : "NO",
-        s_okHide ? "listo" : "NO (firma de 0x1419055f0 distinta)", Live(0, 0.0f));
+        !s_okHide ? "NO (firma de 0x1419055f0 distinta)" : s_okVisHook ? "listo (tambien cuando el juego lo vuelve a mostrar)" : "solo en cinematicas (gancho de SetVisible fallo)", Live(0, 0.0f));
 }
 } // namespace
 
 void BancaPresent() {
     if (!s_tried) Install();
-    if (!s_okTick && !s_okProbe) return;
+    if (!s_okTick && !s_okProbe && !s_okVisHook) return;
     // lineas de la sonda
     const int k = s_logN.load();
     for (int i = 0; i < k; i++) Log("%s", s_logBuf[i]);
@@ -276,8 +297,14 @@ void BancaPresent() {
     if (on && t >= nextT) {
         const unsigned tk = s_ticks.load(std::memory_order_relaxed);
         if (nextT > 0) Log("banca: reloj del juego %.1f por segundo", (tk - lastTicks) / 10.0);
+        // solo lectura: si el banco conocido volvio a estar visible sin pasar por SetVisible, decirlo
+        const uintptr_t body = s_benchBody; uint8_t v = 0;
+        if (body && Live(1, 1.0f) > 0.5f && Rd(body + 0x81, v) && v) Log("banca: OJO el banco de Konami esta visible (cuerpo +0x81 = %u) sin pedido por SetVisible", v);
         lastTicks = tk; nextT = t + 10.0;
     }
+    // el juego quiso mostrar el banco y se lo dejo escondido
+    static unsigned seenShows = 0; const unsigned shows = s_gameShows.load(std::memory_order_relaxed);
+    if (shows != seenShows) { Log("banca: el juego pidio mostrar el banco de Konami (%u veces en total): queda escondido", shows); seenShows = shows; }
     // cambios de convocados / banco
     static unsigned seenSheet = 0, seenBench = 0;
     State st; { std::lock_guard<std::mutex> lk(s_mx); st = s_st; }
