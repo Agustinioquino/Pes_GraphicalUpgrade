@@ -78,7 +78,7 @@ def gnoise(shape, sy, sx, rng):        # ruido gaussiano periodico, grano (sy, s
     return (f - f.mean()) / (f.std() + 1e-9)
 
 IRIS_R = 0.245
-def iris_1024(src):
+def iris_1024(src, seed=7):
     N = 1024; TH, NR = 4096, 1024
     # ampliacion bicubica de la textura del juego + un poco de nitidez (no se pasa por polares: dos remuestreos la emborronaban)
     im = Image.fromarray((src[..., :3] * 255 + 0.5).astype(np.uint8)).resize((N, N), Image.BICUBIC)
@@ -107,6 +107,34 @@ def iris_1024(src):
     hfc = bil(hf[..., None], a / (2 * np.pi) * TH + bil(wv[..., None], a / (2 * np.pi) * TH, np.clip(r / 0.5, 0, 1) * NR, wrapx=True)[..., 0], np.clip(r / 0.5, 0, 1) * NR, wrapx=True)[..., 0]
     m = sstep(0.36, 0.46, R) * (1 - sstep(0.90, 1.02, R))
     out = np.clip(out * (1 + 0.05 * np.tanh(1.2 * hfc) * m)[..., None], 0, 1)
+    # (16/11 c, Agustin: "podes anadirle mas realismo a los colores de la iris?") lo que tiene un iris real y la textura del juego no:
+    # (1) anillo mas calido pegado a la pupila (pigmento del collarete; en ojos claros se nota mas), con borde irregular;
+    # (2) el tono y la saturacion cambian por sectores (nunca es un color parejo); (3) pecas de pigmento marron;
+    # (4) la capa de adelante es mas clara y gris, el fondo entre hebras mas oscuro y con mas color.
+    rc2 = np.random.default_rng(seed)
+    pa = a / (2 * np.pi) * TH; pr = np.clip(r / 0.5, 0, 1) * NR
+    def polar(field): return bil(field[..., None], pa, pr, wrapx=True)[..., 0]
+    lumo = (out * [0.2126, 0.7152, 0.0722]).sum(-1, keepdims=True)
+    mid = out[(R > 0.5) & (R < 0.85)].mean(0)
+    cool = float(np.clip((mid[2] - mid[0]) / max(mid.max(), 1e-3) + 0.15, 0, 1))        # 0 marron .. 1 azul / gris
+    edge = 0.50 + 0.07 * polar(gnoise((NR, TH), 400, 90, rc2)) + 0.03 * polar(gnoise((NR, TH), 400, 14, rc2))
+    wc = sstep(0.34, 0.40, R) * (1 - sstep(-0.07, 0.07, R - edge))
+    warm = lumo * np.array([1.38, 1.02, 0.55]) * (1.0 + 0.25 * cool)
+    out = out + (warm - out) * (wc * (0.16 + 0.26 * cool))[..., None]
+    sect = polar(gnoise((NR, TH), 300, 260, rc2)); sect2 = polar(gnoise((NR, TH), 120, 70, rc2))
+    lum2 = (out * [0.2126, 0.7152, 0.0722]).sum(-1, keepdims=True)
+    out = lum2 + (out - lum2) * (1 + 0.16 * sect * m)[..., None]                       # saturacion por sectores
+    out = out * (1 + 0.07 * sect2 * m)[..., None]
+    out = out * (1 + (np.array([0.035, 0.0, -0.035]) * (sect2 * m)[..., None]))         # tono: sectores apenas mas calidos o mas frios
+    det = out - np.asarray(Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(6))).astype(np.float64) / 255
+    dl = (det * [0.2126, 0.7152, 0.0722]).sum(-1, keepdims=True)
+    out = lum2 + (out - lum2) * (1 - np.clip(dl * 6.0, -0.35, 0.35) * m[..., None])       # hebras claras mas grises, fondo con mas color
+    for i in range(int(rc2.integers(4, 9))):
+        an = rc2.uniform(0, 2 * np.pi); rd = rc2.uniform(0.50, 0.88) * IRIS_R; sz = rc2.uniform(0.005, 0.012)
+        d = np.hypot(X - rd * np.cos(an), (Y - rd * np.sin(an)) * rc2.uniform(0.7, 1.4)) / sz
+        spot = (1 - sstep(0.4, 1.0, d)) * rc2.uniform(0.25, 0.6) * (0.35 + 0.65 * cool)
+        out = out + (lumo * np.array([0.80, 0.52, 0.30]) - out) * spot[..., None]
+    out = np.clip(out, 0, 1)
     return np.concatenate([out, np.ones((N, N, 1))], -1)
 
 def srm_512():
@@ -140,7 +168,7 @@ if __name__ == '__main__':
     src, out = sys.argv[1], sys.argv[2]; os.makedirs(out, exist_ok=True)
     names = sorted(f[:-5] for f in os.listdir(src) if f.startswith('eye_color_sub_') and f.endswith('.ftex'))
     for n in names:
-        img = iris_1024(load(os.path.join(src, n + '.dds')))
+        img = iris_1024(load(os.path.join(src, n + '.dds')), 100 + int(n.split('_')[3]))
         k = write_ftex(os.path.join(src, n + '.ftex'), os.path.join(out, n + '.ftex'), img)
         Image.fromarray((img[..., :3] * 255 + 0.5).astype(np.uint8)).save(os.path.join(out, n + '.png'))
         print(n, img.shape, 'mips', k)
