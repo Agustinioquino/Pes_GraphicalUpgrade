@@ -534,7 +534,7 @@ ID3D11ShaderResourceView* MuscleEffortSRV();    // (02/11) esfuerzo por jugador 
 // (25/10) la ropa choca con el cuerpo real (cuerpo.cpp): piel del cuerpo deformada por personaje para el simulador (t122..t124)
 void BodyOnDraw(ID3D11DeviceContext* c, UINT count, UINT start, INT base, int kind = 0);   // en cada dibujo de la piel del cuerpo (VS 1c02a92a); kind 1 = camiseta (medicion, 327.w)
 ID3D11ShaderResourceView* TorsoNeedSRV();   // (31/10) mapa "torso bajo la camiseta" preciso (t124 del VS de la piel y de su sombra)
-bool KitDrawIsShirt(ID3D11DeviceContext* c, UINT count, INT base);   // (16/11) el dibujo de kit es una camiseta (no short ni medias)
+bool KitDrawIsShirt(ID3D11DeviceContext* c, UINT count, UINT start, INT base);   // (16/11) el dibujo de kit es una camiseta (no short ni medias)
 void TorsoShirtNote(ID3D11DeviceContext* c, int kind);   // (31/10 b) dibujo de la camiseta: origen del personaje para "camiseta por jugador" (fila 320)
 void BodyPresent();                                // registro de mallas nuevas, lote del cuadro (personajes + piel), log
 void BodyClothSRVs(ID3D11ShaderResourceView* out[3]);   // tablas, vertices, listas (null si no esta listo)

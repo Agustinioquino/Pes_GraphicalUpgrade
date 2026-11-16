@@ -416,7 +416,8 @@ ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash
             int tt = 0;
             if (key) for (const KeyN& k : s_keys) if (k.b == b && k.f == f) { tt = k.n; break; }
             if (key && !tt) for (const KeyN& k : s_keysPrev) if (k.b == b && k.f == f) { tt = k.n; break; }
-            if (!tt) tt = ft > 0 ? ft : t_lastTone;
+            // (16/11 b) solo con el torso de ESTE personaje (misma clave b6). Sin el (cuerpo propio = pieza aparte, otra clave) no se
+            // corrige: con el tono medido de la cara o el ultimo torso, el brazo se aclaraba debajo del borde del torso (video 15.12.20)
             t_armTorsoTone = tt;
             if (ft > 0 && key) { bool had = false; for (KeyN& k : s_faceKeys) if (k.b == b && k.f == f) { k.n = ft; had = true; break; } if (!had && s_faceKeys.size() < 256) s_faceKeys.push_back({ b, f, ft }); }
         }

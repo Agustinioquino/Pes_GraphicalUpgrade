@@ -722,69 +722,88 @@ void TorsoShirtNote(ID3D11DeviceContext* c, int kind) {
 // (SetPrivateData: muere con el). Hasta leerlo, y si el formato no es el esperado, vale lo de antes (camiseta).
 static const GUID kKitGuid = { 0x3b8e51c7, 0x52a4, 0x4f0d, { 0x8c, 0x16, 0x2a, 0x91, 0x7e, 0x40, 0xd3, 0x65 } };
 struct KitNote { uint32_t cnt; struct { uint32_t first, n; int32_t st; } e[8]; };   // st: 0 pendiente, 1 camiseta, 2 otra prenda
-struct KitPend { ID3D11Buffer* vb; UINT first, n, idx; };
+struct KitPend { ID3D11Buffer* vb; ID3D11Buffer* ib; UINT vbOf, ibOf, isz, n, first; INT base; };
 static std::mutex s_kitMx; static std::vector<KitPend> s_kitPend;
-bool KitDrawIsShirt(ID3D11DeviceContext* c, UINT count, INT base) {
+// (16/11 b) las prendas del kit comparten el buffer de vertices (y el de indices): leer los primeros vertices desde base daba
+// otra prenda (log 15:10: la misma malla de 834 indices salia a -0.05..1.06 y a 0.88..1.48). Ahora se leen los INDICES del
+// dibujo y solo los vertices que esos indices usan. Clave en el buffer de indices: (inicio en bytes, indices) del dibujo.
+bool KitDrawIsShirt(ID3D11DeviceContext* c, UINT count, UINT start, INT base) {
     if (count < 30) return true;
     ID3D11Buffer* vb = nullptr; UINT st = 0, of = 0; c->IAGetVertexBuffers(0, 1, &vb, &st, &of);
     if (!vb) return true;
+    ID3D11Buffer* ib = nullptr; DXGI_FORMAT fmt = DXGI_FORMAT_UNKNOWN; UINT iof = 0; c->IAGetIndexBuffer(&ib, &fmt, &iof);
     bool shirt = true;
-    if (st == 12) {
-        const UINT first = of + (UINT)(base > 0 ? base : 0) * 12u, n = count / 3;
+    const UINT isz = fmt == DXGI_FORMAT_R32_UINT ? 4u : fmt == DXGI_FORMAT_R16_UINT ? 2u : 0u;
+    if (st == 12 && ib && isz) {
+        const UINT first = iof + start * isz;
         std::lock_guard<std::mutex> lk(s_kitMx);
         KitNote k{}; UINT sz = sizeof k;
-        if (FAILED(vb->GetPrivateData(kKitGuid, &sz, &k)) || sz != sizeof k) { k = KitNote{}; }
+        if (FAILED(ib->GetPrivateData(kKitGuid, &sz, &k)) || sz != sizeof k) { k = KitNote{}; }
         bool had = false;
-        for (uint32_t i = 0; i < k.cnt && i < 8; i++) if (k.e[i].first == first && k.e[i].n == n) { had = true; shirt = k.e[i].st != 2; break; }
+        for (uint32_t i = 0; i < k.cnt && i < 8; i++) if (k.e[i].first == first && k.e[i].n == count) { had = true; shirt = k.e[i].st != 2; break; }
         if (!had && k.cnt < 8 && s_kitPend.size() < 64) {
-            k.e[k.cnt].first = first; k.e[k.cnt].n = n; k.e[k.cnt].st = 0; k.cnt++;
-            vb->SetPrivateData(kKitGuid, sizeof k, &k);
-            vb->AddRef(); s_kitPend.push_back({ vb, first, n, count });
+            k.e[k.cnt].first = first; k.e[k.cnt].n = count; k.e[k.cnt].st = 0; k.cnt++;
+            ib->SetPrivateData(kKitGuid, sizeof k, &k);
+            vb->AddRef(); ib->AddRef(); s_kitPend.push_back({ vb, ib, of, first, isz, count, first, base });
         }
     }
+    if (ib) ib->Release();
     vb->Release();
     return shirt;
 }
-// Present (contexto inmediato): leer hasta 2 mallas de kit pendientes
+static ID3D11Buffer* KitCopy(ID3D11Buffer* src, UINT from, UINT bytes, D3D11_MAPPED_SUBRESOURCE* m) {
+    D3D11_BUFFER_DESC d; src->GetDesc(&d);
+    if (bytes == 0 || from + bytes > d.ByteWidth) return nullptr;
+    ID3D11Buffer* sg = nullptr;
+    D3D11_BUFFER_DESC qd{}; qd.ByteWidth = bytes; qd.Usage = D3D11_USAGE_STAGING; qd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    if (FAILED(g_dev.dev->CreateBuffer(&qd, nullptr, &sg)) || !sg) return nullptr;
+    D3D11_BOX bx = { from, 0, 0, from + bytes, 1, 1 };
+    g_dev.imm->CopySubresourceRegion(sg, 0, 0, 0, 0, src, 0, &bx);
+    if (FAILED(g_dev.imm->Map(sg, 0, D3D11_MAP_READ, 0, m))) { sg->Release(); return nullptr; }
+    return sg;
+}
+// Present (contexto inmediato): leer hasta 2 mallas de kit pendientes (sus indices y los vertices que usan)
 static void KitClsPresent() {
     if (!g_dev.imm || !g_dev.dev) return;
     for (int round = 0; round < 2; round++) {
         KitPend p{};
         { std::lock_guard<std::mutex> lk(s_kitMx); if (s_kitPend.empty()) return; p = s_kitPend.back(); s_kitPend.pop_back(); }
-        D3D11_BUFFER_DESC d; p.vb->GetDesc(&d);
-        int st = 1; float y0 = 0.0f, y1 = 0.0f; bool read = false;
-        if (p.first + 12 <= d.ByteWidth) {
-            const UINT n = (std::min)(p.n, (d.ByteWidth - p.first) / 12u), bytes = n * 12u;
-            ID3D11Buffer* sg = nullptr;
-            D3D11_BUFFER_DESC qd{}; qd.ByteWidth = bytes; qd.Usage = D3D11_USAGE_STAGING; qd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-            if (n >= 8 && SUCCEEDED(g_dev.dev->CreateBuffer(&qd, nullptr, &sg)) && sg) {
-                D3D11_BOX bx = { p.first, 0, 0, p.first + bytes, 1, 1 };
-                g_dev.imm->CopySubresourceRegion(sg, 0, 0, 0, 0, p.vb, 0, &bx);
-                D3D11_MAPPED_SUBRESOURCE m;
-                if (SUCCEEDED(g_dev.imm->Map(sg, 0, D3D11_MAP_READ, 0, &m))) {
-                    const float* f = (const float*)m.pData; bool ok = true; y0 = 1e9f; y1 = -1e9f;
-                    for (UINT i = 0; i < n; i++) {
+        int st = 1; float y0 = 0.0f, y1 = 0.0f; bool read = false; UINT nv = 0;
+        D3D11_MAPPED_SUBRESOURCE mi;
+        if (ID3D11Buffer* si = KitCopy(p.ib, p.ibOf, p.n * p.isz, &mi)) {
+            std::vector<uint32_t> idx(p.n);
+            for (UINT i = 0; i < p.n; i++) idx[i] = p.isz == 4 ? ((const uint32_t*)mi.pData)[i] : ((const uint16_t*)mi.pData)[i];
+            g_dev.imm->Unmap(si, 0); si->Release();
+            uint32_t lo = 0xffffffffu, hi = 0;
+            for (uint32_t v : idx) { lo = (std::min)(lo, v); hi = (std::max)(hi, v); }
+            const int64_t v0 = (int64_t)p.base + lo, v1 = (int64_t)p.base + hi;
+            if (v0 >= 0 && v1 >= v0 && v1 - v0 < 200000) {
+                nv = (UINT)(v1 - v0 + 1);
+                D3D11_MAPPED_SUBRESOURCE mv;
+                if (ID3D11Buffer* sv = KitCopy(p.vb, p.vbOf + (UINT)v0 * 12u, nv * 12u, &mv)) {
+                    const float* f = (const float*)mv.pData; bool ok = true; y0 = 1e9f; y1 = -1e9f;
+                    for (uint32_t v : idx) {
+                        const UINT i = (UINT)((int64_t)p.base + v - v0);
                         const float x = f[i * 3], y = f[i * 3 + 1], z = f[i * 3 + 2];
                         if (!(fabsf(x) < 3.0f && fabsf(y) < 3.0f && fabsf(z) < 3.0f)) { ok = false; break; }   // no son posiciones de un personaje
                         y0 = (std::min)(y0, y); y1 = (std::max)(y1, y);
                     }
-                    g_dev.imm->Unmap(sg, 0);
+                    g_dev.imm->Unmap(sv, 0); sv->Release();
                     if (ok) { read = true; st = y1 > 1.25f ? 1 : 2; }
                 }
-                sg->Release();
             }
         }
         {
             std::lock_guard<std::mutex> lk(s_kitMx);
             KitNote k{}; UINT sz = sizeof k;
-            if (SUCCEEDED(p.vb->GetPrivateData(kKitGuid, &sz, &k)) && sz == sizeof k) {
+            if (SUCCEEDED(p.ib->GetPrivateData(kKitGuid, &sz, &k)) && sz == sizeof k) {
                 for (uint32_t i = 0; i < k.cnt && i < 8; i++) if (k.e[i].first == p.first && k.e[i].n == p.n) k.e[i].st = st;
-                p.vb->SetPrivateData(kKitGuid, sizeof k, &k);
+                p.ib->SetPrivateData(kKitGuid, sizeof k, &k);
             }
         }
         static int nlog = 0;
-        if (nlog++ < 60) { if (read) Log("kit: malla de %u indices, alto %.2f..%.2f m -> %s", p.idx, y0, y1, st == 1 ? "camiseta" : "otra prenda (no cuenta como camiseta)"); else Log("kit: malla de %u indices sin leer (queda como camiseta)", p.idx); }
-        p.vb->Release();
+        if (nlog++ < 60) { if (read) Log("kit: malla de %u indices (%u vertices), alto %.2f..%.2f m -> %s", p.n, nv, y0, y1, st == 1 ? "camiseta" : "otra prenda (no cuenta como camiseta)"); else Log("kit: malla de %u indices sin leer (queda como camiseta)", p.n); }
+        p.vb->Release(); p.ib->Release();
     }
 }
 // (31/10 b) en Present: cierra el cuadro de las camisetas y lee el de hace 2 (sin esperar a la GPU)
