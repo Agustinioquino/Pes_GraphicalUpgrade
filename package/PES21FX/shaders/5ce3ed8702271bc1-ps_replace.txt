@@ -139,6 +139,7 @@ Texture2D<float4> StereoParams : register(t125);
 #include "pes_skintone.hlsli"
 #include "pes_pores.hlsli"   // (27/10 c) poros triplanares sobre la posicion de reposo
 #include "pes_collar.hlsli"   // (27/10) cuello de las caras reales fundido con el torso (fila 322)
+#include "pes_debug_cuerpo.hlsli"   // (16/11) vistas de diagnostico del cuerpo (fila 519): la cara en rojo con su cuadricula
 #include "pes_wrdepth.hlsli"   // (09/11 g) arrugas por gesto con profundidad (t45 / t46, x15 = 2) y edad del jugador
 #include "pes_skin2.hlsli"     // (12/11) PIEL v2 (w124): color, sangre, cavidades, rugosidad y brillo rehechos
 #define PES_SW_HAS_SCENE
@@ -1191,6 +1192,7 @@ void main(
   r0.x = (uint)r0.x << 4;
   r0.x = (uint)r0.x;
   o1.z = 0.000977517106 * r0.x;
+  { float4 dbgC = PesDbgCuerpo(); if (dbgC.z > 0.5) o0.xyz = PesDbgColor(dbgC, o0.xyz, g_tex_diffuse.SampleLevel(g_samplerAnisotropic_Clamp_s, uvD, 0.0).xyz, uvD, 3); }   // (16/11) z519
   o0.w = 1;
   if (pesMicroDbg.x >= 0) o0.xyz = pesMicroDbg;
   o2.y = r0.z;

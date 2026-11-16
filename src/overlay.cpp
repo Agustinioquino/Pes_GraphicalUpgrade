@@ -2377,11 +2377,17 @@ static void DrawMenu() {
             ImGui::EndPopup();
         }
         if (ImGui::GetContentRegionAvail().x - ImGui::GetItemRectMax().x + ImGui::GetWindowPos().x > 210.0f * UIK()) ImGui::SameLine();   // (08/11) si no entra, el buscador baja a su propia fila
+        const bool searchByKb = s_focusSearch;   // (16/11) Ctrl+F: el buscador se abre con el teclado, nunca con el teclado en pantalla
         if (s_focusSearch) { ImGui::SetKeyboardFocusHere(); s_focusSearch = false; }
         ImGui::SetNextItemWidth(std::max(140.0f * UIK(), ImGui::GetContentRegionAvail().x - (s_search[0] ? ImGui::GetFrameHeight() + 6.0f * UIK() : 0.0f)));
         ImGui::InputTextWithHint("##buscar", IcoL(kIcoSearch, TRS(PadUi() && g_cfg.menuPad ? "Buscar opcion (OPTIONS: teclado del mando)" : "Buscar opcion (Ctrl+F)")).c_str(), s_search, sizeof(s_search));
         // (14/11) con el mando: elegir el buscador (cruz / triangulo) abre el teclado en pantalla; mientras esta abierto el campo se suelta
-        if (ImGui::IsItemActivated() && s_pad.connected && g_cfg.menuPad && GImGui->NavInputSource == ImGuiInputSource_Gamepad) MvVkOpen();
+        // (16/11, Agustin: "el menu de insert detecta el mando todo el tiempo en el buscador aunque no este tocando el mando y quiera usar
+        // el teclado") ImGui deja NavInputSource en "mando" desde el ultimo boton del mando y no lo cambia con el mouse ni con las letras:
+        // un clic o Ctrl+F en el buscador abria el teclado en pantalla y soltaba el campo. Ahora solo se abre si lo ultimo tocado es el mando
+        // y el buscador se eligio con el mando (no con clic ni Ctrl+F); y si se vuelve al teclado / mouse, el teclado en pantalla se cierra.
+        if (ImGui::IsItemActivated() && PadUi() && g_cfg.menuPad && !searchByKb && !ImGui::IsMouseClicked(ImGuiMouseButton_Left) && GImGui->NavInputSource == ImGuiInputSource_Gamepad) MvVkOpen();
+        if (MvVkIsOpen() && !PadUi()) MvVkClose();
         if (MvVkIsOpen() && ImGui::IsItemActive()) ImGui::ClearActiveID();
         if (s_search[0]) { ImGui::SameLine(0, 4.0f * UIK()); if (ImGui::Button(s_iconsOk ? (Ico(kIcoX) + "##limpiar").c_str() : "x", ImVec2(ImGui::GetFrameHeight(), 0))) s_search[0] = 0; }
     }
@@ -2937,7 +2943,10 @@ void OverlayPresent(IDXGISwapChain* sc) {
                 const bool stick = std::max(std::max(fabsf(s_pad.lx), fabsf(s_pad.ly)), std::max(fabsf(s_pad.rx), fabsf(s_pad.ry))) > 0.5f, trig = s_pad.l2 > 0.5f || s_pad.r2 > 0.5f;
                 padEdge |= (stick && !s_dStick) || (trig && !s_dTrig); padHeld |= stick || trig; s_dStick = stick; s_dTrig = trig;
             } else { memset(s_dB, 0, sizeof s_dB); s_dStick = s_dTrig = false; }
-            if (padHeld || padEdge) s_dPadT = tn;
+            // (16/11) un boton / palanca que queda apretado solo (POV o eje que reposa fuera del centro) contaba como mando para siempre y el
+            // teclado nunca ganaba: lo mantenido cuenta solo 2 s despues de haberse apretado
+            static double s_dEdgeT = -1.0e9; if (padEdge) s_dEdgeT = tn;
+            if (padEdge || (padHeld && tn - s_dEdgeT < 2.0)) s_dPadT = tn;
             // teclado y mouse leidos directo de Windows (con el menu cerrado ImGui no recibe las teclas): solo con el juego al frente
             bool kbEdge = false;
             if (GetForegroundWindow() == s_hwnd) {

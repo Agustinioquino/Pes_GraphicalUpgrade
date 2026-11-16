@@ -438,6 +438,10 @@ PreOut main(float4 pos : SV_Position, float2 uv : TEXCOORD0) {
   g_shRad = radians(E6.x > 0.0 ? E6.x : 0.27) * 0.5 + 1e-4;   // (07/11 c) radio = la mitad del diametro angular
   g_shSteps = E6.y > 1.5 ? 48 : (E6.y > 0.5 ? 24 : 12);
   g_shLen = clamp(E7.y > 0.0 ? E7.y : 0.45, 0.1, 2.0);
+  // (15/11, Agustin: "hay muchos bugs, en partes del rostro, en partes del modelo") los pasos de la traza eran fijos: con el alcance
+  // largo (y380 = 1.07 m en su ini) cada paso media hasta 9 cm y el rayo se salteaba la nariz, los dedos o el borde de la ropa
+  // (sombra con agujeros y grano). Ahora la cantidad de pasos crece con el alcance: la misma densidad que a 0.45 m, tope 64
+  g_shSteps = (int)min((float)g_shSteps * max(g_shLen / 0.45, 1.0) + 0.5, 64.0);
   bool geo = !(zA < 0.1 || zA > 60.0);   // fondo del editor, sin geometria: solo recibe la luz volumetrica
   if (!geo) { float zc = LinZ(float2(0.5, 0.5)); zSgn = (abs(zc) >= 0.1 && abs(zc) <= 60.0) ? (zc < 0.0 ? -1.0 : 1.0) : (m_projectionParam.z < 0.0 ? -1.0 : 1.0); zA = 4.0; zC = zA * zSgn; }
   // --- preset o manual ---
