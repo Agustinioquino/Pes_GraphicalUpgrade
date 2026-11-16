@@ -1654,6 +1654,29 @@ bool MvVirtualKeyboard(char* buf, int cap, const MvPad& p, float k, float alpha,
 static float s_curScale = 1.0f;
 void MvSetCursorScale(float s) { s_curScale = std::clamp(s, 0.75f, 2.0f); }
 float MvCursorScale() { return s_curScale; }
+// (16/11, Agustin 17:09: "agrega un icono que aparezca al usar la rueda para meter y sacar zoom" + imagen de dos lupas, "con brillo como
+// el resto") LUPA con + (acercar) o - (alejar): aro grueso y mango en diagonal, contorno blanco con filo oscuro y el brillo verde de los
+// cursores; aparece de golpe con un pulso y se va sola (age 0..0.75 s). c = centro del aro
+void MvZoomIconDraw(ImDrawList* dl, ImVec2 c, int dir, float k, float age) {
+    const float in = std::min(1.0f, age / 0.08f), out = std::clamp((0.75f - age) / 0.35f, 0.0f, 1.0f), a = in * out;
+    if (a <= 0.0f) return;
+    const float sc = k * (1.0f + 0.18f * expf(-age * 14.0f)), R = 9.0f * sc, th = 3.2f * sc;
+    const ImVec4 grn(0.20f, 0.91f, 0.50f, 1.0f);
+    const ImVec2 h0(c.x + R * 0.72f, c.y + R * 0.72f), h1(c.x + R * 1.85f, c.y + R * 1.85f);
+    for (int i = 6; i >= 1; i--) { const ImU32 g = ColA(grn, 0.07f * a * (1.0f - (float)i / 7.5f)); const float w = th + (float)i * 2.2f * k;   // brillo
+        dl->AddCircle(c, R, g, 32, w); dl->AddLine(h0, h1, g, w); }
+    auto shape = [&](ImU32 col, float w, ImVec2 o) {
+        dl->AddCircle(ImVec2(c.x + o.x, c.y + o.y), R, col, 32, w);
+        dl->AddLine(ImVec2(h0.x + o.x, h0.y + o.y), ImVec2(h1.x + o.x, h1.y + o.y), col, w * 1.25f);
+        const float s2 = R * 0.52f;
+        dl->AddLine(ImVec2(c.x - s2 + o.x, c.y + o.y), ImVec2(c.x + s2 + o.x, c.y + o.y), col, w * 0.85f);
+        if (dir > 0) dl->AddLine(ImVec2(c.x + o.x, c.y - s2 + o.y), ImVec2(c.x + o.x, c.y + s2 + o.y), col, w * 0.85f); };
+    shape(Col(0, 0, 0, 0.28f * a), th, ImVec2(1.2f * k, 1.6f * k));                       // sombra
+    dl->AddCircleFilled(c, R - th * 0.5f, ColA(ImVec4(0.05f, 0.07f, 0.08f, 1), 0.45f * a), 32);   // vidrio oscuro translucido
+    shape(Col(0.02f, 0.03f, 0.03f, 0.85f * a), th + 1.6f * k, ImVec2(0, 0));                  // filo oscuro
+    shape(ColA(Lerp4(ImVec4(1, 1, 1, 1), grn, 0.18f), a), th, ImVec2(0, 0));               // blanco con un toque verde
+}
+
 void MvCursorDraw(ImDrawList* dl, ImVec2 m, int kind, bool down, float k, float alpha, bool anim, int style) {
     if (alpha <= 0.0f) return;
     k *= s_curScale;

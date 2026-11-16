@@ -333,8 +333,8 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
               if (edge) Log("camara libre: velocidad %.2f m/s (cruceta)", g_cfg.live[344][1]);
           } }
         // zoom con la cruceta arriba / abajo (suave, como Re Pag / Av Pag)
-        if (pad.b[kPadUp]) s_zoomTarget *= 1.0f - 0.45f * dt;
-        if (pad.b[kPadDown]) s_zoomTarget *= 1.0f + 0.45f * dt;
+        if (pad.b[kPadUp]) { s_zoomTarget *= 1.0f - 0.45f * dt; ZoomIconNote(1); }   // (16/11) lupa en pantalla al hacer zoom
+        if (pad.b[kPadDown]) { s_zoomTarget *= 1.0f + 0.45f * dt; ZoomIconNote(-1); }
         if (ed[kPadTriangle]) { TakeFromGame(pos, tgt); memset(s_pv, 0, sizeof s_pv); Log("camara libre: triangulo, se vuelve a la camara del juego"); }
         // modo foto: el reloj del juego
         auto cur = [] { return g_cfg.live[343][1] > 0.5f && TiempoMatchToo() ? TiempoFactor() : 1.0f; };
@@ -393,6 +393,7 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
     }
     {
         const int wheel = s_wheel.exchange(0);
+        if (wheel != 0) { ZoomIconNote(wheel); static int nw = 0; if (nw++ < 3) Log("camara libre: rueda %d (%s)", wheel, front ? "ventana al frente" : "SIN la ventana al frente: no hace zoom"); }
         // (15/11 c, Agustin 02:29: "funciones de vista de motor moderno permitir mover la camara, rotar, panear, zoom") en el Motor la
         // rueda ACERCA la camara al pivote (como un editor), no cambia el campo de vision; fuera del Motor sigue siendo el zoom
         if (wheel != 0 && front && motor && s_pivotOk && !s_follow) {

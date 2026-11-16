@@ -597,6 +597,15 @@ static std::atomic<double> s_vcPulseT{-1.0e9}; static std::atomic<float> s_vcPul
 // del doble clic se mide desde ahi y en altos de ese rectangulo. INFERIDO: alto completo y pegado a la derecha (lo dice el log).
 static std::atomic<float> s_vcAspect{0.0f}, s_vcCx{0}, s_vcCy{0};
 static std::atomic<double> s_vcMoveT{-1.0e9};   // (16/11) ultima vez que la camara a mano se movio
+// (16/11, Agustin 17:08 / 17:09: "dale a la camara del mouse del menu apariencia la opcion de hacer zoom con la rueda y cambiar vista a
+// perspectiva o ortografica", "con un boton", "agrega un icono que aparezca al usar la rueda", "con brillo como el resto")
+static std::atomic<bool> s_vcOrtho{false}; static float s_vcOrthoCur = 0.0f;   // 0 = perspectiva .. 1 = ortografica (animado)
+static std::atomic<float> s_vcBtn[4] = {};   // boton perspectiva / ortografica (pixeles de la ventana; lo dibuja overlay.cpp)
+static std::atomic<double> s_ziT{-1.0e9}; static std::atomic<int> s_ziDir{0};
+void ZoomIconNote(int dir) { if (dir == 0) return; s_ziDir.store(dir > 0 ? 1 : -1); s_ziT.store(Now()); }
+bool ZoomIconGet(float* age, int* dir) { const float a = (float)(Now() - s_ziT.load()); if (a < 0.0f || a > 0.75f) return false; *age = a; *dir = s_ziDir.load(); return true; }
+bool MenuViewCamOrtho() { return s_vcOrtho.load(); }
+void MenuViewCamOrthoButton(float x0, float y0, float x1, float y1) { s_vcBtn[0] = x0; s_vcBtn[1] = y0; s_vcBtn[2] = x1; s_vcBtn[3] = y1; }
 static uintptr_t s_vcMv = 0; static double s_vcT = 0; static int s_vcLog = 0;
 // (15/11 d, Agustin 17:56: "unicamente en el menu editar jugador y sus submenus, pero no en el resto de menus y no en el motor") la
 // camara a mano solo vale dentro de Editar > Jugadores. La clase de cada pagina sale del RTTI del exe (vtable[-1] -> localizador ->
@@ -663,6 +672,7 @@ static void VcMenuExtent(uint8_t* I, double now) {
     if (fresh) s_menuRightT.store(now);
 }
 static bool VcInMenu(int x) { return Now() - s_menuRightT.load() < 0.5 && (float)x < s_menuRightPx.load(); }
+bool MenuViewCamLive() { return VcLive(); }
 bool MenuViewCamHint() { return VcLive() && !s_over.load() && !VcInMenu(s_curX.load()); }   // overlay.cpp: la guia de abajo muestra girar / mover / zoom
 // lo llama freecam.cpp hk_SetCam antes de mandar la camara; save = 0x34 bytes desde +0x10 (lo devuelve despues)
 bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
@@ -677,11 +687,11 @@ bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
     // UNA camara (unas 1.5 llamadas por cuadro: el visor y otro render target del Editar). Antes, al cambiar de puntero se olvidaba la base
     // y la camara que volvia traia lo que habiamos escrito como "base nueva": se sumaba dos veces y saltaba. Ahora cada camara guarda su
     // propia base y lo ultimo escrito (hasta 4).
-    struct VcCam { unsigned char* cam; unsigned char base[0x34], wrote[0x34]; bool haveBase, dirty; double t; };
+    struct VcCam { unsigned char* cam; unsigned char base[0x34], wrote[0x34]; bool haveBase, dirty; double t; float gameFov, wroteFov; bool fovW; };
     static VcCam s_vc[4] = {}; static int s_vcCamLog = 0;
     VcCam* E = nullptr; { const double tn = Now(); int old = 0;
         for (int i = 0; i < 4; i++) { if (s_vc[i].cam == cam) { E = &s_vc[i]; break; } if (s_vc[i].t < s_vc[old].t) old = i; }
-        if (!E) { E = &s_vc[old]; E->cam = cam; E->haveBase = false; E->dirty = false; if (s_vcCamLog++ < 6) Log("mouse en menus: camara del visor: camara %p anotada (lugar %d)", (void*)cam, old); }
+        if (!E) { E = &s_vc[old]; E->cam = cam; E->haveBase = false; E->dirty = false; E->fovW = false; if (s_vcCamLog++ < 6) Log("mouse en menus: camara del visor: camara %p anotada (lugar %d)", (void*)cam, old); }
         E->t = tn; }
     unsigned char* s_base = E->base; unsigned char* s_wrote = E->wrote; bool& s_haveBase = E->haveBase; bool& s_dirty = E->dirty;
     // solo posicion y objetivo (+0x10..+0x27) son nuestros: si el juego los cambio, son la base nueva; lo demas (arriba, cerca / lejos,
@@ -689,8 +699,12 @@ bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
     if (!s_haveBase || memcmp(cam + 0x10, s_wrote, 24) != 0) {   // el juego puso otra vista (p. ej. al entrar a Cara): se arranca de esa
         if (s_haveBase && s_dirty) VcReset("el juego cambio la vista del visor");
         memcpy(s_base, cam + 0x10, 24); memcpy(s_wrote, cam + 0x10, 24); s_haveBase = true; s_dirty = false; }
-    memcpy(s_base + 24, cam + 0x10 + 24, 0x34 - 24);
-    auto Restore = [&]() { if (s_dirty) { memcpy(cam + 0x10, s_base, 24); memcpy(s_wrote, s_base, 24); s_dirty = false; Log("mouse en menus: camara del visor: vuelve a la del juego"); } };
+    // campo de vision: si lo escribimos nosotros (ortografica) el del juego es el guardado, si el juego puso otro, ese es el nuevo
+    { float cf; memcpy(&cf, cam + 0x40, 4); if (!E->fovW || cf != E->wroteFov) { E->gameFov = cf; E->fovW = false; } }
+    memcpy(s_base + 24, cam + 0x10 + 24, 0x34 - 24); memcpy(s_base + 0x30, &E->gameFov, 4);
+    auto Restore = [&]() {
+        if (E->fovW) { memcpy(cam + 0x40, &E->gameFov, 4); E->fovW = false; }
+        if (s_dirty) { memcpy(cam + 0x10, s_base, 24); memcpy(s_wrote, s_base, 24); s_dirty = false; Log("mouse en menus: camara del visor: vuelve a la del juego"); } };
     if (!mv) { if (s_vcMv) { VcReset("salio del visor"); s_vcMv = 0; } s_vcPlayer = false; Restore(); return false; }
     if (!s_vcPlayer.load()) { if (s_vcYawCur != 0 || s_vcPitchCur != 0 || s_vcZoomCur != 1.0f || s_vcPan[0] != 0 || s_vcPan[1] != 0 || s_vcPan[2] != 0) VcReset("fuera de Apariencia"); Restore(); return false; }
     if (mv != s_vcMv) { VcReset("visor nuevo"); s_vcMv = mv; }
@@ -711,7 +725,8 @@ bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
     static int s_vcFrame = -1; const int pf = PresentNo(); const bool step = pf != s_vcFrame; s_vcFrame = pf;
     const double now = Now(); const float dt = step ? (float)std::clamp(now - s_vcT, 0.0, 0.1) : 0.0f; if (step) s_vcT = now;
     s_vcYaw += s_vcDYaw.exchange(0); s_vcPitch += s_vcDPitch.exchange(0);
-    { const int w = s_vcWheel.exchange(0); if (w) s_vcZoom = std::clamp(s_vcZoom * powf(0.88f, (float)w / 120.0f), 0.12f, 3.0f); }
+    { const int w = s_vcWheel.exchange(0); if (w) { s_vcZoom = std::clamp(s_vcZoom * powf(0.88f, (float)w / 120.0f), 0.12f, 3.0f); static int nz = 0; if (nz++ < 3) Log("mouse en menus: camara del visor: rueda -> distancia x%.2f", s_vcZoom); } }
+    { const float to = s_vcOrtho.load() ? 1.0f : 0.0f; if (fabsf(s_vcOrthoCur - to) > 1e-3f) s_vcOrthoCur += (to - s_vcOrthoCur) * std::clamp(8.0f * dt, 0.0f, 1.0f); else s_vcOrthoCur = to; }
     const float pitch0 = asinf(std::clamp(v[1] / d, -1.0f, 1.0f)), yaw0 = atan2f(v[0], v[2]);
     s_vcPitch = std::clamp(s_vcPitch, -1.35f - pitch0, 1.35f - pitch0);   // nunca justo arriba / abajo del jugador
     // lo que se ve sigue al objetivo (arrastrar se siente directo; el doble clic y la vuelta se ven como un movimiento suave)
@@ -774,8 +789,17 @@ bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
         }
     }
     (void)save;
-    if (s_vcYawCur == 0 && s_vcPitchCur == 0 && s_vcZoomCur == 1.0f && s_vcPanCur[0] == 0 && s_vcPanCur[1] == 0 && s_vcPanCur[2] == 0) { Restore(); return false; }
+    if (s_vcYawCur == 0 && s_vcPitchCur == 0 && s_vcZoomCur == 1.0f && s_vcPanCur[0] == 0 && s_vcPanCur[1] == 0 && s_vcPanCur[2] == 0 && s_vcOrthoCur == 0.0f) { Restore(); return false; }
     float nt[3], np[3]; for (int i = 0; i < 3; i++) { nt[i] = tgt[i] + s_vcPanCur[i]; np[i] = nt[i] + nv[i]; }
+    // ORTOGRAFICA (como la del Motor): la camara se aleja K veces sobre la misma linea y el campo de vision se cierra en la misma
+    // proporcion: el objetivo queda del mismo tamano y las lineas paralelas casi no se juntan. Animado (s_vcOrthoCur)
+    if (s_vcOrthoCur > 0.0f) {
+        const float K = 1.0f + 19.0f * s_vcOrthoCur * s_vcOrthoCur;
+        for (int i = 0; i < 3; i++) np[i] = nt[i] + nv[i] * K;
+        const float nf = 2.0f * atanf(tanf(fov * 0.5f) / K);
+        memcpy(cam + 0x40, &nf, 4); E->wroteFov = nf; E->fovW = true;
+        { float cf; memcpy(&cf, cam + 0x38, 4); const float need = dn * K + 50.0f; if (cf == cf && cf < need) memcpy(cam + 0x38, &need, 4); }   // que no corte lejos
+    } else if (E->fovW) { memcpy(cam + 0x40, &E->gameFov, 4); E->fovW = false; }
     // (16/11) camara en movimiento: el TAA del juego mezcla la historia sin saber que la camara se movio (rastros); camhook.cpp le
     // pide descartar la historia mientras se mueve (MenuViewCamMoving)
     { static float s_lastNp[3] = {}, s_lastNt[3] = {}; float dm = 0.0f; for (int i = 0; i < 3; i++) dm = std::max(dm, std::max(fabsf(np[i] - s_lastNp[i]), fabsf(nt[i] - s_lastNt[i])));
@@ -804,6 +828,8 @@ static void VcInput() {
     if (!ok) { s_vcDrag = 0; return; }
     const float ch = (float)rc.bottom;
     int drag = s_vcDrag.load();
+    if (drag == 0 && lEdge && (float)p.x >= s_vcBtn[0].load() && (float)p.x <= s_vcBtn[2].load() && (float)p.y >= s_vcBtn[1].load() && (float)p.y <= s_vcBtn[3].load() && s_vcBtn[2].load() > 0.0f) {
+        const bool o = !s_vcOrtho.load(); s_vcOrtho = o; Log("mouse en menus: camara del visor: vista %s (boton)", o ? "ortografica" : "en perspectiva"); return; }
     if (drag == 0 && lEdge && !s_over.load() && !VcInMenu(p.x)) {   // doble clic rapido (menos de 0.35 s y casi en el mismo lugar)
         static double s_lt = -1.0e9; static POINT s_lp{}; const double t = Now();
         if (t - s_lt < 0.35 && abs(p.x - s_lp.x) + abs(p.y - s_lp.y) < 10) {
@@ -1188,7 +1214,7 @@ static void Install() {
 
 void MenuMouseWheel(int delta) {
     if (!s_ok || g_cfg.menuMouse == 0) return;
-    if (VcLive() && !s_over.load() && !VcInMenu(s_curX.load())) { s_vcWheel.fetch_add(delta, std::memory_order_relaxed); return; }   // (15/11) rueda sobre el jugador del Editar = zoom
+    if (VcLive() && !s_over.load() && !VcInMenu(s_curX.load())) { s_vcWheel.fetch_add(delta, std::memory_order_relaxed); ZoomIconNote(delta); return; }   // (15/11) rueda sobre el jugador del Editar = zoom
     s_wheel.fetch_add(delta, std::memory_order_relaxed);
 }
 

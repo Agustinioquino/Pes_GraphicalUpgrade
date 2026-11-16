@@ -3130,6 +3130,42 @@ void OverlayPresent(IDXGISwapChain* sc) {
         const bool vc = MenuViewCamHint();   // (15/11 ythnmm) sobre el visor del Editar: girar / mover / zoom
         hintH = MvMouseHint(ImGui::GetForegroundDrawList(), ImVec2(ds.x - 18.0f * k, ds.y - 18.0f * k), k, mouseHintA, vc ? TRS("Girar camara") : TRS("Seleccionar / avanzar"), vc ? TRS("Mover camara / Volver") : TRS("Volver"), kn, TRS("Cursor"), vc ? TRS("Zoom") : nullptr, vc, vc ? TRS("Zoom en la zona") : nullptr) + 6.0f * k;
     }
+    // (16/11, Agustin 17:08: "cambiar vista a perspectiva u ortografica ... con un boton") boton de la camara con mouse de Apariencia,
+    // abajo a la derecha sobre la guia; el clic lo toma menumouse.cpp (VcInput) con el rectangulo que se le pasa aca
+    if (!g_menuOpen && !MotorUiOn() && MenuViewCamLive()) {
+        ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
+        const bool o = MenuViewCamOrtho(); const char* lab = o ? TRS("Ortogr\303\241fica") : TRS("Perspectiva");
+        const ImVec2 ts = ImGui::CalcTextSize(lab), pad(12.0f * k, 7.0f * k); const float ic = 18.0f * k;
+        const ImVec2 b(ds.x - 18.0f * k, ds.y - 18.0f * k - hintH - 6.0f * k), a0(b.x - ts.x - ic - pad.x * 2 - 6.0f * k, b.y - std::max(ts.y, ic) - pad.y * 2);
+        POINT cp{}; HWND hw = OverlayHwnd(); bool hov = false;
+        if (hw && GetCursorPos(&cp) && ScreenToClient(hw, &cp)) hov = (float)cp.x >= a0.x && (float)cp.x <= b.x && (float)cp.y >= a0.y && (float)cp.y <= b.y;
+        const ImVec4 g = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+        if (hov || o) for (int i = 4; i >= 1; i--) dl->AddRect(ImVec2(a0.x - i * 1.5f * k, a0.y - i * 1.5f * k), ImVec2(b.x + i * 1.5f * k, b.y + i * 1.5f * k), ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, (hov ? 0.09f : 0.05f) * (5 - i))), 9.0f * k, 0, 2.0f * k);   // brillo
+        dl->AddRectFilled(a0, b, IM_COL32(12, 16, 20, hov ? 215 : 180), 7.0f * k);
+        dl->AddRect(a0, b, o ? ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 0.9f)) : IM_COL32(255, 255, 255, 60), 7.0f * k, 0, 1.2f * k);
+        {   // icono: cubo en perspectiva (lineas que se juntan) u ortografico (paralelas)
+            const ImVec2 c(a0.x + pad.x + ic * 0.5f, (a0.y + b.y) * 0.5f); const float r = ic * 0.42f, sk = o ? 0.0f : 0.28f;
+            const ImU32 w = o ? ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 1)) : IM_COL32(235, 238, 242, 255);
+            const ImVec2 f0(c.x - r, c.y - r * 0.6f), f1(c.x + r * 0.6f, c.y - r * 0.6f), f2(c.x + r * 0.6f, c.y + r), f3(c.x - r, c.y + r);
+            const float bx = r * 0.45f, by = -r * 0.45f, sh = r * sk;   // cara de atras: corrida y (en perspectiva) mas chica
+            const ImVec2 g0(f0.x + bx + sh, f0.y + by + sh), g1(f1.x + bx - sh, f1.y + by + sh), g2(f2.x + bx - sh, f2.y + by - sh), g3(f3.x + bx + sh, f3.y + by - sh);
+            const float lw = 1.4f * k;
+            dl->AddQuad(g0, g1, g2, g3, (w & 0x00ffffff) | 0x8c000000, lw); dl->AddQuad(f0, f1, f2, f3, w, lw);
+            dl->AddLine(f0, g0, w, lw); dl->AddLine(f1, g1, w, lw); dl->AddLine(f2, g2, w, lw); dl->AddLine(f3, g3, w, lw);
+        }
+        dl->AddText(ImVec2(a0.x + pad.x + ic + 6.0f * k, (a0.y + b.y - ts.y) * 0.5f), o ? ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 1)) : IM_COL32(235, 238, 242, 255), lab);
+        MenuViewCamOrthoButton(a0.x, a0.y, b.x, b.y);
+        hintH += (b.y - a0.y) + 6.0f * k;
+    } else MenuViewCamOrthoButton(0, 0, 0, 0);
+    {   // (16/11, Agustin 17:09: lupa al hacer zoom con la rueda / la cruceta, "con brillo como el resto") al lado del cursor
+        float za; int zd;
+        if (!g_menuOpen && ZoomIconGet(&za, &zd)) {
+            const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
+            POINT cp{}; HWND hw = OverlayHwnd(); ImVec2 c(ds.x * 0.5f, ds.y * 0.5f);
+            if (hw && GetCursorPos(&cp) && ScreenToClient(hw, &cp) && cp.x >= 0 && cp.y >= 0 && cp.x < ds.x && cp.y < ds.y && (mmCur || MotorUiOn())) c = ImVec2((float)cp.x + 26.0f * k, (float)cp.y + 24.0f * k);
+            MvZoomIconDraw(ImGui::GetForegroundDrawList(), c, zd, k * 1.15f, za);
+        }
+    }
     if (curToast) {   // (14/11 c) "Cursor apagado / prendido (F1)" chico, abajo a la derecha, en el idioma del menu; se va solo en 1.8 s
         const float t = (float)(Now() - s_curToastT), a = std::min(1.0f, std::min(t / 0.12f, (1.8f - t) / 0.35f));
         char kb[16]; const char* kn = KeyHudName(g_cfg.cursorKey, kb, sizeof(kb));
