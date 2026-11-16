@@ -299,7 +299,9 @@ void main(
   if (P90.w > 0.5) {
     float irisM = irisIn;
     // sombra del parpado/limbo sobre el iris (ambient occlusion suave en el borde)
-    float3 base = eyeBase * lerp(1.0, 1.0 - 0.18 * saturate(P91.z) / 0.5, smoothstep(0.85, 1.0, irisR) * irisOn);
+    // (16/11, Agustin: "el borde del iris tan oscuro no me gusto") el borde se oscurecia en 4 lugares a la vez (textura -35 %, aca -18 %,
+    // z318 -15 % y el bloque viejo del final -22 %: cerca de -60 % de frente). Ahora cada uno es suave: en total ~-16 % de frente
+    float3 base = eyeBase * lerp(1.0, 1.0 - 0.05 * saturate(P91.z) / 0.5, smoothstep(0.85, 1.0, irisR) * irisOn);
     // cornea: Fresnel de Schlick (n = 1.376 -> F0 = 0.025), mas fuerte de costado
     float ndv = saturate(dot(eyeNc, eyeV));
     float F = 0.025 + 0.975 * pow(1 - ndv, 5);
@@ -369,7 +371,7 @@ void main(
       if (bo > 0.001) {
         float ndv2 = saturate(dot(eyeNc, eyeV));
         float limb = smoothstep(0.85, 1.0, irisR) * (1.0 - smoothstep(1.05, 1.3, irisR));
-        base *= 1.0 - bo * limb * (0.10 + 0.30 * (1.0 - ndv2));
+        base *= 1.0 - bo * limb * (0.02 + 0.10 * (1.0 - ndv2));   // (16/11) era 0.10 + 0.30
         float th = irisTh * 6.2831853;
         float vw = fwidth(th * 23.0);
         float vein = pow(saturate(1.0 - abs(sin(th * 23.0 + 2.6 * sin(th * 7.0) + 1.7 * sin(irisR * 3.1)))), 24.0);
@@ -395,7 +397,7 @@ void main(
       float sclera = 1.0 - smoothstep(0.02, 0.22, eyeIris);
       float limbal = smoothstep(0.04, 0.25, eyeIris) * (1.0 - smoothstep(0.3, 0.75, eyeIris));
       c *= lerp(float3(1,1,1), float3(0.96, 0.94, 0.92), sclera);
-      c *= 1.0 - 0.22 * limbal;
+      c *= 1.0 - 0.03 * limbal;   // (16/11) era 0.22: borde del iris menos oscuro
       float l = dot(c, float3(0.2126, 0.7152, 0.0722));
       c = lerp(c, saturate(lerp(l.xxx, c, 1.1)), smoothstep(0.4, 0.8, eyeIris));
       o0.xyz = saturate(c);
