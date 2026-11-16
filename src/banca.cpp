@@ -25,7 +25,10 @@
 //     reusar el clip de sentado (dml_md_lockerSpeech_001_sit_00N) para los suplentes.
 //
 // Fila 516 (ini / menu "Banco de suplentes"): x on / off, y esconder el banco de Konami (1 = si), z anotar cinematicas (1 = si),
-// w libre (paso 2: tope de suplentes por equipo, 0 = todos los convocados).
+// w tope de suplentes por equipo (0 = todos los convocados).
+// Fila 517 (paso 2a, suplentes reales sentados): x on / off (de fabrica prendido; necesita x516 e y516), y cuantos llevan la
+// pechera de suplente (0 a 100 %, de fabrica 50: a quienes les toca se sortea al cargar el partido), z altura del asiento (cm),
+// w adelante / atras (cm). El paso 2a esta explicado mas abajo ("paso 2a").
 #include "core.h"
 #include <MinHook.h>
 #include <atomic>
@@ -36,6 +39,7 @@
 #include <vector>
 #include <cstdarg>
 #include <cctype>
+#include <cmath>
 
 namespace fx {
 
@@ -122,6 +126,8 @@ struct State {
     unsigned benchSeq = 0;
 } s_st;
 std::atomic<unsigned> s_ticks{0};
+std::atomic<unsigned long> s_fdmThread{0};        // hilo de FixDemoMain::vf3 (donde el juego crea y mueve a sus jugadores sueltos)
+void SubsTickFromScene();                          // paso 2a (abajo): reloj de reserva desde la escena del estadio
 char s_logBuf[8][256]; std::atomic<int> s_logN{0};   // lineas de la sonda (hilo del juego) que Present pasa al registro
 
 // cuerpo del banco encontrado (para mostrarlo de nuevo); se vuelve a comprobar antes de cada escritura
@@ -229,6 +235,7 @@ void __fastcall hk_Apply(void* body) {
 // cinematica BENCH con kind de espantapajaros (todos los estadios: Konami y mods usan el mismo campo demoGroup) o cuyo modelo sea
 // el de un "_dir_bench" visto por nombre (por si un estadio de mod no puso el grupo).
 void __fastcall hk_ImplShow(void* impl, float dt, char show) {
+    SubsTickFromScene();
     if (show && Live(0, 0.0f) > 0.5f && Live(1, 1.0f) > 0.5f) {
         const uintptr_t im = (uintptr_t)impl; uint32_t kind = 0, group = 0; uintptr_t mdl = 0;
         bool bench = Rd(im + 0x3c, kind) && Rd(im + 0x44, group) && group == kGroupBench && (kind & kKindScarecrow) != 0;
@@ -457,6 +464,159 @@ bool ScanBenchNear(uint8_t* self, const char* pre, float* mn, float* mx) {
     return false;
 }
 
+// ---------------------------------------------------------------- 16/11 paso 2a: asientos del banco
+// Los suplentes reales se sientan donde Konami sento a sus figuras: en el _dir_bench cada figura es UNA malla (st009_sc2020: 11
+// de material so_benchmember_2017set_home1 con x < 0 y 11 de ..._away con x > 0; el Sports Park trae dos filas, la de atras
+// 0,18 m mas alta). De cada malla sale un asiento: centro en x, fondo y frente en z, piso y cabeza en y, y el lado por el nombre
+// del material. Una malla de suplentes mas ancha que una persona (estadios de mods que las juntan) se parte en piezas conectadas,
+// se juntan las que se tocan y cada grupo da un asiento cada 0,62 m. Se guardan por estadio ("stNNN") al cargar el fmdl.
+struct Seat { float x, z0, z1, y0, y1; int side; };
+struct SeatSet { char pre[8] = {}; ULONGLONG t = 0; int n = 0; Seat s[64]; unsigned seq = 0; };
+std::mutex s_seatMx; SeatSet s_seats;
+bool SeatAdd(const char* pre, const Seat& s) {
+    std::lock_guard<std::mutex> lk(s_seatMx); const ULONGLONG t = GetTickCount64();
+    if (strncmp(s_seats.pre, pre, 5) || t - s_seats.t > 60000) { s_seats.n = 0; memcpy(s_seats.pre, pre, 5); s_seats.pre[5] = 0; s_seats.seq++; }
+    s_seats.t = t;
+    for (int i = 0; i < s_seats.n; i++) {
+        const Seat& o = s_seats.s[i];
+        if (fabsf(o.x - s.x) < 0.25f && fabsf((o.z0 + o.z1) - (s.z0 + s.z1)) * 0.5f < 0.4f) return false;   // ya estaba (el fmdl pasa dos veces)
+    }
+    if (s_seats.n >= 64) return false;
+    s_seats.s[s_seats.n++] = s; s_seats.seq++; return true;
+}
+// se esta cargando un estadio: los asientos de otro ya no valen
+void SeatStadium(const char* pre) {
+    std::lock_guard<std::mutex> lk(s_seatMx);
+    if (strncmp(s_seats.pre, pre, 5)) { s_seats.n = 0; memcpy(s_seats.pre, pre, 5); s_seats.pre[5] = 0; s_seats.seq++; }
+}
+bool StrHas(const char* s, size_t len, const char* w) {
+    const size_t n = strlen(w);
+    for (size_t i = 0; i + n <= len; i++) { size_t j = 0; while (j < n && (char)tolower((unsigned char)s[i + j]) == w[j]) j++; if (j == n) return true; }
+    return false;
+}
+const float kSeatMinH = 0.85f, kSeatMaxH = 1.75f, kSeatOneW = 1.05f, kSeatPitch = 0.62f;
+unsigned SeatsFromMeshes(const Fm& f, const std::vector<FmMesh>& ms, const char* pre) {
+    unsigned added = 0;
+    for (const FmMesh& m : ms) {
+        if (!m.bench || !m.pos || !m.nv) continue;
+        size_t len = 0; const uint8_t* me = f.E(4, m.mat, 0x10); const char* nm = me ? FmStr(f, U<uint16_t>(me), len) : nullptr;
+        const bool isSub = nm && StrStarts(nm, len, "so_benchmember");
+        const int side = !nm ? -1 : StrHas(nm, len, "home") ? 0 : StrHas(nm, len, "away") ? 1 : -1;
+        float mn[3], mx[3];
+        for (uint32_t v = 0; v < m.nv; v++) {
+            float q[3]; memcpy(q, m.pos + (size_t)v * m.stride, 12);
+            for (int i = 0; i < 3; i++) { if (!v || q[i] < mn[i]) mn[i] = q[i]; if (!v || q[i] > mx[i]) mx[i] = q[i]; }
+        }
+        const float wx = mx[0] - mn[0], h = mx[1] - mn[1], wz = mx[2] - mn[2];
+        if (wx <= kSeatOneW) {   // una figura = una malla (Konami)
+            if (h >= kSeatMinH && h <= kSeatMaxH && wx >= 0.3f && wz >= 0.3f && wz <= 1.8f)
+                if (SeatAdd(pre, Seat{ (mn[0] + mx[0]) * 0.5f, mn[2], mx[2], mn[1], mx[1], side })) added++;
+            continue;
+        }
+        if (!isSub || !m.idx || m.nv > 60000) continue;   // utileria larga (microfonos) o demasiado grande
+        // varias figuras en una malla: piezas conectadas -> grupos que se tocan en x / z
+        std::vector<uint32_t> par(m.nv); for (uint32_t v = 0; v < m.nv; v++) par[v] = v;
+        auto fd = [&](uint32_t a) { while (par[a] != a) { par[a] = par[par[a]]; a = par[a]; } return a; };
+        std::vector<uint8_t> used(m.nv, 0);
+        for (uint32_t t = 0; t + 2 < m.nidx; t += 3) {
+            const uint32_t a = m.idx[t], b = m.idx[t + 1], c = m.idx[t + 2];
+            if (a >= m.nv || b >= m.nv || c >= m.nv || (a == b && b == c)) continue;
+            used[a] = used[b] = used[c] = 1;
+            uint32_t ra = fd(a), rb = fd(b); if (ra != rb) par[rb] = ra;
+            ra = fd(a); const uint32_t rc = fd(c); if (ra != rc) par[rc] = ra;
+        }
+        struct Box { float mn[3], mx[3]; };
+        std::vector<Box> pcs; std::vector<int> slot(m.nv, -1);
+        for (uint32_t v = 0; v < m.nv; v++) {
+            if (!used[v]) continue;
+            const uint32_t r = fd(v); float q[3]; memcpy(q, m.pos + (size_t)v * m.stride, 12);
+            if (slot[r] < 0) { slot[r] = (int)pcs.size(); pcs.push_back(Box{ { q[0], q[1], q[2] }, { q[0], q[1], q[2] } }); }
+            Box& b = pcs[slot[r]]; for (int i = 0; i < 3; i++) { b.mn[i] = std::min(b.mn[i], q[i]); b.mx[i] = std::max(b.mx[i], q[i]); }
+        }
+        const size_t n = pcs.size(); if (!n || n > 4000) continue;
+        std::vector<int> gp(n); for (size_t i = 0; i < n; i++) gp[i] = (int)i;
+        auto gf = [&](int a) { while (gp[a] != a) { gp[a] = gp[gp[a]]; a = gp[a]; } return a; };
+        for (size_t i = 0; i < n; i++) for (size_t j = i + 1; j < n; j++) {
+            const Box& a = pcs[i]; const Box& b = pcs[j];
+            if (a.mn[0] - 0.03f <= b.mx[0] && b.mn[0] - 0.03f <= a.mx[0] && a.mn[2] - 0.03f <= b.mx[2] && b.mn[2] - 0.03f <= a.mx[2]) {
+                const int ra = gf((int)i), rb = gf((int)j); if (ra != rb) gp[rb] = ra;
+            }
+        }
+        std::vector<Box> g(n); std::vector<uint8_t> init(n, 0);
+        for (size_t i = 0; i < n; i++) {
+            const int r = gf((int)i);
+            if (!init[r]) { g[r] = pcs[i]; init[r] = 1; }
+            for (int a = 0; a < 3; a++) { g[r].mn[a] = std::min(g[r].mn[a], pcs[i].mn[a]); g[r].mx[a] = std::max(g[r].mx[a], pcs[i].mx[a]); }
+        }
+        for (size_t i = 0; i < n; i++) {
+            if (!init[i]) continue;
+            const Box& b = g[i]; const float gw = b.mx[0] - b.mn[0], gh = b.mx[1] - b.mn[1], gz = b.mx[2] - b.mn[2];
+            if (gh < kSeatMinH || gh > kSeatMaxH || gz < 0.3f || gw < 0.3f) continue;
+            const int k = gw <= kSeatOneW ? 1 : std::min(20, std::max(1, (int)(gw / kSeatPitch + 0.5f)));
+            for (int q = 0; q < k; q++)
+                if (SeatAdd(pre, Seat{ b.mn[0] + (q + 0.5f) * gw / k, b.mn[2], b.mx[2], b.mn[1], b.mx[1], side })) added++;
+        }
+    }
+    return added;
+}
+
+// Reparto: los asientos de un lado (por material; si no dice, x < 0 = local) se ordenan por fila (la de adelante primero: fondo
+// mas cerca de la cancha) y, dentro de la fila, del medio de la cancha hacia afuera. Cada fila usa el piso y el fondo del medio de
+// sus figuras. Si hay mas suplentes que figuras, se reparten parejo a lo ancho de cada fila (no menos de 0,50 m entre dos).
+struct Spot { float x, y, z, yaw; };
+int BuildSpots(const SeatSet& ss, int side, int want, float upCm, float fwdCm, Spot* out, int max, int* seatsOut, int* rowsOut) {
+    if (seatsOut) *seatsOut = 0; if (rowsOut) *rowsOut = 0;
+    if (ss.n <= 0 || want <= 0) return 0;
+    float zc = 0; for (int i = 0; i < ss.n; i++) zc += (ss.s[i].z0 + ss.s[i].z1) * 0.5f; zc /= ss.n;
+    const float dir = zc > 0 ? -1.0f : 1.0f;                    // hacia la cancha
+    const float yaw = zc > 0 ? 180.0f : 0.0f;                   // el jugador mira a +z con giro 0
+    struct S { float x, back, y0; }; S s[64]; int n = 0;
+    for (int i = 0; i < ss.n; i++) {
+        const Seat& a = ss.s[i]; const int sd = a.side >= 0 ? a.side : (a.x < 0 ? 0 : 1);
+        if (sd != side) continue;
+        s[n++] = S{ a.x, dir < 0 ? a.z1 : a.z0, a.y0 };
+    }
+    if (seatsOut) *seatsOut = n;
+    if (!n) return 0;
+    std::sort(s, s + n, [](const S& a, const S& b) { return fabsf(a.back) < fabsf(b.back); });
+    struct Row { int first, count; float back, floor, x0, x1; }; Row rows[8]; int nr = 0;
+    for (int i = 0; i < n; ) {
+        int j = i + 1; while (j < n && fabsf(s[j].back) - fabsf(s[i].back) <= 0.45f) j++;
+        if (nr < 8) {
+            Row& r = rows[nr++]; r.first = i; r.count = j - i;
+            float tb[64], tf[64]; for (int k = i; k < j; k++) { tb[k - i] = s[k].back; tf[k - i] = s[k].y0; }
+            std::sort(tb, tb + r.count); std::sort(tf, tf + r.count);
+            r.back = tb[r.count / 2]; r.floor = tf[r.count / 2];
+            std::sort(s + i, s + j, [](const S& a, const S& b) { return fabsf(a.x) < fabsf(b.x); });
+            r.x0 = r.x1 = s[i].x; for (int k = i; k < j; k++) { r.x0 = std::min(r.x0, s[k].x); r.x1 = std::max(r.x1, s[k].x); }
+        }
+        i = j;
+    }
+    if (rowsOut) *rowsOut = nr;
+    const float kBack = 0.25f + fwdCm * 0.01f;                  // de la espalda de la figura a la cadera
+    int o = 0;
+    if (want <= n) {
+        for (int r = 0; r < nr && o < want && o < max; r++)
+            for (int k = 0; k < rows[r].count && o < want && o < max; k++)
+                out[o++] = Spot{ s[rows[r].first + k].x, rows[r].floor + upCm * 0.01f, rows[r].back + dir * kBack, yaw };
+        return o;
+    }
+    int left = want;
+    for (int r = 0; r < nr && o < max; r++) {
+        const Row& w = rows[r]; const float a = w.x0 - 0.31f, b = w.x1 + 0.31f, width = b - a;
+        int t = (r == nr - 1) ? left : (int)((float)want * w.count / n + 0.5f);
+        t = std::min(std::min(t, left), std::max(w.count, (int)(width / 0.50f)));
+        // del medio de la cancha hacia afuera
+        const bool inner0 = fabsf(a) < fabsf(b);
+        for (int k = 0; k < t && o < max; k++) {
+            const float u = (k + 0.5f) / t;
+            out[o++] = Spot{ inner0 ? a + u * width : b - u * width, w.floor + upCm * 0.01f, w.back + dir * kBack, yaw };
+        }
+        left -= t;
+    }
+    return o;
+}
+
 __declspec(noinline) void ProcessFmdlInner(uint8_t* p, size_t avail) {
     {
         Fm f; if (!FmOpen(f, p, avail)) return;
@@ -466,7 +626,10 @@ __declspec(noinline) void ProcessFmdlInner(uint8_t* p, size_t avail) {
         FmBenchFlags(f, ms, isBench);
         float mn[3] = {}, mx[3] = {};
         if (FmBenchBox(ms, mn, mx)) BoxPut(pre, mn, mx);
-        if (isBench) { FmLog("banca: %s_dir_bench cargado: caja de los suplentes x %.2f..%.2f z %.2f..%.2f", pre, mn[0], mx[0], mn[2], mx[2]); return; }
+        SeatStadium(pre);
+        const unsigned seatsNew = SeatsFromMeshes(f, ms, pre);   // paso 2a (antes de esconder: usa las caras de las mallas)
+        if (isBench) { FmLog("banca: %s_dir_bench cargado: caja de los suplentes x %.2f..%.2f z %.2f..%.2f, %u asientos", pre, mn[0], mx[0], mn[2], mx[2], seatsNew); return; }
+        if (seatsNew) FmLog("banca: %s_%s: %u asientos mas (mallas de suplente fuera del _dir_bench)", pre, part, seatsNew);
         // a) mallas de suplente fuera del _dir_bench
         unsigned benchMeshes = 0, tris = 0;
         for (auto& m : ms) if (m.bench && m.idx) {
@@ -682,6 +845,7 @@ void Tick() {
 }
 
 void __fastcall hk_Fdm(void* self) {
+    s_fdmThread.store(GetCurrentThreadId(), std::memory_order_relaxed);
     o_fdm(self);
     Tick();
 }
@@ -703,6 +867,459 @@ void __fastcall hk_Fdh(void* fd, void* res, uint32_t a3, uint8_t a4, uint64_t a5
         }
     }
     o_fdh(fd, res, a3, a4, a5, a6);
+}
+
+// ---------------------------------------------------------------- 16/11 paso 2a: suplentes reales sentados
+// Lo que hace (fila 516 x e y prendidas y fila 517 x = 1), todo en el hilo del juego:
+//  1) Reloj: match::Human vf19 (0x1408bf4c0), la funcion con la que cada jugador del partido manda su pose a la escena en cada
+//     cuadro. Se usa la del jugador 0. FixDemoMain::vf3 (el reloj del paso 1) no corre en el juego (medido: 0 por segundo).
+//     Solo se trabaja si ese hilo es el mismo que el de las cinematicas (donde el juego crea y mueve a sus jugadores sueltos);
+//     si no coincide se prueba con el de la escena del estadio (FUN_1419b79f0) y, si tampoco, no se crea nada y queda anotado.
+//  2) Convocados de verdad (doc 26): equipo = [[0x143702208] + 0x1978 + lado * 0x28]; orden u32[40] en +4; jugador = equipo
+//     + 0xa8 + idx * 0x128 + 0x30 (0xF0 B); convocados u8 en +0x2eec. Suplentes = lugares 11 .. convocados - 1.
+//  3) Asientos: donde estaban las figuras de Konami de ese lado (arriba).
+//  4) Clips: 7 de los 9 "sentado" del vestuario (dml_md_lockerSpeech_001_sit_00N; el 1 y el 6 terminan corridos 8 y 5 cm y
+//     saltarian al repetir). Medido en los archivos: la raiz queda en el origen (se mueve menos de 1,5 cm) y la cadera baja
+//     47 a 55 cm, asi que el asiento se le da directo al jugador. Se piden como los pide la cinematica (FUN_141b079e0 /
+//     FUN_141eb16e0) y, para que ninguna cinematica los descargue mientras estan en uso, se frena su descarga (FUN_141b08080).
+//  5) Cada suplente es un FixDemoHuman del juego (el jugador suelto de las cinematicas): FUN_141f85e40, LoadId con
+//     FUN_141f61520 (pechera de suplente = 2 en el ultimo argumento), FUN_141f86c30 y sondeo FUN_141f87230. De a uno por vez.
+//     Cuando cargo: posicion y giro en fd+8 / +0x14, FUN_141afa060 (numero del clip en el recurso "fixdemo") y vf1.
+//  6) Cada cuadro: vf4 (avanza el clip) y FUN_141f86d40 (manda la pose), como el reproductor de cinematicas.
+//  7) Se sueltan todos (vf0 con el heap 0x19) antes de que el juego borre a sus jugadores (gancho en el destructor de
+//     match::Human, FUN_1408be4f0), al apagar la opcion o si cambia el partido. El que entra a la cancha deja el banco.
+// Detalle y C reconstruido: /mnt/project-files/banca_suplentes/20261116_como_arma_el_banco.cpp.md, secciones 26 a 28.
+const int kRow2 = 517;   // x suplentes reales, y % con pechera, z altura del asiento (cm), w adelante / atras (cm)
+float Live2(int k, float def) { return (!g_cfg.info[kRow2][k].defined && g_cfg.live[kRow2][k] == 0.0f) ? def : g_cfg.live[kRow2][k]; }
+
+const uintptr_t kMatchPtr = 0x143702208ull;
+const uintptr_t kVtDrawHuman = 0x14261c078ull;                       // draw::util::Human
+// match::Human vf19: push rbp; push rsi; mov rbp,rsp; sub rsp,78h; mov rax,[cookie]; xor rax,rsp; mov [rbp-18h],rax
+const uintptr_t kHumanPush = 0x1408bf4c0ull;
+const unsigned char kHumanPushSig[10] = { 0x40,0x55,0x56,0x48,0x8b,0xec,0x48,0x83,0xec,0x78 };
+// FUN_1408be4f0 (destructor base de match::Human): push rdi; sub rsp,30h; mov [rsp+20h],-2; mov [rsp+50h],rbx; mov [rsp+..],rsi
+const uintptr_t kHumanDtor = 0x1408be4f0ull;
+const unsigned char kHumanDtorSig[20] = { 0x40,0x57,0x48,0x83,0xec,0x30,0x48,0xc7,0x44,0x24,0x20,0xfe,0xff,0xff,0xff,0x48,0x89,0x5c,0x24,0x50 };
+// FUN_141b08080 (cobra::And::ResManager: descargar por hash): push rdi; sub rsp,30h; mov [rsp+20h],-2; mov [rsp+48h],rbx
+const uintptr_t kResUnload = 0x141b08080ull;
+const unsigned char kResUnloadSig[20] = { 0x40,0x57,0x48,0x83,0xec,0x30,0x48,0xc7,0x44,0x24,0x20,0xfe,0xff,0xff,0xff,0x48,0x89,0x5c,0x24,0x48 };
+// funciones del juego que se llaman (mismo exe: sello kStamp)
+const uintptr_t kAlloc = 0x1403fb460ull, kHeapPush = 0x1403fb780ull, kHeapPop = 0x1403fb760ull;
+const uintptr_t kFdCtor = 0x141f85e40ull, kLoadId = 0x141f61520ull, kFdLoad = 0x141f86c30ull, kFdPoll = 0x141f87230ull;
+const uintptr_t kFdPush = 0x141f86d40ull, kFdVf4 = 0x141f87340ull, kFdVf0 = 0x141f863f0ull;
+const uintptr_t kResMgr = 0x141b08cf0ull, kResFind = 0x141b079e0ull, kGaniQueue = 0x141eb16e0ull, kGaniPump = 0x141eb0f50ull, kStrAssign = 0x1404023c0ull;
+const uintptr_t kAnimResMgr = 0x141ed1770ull, kAnimResFind = 0x141ed1700ull, kClipIdx = 0x141afa060ull;
+const uintptr_t kClipLen = 0x141af8be0ull, kClipTime = 0x141af8910ull, kClipSeek = 0x141afa7b0ull;
+typedef void*(__fastcall* AllocFn)(uint32_t*, size_t, size_t);
+typedef uint32_t*(__fastcall* HeapPushFn)(uint32_t*, uint32_t*);
+typedef void(__fastcall* HeapPopFn)(uint32_t*);
+typedef void*(__fastcall* FdCtorFn)(void*, uint8_t);
+typedef void*(__fastcall* LoadIdFn)(void*, void*, int, uint64_t, void*, char, char, char, char, uint8_t);
+typedef void(__fastcall* FdLoadFn)(void*, void*, uint32_t, uint8_t, uint8_t);
+typedef uint64_t(__fastcall* FdPollFn)(void*);
+typedef void(__fastcall* FdPushFn)(void*);
+typedef uint32_t(__fastcall* FdVf4Fn)(void*, float);
+typedef void*(__fastcall* FdVf0Fn)(void*, uint64_t);
+typedef void*(__fastcall* PtrFn)();
+typedef void*(__fastcall* ResFindFn)(void*, void*, const char*);
+typedef void(__fastcall* GaniQueueFn)(void*, void*);
+typedef void(__fastcall* GaniPumpFn)(uint64_t, uint64_t, uint64_t, uint64_t);
+typedef void*(__fastcall* StrAssignFn)(void*, const char*, size_t);
+typedef void*(__fastcall* AnimResFindFn)(void*, void*);
+typedef uint32_t(__fastcall* ClipIdxFn)(void*, const char*);
+typedef float(__fastcall* ClipTimeFn)(void*, uint32_t, uint8_t);
+typedef void(__fastcall* ClipSeekFn)(void*, uint64_t, uint32_t, float, uint8_t, uint8_t);
+typedef void(__fastcall* HumanPushFn)(void*);
+typedef void(__fastcall* HumanDtorFn)(void*, void*, void*, void*);
+typedef uint64_t(__fastcall* ResUnloadFn)(void*, void*);
+HumanPushFn o_humanPush = nullptr; HumanDtorFn o_humanDtor = nullptr; ResUnloadFn o_resUnload = nullptr;
+bool s_okSubs = false;
+
+struct GStr { union { char buf[16]; char* ptr; }; size_t size, cap; };   // std::string de MSVC (el del juego)
+
+// clips de sentado
+const int kNumClips = 7; const int kClipNo[kNumClips] = { 2, 3, 4, 5, 7, 8, 9 };
+struct Clip { char path[112]; uint64_t slot[2]; bool ok, asked; };
+Clip s_clip[kNumClips];
+std::atomic<uint64_t> s_clipHash[kNumClips];
+std::atomic<int> s_protect{0}; std::atomic<unsigned> s_unloadBlocked{0};
+
+// la descarga de un .gani nuestro se frena mientras haya suplentes creados con el (el gestor no cuenta usuarios)
+uint64_t __fastcall hk_ResUnload(void* mgr, void* key) {
+    if (key && s_protect.load(std::memory_order_relaxed) > 0) {
+        uint64_t h = 0; uint8_t t = 0;
+        if (Rd((uintptr_t)key, h) && Rd((uintptr_t)key + 8, t) && t == 2 && h)
+            for (int i = 0; i < kNumClips; i++) if (s_clipHash[i].load(std::memory_order_relaxed) == h) { s_unloadBlocked.fetch_add(1, std::memory_order_relaxed); return 0; }
+    }
+    return o_resUnload(mgr, key);
+}
+
+// cupos de la placa (los mismos que anota el medidor): [gestor] + 0x10 cupo, + 0x14 usados
+const uintptr_t kBudget[6] = { 0x14374cd70ull, 0x14374cd80ull, 0x14374cd88ull, 0x14374da88ull, 0x14374e458ull, 0x14374e460ull };
+const char* const kBudgetName[6] = { "texturas", "modelos", "materiales", "buffers de vertices", "buffers de indices", "flujos de vertices" };
+const int kBudgetMin[6] = { 250, 120, 500, 120, 120, 250 };
+bool BudgetRead(int k, int& cap, int& used) {
+    uintptr_t mgr = 0;
+    return Rd(kBudget[k], mgr) && Heap(mgr) && Rd(mgr + 0x10, cap) && Rd(mgr + 0x14, used) && cap > 0 && cap <= 32767 && used >= 0 && used <= cap;
+}
+bool BudgetOk(char* why, size_t n) {
+    for (int k = 0; k < 6; k++) { int cap = 0, used = 0; if (BudgetRead(k, cap, used) && cap - used < kBudgetMin[k]) { sprintf_s(why, n, "%s: quedan %d de %d", kBudgetName[k], cap - used, cap); return false; } }
+    return true;
+}
+
+struct LiveSub {
+    void* fd = nullptr; int side = 0, order = 0, place = 0, clip = 0, state = 0;   // 0 falta, 1 cargando, 2 sentado, 3 fallo / salio
+    uint32_t teamIdx = 0; uint64_t id = 0; char name[40] = {}; Spot spot{}; bool bib = false, gk = false;
+    float t0 = 0, start = 0; double tCreate = 0; int endTicks = 0; uint8_t player[0xF0] = {};
+};
+enum { kIdle = 0, kWait, kClips, kRun, kOff };
+struct Subs {
+    int phase = kIdle; uintptr_t match = 0, team[2] = {}; LiveSub s[48]; int n = 0, cur = 0;
+    float T = 0; double tPhase = 0, lastTick = 0, lastCheck = 0, tSpawn = 0, tRetry = 0; bool pumpOwn = false, seekSaid = false, sheetSaid = false;
+};
+Subs s_subs;                                           // solo el hilo del juego (y el destructor, con s_subMx)
+std::recursive_mutex s_subMx;
+std::atomic<int> s_subActive{0}; std::atomic<unsigned> s_subTicks{0}, s_subSkipped{0};
+std::atomic<bool> s_subsDead{false};                   // hubo un error dentro del juego: no se toca nada mas en esta sesion
+std::atomic<unsigned long> s_implThread{0}, s_pushThread{0}, s_srcThread{0};
+std::atomic<int> s_src{0};                             // 0 sin decidir, 1 match::Human vf19, 2 escena del estadio
+std::atomic<ULONGLONG> s_matchEnd{0};
+
+uint64_t s_rng = 0;
+uint32_t Rnd() { if (!s_rng) { LARGE_INTEGER c; QueryPerformanceCounter(&c); s_rng = (uint64_t)c.QuadPart | 1; } s_rng ^= s_rng << 13; s_rng ^= s_rng >> 7; s_rng ^= s_rng << 17; return (uint32_t)(s_rng >> 16); }
+
+__declspec(noinline) bool FdDestroy(void* fd) {
+    __try {
+        uint32_t saved = 0, id = 0x19;
+        ((HeapPushFn)kHeapPush)(&saved, &id);
+        ((FdVf0Fn)kFdVf0)(fd, 1);
+        ((HeapPopFn)kHeapPop)(&saved);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void SubsDestroyAll(const char* why) {
+    Subs& S = s_subs; int k = 0, bad = 0;
+    const bool dead = s_subsDead.load();              // con un error previo solo se sueltan los que quedaron bien sentados
+    for (int i = 0; i < S.n; i++) if (S.s[i].fd) { if (!dead || S.s[i].state == 2) { if (FdDestroy(S.s[i].fd)) k++; else bad++; } S.s[i].fd = nullptr; }
+    if (k || bad || S.phase != kIdle) Log("banca: suplentes reales: %d sacados del banco (%s)%s", k, why, bad ? ", con errores al soltar" : "");
+    if (bad) s_subsDead.store(true);
+    S.n = 0; S.cur = 0; S.phase = kIdle; S.match = 0; S.pumpOwn = false; s_subActive.store(0); s_protect.store(0);
+}
+
+// 1 = ya esta en el gestor, 0 = no, -1 = error
+__declspec(noinline) int ClipQuery(int i) {
+    __try {
+        void* mgr = ((PtrFn)kResMgr)(); if (!mgr) return 0;
+        uint64_t out[2] = { 0, 0 };
+        ((ResFindFn)kResFind)(mgr, out, s_clip[i].path);
+        if ((uint8_t)out[1] != 0 && out[0] != 0xb8a0bf169f98ull) { s_clipHash[i].store(out[0]); s_clip[i].ok = true; return 1; }
+        s_clip[i].ok = false; return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+}
+__declspec(noinline) bool ClipAsk(int i) {
+    __try {
+        GStr s; memset(&s, 0, sizeof s); s.cap = 15;
+        ((StrAssignFn)kStrAssign)(&s, s_clip[i].path, strlen(s_clip[i].path));   // lo libera el juego (FUN_141eb16e0)
+        s_clip[i].slot[0] = s_clip[i].slot[1] = 0;
+        ((GaniQueueFn)kGaniQueue)(s_clip[i].slot, &s);
+        s_clip[i].asked = true; return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+__declspec(noinline) bool PumpOnce() {
+    __try { ((GaniPumpFn)kGaniPump)(0, 0, 0, 0); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+__declspec(noinline) void* FixdemoRes() {
+    __try {
+        GStr s; memset(&s, 0, sizeof s); memcpy(s.buf, "fixdemo", 8); s.size = 7; s.cap = 15;
+        void* mgr = ((PtrFn)kAnimResMgr)();
+        return mgr ? ((AnimResFindFn)kAnimResFind)(mgr, &s) : nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+__declspec(noinline) bool SubCreate(LiveSub& u, bool haveSW, uint8_t season, uint8_t weather) {
+    __try {
+        uint32_t saved = 0, id = 0x19, heap = 0x19;
+        ((HeapPushFn)kHeapPush)(&saved, &id);
+        void* mem = ((AllocFn)kAlloc)(&heap, 0x578, 0x10);
+        uint8_t* fd = mem ? (uint8_t*)((FdCtorFn)kFdCtor)(mem, (uint8_t)(0x40 + u.order)) : nullptr;
+        if (fd) {
+            uint8_t lid[0xa0];
+            ((LoadIdFn)kLoadId)(nullptr, lid, u.side, 0, u.player, u.gk ? 1 : 0, 0, 0, 0, (uint8_t)(u.bib ? 2 : 0));
+            if (haveSW) { lid[0x4f] = season; lid[0x50] = weather; }
+            fd[0x490] = 0; fd[0x514] = 0;                 // sin efectos de lluvia / aliento de la cinematica
+            ((FdLoadFn)kFdLoad)(fd, lid, (uint32_t)u.side, (uint8_t)u.place, (uint8_t)(u.gk ? 1 : 0));
+        }
+        ((HeapPopFn)kHeapPop)(&saved);
+        u.fd = fd; return fd != nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { u.fd = nullptr; s_subsDead.store(true); return false; }
+}
+// 1 = cargo, 0 = todavia, -1 = error
+__declspec(noinline) int SubPoll(LiveSub& u) {
+    __try {
+        uint32_t saved = 0, id = 0x19;
+        ((HeapPushFn)kHeapPush)(&saved, &id);
+        const uint64_t r = ((FdPollFn)kFdPoll)(u.fd);
+        ((HeapPopFn)kHeapPop)(&saved);
+        return (r & 0xff) ? 1 : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { s_subsDead.store(true); return -1; }
+}
+__declspec(noinline) bool SubStart(LiveSub& u, void* res, float T) {
+    __try {
+        uint8_t* fd = (uint8_t*)u.fd;
+        memcpy(fd + 8, &u.spot.x, 4); memcpy(fd + 0xc, &u.spot.y, 4); memcpy(fd + 0x10, &u.spot.z, 4); memcpy(fd + 0x14, &u.spot.yaw, 4);
+        fd[0x416] = 1;                                    // al dar la vuelta el clip vuelve a la base (FUN_141f86d40)
+        uint32_t saved = 0, id = 0x19;
+        ((HeapPushFn)kHeapPush)(&saved, &id);
+        const uint32_t idx = ((ClipIdxFn)kClipIdx)(res, s_clip[u.clip].path);
+        uint32_t bits = 0; memcpy(&bits, &u.start, 4);
+        (o_fdh ? o_fdh : (FdhVf1)kFdhVf1)(fd, res, idx, 0, (uint64_t)bits, nullptr);
+        ((HeapPopFn)kHeapPop)(&saved);
+        u.t0 = T; u.endTicks = 0;
+        void* ctl = nullptr; memcpy(&ctl, fd + 0x50, 8);
+        return ctl != nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { s_subsDead.store(true); return false; }
+}
+// avanza y manda la pose; devuelve 2 si tuvo que volver el clip al principio a mano
+__declspec(noinline) int SubUpdate(LiveSub& u, float T) {
+    __try {
+        uint8_t* fd = (uint8_t*)u.fd;
+        ((FdVf4Fn)kFdVf4)(fd, T - u.t0);
+        ((FdPushFn)kFdPush)(fd);
+        void* ctl = nullptr; memcpy(&ctl, fd + 0x50, 8);
+        if (ctl) {
+            const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1), cur = ((ClipTimeFn)kClipTime)(ctl, 0, 1);
+            if (len > 1.0f && cur >= len - 0.003f) {
+                if (++u.endTicks >= 6) { ((ClipSeekFn)kClipSeek)(ctl, 0, 0, 0.0f, 1, 1); u.endTicks = 0; return 2; }
+            } else u.endTicks = 0;
+        }
+        return 1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { s_subsDead.store(true); return -1; }
+}
+
+// arma la lista de los dos equipos; 0 = listo, otro = todavia no se puede (se reintenta) y por que
+const char* const kPrepWhy[6] = { "", "no hay partido", "este estadio no trajo figuras en el banco (sin asientos)", "el estadio todavia esta cargando",
+                                  "los asientos guardados son de otro estadio", "los equipos del partido todavia no estan" };
+int SubsPrepare() {
+    Subs& S = s_subs;
+    uintptr_t m = 0; if (!Rd(kMatchPtr, m) || !Heap(m)) return 1;
+    SeatSet ss; { std::lock_guard<std::mutex> lk(s_seatMx); ss = s_seats; }
+    const ULONGLONG now = GetTickCount64();
+    if (ss.n <= 0) return 2;
+    if (now - ss.t < 3000) return 3;
+    if (ss.t <= s_matchEnd.load()) {                                   // asientos de antes del partido anterior: solo si sigue el mismo estadio
+        uintptr_t bm = 0, bb = 0, be = 0, bs = 0; char nm[64] = {};
+        if (!FindBench(bm, bb, be, bs, nm, sizeof nm) || strncmp(nm, ss.pre, 5)) return 4;
+    }
+    uintptr_t team[2] = {}; uint8_t conv[2] = {};
+    for (int sd = 0; sd < 2; sd++)
+        if (!Rd(m + 0x1978 + (uintptr_t)sd * 0x28, team[sd]) || !Heap(team[sd]) || !Rd(team[sd] + 0x2eec, conv[sd]) || conv[sd] < 11 || conv[sd] > 40) return 5;
+    S.n = 0; S.cur = 0; S.match = m; S.team[0] = team[0]; S.team[1] = team[1];
+    const int cap = (int)(Live(3, 0.0f) + 0.5f);
+    const float pct = std::min(100.0f, std::max(0.0f, Live2(1, 50.0f))), up = Live2(2, 0.0f), fwd = Live2(3, 0.0f);
+    for (int sd = 0; sd < 2; sd++) {
+        static LiveSub tmp[40]; int ns = 0;
+        for (int i = 11; i < conv[sd] && ns < 40; i++) {
+            uint32_t idx = 0xff; if (!Rd(team[sd] + 4 + (uintptr_t)i * 4, idx) || idx >= 40) continue;
+            LiveSub u{};
+            if (!SafeCopy(u.player, (const void*)(team[sd] + 0xa8 + (uintptr_t)idx * 0x128 + 0x30), sizeof u.player)) continue;
+            u.player[0x9c + 60] = 0;                                  // FUN_141f61520 copia el nombre con strcpy_s de 61
+            memcpy(&u.id, u.player, 8);
+            if (!u.id || (uint32_t)u.id == 0xffffu || (uint32_t)u.id == 0xffffffffu) continue;
+            u.gk = u.player[8] == 0; u.side = sd; u.teamIdx = idx; u.place = i;
+            char nm[62] = {}; memcpy(nm, u.player + 0x9c, 61); for (char& c : nm) if (c && (unsigned char)c < 0x20) c = '?';
+            strncpy_s(u.name, nm, _TRUNCATE);
+            tmp[ns++] = u;
+        }
+        if (cap > 0 && ns > cap) ns = cap;
+        Spot sp[40]; int seats = 0, rows = 0;
+        const int got = BuildSpots(ss, sd, ns, up, fwd, sp, 40, &seats, &rows);
+        const int nb = std::min(got, (int)(got * pct / 100.0f + 0.5f));
+        int ord[40]; for (int k = 0; k < got; k++) ord[k] = k;
+        for (int k = 0; k < nb; k++) { const int j = k + (int)(Rnd() % (uint32_t)(got - k)); std::swap(ord[k], ord[j]); tmp[ord[k]].bib = true; }
+        // clips: una vuelta mezclada de los 7, asi dos vecinos nunca comparten clip. Todos arrancan en 0 (camino simple de
+        // vf4); como se crean de a uno, los que repiten clip quedan desfasados varios segundos.
+        int perm[kNumClips]; for (int k = 0; k < kNumClips; k++) perm[k] = k;
+        for (int k = 0; k < kNumClips - 1; k++) std::swap(perm[k], perm[k + (int)(Rnd() % (uint32_t)(kNumClips - k))]);
+        for (int k = 0; k < got && S.n < 48; k++) {
+            LiveSub& u = tmp[k]; u.spot = sp[k]; u.order = S.n; u.clip = perm[k % kNumClips]; u.start = 0.0f;
+            S.s[S.n++] = u;
+        }
+        Log("banca: %s: %d convocados, %d suplentes, %d asientos en %d fila(s) (%s); se sientan %d, %d con pechera (%.0f %%)", sd ? "visitante" : "local", (int)conv[sd], ns,
+            seats, rows, ss.pre, got, nb, pct);
+    }
+    return 0;
+}
+
+void SubsTick(void* host) {
+    if (s_subsDead.load(std::memory_order_relaxed)) return;   // (los sentados se sueltan igual cuando el juego borra a sus jugadores)
+    Subs& S = s_subs;
+    const double now = Now();
+    if (S.lastTick > 0 && now - S.lastTick < 0.002) return;          // una vez por cuadro
+    const float dt = S.lastTick > 0 ? (float)std::min(0.1, now - S.lastTick) : 0.0f;
+    S.lastTick = now; S.T += dt;
+    s_subTicks.fetch_add(1, std::memory_order_relaxed);
+    const bool on = Live(0, 0.0f) > 0.5f && Live(1, 1.0f) > 0.5f && Live2(0, 1.0f) > 0.5f;
+    if (!on) { if (S.phase != kIdle) SubsDestroyAll("opcion apagada"); return; }
+    uintptr_t m = 0; Rd(kMatchPtr, m);
+    if (S.phase != kIdle && m != S.match) { SubsDestroyAll("cambio el partido"); return; }
+    switch (S.phase) {
+    case kIdle:
+        if (now < S.tRetry) return;
+        S.tRetry = now + 2.0;
+        {
+            static int lastWhy = -1; const int why = SubsPrepare();
+            if (why != lastWhy) { lastWhy = why; if (why) Log("banca: suplentes reales: todavia no (%s)", kPrepWhy[why]); }
+            if (why) return;
+        }
+        if (!S.n) { S.phase = kOff; Log("banca: suplentes reales: no hay a quien sentar en este partido (sin asientos de ese estadio o sin suplentes)"); return; }
+        S.phase = kWait; S.tPhase = now; S.T = 0;
+        return;
+    case kWait: {
+        if (now - S.tPhase < 4.0) return;
+        uintptr_t sheet = 0;
+        if (!Rd(kSheetPtr, sheet) || !Heap(sheet)) { if (!S.sheetSaid) { S.sheetSaid = true; Log("banca: suplentes reales: esperando la ficha de las cinematicas"); } return; }
+        int ready = 0;
+        for (int i = 0; i < kNumClips; i++) {
+            sprintf_s(s_clip[i].path, "cpk_dat/common/demo/anime/FoxAnim/FixDemo/Animations/dml_md_lockerSpeech_001_sit_%03d.gani", kClipNo[i]);
+            s_clip[i].asked = false;
+            const int q = ClipQuery(i);
+            if (q < 0) { s_subsDead.store(true); Log("banca: suplentes reales: error al buscar el clip %d en el gestor: se apaga", kClipNo[i]); return; }
+            if (q) ready++;
+        }
+        s_protect.store(1);
+        for (int i = 0; i < kNumClips; i++) if (!s_clip[i].ok && !ClipAsk(i)) { s_subsDead.store(true); Log("banca: suplentes reales: error al pedir el clip %d: se apaga", kClipNo[i]); return; }
+        Log("banca: suplentes reales: %d de %d clips de sentado ya estaban cargados, el resto se pidio", ready, kNumClips);
+        S.phase = kClips; S.tPhase = now; S.pumpOwn = false;
+        return; }
+    case kClips: {
+        int ready = 0;
+        for (int i = 0; i < kNumClips; i++) { const int q = ClipQuery(i); if (q < 0) { s_subsDead.store(true); return; } if (q) ready++; }
+        const double w = now - S.tPhase;
+        if (ready < kNumClips && w > 3.0) {                            // nadie los esta leyendo: se llama a la bomba del juego
+            if (!S.pumpOwn) { S.pumpOwn = true; Log("banca: suplentes reales: los clips no cargan solos en el partido (%d de %d): se llama a la bomba de carga del juego", ready, kNumClips); }
+            if (!PumpOnce()) { s_subsDead.store(true); Log("banca: suplentes reales: error en la bomba de carga: se apaga"); return; }
+        }
+        if (ready < kNumClips && w < 20.0) return;
+        if (!ready) { S.phase = kOff; Log("banca: suplentes reales: ningun clip de sentado cargo en 20 s: no se sienta a nadie en este partido"); return; }
+        if (ready < kNumClips) for (int k = 0; k < S.n; k++) { int c = S.s[k].clip; for (int t = 0; t < kNumClips && !s_clip[c].ok; t++) c = (c + 1) % kNumClips; S.s[k].clip = c; }
+        if (!FixdemoRes()) { S.phase = kOff; Log("banca: suplentes reales: no esta el recurso de clips \"fixdemo\": no se sienta a nadie"); return; }
+        Log("banca: suplentes reales: %d clips listos en %.1f s%s; se crean %d suplentes de a uno", ready, w, S.pumpOwn ? " (con la bomba propia)" : "", S.n);
+        S.phase = kRun; S.tPhase = now; S.tSpawn = now; S.lastCheck = now;
+        return; }
+    case kRun: break;
+    default: return;
+    }
+    // crear de a uno
+    if (S.cur < S.n) {
+        LiveSub& u = S.s[S.cur];
+        if (u.state == 0 && now - S.tSpawn >= 0.10) {
+            char why[96] = {};
+            if (!BudgetOk(why, sizeof why)) {
+                Log("banca: suplentes reales: no se crean mas (%s); quedaron %d de %d", why, s_subActive.load(), S.n);
+                for (int k = S.cur; k < S.n; k++) S.s[k].state = 3;
+                S.cur = S.n;
+            } else {
+                bool haveSW = false; uint8_t season = 0, weather = 0;
+                if (host) {                                               // manga / clima como los de la cancha
+                    uintptr_t h = 0, vt = 0; uint8_t a = 0, b = 0;
+                    if (Rd((uintptr_t)host + 0x7d0, h) && Heap(h) && Rd(h, vt) && vt == kVtDrawHuman && Rd(h + 0xa8 + 0x4f, a) && Rd(h + 0xa8 + 0x50, b)) { haveSW = true; season = a; weather = b; }
+                }
+                if (S.cur == 0) {
+                    uintptr_t sheet = 0; uint8_t a = 0xff, b = 0xff; if (Rd(kSheetPtr, sheet) && Heap(sheet)) { Rd(sheet + 0x5c, a); Rd(sheet + 0x58, b); }
+                    Log("banca: suplentes reales: LoadId +0x4f / +0x50 de la cancha %s %u / %u; de la ficha de cinematicas %u / %u", haveSW ? "" : "(no leido)", season, weather, a, b);
+                }
+                int c0 = 0, c1 = 0; BudgetRead(0, c0, c1);
+                Log("banca: creando suplente %d de %d: %s %llu %s (lugar %d%s%s) en x %.2f y %.2f z %.2f, clip %d; texturas usadas %d de %d", S.cur + 1, S.n,
+                    u.side ? "visitante" : "local", (unsigned long long)u.id, u.name, u.place, u.gk ? ", arquero" : "", u.bib ? ", pechera" : "", u.spot.x, u.spot.y, u.spot.z,
+                    kClipNo[u.clip], c1, c0);
+                if (SubCreate(u, haveSW, season, weather)) { u.state = 1; u.tCreate = now; }
+                else if (s_subsDead.load()) { Log("banca: suplentes reales: ERROR dentro del juego al crear: no se toca nada mas en esta sesion"); return; }
+                else { u.state = 3; S.cur++; S.tSpawn = now; Log("banca: suplentes reales: sin memoria para el suplente %d", S.cur); }
+            }
+        } else if (u.state == 1) {
+            const int r = SubPoll(u);
+            if (r < 0) { u.state = 5; Log("banca: suplentes reales: ERROR dentro del juego al cargar a %s: no se toca nada mas en esta sesion", u.name); return; }
+            if (r == 1) {
+                void* res = FixdemoRes();
+                if (res && SubStart(u, res, S.T)) {
+                    u.state = 2; s_subActive.fetch_add(1);
+                    Log("banca: suplente %d sentado: %s (cargo en %.1f s)", S.cur + 1, u.name, now - u.tCreate);
+                } else {
+                    if (s_subsDead.load()) { Log("banca: suplentes reales: ERROR dentro del juego al dar el clip a %s: no se toca nada mas en esta sesion", u.name); return; }
+                    Log("banca: suplentes reales: %s cargo pero no tomo el clip: se saca", u.name);
+                    FdDestroy(u.fd); u.fd = nullptr; u.state = 3;
+                }
+                S.cur++; S.tSpawn = now;
+            } else if (now - u.tCreate > 30.0) {
+                Log("banca: suplentes reales: %s no cargo en 30 s: se saca", u.name);
+                FdDestroy(u.fd); u.fd = nullptr; u.state = 3; S.cur++; S.tSpawn = now;
+            }
+        }
+        if (S.cur >= S.n) Log("banca: suplentes reales: listo, %d sentados de %d", s_subActive.load(), S.n);
+    }
+    // mover a los sentados
+    for (int k = 0; k < S.n; k++) {
+        LiveSub& u = S.s[k]; if (u.state != 2 || !u.fd) continue;
+        const int r = SubUpdate(u, S.T);
+        if (r < 0) { u.state = 5; Log("banca: suplentes reales: ERROR dentro del juego al mover a %s: no se toca nada mas en esta sesion", u.name); return; }
+        if (r == 2 && !S.seekSaid) { S.seekSaid = true; Log("banca: suplentes reales: el clip no da la vuelta solo; se lo vuelve al principio a mano"); }
+    }
+    // cada 2 s: el que entro a la cancha deja el banco
+    if (now - S.lastCheck >= 2.0) {
+        S.lastCheck = now;
+        for (int k = 0; k < S.n; k++) {
+            LiveSub& u = S.s[k]; if (u.state != 2 || !u.fd) continue;
+            bool onPitch = false;
+            for (int i = 0; i < 11 && !onPitch; i++) { uint32_t idx = 0xff; if (Rd(S.team[u.side] + 4 + (uintptr_t)i * 4, idx)) onPitch = idx == u.teamIdx; }
+            if (!onPitch) continue;
+            Log("banca: %s entro a la cancha: deja el banco", u.name);
+            FdDestroy(u.fd); u.fd = nullptr; u.state = 3; s_subActive.fetch_sub(1);
+        }
+    }
+}
+
+// decide desde que gancho se trabaja (mismo hilo que el de las cinematicas) y si este llamado es el reloj
+bool TickGate(int src) {
+    const unsigned long tid = GetCurrentThreadId();
+    (src == 1 ? s_pushThread : s_implThread).store(tid, std::memory_order_relaxed);
+    int cur = s_src.load(std::memory_order_relaxed);
+    if (cur == 0) {
+        const unsigned long ref = s_fdmThread.load(), a = s_pushThread.load(), b = s_implThread.load();
+        if (!a || !b) return false;
+        const int pick = ref ? (a == ref ? 1 : b == ref ? 2 : 0) : (a == b ? 1 : 0);
+        if (!pick) return false;
+        int exp = 0;
+        if (s_src.compare_exchange_strong(exp, pick)) {
+            s_srcThread.store(pick == 1 ? a : b);
+            Log("banca: reloj de los suplentes reales = %s (hilo %lu; cinematicas %lu, jugadores %lu, estadio %lu)", pick == 1 ? "los jugadores del partido" : "la escena del estadio",
+                pick == 1 ? a : b, ref, a, b);
+        }
+        cur = s_src.load();
+    }
+    if (cur != src) return false;
+    if (tid != s_srcThread.load(std::memory_order_relaxed)) { s_subSkipped.fetch_add(1, std::memory_order_relaxed); return false; }
+    return true;
+}
+
+void __fastcall hk_HumanPush(void* self) {
+    if (s_okSubs && self && *(const uint32_t*)((const uint8_t*)self + 0x18) == 0 && TickGate(1)) {   // jugador 0: una vez por cuadro
+        std::lock_guard<std::recursive_mutex> lk(s_subMx);
+        SubsTick(self);
+    }
+    o_humanPush(self);
+}
+// el juego borra a un jugador del partido: antes se sueltan los nuestros (la escena se va detras)
+void __fastcall hk_HumanDtor(void* self, void* a2, void* a3, void* a4) {
+    if (s_okSubs) {
+        std::lock_guard<std::recursive_mutex> lk(s_subMx);
+        if (s_subs.phase != kIdle) SubsDestroyAll("termino el partido");
+    }
+    s_matchEnd.store(GetTickCount64());
+    o_humanDtor(self, a2, a3, a4);
+}
+void SubsTickFromScene() {
+    if (!s_okSubs || !TickGate(2)) return;
+    std::lock_guard<std::recursive_mutex> lk(s_subMx);
+    SubsTick(nullptr);
 }
 
 void Install() {
@@ -731,6 +1348,18 @@ void Install() {
         }
         Log("banca: figuras sentadas en el banco de los otros modelos del estadio (al cargar) %s", s_okFmdl ? "enganchado" : "NO");
     }
+    {   // 16/11 paso 2a: suplentes reales sentados
+        const bool a = SigAt(kHumanPush, kHumanPushSig, sizeof kHumanPushSig), b = SigAt(kHumanDtor, kHumanDtorSig, sizeof kHumanDtorSig), c = SigAt(kResUnload, kResUnloadSig, sizeof kResUnloadSig);
+        if (!a || !b || !c || !s_okFmdl || !s_okImpl)
+            Log("banca: suplentes reales NO: firmas de 0x1408bf4c0 / 0x1408be4f0 / 0x141b08080 %d %d %d, asientos (fmdl) %d, escena del estadio %d", a, b, c, s_okFmdl, s_okImpl);
+        else if (MH_CreateHook((void*)kResUnload, (void*)&hk_ResUnload, (void**)&o_resUnload) == MH_OK && MH_EnableHook((void*)kResUnload) == MH_OK) {
+            if (MH_CreateHook((void*)kHumanDtor, (void*)&hk_HumanDtor, (void**)&o_humanDtor) == MH_OK && MH_EnableHook((void*)kHumanDtor) == MH_OK) {
+                if (MH_CreateHook((void*)kHumanPush, (void*)&hk_HumanPush, (void**)&o_humanPush) == MH_OK && MH_EnableHook((void*)kHumanPush) == MH_OK) s_okSubs = true;
+                else { MH_DisableHook((void*)kHumanDtor); MH_RemoveHook((void*)kHumanDtor); MH_DisableHook((void*)kResUnload); MH_RemoveHook((void*)kResUnload); }
+            } else { MH_DisableHook((void*)kResUnload); MH_RemoveHook((void*)kResUnload); }
+        }
+        Log("banca: suplentes reales sentados (paso 2a, fila 517) %s", s_okSubs ? "enganchado" : "NO");
+    }
     Log("banca: escondido por la escena del estadio (cada cuadro) %s", s_okImpl ? "enganchado" : "NO");
     Log("banca: reloj %s, sonda de cinematicas %s, esconder el banco %s (fila 516: x %.0f)", s_okTick ? "enganchado" : "NO", s_okProbe ? "enganchada" : "NO",
         !s_okHide ? "NO (firma de 0x1419055f0 distinta)" : s_okVisHook ? (s_okApply ? "listo (SetVisible y al aplicar)" : "solo por SetVisible") : "solo en cinematicas (gancho de SetVisible fallo)", Live(0, 0.0f));
@@ -739,7 +1368,7 @@ void Install() {
 
 void BancaPresent() {
     if (!s_tried) Install();
-    if (!s_okTick && !s_okProbe && !s_okVisHook && !s_okApply && !s_okImpl && !s_okFmdl) return;
+    if (!s_okTick && !s_okProbe && !s_okVisHook && !s_okApply && !s_okImpl && !s_okFmdl && !s_okSubs) return;
     {   // lineas del hilo de carga (paso 1h)
         char tmp[16][220]; int n = 0; unsigned lost = 0;
         { std::lock_guard<std::mutex> lk(s_fmMx); n = s_fmLogN; for (int i = 0; i < n; i++) strcpy_s(tmp[i], s_fmLog[i]); s_fmLogN = 0; lost = s_fmLost; s_fmLost = 0; }
@@ -767,6 +1396,13 @@ void BancaPresent() {
         Log("%s", line);
         Log("banca: la escena del estadio quiso mostrar los suplentes de Konami %u veces (quedaron escondidos)", s_implHidden.load(std::memory_order_relaxed));
         ReadSheet();   // convocados tambien sin cinematica (solo lectura)
+        if (s_okSubs) {   // paso 2a
+            static unsigned lastSub = 0; const unsigned st = s_subTicks.load(std::memory_order_relaxed);
+            Log("banca: suplentes reales %s: %d sentados, reloj %.1f por segundo (fuente %d, hilo %lu; cinematicas %lu, jugadores %lu, estadio %lu), %u cuadros saltados por otro hilo, %u descargas de clips frenadas%s",
+                Live2(0, 1.0f) > 0.5f ? "prendido" : "apagado", s_subActive.load(), nextT > 0 ? (st - lastSub) / 10.0 : 0.0, s_src.load(), s_srcThread.load(), s_fdmThread.load(),
+                s_pushThread.load(), s_implThread.load(), s_subSkipped.load(), s_unloadBlocked.load(), s_subsDead.load() ? "; APAGADO por un error dentro del juego" : "");
+            lastSub = st;
+        }
         lastTicks = tk; nextT = t + 10.0;
     }
     // el juego quiso mostrar el banco y se lo dejo escondido
