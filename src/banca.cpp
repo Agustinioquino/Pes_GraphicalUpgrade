@@ -449,7 +449,7 @@ __declspec(noinline) void ProcessFmdlInner(uint8_t* p, size_t avail) {
         std::vector<FmMesh> ms; if (!FmMeshes(f, ms)) { FmLog("banca: %s_%s: no se pudo leer el fmdl, sin tocar", pre, part); return; }
         const bool isBench = !strcmp(part, "dir_bench");
         FmBenchFlags(f, ms, isBench);
-        float mn[3], mx[3];
+        float mn[3] = {}, mx[3] = {};
         if (FmBenchBox(ms, mn, mx)) BoxPut(pre, mn, mx);
         if (isBench) { FmLog("banca: %s_dir_bench cargado: caja de los suplentes x %.2f..%.2f z %.2f..%.2f", pre, mn[0], mx[0], mn[2], mx[2]); return; }
         // a) mallas de suplente fuera del _dir_bench
