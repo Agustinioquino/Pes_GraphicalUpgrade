@@ -275,7 +275,7 @@ float PesTorsoShrinkMM(float3 rest, float3 n) {
   float rr = 0.07043 - 0.00015 * c1 - 0.01002 * c2 + 0.00154 * c3 + 0.00102 * c4;
   float yy = 1.53524 - 0.01994 * c1 - 0.01021 * c2 + 0.00642 * c3 - 0.00158 * c4;
   float dn = length(float2(max(rho - rr, 0.0), min(p.y - yy, 0.0)));
-  float n0 = R.z > 0.5 ? R.z * 0.01 : 0.0, n1 = R.z > 0.5 ? n0 + 0.03 : 0.025;
+  float n0 = R.z > 0.5 ? R.z * 0.01 : 0.0, n1 = R.z > 0.5 ? n0 + 0.09 : 0.025;   // (16/11) 0.03 -> 0.09: el torso nuevo (cuerpo_a/b/c, torso_shrink_suave.py) funde el cuello de 3 a 11 cm; medido con z349 1.8: media 0.2 mm, sobra max 1.7 mm (antes 7.9)
   float t = (base + (14.0 - base) * wx) * belly * PesShrinkSS((dn - n0) / (n1 - n0));
   float sA = dot(p - float3(0.2631, 1.3704, 0.0195), float3(0.7611, -0.6432, -0.0839));   // a lo largo del brazo desde el hombro
   if (sA > 0.0) { float own = 2.0 * (1.0 - PesShrinkSS((sA - 0.15) / 0.07)); t = lerp(t, own, PesShrinkSS(sA / 0.025)); }
