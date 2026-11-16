@@ -160,6 +160,14 @@ void main(
     }
     if (found > 0.0) irisRad = clamp(found, 0.12, 0.30); }
   float irisR = length(irisD) / irisRad;
+  // (16/11 d, Agustin con captura: "el iris se ve raro, el borde negro es raro") la textura de lo blanco del juego trae pintado un disco
+  // gris con borde oscuro debajo del iris; donde la mascara del iris se apaga (borde) ese gris asomaba como un aro negro duro, tipo
+  // lente de contacto. Debajo del iris y en su borde se usa el blanco limpio de un poco mas afuera (misma direccion), asi el iris
+  // pasa a lo blanco sin aro; el limbo suave lo ponen z91 / z318
+  if (P90.w > 0.5) {
+    float2 dUc = irisD / max(length(irisD), 1e-5);
+    float3 sclOut = g_tex_diffuse.SampleLevel(g_sampler_diffuse_s, 0.5 + dUc * irisRad * 1.5, 1).xyz;
+    r2.xyz = lerp(sclOut, r2.xyz, smoothstep(1.2, 1.5, irisR)); }
   // PUPILA REACTIVA (04/11 b, Agustin: "la idea de la pupila reactiva no es cambiar el tamano si no modificar la forma"; "va asi"):
   // como un ojo real, el agujero del medio se abre o se cierra y el iris se estira (luz fuerte: fibras finas y largas) o se arruga
   // (poca luz: fibras juntas), el borde de afuera del iris no se mueve. Se remapea en radio la UV con la que se lee la textura del

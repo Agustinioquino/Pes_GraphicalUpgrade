@@ -94,11 +94,11 @@ def iris_1024(src, seed=7):
     rc = np.clip(r / 0.5 * nb - 0.5, 0, nb - 1.001); i0 = np.floor(rc).astype(int); t = (rc - i0)[..., None]
     ring = prof[i0] * (1 - t) + prof[np.minimum(i0 + 1, nb - 1)] * t
     # fuera del iris la textura no se ve (la tapa la esclerotica): promedio del anillo, sin el borde poligonal
-    out = out + (ring - out) * sstep(1.15, 1.6, R)[..., None]
+    out = out + (ring - out) * sstep(1.05, 1.4, R)[..., None]
     # anillo oscuro del borde del iris: se acerca a la luz del medio del iris
     lp = (prof * [0.2126, 0.7152, 0.0722]).sum(-1); Rb = (np.arange(nb) + 0.5) / nb * 0.5 / IRIS_R
     ref = lp[(Rb > 0.55) & (Rb < 0.70)].mean()
-    gain = 1 + 0.55 * (np.clip(ref / np.maximum(lp, 1e-4), 1.0, 2.2) - 1) * sstep(0.68, 0.92, Rb) * (1 - sstep(1.25, 1.7, Rb))
+    gain = 1 + 0.85 * (np.clip(ref / np.maximum(lp, 1e-4), 1.0, 2.5) - 1) * sstep(0.62, 0.90, Rb) * (1 - sstep(1.5, 1.9, Rb))   # (16/11 d) mas, y hasta mas afuera
     out = out * (gain[i0] * (1 - t[..., 0]) + gain[np.minimum(i0 + 1, nb - 1)] * t[..., 0])[..., None]
     # hebras finas nuevas (mas chicas que un pixel de la textura vieja), onduladas, solo dentro del iris
     rng = np.random.default_rng(1024)
@@ -120,7 +120,7 @@ def iris_1024(src, seed=7):
     edge = 0.50 + 0.07 * polar(gnoise((NR, TH), 400, 90, rc2)) + 0.03 * polar(gnoise((NR, TH), 400, 14, rc2))
     wc = sstep(0.34, 0.40, R) * (1 - sstep(-0.07, 0.07, R - edge))
     warm = lumo * np.array([1.38, 1.02, 0.55]) * (1.0 + 0.25 * cool)
-    out = out + (warm - out) * (wc * (0.16 + 0.26 * cool))[..., None]
+    out = out + (warm - out) * (wc * (0.05 + 0.15 * cool))[..., None]   # (16/11 d) era 0.16 + 0.26: en el juego quedaba un aro dorado
     sect = polar(gnoise((NR, TH), 300, 260, rc2)); sect2 = polar(gnoise((NR, TH), 120, 70, rc2))
     lum2 = (out * [0.2126, 0.7152, 0.0722]).sum(-1, keepdims=True)
     out = lum2 + (out - lum2) * (1 + 0.16 * sect * m)[..., None]                       # saturacion por sectores
