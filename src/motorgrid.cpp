@@ -1,24 +1,38 @@
 // ---------------------------------------------------------------- (15/11) grilla de piso del Motor en tiempo real
 // Agustin 01:51: "enfocate en el menu en si, sin fondo con grilla". El estudio del Motor no muestra el fondo del Editar: en su
 // lugar va un fondo gris oscuro con una grilla de piso en perspectiva (como la de Blender), con el eje X en rojo y el Z en azul.
-// Se dibuja en una textura propia (CPU, 960 x 540) con la camara libre del Motor (freecam.cpp: posicion, giro y campo de vision)
+// Se dibuja en una textura propia (CPU, 1920 x 1080 desde el 15/11 r) con la camara libre del Motor (freecam.cpp: posicion, giro y campo de vision)
 // y se entrega como fondo en el mismo dibujo donde antes iba el negro (glass.cpp EditorBgFor): queda DETRAS del jugador y de los
-// paneles, no encima. Una vez por cuadro. [PES21FX] motor_grilla = 0 deja el fondo negro liso.
+// paneles, no encima. Una vez por cuadro. [PES21FX] motor_grilla = 0 deja el fondo gris sin lineas (15/11 o; antes negro).
+#ifndef MOTORGRID_TEST
 #include "core.h"
+#endif
 #include <atomic>
 #include <cmath>
 #include <cstring>
 #include <algorithm>
 #include <vector>
+#include <mutex>
+#include <map>
 
 namespace fx {
 
-static const int kW = 960, kH = 540;
+// (15/11 r, Agustin 19:22 con video: "sobre la grilla la resolucion") antes 960 x 540 estirado a la pantalla: lineas borrosas y
+// escalonadas. Ahora a la resolucion de 1920 x 1080 (solo se rehace cuando cambia la camara o las opciones)
+static const int kW = 1920, kH = 1080;
 static ID3D11Texture2D* s_tex = nullptr; static ID3D11ShaderResourceView* s_srv = nullptr; static bool s_tried = false;
 static std::vector<uint32_t> s_px;
 static std::atomic<bool> s_fresh{false};       // ya se dibujo en este cuadro
+// (15/11 o) relacion de aspecto de la PANTALLA: la textura de 960 x 540 se estira a toda la pantalla; con un monitor 21:9 (el de
+// Agustin, 2560 x 1080) la grilla se proyectaba como 16:9 y quedaba estirada de costado (no seguia a la camara como el jugador)
+static float s_asp = 16.0f / 9.0f;
 
-void MotorGridPresent() { s_fresh.store(false, std::memory_order_relaxed); }
+static void MotorDepthDiagTick();
+void MotorGridPresent() { s_fresh.store(false, std::memory_order_relaxed);
+#ifndef MOTORGRID_TEST
+    MotorDepthDiagTick();
+#endif
+}
 
 static inline void Plot(int x, int y, uint32_t rgb, float a) {
     if ((unsigned)x >= (unsigned)kW || (unsigned)y >= (unsigned)kH || a <= 0.0f) return;
@@ -42,7 +56,7 @@ static void Line(float x0, float y0, float x1, float y1, uint32_t rgb, float a0,
 
 struct Cam { float pos[3], f[3], r[3], u[3], th; };
 // segmento del mundo -> pantalla, recortado contra el plano cercano; la opacidad baja con la distancia
-static void Seg(const Cam& c, const float* a, const float* b, uint32_t rgb, float alpha, float fadeDist) {
+static void Seg(const Cam& c, const float* a, const float* b, uint32_t rgb, float alpha, float fadeDist, float ka = 1.0f, float kb = 1.0f) {
     float pa[3], pb[3];
     for (int k = 0; k < 2; k++) {
         const float* p = k ? b : a; float* o = k ? pb : pa; const float d[3] = { p[0] - c.pos[0], p[1] - c.pos[1], p[2] - c.pos[2] };
@@ -52,7 +66,7 @@ static void Seg(const Cam& c, const float* a, const float* b, uint32_t rgb, floa
     if (pa[2] < zn && pb[2] < zn) return;
     if (pa[2] < zn) { const float t = (zn - pa[2]) / (pb[2] - pa[2]); for (int i = 0; i < 3; i++) pa[i] += (pb[i] - pa[i]) * t; }
     if (pb[2] < zn) { const float t = (zn - pb[2]) / (pa[2] - pb[2]); for (int i = 0; i < 3; i++) pb[i] += (pa[i] - pb[i]) * t; }
-    const float asp = (float)kW / (float)kH, hx = 0.5f * kW, hy = 0.5f * kH;
+    const float asp = s_asp, hx = 0.5f * kW, hy = 0.5f * kH;
     float x0 = hx + pa[0] / (pa[2] * c.th * asp) * hx, y0 = hy - pa[1] / (pa[2] * c.th) * hy;
     float x1 = hx + pb[0] / (pb[2] * c.th * asp) * hx, y1 = hy - pb[1] / (pb[2] * c.th) * hy;
     // recorte grueso al rectangulo agrandado (para no recorrer lineas enormes)
@@ -62,13 +76,128 @@ static void Seg(const Cam& c, const float* a, const float* b, uint32_t rgb, floa
         // una punta muy lejos de la pantalla: se parte en tramos y se dibujan solo los que caen cerca
         float m[3]; for (int i = 0; i < 3; i++) m[i] = 0.5f * (a[i] + b[i]);
         const float l2 = (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]);
-        if (l2 > 0.01f) { Seg(c, a, m, rgb, alpha, fadeDist); Seg(c, m, b, rgb, alpha, fadeDist); }
+        const float km = 0.5f * (ka + kb);
+        if (l2 > 0.01f) { Seg(c, a, m, rgb, alpha, fadeDist, ka, km); Seg(c, m, b, rgb, alpha, fadeDist, km, kb); }
         return;
     }
-    const float f0 = std::clamp(1.0f - pa[2] / fadeDist, 0.0f, 1.0f), f1 = std::clamp(1.0f - pb[2] / fadeDist, 0.0f, 1.0f);
+    // ka / kb: opacidad de cada punta del tramo (la grilla la calcula por distancia en el piso); si se recorto contra el plano
+    // cercano, la punta recortada toma la de la otra
+    const bool ca = pa[2] <= 0.0501f, cb = pb[2] <= 0.0501f; const float qa = ca ? kb : ka, qb = cb ? ka : kb;
+    const float f0 = std::clamp(1.0f - pa[2] / fadeDist, 0.0f, 1.0f) * qa, f1 = std::clamp(1.0f - pb[2] / fadeDist, 0.0f, 1.0f) * qb;
     Line(x0, y0, x1, y1, rgb, alpha * f0, alpha * f1);
 }
 
+// pinta el fondo y la grilla en s_px con la camara c
+static void GridPaint(const Cam& c) {
+    // --- fondo: gris oscuro con un degrade suave hacia arriba ---
+    for (int y = 0; y < kH; y++) {
+        const float t = (float)y / (float)(kH - 1); const int v = (int)(30.0f + 14.0f * (1.0f - t));
+        const uint32_t col = 0xff000000u | (uint32_t)v | ((uint32_t)v << 8) | ((uint32_t)(v + 3) << 16);
+        uint32_t* row = &s_px[(size_t)y * kW]; for (int x = 0; x < kW; x++) row[x] = col;
+    }
+    // --- grilla (15/11 o, Agustin 05:14: "al desactivar la grilla del piso todo se pone negro, la grilla a cierta distancia pierde la
+    // simetria"). Apagada queda el fondo gris de arriba, sin lineas. Antes era un cuadrado alrededor de la camara que se apagaba por la
+    // profundidad de cada punta (interpolada en pantalla): de costado se cortaba en las esquinas del cuadrado y cada linea se apagaba
+    // distinto. Ahora: un CIRCULO alrededor de la camara, cada linea partida en tramos cortos y cada punta apagada por su distancia real
+    // en el piso (igual para todos lados), y las lineas finas se apagan cuando quedan a menos de ~3 pixeles de su vecina (lejos se
+    // juntaban y hacian dibujos raros). Opciones: [PES21FX] motor_grilla_celda (m), motor_grilla_linea_fuerte (cada N celdas, 0 = sin),
+    // motor_grilla_intensidad (0..200 %), motor_grilla_ejes, motor_grilla_tamano (m de lado; el circulo es de ese diametro).
+    if (g_cfg.motorGrid != 0) {
+        const float cell = std::clamp(g_cfg.motorGridCell, 0.1f, 10.0f); const int major = std::clamp(g_cfg.motorGridMajor, 0, 50);
+        const float gain = std::clamp((float)g_cfg.motorGridAlpha, 0.0f, 200.0f) / 100.0f;
+        // (15/11 q, Agustin 17:28: "que la grilla se renderize con la distancia al maximo") tamano 0 = MAXIMA: hasta 2 km (el horizonte
+        // del visor). Para que no cueste: por niveles, como los editores. Nivel 0 = la celda hasta 60 celdas de la camara; nivel 1 = cada
+        // M celdas (M = la linea fuerte, o 10) desde ahi hasta 60 x M celdas; nivel 2 = cada M x M... Cada nivel dibuja solo el anillo que
+        // el anterior no cubre (sin lineas dobles) y sus tramos son mas largos cuanto mas lejos.
+        const bool maxi = g_cfg.motorGridSize <= 0;
+        const float Rmax = maxi ? 2000.0f : std::min((float)std::clamp(g_cfg.motorGridSize, 10, 199) * 0.5f, cell * 600.0f);
+        const float fade = maxi ? Rmax : std::min(Rmax, (9.0f + 6.0f * std::fabs(c.pos[1]) + 0.45f / c.th) * std::max(1.0f, Rmax / 20.0f));
+        const int M = major > 1 ? major : 10;
+        const float px = c.pos[0], pz = c.pos[2];
+        const float asp = s_asp, hx = 0.5f * kW, hy = 0.5f * kH;
+        auto proj = [&](const float* w, float& sx, float& sy) {      // false = detras de la camara
+            const float d[3] = { w[0] - c.pos[0], w[1] - c.pos[1], w[2] - c.pos[2] };
+            const float z = d[0] * c.f[0] + d[1] * c.f[1] + d[2] * c.f[2]; if (z < 0.05f) return false;
+            sx = hx + (d[0] * c.r[0] + d[1] * c.r[1] + d[2] * c.r[2]) / (z * c.th * asp) * hx; sy = hy - (d[0] * c.u[0] + d[1] * c.u[1] + d[2] * c.u[2]) / (z * c.th) * hy; return true; };
+        // separacion en pantalla entre esta linea y su vecina (a "st" de distancia por el otro eje), en pixeles
+        auto spacing = [&](const float* m, int axis, float st) {
+            float n[3] = { m[0], 0.0f, m[2] }; n[axis] += st; float t[3] = { m[0], 0.0f, m[2] }; t[2 - axis] += st * 0.5f;
+            float ax, ay, bx, by, tx, ty; if (!proj(m, ax, ay) || !proj(n, bx, by) || !proj(t, tx, ty)) return 1.0e6f;
+            float dx = tx - ax, dy = ty - ay; const float l = sqrtf(dx * dx + dy * dy); if (l < 1.0e-4f) return 1.0e6f; dx /= l; dy /= l;
+            return std::fabs((bx - ax) * dy - (by - ay) * dx); };
+        // (15/11 r, Agustin 18:43: "la grilla sigue desapareciendo en el horizonte") en Maxima no se apaga por distancia hasta el
+        // ultimo 15 % del radio de 2 km
+        auto fadeAt = [&](float x, float z) { const float d = sqrtf((x - px) * (x - px) + (z - pz) * (z - pz)) / fade;
+            const float a = maxi ? std::clamp((1.0f - d) / 0.15f, 0.0f, 1.0f) : std::clamp(1.0f - d, 0.0f, 1.0f); return a * a * (3.0f - 2.0f * a); };
+        float rIn = 0.0f, step = cell; long long mult = 1; float Rlv = Rmax;
+        auto ringFade = [&](float x, float z) { const float d = sqrtf((x - px) * (x - px) + (z - pz) * (z - pz));
+            const float a = std::clamp((Rlv - d) / (0.4f * Rlv), 0.0f, 1.0f); return a * a * (3.0f - 2.0f * a); };
+        for (int lv = 0; lv < 5 && rIn < Rmax; lv++, step *= (float)M, mult *= M) {
+            const float R = maxi ? std::min(Rmax, step * 60.0f) : Rmax; Rlv = R;
+            for (int axis = 0; axis < 2; axis++) {          // 0: lineas de x fija (corren por z, el eje Z azul) / 1: de z fija (el eje X rojo)
+                const float pc = axis == 0 ? px : pz, po = axis == 0 ? pz : px;
+                const long long k0 = (long long)std::ceil((pc - R) / step), k1 = (long long)std::floor((pc + R) / step);
+                for (long long kk = k0; kk <= k1; kk++) {
+                    const float v = (float)kk * step, dv = v - pc; const float hc = sqrtf(std::max(0.0f, R * R - dv * dv)); if (hc < 1.0e-3f) continue;
+                    const float hi = rIn > std::fabs(dv) ? sqrtf(rIn * rIn - dv * dv) : 0.0f;      // tramo que ya dibujo el nivel anterior
+                    const long long kc = kk * mult;      // numero de la linea en celdas
+                    const bool ax0 = kk == 0 && g_cfg.motorGridAxes != 0, maj = major > 0 && kc % major == 0;
+                    const uint32_t col = ax0 ? (axis == 0 ? 0x00e08c40u : 0x005448eau) : 0x00909090u;
+                    const float base = (ax0 ? 0.95f : maj ? 0.50f : 0.24f) * gain; if (base <= 0.003f) continue;
+                    // (15/11 s, Agustin 19:28: "la grilla no sigue las lineas correctamente"; video 16.20.38: en el borde de cada nivel las
+                    // lineas finas se cortaban de golpe en una curva y arriba seguian solo las gruesas, como si la grilla se partiera).
+                    // Las lineas que NO siguen en el nivel siguiente (las que no son multiplo de M) se apagan suave en el ultimo 40 % del
+                    // anillo; las que siguen (multiplo de M) pasan al nivel siguiente con la misma intensidad, sin corte
+                    const bool ringOut = maxi && R < Rmax && (kk % M) != 0;
+                    for (int side = 0; side < 2; side++) {      // los dos lados del anillo (o la linea entera si no hay anillo adentro)
+                        float t = side == 0 ? po - hc : po + hi; const float tEnd = side == 0 ? (hi > 0.0f ? po - hi : po + hc) : po + hc;
+                        if (side == 1 && hi <= 0.0f) break;
+                        while (t < tEnd) {
+                            const float dist = std::fabs(dv) + std::fabs(t - po); const float sg = std::clamp(dist * 0.18f, 0.25f, 6.0f * (float)mult); const float t2 = std::min(tEnd, t + sg);
+                            float a[3], b[3]; if (axis == 0) { a[0] = b[0] = v; a[2] = t; b[2] = t2; } else { a[2] = b[2] = v; a[0] = t; b[0] = t2; } a[1] = b[1] = 0.0f;
+                            float fa = fadeAt(a[0], a[2]), fb = fadeAt(b[0], b[2]);
+                            if (ringOut) { fa *= ringFade(a[0], a[2]); fb *= ringFade(b[0], b[2]); }
+                            if (fa > 0.003f || fb > 0.003f) {
+                                float sp = 1.0f;
+                                if (!ax0) { float m[3] = { (a[0] + b[0]) * 0.5f, 0.0f, (a[2] + b[2]) * 0.5f }; const float s1 = spacing(m, axis, step) * (maj && mult < major ? (float)major / (float)mult : 1.0f); sp = std::clamp((s1 - 2.0f) / 4.0f, 0.0f, 1.0f);
+                                    // en Maxima las lineas fuertes y las del ultimo nivel no se apagan del todo al juntarse cerca del horizonte:
+                                    // se funden en una franja suave en vez de cortarse
+                                    if (maxi && (maj || R >= Rmax || lv >= 3)) sp = std::max(sp, 0.30f); }
+                                if (sp > 0.003f) Seg(c, a, b, col, base * sp, 1.0e9f, fa, fb);
+                            }
+                            t = t2;
+                        }
+                    }
+                }
+            }
+            rIn = R;
+            if (!maxi) break;
+        }
+    }
+    // --- (15/11 r, Agustin 19:22: "pq el jugador parece un png") sombra de contacto del jugador sobre el piso: el jugador lo dibuja el
+    // visor del Editar en su propia imagen y se pega encima de este fondo, sin tocar el piso. Una mancha oscura suave en el piso
+    // (y = 0) alrededor de los pies (el jugador del visor esta en el origen) lo apoya. Por pixel: rayo de la camara contra el piso.
+    {   const float R = 0.75f; const float asp = s_asp, hx = 0.5f * kW, hy = 0.5f * kH;
+        if (c.pos[1] > 0.05f) {
+            float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f; bool any = false;
+            for (int q = 0; q < 16; q++) { const float an = (float)q * 0.3926991f; const float w[3] = { cosf(an) * R, 0.0f, sinf(an) * R };
+                const float d[3] = { w[0] - c.pos[0], w[1] - c.pos[1], w[2] - c.pos[2] };
+                const float z = d[0] * c.f[0] + d[1] * c.f[1] + d[2] * c.f[2]; if (z < 0.05f) { any = false; x0 = 0; y0 = 0; x1 = (float)kW; y1 = (float)kH; break; }
+                const float sx = hx + (d[0] * c.r[0] + d[1] * c.r[1] + d[2] * c.r[2]) / (z * c.th * asp) * hx, sy = hy - (d[0] * c.u[0] + d[1] * c.u[1] + d[2] * c.u[2]) / (z * c.th) * hy;
+                x0 = std::min(x0, sx); x1 = std::max(x1, sx); y0 = std::min(y0, sy); y1 = std::max(y1, sy); any = true; }
+            (void)any;
+            const int ix0 = std::max(0, (int)x0 - 2), ix1 = std::min(kW - 1, (int)x1 + 2), iy0 = std::max(0, (int)y0 - 2), iy1 = std::min(kH - 1, (int)y1 + 2);
+            for (int y = iy0; y <= iy1; y++) { const float b = (hy - (float)y) / hy * c.th;
+                for (int x = ix0; x <= ix1; x++) { const float a = ((float)x - hx) / hx * c.th * asp;
+                    const float dir[3] = { c.f[0] + c.r[0] * a + c.u[0] * b, c.f[1] + c.r[1] * a + c.u[1] * b, c.f[2] + c.r[2] * a + c.u[2] * b };
+                    if (dir[1] > -1e-5f) continue; const float t = -c.pos[1] / dir[1]; const float gx = c.pos[0] + dir[0] * t, gz = c.pos[2] + dir[2] * t;
+                    const float dd = sqrtf(gx * gx + gz * gz) / R; if (dd >= 1.0f) continue;
+                    const float k = (1.0f - dd) * (1.0f - dd) * 0.55f;      // mas oscura al centro, se desvanece hacia el borde
+                    uint32_t& px = s_px[(size_t)y * kW + x]; const int m = (int)((1.0f - k) * 256.0f);
+                    px = 0xff000000u | (uint32_t)(((px & 255) * m) >> 8) | ((uint32_t)((((px >> 8) & 255) * m) >> 8) << 8) | ((uint32_t)((((px >> 16) & 255) * m) >> 8) << 16); } } } }
+}
+
+#ifndef MOTORGRID_TEST
 // fondo del estudio del Motor para este cuadro (nullptr = no se pudo: va el negro)
 ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx) {
     if (!g_dev.dev || !ctx) return nullptr;
@@ -90,25 +219,31 @@ ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx) {
     c.r[0] = -c.f[2]; c.r[1] = 0; c.r[2] = c.f[0]; { const float l = sqrtf(c.r[0] * c.r[0] + c.r[2] * c.r[2]); if (l > 1e-5f) { c.r[0] /= l; c.r[2] /= l; } else { c.r[0] = 1; c.r[2] = 0; } }
     c.u[0] = c.r[1] * c.f[2] - c.r[2] * c.f[1]; c.u[1] = c.r[2] * c.f[0] - c.r[0] * c.f[2]; c.u[2] = c.r[0] * c.f[1] - c.r[1] * c.f[0];
     c.th = tanf(0.5f * std::clamp(FreeCamFovNow(), 0.02f, 2.4f));
-    // --- fondo: gris oscuro con un degrade suave hacia arriba ---
-    for (int y = 0; y < kH; y++) {
-        const float t = (float)y / (float)(kH - 1); const int v = (int)(30.0f + 14.0f * (1.0f - t));
-        const uint32_t col = 0xff000000u | (uint32_t)v | ((uint32_t)v << 8) | ((uint32_t)(v + 3) << 16);
-        uint32_t* row = &s_px[(size_t)y * kW]; for (int x = 0; x < kW; x++) row[x] = col;
-    }
-    // --- grilla: celdas de 1 m, lineas mas fuertes cada 5 m, motor_grilla_tamano x motor_grilla_tamano m alrededor de la camara (40 de fabrica;
-    // 15/11, Agustin 04:09: "puedes agregar una opcion para aumentar la grilla?"). Mas grande = se ve mas lejos (la niebla se aleja igual)
-    const int half = std::clamp(g_cfg.motorGridSize, 10, 400) / 2; const float fade = (9.0f + 6.0f * std::fabs(c.pos[1]) + 0.45f / c.th) * std::max(1.0f, (float)half / 20.0f);
-    const int cx = (int)std::floor(c.pos[0] + 0.5f), cz = (int)std::floor(c.pos[2] + 0.5f);
-    for (int i = -half; i <= half; i++) {
-        const int gx = cx + i, gz = cz + i;
-        {   const float a[3] = { (float)gx, 0, (float)(cz - half) }, b[3] = { (float)gx, 0, (float)(cz + half) };
-            if (gx == 0) Seg(c, a, b, 0x00e08c40u, 0.95f, fade * 1.6f);            // eje Z (azul; el color va en BGR dentro del u32 RGBA)
-            else Seg(c, a, b, 0x00909090u, (gx % 5 == 0) ? 0.50f : 0.24f, fade); }
-        {   const float a[3] = { (float)(cx - half), 0, (float)gz }, b[3] = { (float)(cx + half), 0, (float)gz };
-            if (gz == 0) Seg(c, a, b, 0x005448eau, 0.95f, fade * 1.6f);            // eje X (rojo)
-            else Seg(c, a, b, 0x00909090u, (gz % 5 == 0) ? 0.50f : 0.24f, fade); }
-    }
+    s_asp = (g_bbW > 0 && g_bbH > 0) ? std::clamp((float)g_bbW / (float)g_bbH, 0.5f, 5.0f) : 16.0f / 9.0f;
+    // (15/11 s, Agustin 19:28: "la grilla no sigue las lineas correctamente") con jugador cargado se usa la camara tal cual se le mando
+    // al visor (freecam.cpp FreeCamWrittenCam): posicion, direccion y arriba reales, campo de vision ya suavizado y el aspecto con el
+    // que el juego proyecta al jugador; asi la grilla y el jugador salen de la MISMA proyeccion
+    {   float wp[3], wt[3], wu[3], wf = 0.0f, wa = 0.0f;
+        if (FreeCamWrittenCam(wp, wt, wu, &wf, &wa)) {
+            float f[3] = { wt[0] - wp[0], wt[1] - wp[1], wt[2] - wp[2] }; const float lf = sqrtf(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+            if (lf > 1e-5f) {
+                for (int i = 0; i < 3; i++) f[i] /= lf;
+                float r[3] = { f[1] * wu[2] - f[2] * wu[1], f[2] * wu[0] - f[0] * wu[2], f[0] * wu[1] - f[1] * wu[0] }; const float lr = sqrtf(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+                if (lr > 1e-5f) {
+                    for (int i = 0; i < 3; i++) { r[i] /= lr; c.pos[i] = wp[i]; c.f[i] = f[i]; c.r[i] = r[i]; }
+                    c.u[0] = r[1] * f[2] - r[2] * f[1]; c.u[1] = r[2] * f[0] - r[0] * f[2]; c.u[2] = r[0] * f[1] - r[1] * f[0];
+                    c.th = tanf(0.5f * std::clamp(wf, 0.02f, 2.4f));
+                    if (wa == wa && wa > 0.5f && wa < 5.0f) s_asp = wa;
+                    yaw = atan2f(f[0], f[2]); pitch = asinf(std::clamp(f[1], -1.0f, 1.0f));
+                    static int nl = 0; if (nl++ < 3) Log("motor (grilla): con la camara del visor: campo de vision %.4f, aspecto %.3f (pantalla %u x %u)", wf, s_asp, g_bbW, g_bbH);
+                } } } }
+    // (15/11 o) si la camara y las opciones no cambiaron desde el ultimo dibujo, la textura ya esta bien: no se rehace
+    {   struct Key { float p[3], yaw, pitch, th, cell, asp, u[3]; int on, size, alpha, major, axes; };
+        static Key s_last{}; static bool s_have = false; Key kk{}; memcpy(kk.p, c.pos, sizeof kk.p); kk.yaw = yaw; kk.pitch = pitch; kk.th = c.th; kk.cell = g_cfg.motorGridCell; kk.asp = s_asp; memcpy(kk.u, c.u, sizeof kk.u);
+        kk.on = g_cfg.motorGrid; kk.size = g_cfg.motorGridSize; kk.alpha = g_cfg.motorGridAlpha; kk.major = g_cfg.motorGridMajor; kk.axes = g_cfg.motorGridAxes;
+        if (s_have && memcmp(&kk, &s_last, sizeof kk) == 0) return s_srv;
+        s_last = kk; s_have = true; }
+    GridPaint(c);
     D3D11_MAPPED_SUBRESOURCE ms{};
     if (SUCCEEDED(ctx->Map(s_tex, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms)) && ms.pData) {
         for (int y = 0; y < kH; y++) memcpy((uint8_t*)ms.pData + (size_t)y * ms.RowPitch, &s_px[(size_t)y * kW], (size_t)kW * 4);
@@ -117,4 +252,47 @@ ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx) {
     return s_srv;
 }
 
+// ---- (16/11, Agustin 06:44: "pero no tiene profundidad el jugador") DIAGNOSTICO para meter la grilla en la escena 3D del visor:
+// el jugador se pega como imagen encima del fondo con grilla. Para dibujar la grilla con la profundidad del jugador hace falta saber
+// que profundidad (DSV) usa el visor, su formato y su borrado (0 = Z invertida). Dentro del Motor, cada 20 s (hasta 4 veces) se mira
+// medio segundo: cada combinacion imagen de destino + profundidad que el juego pone (tamano, formato, si es la imagen del jugador que
+// despues lee el menu) y con que valor se borra cada profundidad. Solo anota; no cambia nada.
+static std::mutex s_ddMx; static std::atomic<bool> s_ddOn{false}; static double s_ddT0 = 0.0; static int s_ddDumps = 0;
+struct DdKey { uint32_t rw, rh, rf, dw, dh, df; uintptr_t rres, dres; bool operator<(const DdKey& o) const { return memcmp(this, &o, sizeof *this) < 0; } };
+static std::map<DdKey, int> s_ddRt; static std::map<uintptr_t, float> s_ddClear; static std::atomic<uintptr_t> s_ddPlayerImg{0};
+void MotorDepthPlayerImage(void* res) { s_ddPlayerImg.store((uintptr_t)res, std::memory_order_relaxed); }
+static void DdDesc(ID3D11View* v, uint32_t& w, uint32_t& h, uint32_t& f, uintptr_t& res) {
+    w = h = f = 0; res = 0; if (!v) return;
+    ID3D11Resource* r = nullptr; v->GetResource(&r); if (!r) return; res = (uintptr_t)r;
+    ID3D11Texture2D* t = nullptr; r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t); r->Release();
+    if (t) { D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); w = d.Width; h = d.Height; f = (uint32_t)d.Format; t->Release(); }
+}
+void MotorDepthDiagRT(UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d) {
+    if (!s_ddOn.load(std::memory_order_relaxed) || !d) return;
+    DdKey k{}; DdDesc(n > 0 && v ? v[0] : nullptr, k.rw, k.rh, k.rf, k.rres); DdDesc(d, k.dw, k.dh, k.df, k.dres);
+    if (k.dw < 512) return;
+    std::lock_guard<std::mutex> lk(s_ddMx); s_ddRt[k]++;
+}
+void MotorDepthDiagClear(ID3D11DepthStencilView* d, float depth) {
+    if (!s_ddOn.load(std::memory_order_relaxed) || !d) return;
+    uint32_t w, h, f; uintptr_t res; DdDesc(d, w, h, f, res); if (w < 512) return;
+    std::lock_guard<std::mutex> lk(s_ddMx); s_ddClear[res] = depth;
+}
+static void MotorDepthDiagTick() {
+    const double now = Now();
+    if (!MotorPageActive() || s_ddDumps >= 4) { s_ddOn.store(false); s_ddT0 = 0.0; return; }
+    if (s_ddT0 == 0.0) { s_ddT0 = now; return; }
+    if (!s_ddOn.load() && now - s_ddT0 > 20.0) { std::lock_guard<std::mutex> lk(s_ddMx); s_ddRt.clear(); s_ddClear.clear(); s_ddOn.store(true); s_ddT0 = now; return; }
+    if (s_ddOn.load() && now - s_ddT0 > 0.5) {
+        s_ddOn.store(false); s_ddT0 = now; s_ddDumps++;
+        std::lock_guard<std::mutex> lk(s_ddMx); const uintptr_t pi = s_ddPlayerImg.load();
+        Log("motor (profundidad %d): %d combinaciones imagen + profundidad en 0.5 s (imagen del jugador del menu %p)", s_ddDumps, (int)s_ddRt.size(), (void*)pi);
+        int i = 0;
+        for (const auto& e : s_ddRt) { if (i++ >= 24) break; const DdKey& k = e.first; auto c = s_ddClear.find(k.dres);
+            Log("motor (profundidad %d):  imagen %ux%u fmt %u %p%s | profundidad %ux%u fmt %u %p borrada a %s | %d veces", s_ddDumps, k.rw, k.rh, k.rf, (void*)k.rres, k.rres && k.rres == pi ? " (LA DEL JUGADOR)" : "",
+                k.dw, k.dh, k.df, (void*)k.dres, c == s_ddClear.end() ? "-" : (c->second < 0.5f ? "0 (Z invertida)" : "1"), e.second); }
+    }
+}
+
+#endif
 } // namespace fx

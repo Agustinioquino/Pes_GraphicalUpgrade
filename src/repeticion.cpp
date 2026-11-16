@@ -134,6 +134,60 @@ namespace {
 ID3D11Texture2D* s_tex[2] = {}; ID3D11ShaderResourceView* s_srv[2] = {}; int s_prevI = 0;   // s_prevI = ultimo cuadro, el otro = cuadro viejo
 UINT s_tw = 0, s_th = 0; DXGI_FORMAT s_tf = DXGI_FORMAT_UNKNOWN;
 double s_cutT = -1e9; int s_cutSeen = 0; bool s_haveOld = false, s_copyOk = false;
+// ---- (16/11, Agustin: "que se adapte correctamente aunque la barra este arriba o en otras zonas y con una imagen") ----
+// La pantalla de la repeticion (match2D::Screen::Replay, vtable 0x142bf0760, game2dReplay.bin) cambia de diseno segun el menu de la
+// competicion (Dream Patch / MenuServer): la barra puede estar abajo (diseno original) o arriba (diseno VAR). En vez de la posicion
+// fija se mide la del propio menu: gancho en su vf19 (0x1420f4580, cada cuadro, hilo del juego); la pagina [this+0x10] tiene en +0x98
+// el buscador de nodos por nombre (vf1, como FUN_142104290); cada nodo menusystem da su posicion GLOBAL con vf20 (FUN_140e4d9e0 ->
+// FUN_141f95bd0 = propiedad 0x1008 del clip). La barra queda entre "text_timeStart" y "text_timeEnd" (los tiempos de los extremos);
+// "text_timeCurrent" va debajo del cabezal. Sin esos nodos (o valores raros) se usa la posicion fija de antes.
+const uintptr_t kScrReplayVt = 0x142bf0760ull, kScrReplayVf19 = 0x1420f4580ull;
+using ScrFn = void(*)(void*);
+ScrFn o_scr19 = nullptr; int s_scrHook = 0;          // 0 sin intentar, 1 enganchado, -1 no
+struct UiPos { float x, y; bool ok; };
+std::atomic<float> s_uiS[2]{0.0f, 0.0f}, s_uiE[2]{0.0f, 0.0f}, s_uiC[2]{0.0f, 0.0f};
+std::atomic<int> s_uiOk{0}; std::atomic<unsigned long long> s_uiMs{0};
+UiPos NodePos(void* root, const char* name) {
+    UiPos r{0, 0, false};
+    __try {
+        using FindFn = void*(*)(void*, const char*); using PosFn = int(*)(void*, float*);
+        void* node = (*(FindFn**)root)[1](root, name); if (!node) return r;
+        float v[2] = {0, 0};
+        if ((*(PosFn**)node)[20](node, v) < 0) return r;
+        if (!(fabsf(v[0]) < 20000.0f && fabsf(v[1]) < 20000.0f)) return r;
+        r.x = v[0]; r.y = v[1]; r.ok = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { r.ok = false; }
+    return r;
+}
+void hk_Scr19(void* self) {
+    o_scr19(self);
+    if (!g_cfg.replayBar) return;
+    __try {
+        const uintptr_t page = *(const uintptr_t*)((const unsigned char*)self + 0x10); if (!page) return;
+        void* root = (void*)(page + 0x98);
+        const UiPos a = NodePos(root, "text_timeStart"), b = NodePos(root, "text_timeEnd"), c = NodePos(root, "text_timeCurrent");
+        const bool ok = a.ok && b.ok && b.x - a.x > 40.0f;
+        if (ok) { s_uiS[0] = a.x; s_uiS[1] = a.y; s_uiE[0] = b.x; s_uiE[1] = b.y; s_uiC[0] = c.ok ? c.x : 0.0f; s_uiC[1] = c.ok ? c.y : -1.0f; s_uiMs = GetTickCount64(); }
+        s_uiOk = ok ? 1 : 0;
+        static int s_n = 0; static float s_lx = -1, s_ly = -1;
+        if (s_n < 12 && (fabsf(a.x - s_lx) > 1.0f || fabsf(a.y - s_ly) > 1.0f)) {
+            s_n++; s_lx = a.x; s_ly = a.y;
+            Log("repeticion: menu de la repeticion: inicio %s (%.1f, %.1f), fin %s (%.1f, %.1f), actual %s (%.1f, %.1f) -> %s",
+                a.ok ? "si" : "NO", a.x, a.y, b.ok ? "si" : "NO", b.x, b.y, c.ok ? "si" : "NO", c.x, c.y, ok ? "barra medida en el menu" : "posicion fija");
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { s_uiOk = 0; }
+}
+void HookScr() {
+    if (s_scrHook) return;
+    s_scrHook = -1;
+    void** slot = (void**)(kScrReplayVt + 19 * sizeof(void*));
+    __try { if ((uintptr_t)*slot != kScrReplayVf19) { Log("repeticion: la vtable de la pantalla de repeticion no coincide (%p): barra en posicion fija", *slot); return; } }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return; }
+    DWORD old = 0;
+    if (!VirtualProtect(slot, sizeof(void*), PAGE_READWRITE, &old)) { Log("repeticion: no se pudo cambiar la vtable de la pantalla (%lu)", GetLastError()); return; }
+    o_scr19 = (ScrFn)*slot; InterlockedExchangePointer(slot, (void*)&hk_Scr19); VirtualProtect(slot, sizeof(void*), old, &old);
+    s_scrHook = 1; Log("repeticion: pantalla de repeticion enganchada (vf19 0x1420f4580): la barra sigue al diseno del menu");
+}
 // ---- barra ----
 double s_moveT = -1e9; POINT s_lastP{ -32000, -32000 }; bool s_lWas = false, s_drag = false;
 float s_mx = -1, s_my = -1; bool s_front = false;
@@ -184,6 +238,14 @@ BarGeo Geo(const ImVec2& ds) {
     const float grow = 0.0f * lenS;   // (14/11 l, Agustin: "no hagas que la barra se estire") siempre en el lugar de la del juego          // 15 s o menos: como la del juego; 2 min o mas: ancha
     const float t = (float)std::clamp((Now() - s_openT - 0.25) / 0.45, 0.0, 1.0); const float e = grow * t * t * (3.0f - 2.0f * t);
     BarGeo g;
+    // (16/11) diseno medido en el menu (arriba, abajo o con imagen): de la mitad del tiempo de inicio a la del final. El nodo da su
+    // punto de anclaje (arriba a la izquierda del texto "00:00", ~55 x 24 px a 1080p): la barra va ~22 px mas abajo
+    if (s_uiOk.load() && GetTickCount64() - s_uiMs.load() < 1500) {
+        const float ax = s_uiS[0].load(), ay = s_uiS[1].load(), bx = s_uiE[0].load(), by = s_uiE[1].load();
+        g.x0 = (ax + 27.0f) * sx; g.x1 = (bx + 27.0f) * sx;
+        const float h = 4.0f * k; const float yc = ((ay + by) * 0.5f + 34.0f) * sy;
+        g.h = h; g.y = yc - h * 0.5f; g.hit = 18.0f * k; return g;
+    }
     g.x0 = (860.0f + (104.0f - 860.0f) * e) * sx; g.x1 = (1764.0f + (1816.0f - 1764.0f) * e) * sx;
     const float h = (4.0f + 6.0f * e) * k; const float yc = (973.5f + (836.0f - 973.5f) * e) * sy;
     g.h = h; g.y = yc - h * 0.5f; g.hit = (18.0f + 10.0f * e) * k; return g;   // (14/11 n) un poco mas alto para acertarle (era 14)
@@ -193,6 +255,7 @@ BarGeo Geo(const ImVec2& ds) {
 // Present, antes del ImGui de la DLL: copia del cuadro (solo en la repeticion) y estado del mouse. true = hay algo que dibujar
 bool RepeticionPresent(IDXGISwapChain* sc) {
     if (!RepeticionWantsHook() || s_ok.load() != 1) { s_drag = false; return false; }
+    if (g_cfg.replayBar && !s_scrHook) HookScr();   // (16/11) una vez: medir la barra en el menu de la repeticion
     const bool live = ReplayLive();
     const double now = Now();
     // mouse (pixeles de la ventana)

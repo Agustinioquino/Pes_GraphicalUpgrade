@@ -674,12 +674,12 @@ template<int V> static void STDMETHODCALLTYPE hk_Dispatch(ID3D11DeviceContext* c
 }
 template<int V> static void STDMETHODCALLTYPE hk_OMSetRT(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d) { PerfDrawScope pds_(c, false);
     GrassBaseFlush(c, 1, 0, v ? n : 0, v, d);
-    o_OMSetRT[V](c, n, v, d);
+    o_OMSetRT[V](c, n, v, d); MotorDepthDiagRT(n, v, d);
     Ctx(c).shadowDSV = HeadShadowBind(n, v, d); Ctx(c).gameShadow = HeadShadowIsGameRes(d);
 }
 template<int V> static void STDMETHODCALLTYPE hk_OMSetRTU(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d, UINT us, UINT un, ID3D11UnorderedAccessView* const* u, const UINT* ic) { PerfDrawScope pds_(c, false);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) GrassBaseFlush(c, 1, 0, v ? n : 0, v, d);   // solo UAVs: los targets no cambian
-    o_OMSetRTU[V](c, n, v, d, us, un, u, ic);
+    o_OMSetRTU[V](c, n, v, d, us, un, u, ic); if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) MotorDepthDiagRT(n, v, d);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) { Ctx(c).shadowDSV = HeadShadowBind(n, v, d); Ctx(c).gameShadow = HeadShadowIsGameRes(d); }
 }
 template<int V> static void STDMETHODCALLTYPE hk_ClearState(ID3D11DeviceContext* c) { PerfDrawScope pds_(c, false);
@@ -901,6 +901,7 @@ std::atomic<int> g_depthClearZero{0}, g_depthClearOne{0};
 template<int V> static void STDMETHODCALLTYPE hk_ClearDSV(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, UINT f, FLOAT d, UINT8 st) { PerfDrawScope pds_(c, false);
     if (f & D3D11_CLEAR_DEPTH) { if (d < 0.5f) g_depthClearZero++; else g_depthClearOne++; HeadShadowOnClear(c, v, d); }   // (27/10 c) el atlas de la cabeza se limpia con el shadow map del juego
     GrassBaseFlush(c, 2, 0);   // (26/10 g) antes de borrar la profundidad de la pasada
+    if (f & D3D11_CLEAR_DEPTH) MotorDepthDiagClear(v, d);
     o_ClearDSV[V](c, v, f, d, st);
 }
 
@@ -2379,6 +2380,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     { static ULONGLONG t = 0; ULONGLONG n = GetTickCount64(); if (n - t > 10000) { t = n; RastroFlush(false); } }
     FaceInjectPresent();   // (09/11) matrices del rig: donde se arma la cara (solo mide, expr_inyeccion)
     SolEditorPresent();   // (09/11) sol real del editor: ganchos (primer Present), aplicar pendiente, log cada 10 s
+    BancaPresent();     // (16/11 8z607v) banco de suplentes paso 1: ganchos en el primer Present, registro
     RedesPresent();     // (13/11 sk9ema) redes de los arcos con el viento unico (ganchos en el primer Present)
     BanderinPresent();  // (14/11 sk9ema) banderin del corner: simula la tela y sube pes_flag (despues de UpdateTimeParams: filas 494 / 157 de este cuadro)
     CamHookPresent();   // (23/10) camara del motor: ganchos (primer Present), cortes de camara -> 160, log
@@ -2434,6 +2436,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     PanelPresent(s_frameTex);   // (08/11) panel en vivo: recargas pedidas por HTTP y capturas (panel.cpp)
     FisicoCapturePresent(s_frameTex);   // (26/10 c) paginas del menu Fisico
     MenuTestPresent(sc, s_frameTex);   // (08/11) prueba automatica v2: mide, fotografia y escribe PES21FX/diagnostico/<fecha>/ (OJO: nunca terminar un comentario // con barra invertida: continua la linea y se come la siguiente)
+    MotorExtraPresent(sc);   // (15/11 q) vista extra del Motor: guarda la imagen de la camara extra y deja en pantalla la principal
     { GpuZoneScope gz_(g_dev.imm, kGzOverlay); OverlayPresent(sc); }
     --t_perfDepth;
     const uint64_t pfT1 = __rdtsc();

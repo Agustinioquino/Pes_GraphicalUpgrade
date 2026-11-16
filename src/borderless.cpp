@@ -85,6 +85,17 @@ void BorderlessEnsure(HWND w, bool windowed, unsigned bw, unsigned bh) {
         SetWindowPos(w, HWND_TOP, m.left, m.top, m.right - m.left, m.bottom - m.top, SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
         Log("ventana sin bordes: corregida al crear la imagen (tenia bordes: %s, estaba en %ld,%ld %ldx%ld)", styleOk ? "no" : "si", r.left, r.top, r.right - r.left, r.bottom - r.top);
     }
+    // (15/11 18:34) Agustin: la ventana quedaba atras / sin foco al abrir y habia que hacer clic para verla. Se la trae adelante
+    // con el foco; si Windows no deja (otro programa tiene el foco), se engancha un momento la entrada del hilo de adelante.
+    if (GetForegroundWindow() != w) {
+        HWND fg = GetForegroundWindow(); const DWORD me = GetCurrentThreadId(), wt = GetWindowThreadProcessId(w, nullptr);
+        const DWORD ft = fg ? GetWindowThreadProcessId(fg, nullptr) : 0;
+        const bool a1 = ft && ft != me && AttachThreadInput(me, ft, TRUE) != FALSE, a2 = wt && wt != me && wt != ft && AttachThreadInput(me, wt, TRUE) != FALSE;
+        ShowWindow(w, SW_SHOW); SetWindowPos(w, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        BringWindowToTop(w); const BOOL okFg = SetForegroundWindow(w); SetActiveWindow(w); SetFocus(w);
+        if (a2) AttachThreadInput(me, wt, FALSE); if (a1) AttachThreadInput(me, ft, FALSE);
+        Log("ventana sin bordes: ventana traida adelante con el foco (%s)", GetForegroundWindow() == w ? "ok" : okFg ? "pedido, Windows la dejo atras" : "Windows no dejo");
+    }
     const unsigned mw = (unsigned)(m.right - m.left), mh = (unsigned)(m.bottom - m.top);
     Log("ventana sin bordes: imagen %ux%u en un monitor de %ux%u%s (AdjustWindowRectEx atendida %d veces)", bw, bh, mw, mh,
         bw == mw && bh == mh ? " - nitida, punto por punto" : " - Windows la estira: para que sea nitida elegir la resolucion del monitor en settings.exe", s_adjN.load());
