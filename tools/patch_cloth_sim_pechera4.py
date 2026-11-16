@@ -30,6 +30,12 @@ rep("    const float pesJump = s_menu ? PES_MENU_JUMP : 50.0;   // (15/11 c) en 
     "    float pesDet0 = abs(determinant((float3x3)pesSk0)), pesDet1 = abs(determinant((float3x3)pesSk1));\n"
     "    bool pesScaleJump = s_menu && abs(pesDet1 - pesDet0) > PES_MENU_JUMP_SCALE * max(max(pesDet0, pesDet1), 1e-6);\n"
     "    if (dot(vBody, vBody) > 2500.0 || pesScaleJump) {\n")
+# (16/11, cloth.log 01:38) el VS de las pecheras (92900712c8702eb4, agregado a cloth.ini el 15/11) tambien lo usan brazos y manos
+# de algun jugador del menu: entraron como camisetas (6043 v, x -0.58..0.58, y 1.09..1.40, 5 capsulas; 1158 v, y 0.91..1.14,
+# 4 capsulas) con todas sus particulas como manga. Quedan fijos al esqueleto como el cuello de la campera.
+rep("#define PES_IS_COLLAR (g_legCount == 0 && g_capsuleCount == 0 && (g_vertexCount == 1074 || g_vertexCount == 1100))",
+    "#define PES_IS_COLLAR (g_legCount == 0 && ((g_capsuleCount == 0 && (g_vertexCount == 1074 || g_vertexCount == 1100)) || \\\n"
+    "                       (g_capsuleCount >= 4 && (g_vertexCount == 6043 || g_vertexCount == 1158))))   // + brazos y manos (16/11)")
 if crlf: t = t.replace('\n', '\r\n')
 open(p, 'wb').write(t.encode('latin1'))
 print('ok', p)

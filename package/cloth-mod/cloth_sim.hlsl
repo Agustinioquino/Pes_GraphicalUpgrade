@@ -258,7 +258,8 @@ cbuffer Params : register(b2)
 // (16/11) las pecheras como las arma el mod hoy (pechera 3542 v, suplente 1226 v, con 1 capsula): solo para la brisa
 #define PES_IS_BIBW (g_legCount == 0 && g_capsuleCount <= 1 && (g_vertexCount == PES_BIB_VERTS0 || g_vertexCount == PES_BIB_VERTS1))
 // (16/11) cuello de la campera (malla 0 de campera_pes21fx, VS de las pecheras): fijo al esqueleto, sin fisica
-#define PES_IS_COLLAR (g_legCount == 0 && g_capsuleCount == 0 && (g_vertexCount == 1074 || g_vertexCount == 1100))
+#define PES_IS_COLLAR (g_legCount == 0 && ((g_capsuleCount == 0 && (g_vertexCount == 1074 || g_vertexCount == 1100)) || \
+                       (g_capsuleCount >= 4 && (g_vertexCount == 6043 || g_vertexCount == 1158))))   // + brazos y manos (16/11)
 #define PES_BIBW_PUSH    0.008    // (m) separacion extra de las pecheras en pecho y panza
 #define PES_BIBW_ZC      0.05     // (m, pose de armado) eje del torso en z (z mayor = adelante)
 #define PES_MENU_JUMP_SCALE 0.35  // (16/11) en menus: cambio relativo del determinante de la piel entre cuadros = salto de esqueleto
