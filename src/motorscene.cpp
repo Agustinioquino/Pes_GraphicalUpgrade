@@ -12,6 +12,7 @@
 // Todo se lee con memoria comprobada y dentro de __try: si el juego cambia las listas justo en ese momento se descarta la pasada.
 #include "core.h"
 #include <cstring>
+#include <cmath>
 
 namespace fx {
 
@@ -81,10 +82,107 @@ static bool SetOn(uintptr_t obj, uintptr_t data, int kind, bool on) {
         return true;
     } __except (1) { return false; }
 }
+static bool RefreshLight(const MotorLight& L);      // abajo: vuelve a poner su color con el setter del juego (llama a su actualizacion)
 bool MotorLightSetOn(const MotorLight& L, bool on) {
-    const bool ok = SetOn(L.obj, L.data, L.kind, on);
+    bool ok = SetOn(L.obj, L.data, L.kind, on);
+    // (15/11 r, Agustin 18:48: "los focos los volvi a activar en el motor pero se sigue viendo como si los focos estuvieran apagados")
+    // el bit solo no avisa a la luz; al prender se le vuelve a poner su propio color con el setter del juego, que termina en la
+    // actualizacion de la clase (ranura +0x78), como cuando el juego arma la escena
+    if (ok && on) { const bool r = RefreshLight(L); static int nr = 0; if (nr++ < 30) Log("motor (escena): luz \"%s\" actualizada al prender: %s", L.name[0] ? L.name : "(sin nombre)", r ? "si" : "no (sin setter de color)"); }
     static int n = 0; if (n++ < 60) Log("motor (escena): luz \"%s\" %s%s", L.name[0] ? L.name : "(sin nombre)", on ? "prendida" : "apagada", ok ? "" : " -> NO se pudo (ya no esta en la escena)");
     return ok;
+}
+
+// ---------------------------------------------------------------- (15/11 o) inspector editable
+// Agustin 05:16: "esta parte deberia dejar modificar variables". Se usan los MISMOS setters del motor que usa el juego al leer
+// una escena (llamadores en c_1417a3960.c 79020 / 79213 / 101034 / 101296), con el comienzo de cada funcion comprobado:
+//   color (todas)  FUN_14169f2e0(luz, float4*)  escribe P+0x40 y llama la ranura +0x78 (la actualizacion de la clase).
+//                  Es la misma que llama el modulo de Sider (275 veces seguidas desde otro hilo en la prueba del 11/11, sin cierre).
+//   sombra         bit 0x10 de P+0x64 (FUN_14169f7f0 hace solo eso: dato)
+//   alcance Punto  FUN_14169f570(luz, r)  [luz+0x84] = r, P+0xb4 = r, atenuacion FUN_14171dd60, ranura +0x78, limites FUN_1416a0900
+//   alcance Foco   FUN_14169f5d0(luz, r)  [luz+0x84] = r, P+0xe8 = r, atenuacion FUN_14171dde0, ranura +0x78, limites FUN_1416a09a0
+//   posicion Punto FUN_14169f680(luz, float4*) P+0x70 y limites (esfera)   Foco FUN_14169f6d0 (cono)   Sol FUN_14169f3c0 (direccion)
+// Que Punto = f570 / f680 y Foco = f5d0 / f6d0 es INFERIDO de los limites que arman (esfera alrededor del punto con el alcance, y
+// cono con el giro de la luz +0x90) y del tamano del bloque P. Los argumentos float4 se leen con movaps: van alineados a 16.
+// La luz "Local" y la base no tienen alcance ni posicion editables (no conozco su setter): quedan de solo lectura.
+static const uintptr_t kFnColor = 0x14169f2e0ull, kFnRangeP = 0x14169f570ull, kFnRangeS = 0x14169f5d0ull,
+                       kFnPosP = 0x14169f680ull, kFnPosS = 0x14169f6d0ull, kFnDirSun = 0x14169f3c0ull;
+static bool SigOk(uintptr_t fn, const char* hex) {      // compara el comienzo de la funcion con lo leido en la base de Ghidra
+    unsigned char want[24]; int n = 0;
+    for (const char* p = hex; p[0] && p[1] && n < 24; p += 2) { auto h = [](char c) { return c >= 'a' ? c - 'a' + 10 : c - '0'; }; want[n++] = (unsigned char)(h(p[0]) * 16 + h(p[1])); }
+    __try { return memcmp((const void*)fn, want, (size_t)n) == 0; } __except (1) { return false; }
+}
+static int FnOk(int i) {      // 0 color, 1 alcance punto, 2 alcance foco, 3 pos punto, 4 pos foco, 5 direccion sol: 1 = firma buena
+    static int s_ok[6] = { -1, -1, -1, -1, -1, -1 };
+    if (s_ok[i] < 0) {
+        static const uintptr_t fn[6] = { kFnColor, kFnRangeP, kFnRangeS, kFnPosP, kFnPosS, kFnDirSun };
+        static const char* const sig[6] = { "488b41380f28020f294040488b0148ff6078", "40534883ec20488b4138488bd9f30f118984000000f30f1188b4000000",
+            "40534883ec20488b4138488bd9f30f118984000000f30f1188e8000000", "0f28024c8b41380f280da2a6f0000f59c8410f294070",
+            "0f28024c8b41380f280d52a6f0000f59c8410f294070", "0f28024c8b41380f280d62a9f0000f59c8410f294070" };
+        static const char* const nm[6] = { "color", "alcance del punto", "alcance del foco", "posicion del punto", "posicion del foco", "direccion del sol" };
+        s_ok[i] = SigOk(fn[i], sig[i]) ? 1 : 0;
+        Log("motor (escena): funcion de %s 0x%llx %s", nm[i], (unsigned long long)fn[i], s_ok[i] ? "reconocida" : "NO es la que espero: ese dato queda de solo lectura");
+    }
+    return s_ok[i];
+}
+// sigue siendo la misma luz, enlazada en su escena, con su bloque de datos conocido y (si la clase lo tiene) su bloque de dibujo
+static bool Alive(uintptr_t obj, uintptr_t data, int kind) {
+    if (kind < 0 || kind > 4 || !Heap(obj) || !Heap(data)) return false;
+    if (*(uintptr_t*)obj != kVtLight[kind] || (*(uint32_t*)(obj + 0x24) & 1u) == 0 || *(uintptr_t*)(obj + 0x38) != data || !DataVt(*(uintptr_t*)data)) return false;
+    if (kind == 4 && !Heap(*(uintptr_t*)(obj + 0xd8))) return false;                       // foco: bloque de dibujo [+0xd8]
+    if ((kind == 1 || kind == 3) && !Heap(*(uintptr_t*)(obj + 0x90))) return false;        // sol / punto: bloque [+0x90]
+    return true;
+}
+bool MotorLightCan(const MotorLight& L, int what) {
+    if (!L.writable) return false;
+    switch (what) {
+    case 0: return FnOk(0) == 1;
+    case 1: return true;
+    case 2: return (L.kind == 3 && FnOk(1) == 1) || (L.kind == 4 && FnOk(2) == 1);
+    case 3: return (L.kind == 3 && FnOk(3) == 1) || (L.kind == 4 && FnOk(4) == 1) || (L.kind == 1 && FnOk(5) == 1);
+    }
+    return false;
+}
+typedef void(__fastcall* PFN_V4)(uintptr_t, const float*); typedef void(__fastcall* PFN_F)(uintptr_t, float);
+static bool CallV4(uintptr_t fn, uintptr_t obj, uintptr_t data, int kind, const float* v) {
+    alignas(16) float a[4] = { v[0], v[1], v[2], v[3] };
+    __try { if (!Alive(obj, data, kind)) return false; ((PFN_V4)fn)(obj, a); return true; } __except (1) { return false; }
+}
+static bool CallF(uintptr_t fn, uintptr_t obj, uintptr_t data, int kind, float v) {
+    __try { if (!Alive(obj, data, kind)) return false; ((PFN_F)fn)(obj, v); return true; } __except (1) { return false; }
+}
+static bool ReadF(uintptr_t a, float* out) { __try { if (!Heap(a & ~(uintptr_t)7)) return false; *out = *(const float*)a; return true; } __except (1) { return false; } }
+static bool Finite(float v, float lim) { return v == v && v > -lim && v < lim; }
+bool MotorLightSetColor(const MotorLight& L, const float* c) {
+    if (!MotorLightCan(L, 0)) return false;
+    for (int i = 0; i < 4; i++) if (!Finite(c[i], 1.0e7f)) return false;
+    return CallV4(kFnColor, L.obj, L.data, L.kind, c);
+}
+static bool RefreshLight(const MotorLight& L) {
+    if (!MotorLightCan(L, 0)) return false;
+    float c[4]; if (!ReadF(L.data + 0x40, &c[0]) || !ReadF(L.data + 0x44, &c[1]) || !ReadF(L.data + 0x48, &c[2]) || !ReadF(L.data + 0x4c, &c[3])) return false;
+    for (int i = 0; i < 4; i++) if (!Finite(c[i], 1.0e7f)) return false;
+    return CallV4(kFnColor, L.obj, L.data, L.kind, c);
+}
+bool MotorLightSetShadow(const MotorLight& L, bool on) {
+    __try {
+        if (!L.writable || !Alive(L.obj, L.data, L.kind)) return false;
+        uint32_t* f = (uint32_t*)(L.data + 0x64); const uint32_t v = *f, w = on ? (v | 0x10u) : (v & ~0x10u);
+        if (w != v) *f = w;
+        return true;
+    } __except (1) { return false; }
+}
+bool MotorLightSetRange(const MotorLight& L, float r) {
+    if (!MotorLightCan(L, 2) || !Finite(r, 100000.0f) || r < 0.01f) return false;
+    return CallF(L.kind == 3 ? kFnRangeP : kFnRangeS, L.obj, L.data, L.kind, r);
+}
+bool MotorLightSetPos(const MotorLight& L, const float* p) {
+    if (!MotorLightCan(L, 3)) return false;
+    for (int i = 0; i < 3; i++) if (!Finite(p[i], 100000.0f)) return false;
+    float w = 1.0f; if (!ReadF(L.data + 0x7c, &w)) return false;                       // la cuarta componente queda como estaba
+    float v[4] = { p[0], p[1], p[2], w };
+    if (L.kind == 1) { const float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (l < 1.0e-4f) return false; v[0] /= l; v[1] /= l; v[2] /= l; }   // sol: direccion unitaria
+    return CallV4(L.kind == 3 ? kFnPosP : L.kind == 4 ? kFnPosS : kFnDirSun, L.obj, L.data, L.kind, v);
 }
 
 } // namespace fx

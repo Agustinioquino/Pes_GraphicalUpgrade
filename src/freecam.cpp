@@ -194,6 +194,29 @@ static float s_fovOut = 0.364f;
 void FreeCamGizmoOrbit(float dyaw, float dpitch) { std::lock_guard<std::mutex> lk(s_gzMx); s_gzDYaw += dyaw; s_gzDPitch += dpitch; }
 void FreeCamGizmoAxis(int a) { s_gzAxis.store(a); }      // 0 +X, 1 -X, 2 +Y, 3 -Y, 4 +Z, 5 -Z: la camara se pone de ese lado del pivote
 void FreeCamGizmoHome() { s_gzHome.store(1); }
+// (15/11 q, Agustin 17:28: "faltan las vistas en perspectiva y en no") vista ortografica del Motor (Num 5, como Blender). La proyeccion
+// del visor (+0x3c) no se toca: se hace con un teleobjetivo (campo de vision 0.02 rad) y la camara alejada del pivote lo justo para que
+// lo que esta en el pivote se vea del mismo tamano; con ese angulo la perspectiva es menos de 1 % de un lado al otro de la escena.
+// El cambio es animado (0.25 s) y lo que se ve en el pivote no cambia de tamano mientras pasa. s_orthoFar = lejos que hace falta.
+static std::atomic<int> s_orthoWant{ 0 }; static float s_orthoA = 0.0f, s_posOut[3] = {}; static bool s_posOutOk = false; static std::atomic<float> s_orthoFar{ 0.0f };
+void FreeCamOrthoSet(int on) { s_orthoWant.store(on ? 1 : 0); }
+bool FreeCamOrtho() { return s_orthoWant.load() != 0; }
+// (15/11 q, Agustin 17:27: "permitirme crear una vista extra, con otra camara"; 17:39 eligio probar alternando cuadros) VISTA EXTRA:
+// el juego dibuja una sola camara por cuadro, asi que en los cuadros "B" el visor recibe la camara extra (orbita alrededor del mismo
+// pivote que la camara libre) y motorextra.cpp guarda esa imagen y vuelve a poner en pantalla la del cuadro anterior. Cada vista se
+// renueva la mitad de las veces. s_xOff = intercambiar (si el juego dibuja la camara un cuadro despues de recibirla).
+static std::atomic<int> s_xOn{ 0 }, s_xOff{ 0 }; static std::atomic<unsigned> s_xFrame{ 0 };
+static std::mutex s_xMx; static float s_xYaw = 0.0f, s_xPitch = 0.25f, s_xDist = 3.0f, s_xPiv[3] = { 0.0f, 0.95f, 0.0f }, s_xFov = 0.364f; static bool s_xInit = false;
+void FreeCamExtraSet(int on) { s_xOn.store(on ? 1 : 0); if (!on) { std::lock_guard<std::mutex> lk(s_xMx); s_xInit = false; } }
+bool FreeCamExtra() { return s_xOn.load() != 0; }
+void FreeCamExtraSwap() { s_xOff.store(s_xOff.load() ^ 1); }
+void FreeCamExtraTick() { s_xFrame.fetch_add(1); }
+bool FreeCamExtraBFrame() { return s_xOn.load() != 0 && ((s_xFrame.load() + (unsigned)s_xOff.load()) & 1u) != 0; }
+void FreeCamExtraOrbit(float dyaw, float dpitch) { std::lock_guard<std::mutex> lk(s_xMx); s_xYaw += dyaw; s_xPitch = std::clamp(s_xPitch + dpitch, -1.45f, 1.45f); }
+void FreeCamExtraZoom(float f) { std::lock_guard<std::mutex> lk(s_xMx); s_xDist = std::clamp(s_xDist * f, 0.3f, 120.0f); }
+void FreeCamExtraPreset(int p) { std::lock_guard<std::mutex> lk(s_xMx);      // 0 frente, 1 costado derecho, 2 arriba, 3 atras, 4 costado izquierdo
+    static const float kY[5] = { 0.0f, 1.5707963f, 0.0f, 3.1415927f, -1.5707963f }, kP[5] = { 0.12f, 0.12f, 1.45f, 0.12f, 0.12f };
+    const int q = std::clamp(p, 0, 4); s_xYaw = kY[q]; s_xPitch = kP[q]; }
 static double s_headLostT = -1.0;   // (08/11 e) cuando se perdio el dato de la cabeza siguiendo la cara (-1 = no)
 static bool FreeCamHeadLost() {   // se pidio seguir la cara, se estaba siguiendo y el dato se corto: se suelta hasta que vuelva
     if (s_headLostT < 0.0) return false;
@@ -551,6 +574,19 @@ static bool Update(float* pos, float* tgt, float* up, float* fov, int proj, cons
             if (*fov != s_fovWritten) s_fovBase = *fov;
             *fov = s_fovBase * z; s_fovWritten = *fov; fovApplied = *fov;
         }
+        // (15/11 q) ortografica: alejar a lo largo de la mirada y cerrar el angulo en la misma proporcion (tan), con el pivote quieto
+        const float want = (motor && !s_follow && s_pivotOk && s_orthoWant.load()) ? 1.0f : 0.0f;
+        s_orthoA = want > s_orthoA ? std::min(want, s_orthoA + dt / 0.25f) : std::max(want, s_orthoA - dt / 0.25f);
+        s_orthoFar.store(0.0f); s_posOutOk = false;
+        if (s_orthoA > 0.0f && fovApplied > 0.0f && s_pivotOk) {
+            const float e = s_orthoA * s_orthoA * (3.0f - 2.0f * s_orthoA);
+            const float t0 = tanf(fovApplied * 0.5f), tO = tanf(0.02f * 0.5f), tN = t0 + (tO - t0) * e;
+            float d[3] = { s_pivot[0] - s_pos[0], s_pivot[1] - s_pos[1], s_pivot[2] - s_pos[2] };
+            const float dist = std::max(0.3f, d[0] * f[0] + d[1] * f[1] + d[2] * f[2]), nd = dist * t0 / std::max(1.0e-5f, tN);
+            for (int i = 0; i < 3; i++) { pos[i] = s_pos[i] - f[i] * (nd - dist); if (!s_follow) tgt[i] = pos[i] + f[i]; }
+            *fov = 2.0f * atanf(tN); s_fovWritten = *fov; fovApplied = *fov; s_orthoFar.store(nd); memcpy(s_posOut, pos, 12); s_posOutOk = true;
+            static int nl = 0; if (e >= 1.0f && nl++ < 3) Log("camara libre (Motor): vista ortografica, camara a %.1f m del pivote (antes %.2f)", nd, dist);
+        }
     }
     float* q = g_cfg.live[345]; q[0] = s_pos[0]; q[1] = s_pos[1]; q[2] = s_pos[2]; q[3] = fovApplied;
     if (++s_applies % 600 == 0 && s_logged < 20) {   // cada ~10 s de uso
@@ -587,6 +623,7 @@ static bool s_tried = false, s_okEditor = false;
 // guarda el CameraImpl tal como estaba al prender y se restaura una vez al apagar (pedido de Agustin: volver a la posicion original)
 static unsigned char s_orig[0x50]; static bool s_haveOrig = false, s_restore = false;
 
+static std::mutex s_wcMx; static float s_wc[11] = {}; static double s_wcT = 0.0;
 static void hk_SetCam(void* rt, unsigned char* cam) {
     s_editorCalls++;
     if (cam && !FreeCamActive() && s_restore) {
@@ -619,7 +656,62 @@ static void hk_SetCam(void* rt, unsigned char* cam) {
     } else if (!FreeCamActive() && s_on) {
         Update(nullptr, nullptr, nullptr, nullptr, 0, "editor", nullptr);   // solo anota "apagada"
     }
+    // (15/11 o, Agustin 05:08 / 05:23: "veo la camara y los recortes de la escena del modo editar", "desmontar los limites de
+    // renderizado del modo editar para este menu") dentro del Motor la camara del visor corta mas cerca y mucho mas lejos que la
+    // del Editar ([PES21FX] motor_cerca / motor_lejos en metros; 0 = como el juego). Fuera del Motor no se toca.
+    // Al salir del Motor se devuelven los valores que tenia esa camara (Agustin 05:28: "que al salir se vuelva a la normal del modo editar").
+    static unsigned char* s_clipCam = nullptr; static float s_clipOrig[2] = {}; static bool s_clipOn = false;
+    if (cam && s_clipOn && !MotorPageActive()) { if (cam == s_clipCam) { memcpy(cam + 0x34, &s_clipOrig[0], 4); memcpy(cam + 0x38, &s_clipOrig[1], 4); Log("camara libre (Motor): cerca / lejos del visor devueltos a %.3f / %.1f", s_clipOrig[0], s_clipOrig[1]); } s_clipOn = false; }
+    if (cam && MotorPageActive()) { int proj; memcpy(&proj, cam + 0x3c, 4); if (proj == 0) {
+        float nr, fr; memcpy(&nr, cam + 0x34, 4); memcpy(&fr, cam + 0x38, 4);
+        if (!s_clipOn || cam != s_clipCam) { s_clipCam = cam; s_clipOrig[0] = nr; s_clipOrig[1] = fr; s_clipOn = true; }
+        const float wn = g_cfg.motorNear, wf = g_cfg.motorFar;
+        if (wn > 0.0f && nr == nr && nr > wn) memcpy(cam + 0x34, &wn, 4);
+        if (wf > 0.0f && fr == fr && fr < wf) memcpy(cam + 0x38, &wf, 4);
+        { const float od = s_orthoFar.load(), of = od + 2000.0f; float cf; memcpy(&cf, cam + 0x38, 4); if (od > 0.0f && cf == cf && cf < of) memcpy(cam + 0x38, &of, 4);
+          float cn; memcpy(&cn, cam + 0x34, 4); const float on = od > 20.0f ? std::min(5.0f, od * 0.25f) : 0.0f; if (on > 0.0f && cn == cn && cn < on) memcpy(cam + 0x34, &on, 4); }   // ortografica: lejos sin cortar, cerca un poco mas afuera (precision)
+        static int nl = 0; if (nl++ < 3) Log("camara libre (Motor): cerca / lejos del visor %.3f / %.1f -> %.3f / %.1f", nr, fr, wn > 0.0f && nr > wn ? wn : nr, wf > 0.0f && fr < wf ? wf : fr);
+    } }
+    // (15/11 ythnmm, Agustin: "le falta opciones en el modo editar jugador para mover la camara, hacer zoom") camara del visor del Editar
+    // con el mouse (menumouse.cpp MenuViewCamAdjust): se corre solo la copia que se manda al render target y despues se devuelve lo del
+    // juego, asi el CameraImpl del visor no acumula nada y al salir queda la camara de siempre. Nunca con la camara libre ni en el Motor.
+    // (15/11 f) ahora queda escrita en el CameraImpl (asi el recorte y las sombras del juego ven la misma camara); MenuViewCamAdjust
+    // devuelve la del juego al salir de Apariencia
+    unsigned char vcSave[0x34];
+    if (cam && !FreeCamActive() && !MotorPageActive()) MenuViewCamAdjust(cam, vcSave);   // (ythnmm ec655d9) queda escrita; se restaura al salir de Apariencia
+    // (15/11 q) vista extra: en los cuadros B se manda la camara extra y despues se deja la de siempre en el visor
+    unsigned char xSave[0x34]; bool xb = false;
+    if (cam && FreeCamActive() && MotorPageActive() && s_pivotOk && rt == s_rtMain && FreeCamExtraBFrame()) {
+        std::lock_guard<std::mutex> lk(s_xMx);
+        if (!s_xInit) { const float d[3] = { s_pos[0] - s_pivot[0], s_pos[1] - s_pivot[1], s_pos[2] - s_pivot[2] }; const float l = Len3(d);
+            s_xDist = std::clamp(l, 0.3f, 120.0f); s_xYaw = atan2f(d[0], d[2]) + 1.5707963f; s_xPitch = 0.15f; s_xInit = true;
+            // (15/11 r, Agustin 18:43: "no es independiente, se mueve con la vista normal") la camara extra guarda SU punto de giro y su
+            // campo de vision al prenderse: mover, girar o hacer zoom con la principal ya no la mueve
+            memcpy(s_xPiv, s_pivot, 12); { float f0; memcpy(&f0, cam + 0x40, 4); s_xFov = (f0 == f0 && f0 > 0.1f && f0 < 2.0f) ? f0 : (s_fovBase > 0.1f ? s_fovBase : 0.364f); }
+            Log("motor: vista extra prendida (alternando cuadros), camara propia a %.2f m de su punto (%.2f, %.2f, %.2f), de costado, campo de vision %.3f", s_xDist, s_xPiv[0], s_xPiv[1], s_xPiv[2], s_xFov); }
+        memcpy(xSave, cam + 0x10, sizeof xSave); xb = true;
+        const float cp = cosf(s_xPitch); const float c[3] = { cp * sinf(s_xYaw), sinf(s_xPitch), cp * cosf(s_xYaw) };
+        float* pos = (float*)(cam + 0x10); float* tgt = (float*)(cam + 0x1c); float* up = (float*)(cam + 0x28);
+        for (int i = 0; i < 3; i++) { pos[i] = s_xPiv[i] + c[i] * s_xDist; tgt[i] = s_xPiv[i]; } up[0] = 0.0f; up[1] = 1.0f; up[2] = 0.0f;
+        memcpy(cam + 0x40, &s_xFov, 4); { float cn; memcpy(&cn, cam + 0x34, 4); const float n0 = 0.05f; if (cn == cn && cn > n0) memcpy(cam + 0x34, &n0, 4); }   // sin la lente ni el cerca de la ortografica
+    }
+    // (15/11 s, Agustin 19:28: "la grilla no sigue las lineas correctamente") la grilla del Motor (motorgrid.cpp) armaba su camara con
+    // la pose de la camara libre y el campo de vision PEDIDO (x345), no con lo que de verdad se le manda al visor (campo de vision ya
+    // suavizado, objetivo, arriba, aspecto +0x44): al hacer zoom o girar, las lineas y el jugador se separaban. Se guarda la camara
+    // tal cual llega al juego (solo la del visor principal, no la de la vista extra)
+    if (cam && FreeCamActive() && MotorPageActive() && rt == s_rtMain && !xb) {
+        std::lock_guard<std::mutex> lk(s_wcMx); memcpy(s_wc, cam + 0x10, 12); memcpy(s_wc + 3, cam + 0x1c, 12); memcpy(s_wc + 6, cam + 0x28, 12);
+        memcpy(s_wc + 9, cam + 0x40, 4); memcpy(s_wc + 10, cam + 0x44, 4); s_wcT = Now();
+    }
     o_setCam(rt, cam);
+    if (xb) memcpy(cam + 0x10, xSave, sizeof xSave);
+}
+// para la grilla del Motor: la ultima camara que se le mando al visor (posicion, objetivo, arriba, campo de vision vertical, aspecto)
+bool FreeCamWrittenCam(float* pos, float* tgt, float* up, float* fov, float* asp) {
+    std::lock_guard<std::mutex> lk(s_wcMx);
+    if (s_wcT <= 0.0 || Now() - s_wcT > 0.5) return false;
+    memcpy(pos, s_wc, 12); memcpy(tgt, s_wc + 3, 12); memcpy(up, s_wc + 6, 12); *fov = s_wc[9]; *asp = s_wc[10];
+    return s_wc[9] == s_wc[9] && s_wc[9] > 0.001f && s_wc[9] < 3.0f;
 }
 
 static bool Readable(const void* p, size_t n) {
@@ -641,8 +733,55 @@ static void Install() {
     Log("camara libre: camara del visor del editor (0x1419bf3f0 RenderTarget::SetCamera) %s", s_okEditor ? "enganchada" : "NO se pudo enganchar");
 }
 
+// (15/11 q, Agustin 17:40: "le falta resolucion al motor") el visor del Editar dibuja en una imagen del tamano del recuadro loaderTex
+// (1238 x 1080 en su PC) y el Motor la muestra estirada. Dentro del Motor se le pide al juego el tamano de la pantalla x motor_resolucion
+// con SU funcion de cambiar el tamano en vivo (TaskModelView 0x141ee5490: toma el candado del visor +0x510, rehace sus imagenes y su
+// aspecto); al salir del Motor se le devuelve el tamano que tenia. Cadena: edit::ModelView [0x1438040d0] -> +0x78 tarea -> +0x90 Impl
+// (+0xfc ancho, +0x100 alto, +0x104 aspecto). Hallazgo: decompilado/hallazgos/20261115_graficos_niveles_y_visor_editar.cpp.md
+static bool Readable(const void* p, size_t n);
+static void MotorResTick() {
+    static uintptr_t s_task = 0; static int s_ow = 0, s_oh = 0; static bool s_set = false; static double s_t = -1.0e9; static int s_nl = 0;
+    static int s_exe = -1; if (s_exe < 0) { HMODULE mod = GetModuleHandleW(nullptr); auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
+        s_exe = ((uintptr_t)mod == 0x140000000ull && nt->FileHeader.TimeDateStamp == 0x62787C6A) ? 1 : 0; }
+    if (s_exe != 1) return;
+    const uintptr_t kMV = 0x1438040d0ull;
+    const uintptr_t mv = Readable((const void*)kMV, 8) ? *(const uintptr_t*)kMV : 0;
+    const uintptr_t task = (mv && Readable((const void*)(mv + 0x78), 8)) ? *(const uintptr_t*)(mv + 0x78) : 0;
+    const uintptr_t impl = (task && Readable((const void*)(task + 0x90), 8)) ? *(const uintptr_t*)(task + 0x90) : 0;
+    if (!impl || !Readable((const void*)(impl + 0xfc), 12)) { if (task != s_task) s_set = false; return; }
+    if (s_set && task != s_task) s_set = false;      // otro visor: lo guardado era del anterior
+    const int cw = *(const int*)(impl + 0xfc), ch = *(const int*)(impl + 0x100); const double now = Now();
+    typedef void (*ResizeFn)(uintptr_t, int, int, uintptr_t); const ResizeFn resize = (ResizeFn)0x141ee5490ull;
+    const bool want = MotorPageActive() && g_cfg.motorRes > 0 && g_bbW >= 640 && g_bbH >= 360;
+    // (15/11 r, Agustin 18:43: "la resolucion parece seguir siendo baja" con el visor ya a 1920 x 1080) escala de resolucion interna del
+    // juego (menu de graficos, fila 2, 50..100 %: byte 0x14352c638, por cuadro float 0x143802f38 = pct / 100; decompilado 15/11,
+    // INFERIDO que es la resolucion interna). En el Motor se pone al 100 % y al salir vuelve la del juego. Se anota cada cambio.
+    {   static int s_pctOrig = -1; static int s_lastPct = -2; static float s_lastF = -2.0f; static int s_nlp = 0;
+        unsigned char* pPct = (unsigned char*)0x14352c638ull; const float* pF = (const float*)0x143802f38ull;
+        if (Readable(pPct, 1) && Readable(pF, 4)) {
+            const int pct = *pPct; const float f = *pF;
+            if ((pct != s_lastPct || std::fabs(f - s_lastF) > 0.001f) && s_nlp < 16) { s_nlp++; Log("motor: escala de resolucion interna del juego %d %% (por cuadro %.3f)%s", pct, f, MotorPageActive() ? " - en el Motor" : ""); }
+            s_lastPct = pct; s_lastF = f;
+            if (want && pct >= 50 && pct < 100) { if (s_pctOrig < 0) s_pctOrig = pct; DWORD op; if (VirtualProtect(pPct, 1, PAGE_READWRITE, &op)) { *pPct = 100; VirtualProtect(pPct, 1, op, &op); } }
+            else if (!want && s_pctOrig >= 0) { DWORD op; if (VirtualProtect(pPct, 1, PAGE_READWRITE, &op)) { *pPct = (unsigned char)s_pctOrig; VirtualProtect(pPct, 1, op, &op); } s_pctOrig = -1; }
+        } }
+    if (want) {
+        const float sc = std::clamp((float)g_cfg.motorRes / 100.0f, 0.5f, 2.0f);
+        const int W = std::clamp((int)((float)g_bbW * sc + 0.5f) & ~1, 320, 8192), H = std::clamp((int)((float)g_bbH * sc + 0.5f) & ~1, 180, 8192);
+        if (cw == W && ch == H) return;
+        if (now - s_t < 1.0) return; s_t = now;
+        if (!s_set) { s_ow = cw; s_oh = ch; s_task = task; s_set = true; }
+        resize(task, W, H, 0);
+        if (s_nl++ < 12) Log("motor: visor a %d x %d (%d %% de la pantalla %u x %u; tenia %d x %d, aspecto %.3f)", W, H, g_cfg.motorRes, g_bbW, g_bbH, cw, ch, *(const float*)(impl + 0x104));
+    } else if (s_set) {
+        if (cw != s_ow || ch != s_oh) { if (now - s_t < 0.2) return; s_t = now; resize(task, s_ow, s_oh, 0); if (s_nl++ < 12) Log("motor: visor devuelto a %d x %d (fuera del Motor)", s_ow, s_oh); }
+        s_set = false;
+    }
+}
+
 void FreeCamPresent() {
     if (!s_tried) Install();
+    MotorResTick();
     static double s_t0 = 0; static int s_c0 = 0, s_a0 = 0;
     double t = Now();
     if (s_t0 == 0) { s_t0 = t; return; }
@@ -660,7 +799,7 @@ void FreeCamSetPose(const float* pos, float yaw, float pitch) {
     memcpy(s_posePos, pos, 12); s_poseYaw = yaw; s_posePitch = pitch; s_poseWant = true;
     if (!FreeCamActive()) g_cfg.live[344][0] = 2.0f;
 }
-bool FreeCamGetPose(float* pos, float* yaw, float* pitch) { memcpy(pos, s_pos, 12); *yaw = s_yaw; *pitch = s_pitch; return s_on; }
+bool FreeCamGetPose(float* pos, float* yaw, float* pitch) { memcpy(pos, s_posOutOk ? s_posOut : s_pos, 12);   /* (15/11 q) ortografica: la camara alejada que se escribe */ *yaw = s_yaw; *pitch = s_pitch; return s_on; }
 // (15/11) Motor sin modelo: mantiene viva la camara libre aunque el visor no pida camara. Camara de mentira = la del estudio del
 // Editar (a 6.5 m, campo de vision 0.364 rad, mirando al centro a 0.95 m del piso). Devuelve el campo de vision vertical que se ve
 void FreeCamMotorTick() {
