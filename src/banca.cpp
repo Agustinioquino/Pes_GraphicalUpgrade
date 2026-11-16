@@ -235,7 +235,6 @@ void __fastcall hk_Apply(void* body) {
 // cinematica BENCH con kind de espantapajaros (todos los estadios: Konami y mods usan el mismo campo demoGroup) o cuyo modelo sea
 // el de un "_dir_bench" visto por nombre (por si un estadio de mod no puso el grupo).
 void __fastcall hk_ImplShow(void* impl, float dt, char show) {
-    SubsTickFromScene();
     if (show && Live(0, 0.0f) > 0.5f && Live(1, 1.0f) > 0.5f) {
         const uintptr_t im = (uintptr_t)impl; uint32_t kind = 0, group = 0; uintptr_t mdl = 0;
         bool bench = Rd(im + 0x3c, kind) && Rd(im + 0x44, group) && group == kGroupBench && (kind & kKindScarecrow) != 0;
@@ -894,9 +893,11 @@ float Live2(int k, float def) { return (!g_cfg.info[kRow2][k].defined && g_cfg.l
 
 const uintptr_t kMatchPtr = 0x143702208ull;
 const uintptr_t kVtDrawHuman = 0x14261c078ull;                       // draw::util::Human
-// match::Human vf19: push rbp; push rsi; mov rbp,rsp; sub rsp,78h; mov rax,[cookie]; xor rax,rsp; mov [rbp-18h],rax
-const uintptr_t kHumanPush = 0x1408bf4c0ull;
-const unsigned char kHumanPushSig[10] = { 0x40,0x55,0x56,0x48,0x8b,0xec,0x48,0x83,0xec,0x78 };
+// match::Player::vf5 (0x140925710): lo que hace cada jugador del partido en cada cuadro para dibujarse (termina en
+// FUN_1408bf160 -> FUN_141ec8980, mandar la pose). push rbx; sub rsp,30h; mov rbx,rcx; mov rcx,[rcx+7d0h]; test rcx,rcx; je
+// (16/11 2a-2: antes match::Human::vf19 0x1408bf4c0, que en la prueba no corrio nunca durante el partido)
+const uintptr_t kHumanPush = 0x140925710ull;
+const unsigned char kHumanPushSig[21] = { 0x40,0x53,0x48,0x83,0xec,0x30,0x48,0x8b,0xd9,0x48,0x8b,0x89,0xd0,0x07,0x00,0x00,0x48,0x85,0xc9,0x0f,0x84 };
 // FUN_1408be4f0 (destructor base de match::Human): push rdi; sub rsp,30h; mov [rsp+20h],-2; mov [rsp+50h],rbx; mov [rsp+..],rsi
 const uintptr_t kHumanDtor = 0x1408be4f0ull;
 const unsigned char kHumanDtorSig[20] = { 0x40,0x57,0x48,0x83,0xec,0x30,0x48,0xc7,0x44,0x24,0x20,0xfe,0xff,0xff,0xff,0x48,0x89,0x5c,0x24,0x50 };
@@ -1149,6 +1150,31 @@ int SubsPrepare() {
     return 0;
 }
 
+// (2a-2) solo lectura, desde Present: anota una vez por partido los suplentes de verdad de cada equipo (los que se van a sentar),
+// para poder comprobarlos aunque el reloj no corra
+void LogRealSubs() {
+    static uint64_t lastSig = 0;
+    uintptr_t m = 0; if (!Rd(kMatchPtr, m) || !Heap(m)) { lastSig = 0; return; }
+    char line[2][900] = {}; int cnt[2] = {}; uint8_t conv[2] = {}; uint64_t sig = (uint64_t)m;
+    for (int sd = 0; sd < 2; sd++) {
+        uintptr_t team = 0;
+        if (!Rd(m + 0x1978 + (uintptr_t)sd * 0x28, team) || !Heap(team) || !Rd(team + 0x2eec, conv[sd]) || conv[sd] < 11 || conv[sd] > 40) return;
+        size_t pos = 0;
+        for (int i = 11; i < conv[sd]; i++) {
+            uint32_t idx = 0xff; if (!Rd(team + 4 + (uintptr_t)i * 4, idx) || idx >= 40) continue;
+            uint8_t pl[0xF0] = {}; if (!SafeCopy(pl, (const void*)(team + 0xa8 + (uintptr_t)idx * 0x128 + 0x30), sizeof pl)) continue;
+            uint64_t id = 0; memcpy(&id, pl, 8); uint16_t num = 0; memcpy(&num, pl + 0x86, 2);
+            char nm[62] = {}; memcpy(nm, pl + 0x9c, 60); for (char& c : nm) if (c && (unsigned char)c < 0x20) c = '?';
+            sig = sig * 1099511628211ull ^ id;
+            if (pos < sizeof line[sd] - 90) pos += (size_t)sprintf_s(line[sd] + pos, sizeof line[sd] - pos, "%s%s (%u, id %llu%s)", cnt[sd] ? ", " : "", nm, (unsigned)num, (unsigned long long)id, pl[8] == 0 ? ", arquero" : "");
+            cnt[sd]++;
+        }
+    }
+    if (sig == lastSig) return;
+    lastSig = sig;
+    for (int sd = 0; sd < 2; sd++) Log("banca: suplentes de verdad del %s (%d convocados, %d suplentes): %s", sd ? "visitante" : "local", (int)conv[sd], cnt[sd], line[sd]);
+}
+
 void SubsTick(void* host) {
     if (s_subsDead.load(std::memory_order_relaxed)) return;   // (los sentados se sueltan igual cuando el juego borra a sus jugadores)
     Subs& S = s_subs;
@@ -1277,33 +1303,37 @@ void SubsTick(void* host) {
     }
 }
 
-// decide desde que gancho se trabaja (mismo hilo que el de las cinematicas) y si este llamado es el reloj
-bool TickGate(int src) {
-    const unsigned long tid = GetCurrentThreadId();
-    (src == 1 ? s_pushThread : s_implThread).store(tid, std::memory_order_relaxed);
-    int cur = s_src.load(std::memory_order_relaxed);
-    if (cur == 0) {
-        const unsigned long ref = s_fdmThread.load(), a = s_pushThread.load(), b = s_implThread.load();
-        if (!a || !b) return false;
-        const int pick = ref ? (a == ref ? 1 : b == ref ? 2 : 0) : (a == b ? 1 : 0);
-        if (!pick) return false;
-        int exp = 0;
-        if (s_src.compare_exchange_strong(exp, pick)) {
-            s_srcThread.store(pick == 1 ? a : b);
-            Log("banca: reloj de los suplentes reales = %s (hilo %lu; cinematicas %lu, jugadores %lu, estadio %lu)", pick == 1 ? "los jugadores del partido" : "la escena del estadio",
-                pick == 1 ? a : b, ref, a, b);
-        }
-        cur = s_src.load();
+// Reloj: el jugador 0 del partido, una vez por cuadro. Si el 0 no aparece en medio segundo (expulsado, otro orden) vale
+// cualquier jugador, no mas de una vez cada 8 ms. El hilo se anota (el heap "actual" es por hilo y se pone en cada llamada).
+std::atomic<unsigned> s_pushCalls{0}, s_threadChanges{0};
+bool TickGate(uint32_t idx) {
+    s_pushCalls.fetch_add(1, std::memory_order_relaxed);
+    static std::atomic<double> last0{0.0}, lastAny{0.0};
+    const double now = Now();
+    if (idx == 0) last0.store(now, std::memory_order_relaxed);
+    else {
+        if (now - last0.load(std::memory_order_relaxed) < 0.5) return false;
+        if (now - lastAny.load(std::memory_order_relaxed) < 0.008) return false;
     }
-    if (cur != src) return false;
-    if (tid != s_srcThread.load(std::memory_order_relaxed)) { s_subSkipped.fetch_add(1, std::memory_order_relaxed); return false; }
+    lastAny.store(now, std::memory_order_relaxed);
+    const unsigned long tid = GetCurrentThreadId();
+    const unsigned long prev = s_srcThread.exchange(tid, std::memory_order_relaxed);
+    s_pushThread.store(tid, std::memory_order_relaxed);
+    if (prev != tid) {
+        const unsigned n = s_threadChanges.fetch_add(1, std::memory_order_relaxed);
+        if (n < 4) Log("banca: reloj de los suplentes reales: jugador %u, hilo %lu%s", idx, tid, n ? " (cambio de hilo)" : "");
+    }
+    s_src.store(1, std::memory_order_relaxed);
     return true;
 }
 
 void __fastcall hk_HumanPush(void* self) {
-    if (s_okSubs && self && *(const uint32_t*)((const uint8_t*)self + 0x18) == 0 && TickGate(1)) {   // jugador 0: una vez por cuadro
-        std::lock_guard<std::recursive_mutex> lk(s_subMx);
-        SubsTick(self);
+    if (s_okSubs && self) {
+        const uint32_t idx = *(const uint32_t*)((const uint8_t*)self + 0x18);
+        if (idx < 22 && TickGate(idx)) {
+            std::lock_guard<std::recursive_mutex> lk(s_subMx);
+            SubsTick(self);
+        }
     }
     o_humanPush(self);
 }
@@ -1316,11 +1346,7 @@ void __fastcall hk_HumanDtor(void* self, void* a2, void* a3, void* a4) {
     s_matchEnd.store(GetTickCount64());
     o_humanDtor(self, a2, a3, a4);
 }
-void SubsTickFromScene() {
-    if (!s_okSubs || !TickGate(2)) return;
-    std::lock_guard<std::recursive_mutex> lk(s_subMx);
-    SubsTick(nullptr);
-}
+void SubsTickFromScene() {}   // (2a-2) la escena del estadio corre en hilos de trabajo distintos: ya no se usa de reloj
 
 void Install() {
     s_tried = true;
@@ -1398,9 +1424,10 @@ void BancaPresent() {
         ReadSheet();   // convocados tambien sin cinematica (solo lectura)
         if (s_okSubs) {   // paso 2a
             static unsigned lastSub = 0; const unsigned st = s_subTicks.load(std::memory_order_relaxed);
-            Log("banca: suplentes reales %s: %d sentados, reloj %.1f por segundo (fuente %d, hilo %lu; cinematicas %lu, jugadores %lu, estadio %lu), %u cuadros saltados por otro hilo, %u descargas de clips frenadas%s",
-                Live2(0, 1.0f) > 0.5f ? "prendido" : "apagado", s_subActive.load(), nextT > 0 ? (st - lastSub) / 10.0 : 0.0, s_src.load(), s_srcThread.load(), s_fdmThread.load(),
-                s_pushThread.load(), s_implThread.load(), s_subSkipped.load(), s_unloadBlocked.load(), s_subsDead.load() ? "; APAGADO por un error dentro del juego" : "");
+            LogRealSubs();
+            Log("banca: suplentes reales %s: %d sentados, reloj %.1f por segundo (hilo %lu, %u cambios de hilo, %u llamadas de jugadores en total), %u descargas de clips frenadas%s",
+                Live2(0, 1.0f) > 0.5f ? "prendido" : "apagado", s_subActive.load(), nextT > 0 ? (st - lastSub) / 10.0 : 0.0, s_srcThread.load(), s_threadChanges.load(),
+                s_pushCalls.load(), s_unloadBlocked.load(), s_subsDead.load() ? "; APAGADO por un error dentro del juego" : "");
             lastSub = st;
         }
         lastTicks = tk; nextT = t + 10.0;
