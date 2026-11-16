@@ -1035,7 +1035,9 @@ void main(
           float4 cvr = float4(dot(Pr, cb2[8]), dot(Pr, cb2[9]), dot(Pr, cb2[10]), dot(Pr, cb2[11]));
           pF = abs(cb2[5].y) * IniParams.Load(int2(63, 0)).z / max(dot(cvr, cb2[7]), 0.05);
         }
-        float kZ = smoothstep(thrF * 0.8, thrF * 1.25, pF) * kF;
+        // (16/11, Agustin: "el pasto se hunde al alejar la camara") el relleno baja solo lo que hay de hojas 3D: el CS pone 35 % de las hojas en el umbral
+        // y 100 % a 3x el umbral; antes las tarjetas bajaban enteras ya en 1.25x y entre 1x y 3x quedaba el pasto ralo y bajo (un pozo al alejar)
+        float kZ = smoothstep(thrF * 0.8, thrF * 1.25, pF) * lerp(0.35, 1.0, smoothstep(thrF, thrF * 3.0, pF)) * kF;
         pesH *= lerp(1.0, 0.48 + 0.42 * frac(pesHv * 7.31 + 0.27), kZ);
         pesWmul *= lerp(1.0, 1.18, kZ);
         float aF = frac(pesHv * 4.13 + 0.61) * 6.2832;

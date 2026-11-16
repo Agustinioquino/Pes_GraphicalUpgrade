@@ -202,7 +202,7 @@ void main(uint3 id : SV_DispatchThreadID)
     // (11/11 m) nivel 0 en la zona de las hojas 3D: el VS 498b30 deja las tarjetas como relleno al 48-90 % del alto (y403): se cuentan con
     // ese alto (69 % en promedio) para que cubran lo mismo (mas tarjetas, mas bajas)
     if (lvl == 0 && gPad[5].x > 1.0 && gPad[4].y > 0.001 && gPad[4].x < 0.5)
-      hM *= lerp(1.0, 0.69, smoothstep(gPad[5].x * 0.8, gPad[5].x * 1.25, pc) * saturate(gPad[4].y));
+      hM *= lerp(1.0, 0.69, smoothstep(gPad[5].x * 0.8, gPad[5].x * 1.25, pc) * lerp(0.35, 1.0, smoothstep(gPad[5].x, gPad[5].x * 3.0, pc)) * saturate(gPad[4].y));   // (16/11) como el VS: segun cuantas hojas 3D hay
     float hpx = max(hM * pc, 1.0);
     // (02/11 paso 4) recorte por alto en pantalla (gPad[3].y / .z px, por defecto 1.2 / 3.0): una hoja de < 1.2 px de alto no se dibuja,
     // entre 1.2 y 3 px se ralea en rampa; lejos queda el cesped plano de la base (PESFarTurf), que empalma con su kFar
