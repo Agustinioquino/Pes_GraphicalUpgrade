@@ -50,6 +50,8 @@ rep("* (PES_MENU_BREEZE * (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 +
 # en el pecho y en la panza solo para las pecheras") el reposo de las pecheras sale PES_BIBW_PUSH mas afuera en el frente del
 # torso (pecho y panza). Las dos capas por igual (la de adentro trae la normal hacia adentro: se da vuelta mirando la pose de
 # armado desde el eje del torso). Mueve el anclaje, la correa y el choque con su pose, asi que la tela queda mas lejos.
+# Banda medida en la pechera naranja 5F8BF8E2 (cuello nuevo, 16/11 01:09): el borde del cuello baja en el frente hasta
+# y 1.461 y la parte de arriba de las sisas esta en 1.40..1.45; la banda termina en 1.38..1.45 para no tocarlos.
 rep("#define PES_MENU_JUMP    3.0",
     "#define PES_BIBW_PUSH    0.008    // (m) separacion extra de las pecheras en pecho y panza\n"
     "#define PES_BIBW_ZC      0.05     // (m, pose de armado) eje del torso en z (z mayor = adelante)\n"
@@ -60,7 +62,7 @@ rep("void restAt(uint p, float t, out float3 pos, out float3 nrm)\n",
     "    float3 q = r.posPin.xyz;\n"
     "    float sgn = dot(r.nrm.xz, float2(q.x, q.z - PES_BIBW_ZC)) < 0.0 ? -1.0 : 1.0;\n"
     "    float front = smoothstep(PES_BIBW_ZC - 0.01, PES_BIBW_ZC + 0.04, q.z);\n"
-    "    float band = smoothstep(0.92, 0.98, q.y) * (1.0 - smoothstep(1.42, 1.50, q.y));   // panza y pecho, sin hombros\n"
+    "    float band = smoothstep(0.92, 0.98, q.y) * (1.0 - smoothstep(1.38, 1.45, q.y));   // panza y pecho, sin cuello ni hombros\n"
     "    return sgn * PES_BIBW_PUSH * front * band;\n"
     "}\n"
     "void restAt(uint p, float t, out float3 pos, out float3 nrm)\n")

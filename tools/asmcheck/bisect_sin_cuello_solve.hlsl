@@ -613,7 +613,7 @@ float pesBibPush(ParticleRest r)   // (16/11) cuanto sale el reposo de la pecher
     float3 q = r.posPin.xyz;
     float sgn = dot(r.nrm.xz, float2(q.x, q.z - PES_BIBW_ZC)) < 0.0 ? -1.0 : 1.0;
     float front = smoothstep(PES_BIBW_ZC - 0.01, PES_BIBW_ZC + 0.04, q.z);
-    float band = smoothstep(0.92, 0.98, q.y) * (1.0 - smoothstep(1.42, 1.50, q.y));   // panza y pecho, sin hombros
+    float band = smoothstep(0.92, 0.98, q.y) * (1.0 - smoothstep(1.38, 1.45, q.y));   // panza y pecho, sin cuello ni hombros
     return sgn * PES_BIBW_PUSH * front * band;
 }
 void restAt(uint p, float t, out float3 pos, out float3 nrm)
