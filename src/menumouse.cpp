@@ -596,6 +596,7 @@ static std::atomic<double> s_vcPulseT{-1.0e9}; static std::atomic<float> s_vcPul
 // con la relacion de aspecto de la camara (+0x44). El centro de la camara es el centro de ESE rectangulo, no el de la ventana: el punto
 // del doble clic se mide desde ahi y en altos de ese rectangulo. INFERIDO: alto completo y pegado a la derecha (lo dice el log).
 static std::atomic<float> s_vcAspect{0.0f}, s_vcCx{0}, s_vcCy{0};
+static std::atomic<double> s_vcMoveT{-1.0e9};   // (16/11) ultima vez que la camara a mano se movio
 static uintptr_t s_vcMv = 0; static double s_vcT = 0; static int s_vcLog = 0;
 // (15/11 d, Agustin 17:56: "unicamente en el menu editar jugador y sus submenus, pero no en el resto de menus y no en el motor") la
 // camara a mano solo vale dentro de Editar > Jugadores. La clase de cada pagina sale del RTTI del exe (vtable[-1] -> localizador ->
@@ -704,7 +705,11 @@ bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
     { float asp; memcpy(&asp, cam + 0x44, 4); if (asp == asp && asp > 0.2f && asp < 5.0f) s_vcAspect.store(asp); }
     if (s_vcLog < 2) { s_vcLog++; Log("mouse en menus: camara del visor del Editar a mano (camara del juego a %.2f m, campo de vision %.3f): arrastrar = girar, derecho = mover, rueda = zoom", d, fov); }
     // pedido del mouse
-    const double now = Now(); const float dt = (float)std::clamp(now - s_vcT, 0.0, 0.1); s_vcT = now;
+    // (16/11, Agustin 06:44: "la camara con el mouse en apariencia sigue viendose rastros o glitches") el gancho recibe ~1.5 camaras por
+    // cuadro y el suavizado avanzaba en CADA llamada: dentro de un mismo cuadro cada camara del visor salia un poco distinta. Ahora el
+    // suavizado avanza una sola vez por cuadro (numero de Present) y todas las camaras de ese cuadro reciben la misma
+    static int s_vcFrame = -1; const int pf = PresentNo(); const bool step = pf != s_vcFrame; s_vcFrame = pf;
+    const double now = Now(); const float dt = step ? (float)std::clamp(now - s_vcT, 0.0, 0.1) : 0.0f; if (step) s_vcT = now;
     s_vcYaw += s_vcDYaw.exchange(0); s_vcPitch += s_vcDPitch.exchange(0);
     { const int w = s_vcWheel.exchange(0); if (w) s_vcZoom = std::clamp(s_vcZoom * powf(0.88f, (float)w / 120.0f), 0.12f, 3.0f); }
     const float pitch0 = asinf(std::clamp(v[1] / d, -1.0f, 1.0f)), yaw0 = atan2f(v[0], v[2]);
@@ -771,10 +776,15 @@ bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
     (void)save;
     if (s_vcYawCur == 0 && s_vcPitchCur == 0 && s_vcZoomCur == 1.0f && s_vcPanCur[0] == 0 && s_vcPanCur[1] == 0 && s_vcPanCur[2] == 0) { Restore(); return false; }
     float nt[3], np[3]; for (int i = 0; i < 3; i++) { nt[i] = tgt[i] + s_vcPanCur[i]; np[i] = nt[i] + nv[i]; }
+    // (16/11) camara en movimiento: el TAA del juego mezcla la historia sin saber que la camara se movio (rastros); camhook.cpp le
+    // pide descartar la historia mientras se mueve (MenuViewCamMoving)
+    { static float s_lastNp[3] = {}, s_lastNt[3] = {}; float dm = 0.0f; for (int i = 0; i < 3; i++) dm = std::max(dm, std::max(fabsf(np[i] - s_lastNp[i]), fabsf(nt[i] - s_lastNt[i])));
+      if (dm > 1.0e-4f) s_vcMoveT.store(now); memcpy(s_lastNp, np, 12); memcpy(s_lastNt, nt, 12); }
     memcpy(cam + 0x10, np, 12); memcpy(cam + 0x1c, nt, 12);
     memcpy(s_wrote, cam + 0x10, 24); s_dirty = true;
     return true;
 }
+bool MenuViewCamMoving() { return Now() - s_vcMoveT.load() < 0.12; }
 // overlay.cpp: destello del doble clic (pixeles de la ventana); kind 1 = zoom a la zona, 0 = vuelta
 bool MenuViewCamPulse(float* x, float* y, float* age, int* kind) {
     const float a = (float)(Now() - s_vcPulseT.load()); if (a < 0.0f || a > 0.9f) return false;
