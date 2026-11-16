@@ -1,0 +1,276 @@
+// PES 2021 - vertex shader del GLOBO DEL OJO (eye.fmdl comun: 2 esferas de 193 vertices, huesos skf_eye_l / skf_eye_r; PS de
+// ojos fccd955f). Reescrito a mano desde el ensamblador del catalogo del mod (01/11, 133 instrucciones): skinning de 4 huesos
+// (cb6, el cuadro anterior en el registro 96), posicion en vista -> clip, posicion en el mundo -> vector a la camara en espacio
+// tangente (TEXCOORD2) y paralaje de la cornea (TEXCOORD1.xy * -m_materials[1].x).
+// PES21 FX (01/11 h): MIRADA VIVA (pes_expr.hlsli PesGaze, fila 347.w): antes del skinning el globo gira alrededor de su centro
+// (la DLL lo ajusta por esfera y lo pasa en b12, expr.cpp), con sacadas, fijaciones y deriva; el parpado de arriba de la cara
+// (faab87ee / 455eb97b, PesBlinkApply) acompana con el mismo reloj y la misma semilla.
+
+cbuffer cVSScene : register(b2)
+{
+
+  struct
+  {
+    float4x4 m_projectionView;
+    float4x4 m_projection;
+    float4x4 m_view;
+    float4x4 m_shadowProjection;
+    float4x4 m_shadowProjection2;
+    float4 m_eyepos;
+    float4 m_projectionParam;
+    float4 m_viewportSize;
+    float4 m_exposure;
+    float4 m_fogParam[3];
+    float4 m_fogColor;
+    float4 m_cameraCenterOffset;
+    float4 m_shadowMapResolutions;
+  } g_vsScene : packoffset(c0);
+
+}
+
+cbuffer cVSMaterial : register(b4)
+{
+
+  struct
+  {
+    float4 m_materials[8];
+  } g_vsMaterial : packoffset(c0);
+
+}
+
+cbuffer cVSObject : register(b5)
+{
+
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[9];
+  } g_vsObject : packoffset(c0);
+
+}
+
+cbuffer VSBones : register(b6)
+{
+
+  struct
+  {
+    float4x3 m_boneMatrices[32];
+  } g_vsBone : packoffset(c0);
+
+
+  struct
+  {
+    float4x3 m_boneMatrices[32];
+  } g_vsPrevBone : packoffset(c96);
+
+}
+
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+#include "pes_skintone.hlsli"   // semilla por jugador (PesSkinNearest)
+#include "pes_expr.hlsli"       // (01/11 h) PesGaze / PesGazeRot / PesExprSeed, b12 con los centros de los ojos
+
+
+void main(
+  float4 v0 : POSITION0,
+  float4 v1 : NORMAL0,
+  float4 v2 : TANGENT0,
+  uint4 v3 : BLENDINDICES0,
+  float4 v4 : BLENDWEIGHT0,
+  float4 v5 : TEXCOORD0,
+  float4 v6 : TEXCOORD1,
+  float4 v7 : TEXCOORD2,
+  float4 v8 : TEXCOORD3,
+  out float4 o0 : SV_Position0,
+  out float4 o1 : COLOR0,
+  out float2 o2 : TEXCOORD0,
+  out float2 p2 : TEXCOORD9,
+  out float4 o3 : TEXCOORD1,
+  out float4 o4 : TEXCOORD2,
+  out float4 o5 : TEXCOORD5,
+  out float4 o6 : TEXCOORD6,
+  out float4 o7 : TEXCOORD7,
+  out float4 o8 : TEXCOORD8)
+{
+  float4 r0,r1,r2,r3,r4,r5,r6,r7;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  // ---- (01/11 h) mirada viva: giro del globo alrededor de su centro, en el reposo (el hueso del ojo lo lleva despues) ----
+  float4 v0g = v0, v0p = v0;      // posicion de reposo girada: este cuadro / cuadro anterior (vectores de movimiento)
+  float3 nrm = v1.xyz, tng = v2.xyz;
+  {
+    float gAmp = IniParams.Load(int2(347, 0)).w;
+    if (gAmp > 0.0 && g_pesExprMesh.w == 2u) {
+      float4 E = v3.x == 0u ? g_pesExprEye[0] : g_pesExprEye[1];   // centro (xyz) y radio del ojo de este vertice
+      if (E.w > 0.0) {
+        float t = IniParams.Load(int2(157, 0)).x;
+        float seed = PesExprSeed();
+        // (01/11 k, Agustin: "bien cuando no hay animacion, despues queda raro") si el juego esta moviendo los ojos (el hueso del
+        // ojo giro entre un cuadro y el otro mas de ~0.15 grados), la mirada del mod se aparta: 0 con 0.6 grados por cuadro
+        uint eb = v3.x;
+        float3 fwd1 = mul(float3(0.0, 0.0, 1.0), (float3x3)g_vsBone.m_boneMatrices[eb]);
+        float3 fwd0 = mul(float3(0.0, 0.0, 1.0), (float3x3)g_vsPrevBone.m_boneMatrices[eb]);
+        float rate = length(fwd1 - fwd0);
+        gAmp *= 1.0 - smoothstep(0.0026, 0.0105, rate);
+        float2 g = PesGaze(t, seed, gAmp), gp = PesGaze(t - 1.0 / 60.0, seed, gAmp);
+        v0g.xyz = E.xyz + PesGazeRot(v0.xyz - E.xyz, g);
+        v0p.xyz = E.xyz + PesGazeRot(v0.xyz - E.xyz, gp);
+        nrm = PesGazeRot(nrm, g);
+        tng = PesGazeRot(tng, g);
+      }
+    }
+  }
+
+  r0.x = cmp(g_vsObject.m_useWeightCount.x != 0.000000);
+  if (r0.x != 0) {
+    r1.xyzw = g_vsBone.m_boneMatrices[v3.y]._m00_m10_m20_m30 * v4.yyyy;
+    r2.xyzw = g_vsBone.m_boneMatrices[v3.y]._m01_m11_m21_m31 * v4.yyyy;
+    r3.xyzw = g_vsBone.m_boneMatrices[v3.y]._m02_m12_m22_m32 * v4.yyyy;
+    r1.xyzw = g_vsBone.m_boneMatrices[v3.x]._m00_m10_m20_m30 * v4.xxxx + r1.xyzw;
+    r2.xyzw = g_vsBone.m_boneMatrices[v3.x]._m01_m11_m21_m31 * v4.xxxx + r2.xyzw;
+    r3.xyzw = g_vsBone.m_boneMatrices[v3.x]._m02_m12_m22_m32 * v4.xxxx + r3.xyzw;
+    r1.xyzw = g_vsBone.m_boneMatrices[v3.z]._m00_m10_m20_m30 * v4.zzzz + r1.xyzw;
+    r2.xyzw = g_vsBone.m_boneMatrices[v3.z]._m01_m11_m21_m31 * v4.zzzz + r2.xyzw;
+    r3.xyzw = g_vsBone.m_boneMatrices[v3.z]._m02_m12_m22_m32 * v4.zzzz + r3.xyzw;
+    r1.xyzw = g_vsBone.m_boneMatrices[v3.w]._m00_m10_m20_m30 * v4.wwww + r1.xyzw;
+    r2.xyzw = g_vsBone.m_boneMatrices[v3.w]._m01_m11_m21_m31 * v4.wwww + r2.xyzw;
+    r3.xyzw = g_vsBone.m_boneMatrices[v3.w]._m02_m12_m22_m32 * v4.wwww + r3.xyzw;
+    r4.x = dot(v0g.xyzw, r1.xyzw);
+    r4.y = dot(v0g.xyzw, r2.xyzw);
+    r4.z = dot(v0g.xyzw, r3.xyzw);
+    r5.x = dot(nrm.xyz, r1.xyz);
+    r5.y = dot(nrm.xyz, r2.xyz);
+    r5.z = dot(nrm.xyz, r3.xyz);
+    r1.x = dot(tng.xyz, r1.xyz);
+    r1.y = dot(tng.xyz, r2.xyz);
+    r1.z = dot(tng.xyz, r3.xyz);
+    r2.xyzw = g_vsPrevBone.m_boneMatrices[v3.y]._m00_m10_m20_m30 * v4.yyyy;
+    r3.xyzw = g_vsPrevBone.m_boneMatrices[v3.y]._m01_m11_m21_m31 * v4.yyyy;
+    r6.xyzw = g_vsPrevBone.m_boneMatrices[v3.y]._m02_m12_m22_m32 * v4.yyyy;
+    r2.xyzw = g_vsPrevBone.m_boneMatrices[v3.x]._m00_m10_m20_m30 * v4.xxxx + r2.xyzw;
+    r3.xyzw = g_vsPrevBone.m_boneMatrices[v3.x]._m01_m11_m21_m31 * v4.xxxx + r3.xyzw;
+    r6.xyzw = g_vsPrevBone.m_boneMatrices[v3.x]._m02_m12_m22_m32 * v4.xxxx + r6.xyzw;
+    r2.xyzw = g_vsPrevBone.m_boneMatrices[v3.z]._m00_m10_m20_m30 * v4.zzzz + r2.xyzw;
+    r3.xyzw = g_vsPrevBone.m_boneMatrices[v3.z]._m01_m11_m21_m31 * v4.zzzz + r3.xyzw;
+    r6.xyzw = g_vsPrevBone.m_boneMatrices[v3.z]._m02_m12_m22_m32 * v4.zzzz + r6.xyzw;
+    r2.xyzw = g_vsPrevBone.m_boneMatrices[v3.w]._m00_m10_m20_m30 * v4.wwww + r2.xyzw;
+    r3.xyzw = g_vsPrevBone.m_boneMatrices[v3.w]._m01_m11_m21_m31 * v4.wwww + r3.xyzw;
+    r0.xyzw = g_vsPrevBone.m_boneMatrices[v3.w]._m02_m12_m22_m32 * v4.wwww + r6.xyzw;
+    r2.x = dot(v0p.xyzw, r2.xyzw);
+    r2.y = dot(v0p.xyzw, r3.xyzw);
+    r2.z = dot(v0p.xyzw, r0.xyzw);
+  } else {
+    r5.xyz = nrm.xyz;
+    r1.xyz = tng.xyz;
+    r4.xyz = v0g.xyz;
+    r2.xyz = v0p.xyz;
+  }
+  r4.w = v0.w;
+  // posicion en vista y en clip
+  r0.x = dot(r4.xyzw, g_vsObject.m_viewWorld._m00_m10_m20_m30);
+  r0.y = dot(r4.xyzw, g_vsObject.m_viewWorld._m01_m11_m21_m31);
+  r0.z = dot(r4.xyzw, g_vsObject.m_viewWorld._m02_m12_m22_m32);
+  r0.w = dot(r4.xyzw, g_vsObject.m_viewWorld._m03_m13_m23_m33);
+  r3.x = dot(r0.xyzw, g_vsScene.m_projection._m00_m10_m20_m30);
+  r3.y = dot(r0.xyzw, g_vsScene.m_projection._m01_m11_m21_m31);
+  o0.z = dot(r0.xyzw, g_vsScene.m_projection._m02_m12_m22_m32);
+  r3.w = dot(r0.xyzw, g_vsScene.m_projection._m03_m13_m23_m33);
+  // posicion en el mundo
+  r0.x = dot(r4.xyzw, g_vsObject.m_world._m00_m10_m20_m30);
+  r0.y = dot(r4.xyzw, g_vsObject.m_world._m01_m11_m21_m31);
+  r0.z = dot(r4.xyzw, g_vsObject.m_world._m02_m12_m22_m32);
+  // cuadro anterior (vectores de movimiento)
+  r2.w = v0.w;
+  r4.x = dot(r2.xyzw, g_vsScene.m_shadowProjection._m00_m10_m20_m30);
+  r4.y = dot(r2.xyzw, g_vsScene.m_shadowProjection._m01_m11_m21_m31);
+  r4.z = dot(r2.xyzw, g_vsScene.m_shadowProjection._m02_m12_m22_m32);
+  r4.w = dot(r2.xyzw, g_vsScene.m_shadowProjection._m03_m13_m23_m33);
+  o8.z = dot(r4.xyzw, g_vsScene.m_shadowProjection2._m00_m10_m20_m30);
+  o8.w = dot(r4.xyzw, g_vsScene.m_shadowProjection2._m01_m11_m21_m31);
+  p2.y = dot(r4.xyzw, g_vsScene.m_shadowProjection2._m03_m13_m23_m33);
+  // normal y tangente en el MUNDO (cb5[4..6] = m_world; base del espacio tangente para el vector a la camara, que es en el mundo)
+  // (01/11 i) la primera version las llevaba a vista y los ojos salian negros
+  r2.x = dot(r5.xyz, g_vsObject.m_world._m00_m10_m20);
+  r2.y = dot(r5.xyz, g_vsObject.m_world._m01_m11_m21);
+  r2.z = dot(r5.xyz, g_vsObject.m_world._m02_m12_m22);
+  r0.w = dot(r2.xyz, r2.xyz);
+  r0.w = rsqrt(r0.w);
+  r2.xyz = r2.xyz * r0.www;
+  r4.z = dot(r1.xyz, g_vsObject.m_world._m00_m10_m20);
+  r4.x = dot(r1.xyz, g_vsObject.m_world._m01_m11_m21);
+  r4.y = dot(r1.xyz, g_vsObject.m_world._m02_m12_m22);
+  r0.w = dot(r4.xyz, r4.xyz);
+  r0.w = rsqrt(r0.w);
+  r4.xyz = r4.xyz * r0.www;
+  r6.xyz = r2.zxy * r4.xyz;
+  r4.xyz = r2.yzx * r4.yzx + -r6.xyz;
+  r0.w = dot(r4.xyz, r4.xyz);
+  r0.w = rsqrt(r0.w);
+  r4.xyz = r4.xyz * r0.www;
+  r4.xyz = r4.xyz * v2.www;
+  // normal, tangente y binormal en VISTA (cb5[0..2] = m_viewWorld; TEXCOORD5 / 6 / 7)
+  r6.x = dot(r5.xyz, g_vsObject.m_viewWorld._m00_m10_m20);
+  r6.y = dot(r5.xyz, g_vsObject.m_viewWorld._m01_m11_m21);
+  r6.z = dot(r5.xyz, g_vsObject.m_viewWorld._m02_m12_m22);
+  r0.w = dot(r6.xyz, r6.xyz);
+  r0.w = rsqrt(r0.w);
+  r5.xyz = r6.xyz * r0.www;
+  r6.x = dot(r1.xyz, g_vsObject.m_viewWorld._m00_m10_m20);
+  r6.y = dot(r1.xyz, g_vsObject.m_viewWorld._m01_m11_m21);
+  r6.z = dot(r1.xyz, g_vsObject.m_viewWorld._m02_m12_m22);
+  r0.w = dot(r6.xyz, r6.xyz);
+  r0.w = rsqrt(r0.w);
+  r1.xyz = r6.xyz * r0.www;
+  r6.xyz = r1.yzx * r5.zxy;
+  r6.xyz = r5.yzx * r1.zxy + -r6.xyz;
+  r0.w = dot(r6.xyz, r6.xyz);
+  r0.w = rsqrt(r0.w);
+  r6.xyz = r6.xyz * r0.www;
+  r6.xyz = r6.xyz * v2.www;
+  // vector a la camara en espacio tangente (cornea) y paralaje
+  r0.xyz = -r0.xyz + g_vsScene.m_eyepos.xyz;
+  r7.xyz = r2.yzx * r4.zxy;
+  r7.xyz = r4.yzx * r2.zxy + -r7.xyz;
+  r7.x = dot(r7.xyz, r0.xyz);
+  r7.y = dot(r4.xyz, r0.xyz);
+  r7.z = dot(r2.xyz, r0.xyz);
+  r0.w = dot(r7.xy, r7.xy);
+  r0.w = rsqrt(r0.w);
+  r4.xy = r7.xy * r0.ww;
+  r0.w = dot(r7.xyz, r7.xyz);
+  r0.w = -r7.z * r7.z + r0.w;
+  r0.w = sqrt(r0.w);
+  r0.w = r0.w / -r7.z;
+  r4.xy = r4.xy * r0.ww;
+  r4.xy = r4.xy * -g_vsMaterial.m_materials[1].xx;
+  r0.w = dot(r0.xyz, r0.xyz);
+  r0.w = rsqrt(r0.w);
+  r0.xyz = r0.xyz * r0.www;
+  r4.z = dot(r0.xyz, r2.xyz);
+  o5.xyz = r1.xyz;
+  o6.xyz = r6.xyz;
+  o7.xyz = r5.xyz;
+  o0.xyw = r3.xyw;
+  o1.xyz = float3(1,1,1);
+  o1.w = g_vsObject.m_useWeightCount.w;
+  o8.xy = r3.xy;
+  r4.w = -r4.y;
+  o3.xyz = r4.xwz;
+  o4.xyz = r7.xyz;
+  o2.xy = v5.xy;
+  p2.x = r3.w;
+  // el original no escribe estos componentes
+  o3.w = 0;
+  o4.w = 0;
+  o5.w = 0;
+  o6.w = 0;
+  o7.w = 0;
+  return;
+}
