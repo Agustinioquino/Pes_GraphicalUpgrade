@@ -1443,7 +1443,6 @@ void solveConstraint(uint4 cn, float L, float hh)
     bool tuckedPins = (s_flags & 256) != 0;
     float wa = (cn.w & (tuckedPins ? 8u : 2u)) ? 0.0 : 1.0;
     float wb = (cn.w & (tuckedPins ? 16u : 4u)) ? 0.0 : 1.0;
-    if (PES_IS_COLLAR) { wa = 0.0; wb = 0.0; }   // (16/11) cuello de la campera: todo fijo
     float3 d = gx[cn.x] - gx[cn.y];
     float len = length(d);
     if (len < 1e-7) return;

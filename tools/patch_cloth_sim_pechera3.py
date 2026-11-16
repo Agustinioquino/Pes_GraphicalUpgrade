@@ -37,9 +37,8 @@ rep("float pesPinRest(ParticleRest r) { return (s_flags & 256) ? float((r.skin.w
 rep("    if (s_flags & 256) return float((g_rest[p].skin.w >> 2) & 63) / 63.0;\n    return g_rest[p].posPin.w;\n}\n",
     "    float pn = (s_flags & 256) ? float((g_rest[p].skin.w >> 2) & 63) / 63.0 : g_rest[p].posPin.w;\n"
     "    return PES_IS_COLLAR ? 1.0 : pn;   // (16/11) cuello de la campera: fijo\n}\n")
-rep("    float wb = (cn.w & (tuckedPins ? 16u : 4u)) ? 0.0 : 1.0;\n",
-    "    float wb = (cn.w & (tuckedPins ? 16u : 4u)) ? 0.0 : 1.0;\n"
-    "    if (PES_IS_COLLAR) { wa = 0.0; wb = 0.0; }   // (16/11) cuello de la campera: todo fijo\n")
+# (sin tocar solveConstraint: poner wa = wb = 0 ahi tambien dio X3663. No hace falta: con pin 1 cada subpaso arranca en la
+# pose y el choque lo saltea; las restricciones ya estan en su largo de reposo, asi que casi no lo mueven)
 rep("* (PES_MENU_BREEZE * (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0)));\n",
     "* (PES_MENU_BREEZE * (PES_IS_BIBW ? 0.8 * sin(g_time * 0.9) * (0.6 + 0.4 * sin(g_time * 0.37 + 1.0))   // (16/11) pecheras: va y viene\n"
     "                                   : (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0))));\n")
