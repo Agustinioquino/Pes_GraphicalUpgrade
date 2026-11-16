@@ -948,7 +948,7 @@ std::atomic<int> s_protect{0}; std::atomic<unsigned> s_unloadBlocked{0};
 uint64_t __fastcall hk_ResUnload(void* mgr, void* key) {
     if (key && s_protect.load(std::memory_order_relaxed) > 0) {
         uint64_t h = 0; uint8_t t = 0;
-        if (Rd((uintptr_t)key, h) && Rd((uintptr_t)key + 8, t) && t == 2 && h)
+        if (Rd((uintptr_t)key, h) && Rd((uintptr_t)key + 8, t) && t >= 1 && t <= 5 && h)   // el hash sale de la ruta: vale para las 5 listas del gestor
             for (int i = 0; i < kNumClips; i++) if (s_clipHash[i].load(std::memory_order_relaxed) == h) { s_unloadBlocked.fetch_add(1, std::memory_order_relaxed); return 0; }
     }
     return o_resUnload(mgr, key);
