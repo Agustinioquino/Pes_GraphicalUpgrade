@@ -911,6 +911,11 @@ const uintptr_t kFdPush = 0x141f86d40ull, kFdVf4 = 0x141f87340ull, kFdVf0 = 0x14
 const uintptr_t kResMgr = 0x141b08cf0ull, kResFind = 0x141b079e0ull, kGaniQueue = 0x141eb16e0ull, kGaniPump = 0x141eb0f50ull, kStrAssign = 0x1404023c0ull;
 const uintptr_t kAnimResMgr = 0x141ed1770ull, kAnimResFind = 0x141ed1700ull, kClipIdx = 0x141afa060ull;
 const uintptr_t kClipLen = 0x141af8be0ull, kClipTime = 0x141af8910ull, kClipSeek = 0x141afa7b0ull;
+// (2a-3) FUN_141ec8320(draw::util::Human*, bool): mostrar / esconder (h+0x5a, modelo+0x25 y orden 0x510 al hilo que dibuja).
+// Es lo que hace match::Human::vf14 (0x1408c0140) cada cuadro y lo que hace la cinematica al activar a un jugador
+// (FUN_141f45950). Sin esto el suplente carga y se mueve pero no se dibuja (prueba 2a-2: 24 sentados, ninguno visible).
+const uintptr_t kHumanShow = 0x141ec8320ull;
+typedef void(__fastcall* HumanShowFn)(void*, uint8_t);
 typedef void*(__fastcall* AllocFn)(uint32_t*, size_t, size_t);
 typedef uint32_t*(__fastcall* HeapPushFn)(uint32_t*, uint32_t*);
 typedef void(__fastcall* HeapPopFn)(uint32_t*);
@@ -1075,6 +1080,8 @@ __declspec(noinline) bool SubStart(LiveSub& u, void* res, float T) {
         (o_fdh ? o_fdh : (FdhVf1)kFdhVf1)(fd, res, idx, 0, (uint64_t)bits, nullptr);
         ((HeapPopFn)kHeapPop)(&saved);
         u.t0 = T; u.endTicks = 0;
+        void* h = nullptr; memcpy(&h, fd + 0x48, 8);
+        if (h) ((HumanShowFn)kHumanShow)(h, 1);
         void* ctl = nullptr; memcpy(&ctl, fd + 0x50, 8);
         return ctl != nullptr;
     } __except (EXCEPTION_EXECUTE_HANDLER) { s_subsDead.store(true); return false; }
@@ -1085,6 +1092,8 @@ __declspec(noinline) int SubUpdate(LiveSub& u, float T) {
         uint8_t* fd = (uint8_t*)u.fd;
         ((FdVf4Fn)kFdVf4)(fd, T - u.t0);
         ((FdPushFn)kFdPush)(fd);
+        void* h = nullptr; memcpy(&h, fd + 0x48, 8);
+        if (h && *((const uint8_t*)h + 0x5a) == 0) ((HumanShowFn)kHumanShow)(h, 1);   // si algo lo escondio, se vuelve a mostrar
         void* ctl = nullptr; memcpy(&ctl, fd + 0x50, 8);
         if (ctl) {
             const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1), cur = ((ClipTimeFn)kClipTime)(ctl, 0, 1);
