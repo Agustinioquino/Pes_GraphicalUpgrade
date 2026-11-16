@@ -104,6 +104,7 @@ static ID3D11Buffer* s_shStage[kShStages] = {};
 static std::atomic<int> s_shW{0}, s_shCount{0};
 static int s_shN[kShStages] = { -1, -1, -1 };
 static uint8_t s_shKind[kShStages][kShDraws];
+static uint32_t s_shIdx[kShStages][kShDraws];   // (16/11) indices de cada dibujo de kit (para separar camiseta de short / medias en el registro)
 static float s_shList[kShTail]; static int s_shAge = 1000; static double s_shLog = 0;
 static bool s_mapDirty = false;
 static std::wstring MapPath() { return g_cfg.baseDir + L"torso_camiseta.bin"; }
@@ -706,7 +707,7 @@ void TorsoShirtNote(ID3D11DeviceContext* c, int kind) {
     if (CBWindow(g2, 192, &o2) && CBWindow(g5, 48, &o5)) {
         const int i = s_shCount.fetch_add(1);
         if (i < (int)kShDraws) {
-            s_shKind[w][i] = (uint8_t)kind;
+            s_shKind[w][i] = (uint8_t)(kind & 0xff); s_shIdx[w][i] = (uint32_t)kind >> 8;
             D3D11_BOX b2 = { o2 + 128, 0, 0, o2 + 192, 1, 1 }, b5 = { o5, 0, 0, o5 + 48, 1, 1 };
             c->CopySubresourceRegion(st, 0, (UINT)i * kShSlot, 0, 0, g2.b, 0, &b2);
             c->CopySubresourceRegion(st, 0, (UINT)i * kShSlot + 64, 0, 0, g5.b, 0, &b5);
@@ -749,7 +750,11 @@ static void TorsoShirtPresent() {
                 if (t > s_shLog) {
                     s_shLog = t + 30.0; char line[900]; int ln = 0; line[0] = 0;
                     for (int k = 0; k < n && ln < 820; k++) ln += snprintf(line + ln, sizeof line - ln, " (%.1f, %.2f, %.1f)%s%s", L[k][0], L[k][1], L[k][2], fmodf(L[k][3], 4.0f) > 1.5f ? " c7ae" : fmodf(L[k][3], 4.0f) > 0.5f ? " a41e" : "", L[k][3] > 3.5f ? " ajustada" : "");
-                    Log("torso bajo la camiseta: %d personajes con camiseta (de %d dibujos):%s", n, pn, line);
+                    // (16/11) el short y las medias usan el mismo PS que la camiseta: un jugador sin remera figura "con camiseta".
+                    // Se anotan los indices de los primeros dibujos para elegir como separarlos
+                    char idx[400]; int li = 0; idx[0] = 0;
+                    for (int i = 0; i < pn && i < 24 && li < 380; i++) li += snprintf(idx + li, sizeof idx - li, " %u", s_shIdx[rd][i]);
+                    Log("torso bajo la camiseta: %d personajes con camiseta (de %d dibujos):%s | indices:%s", n, pn, line, idx);
                 }
             } else if (++s_shAge == 30) { s_shList[0] = 0.0f; s_shList[1] = 0.0f; changed = true; }   // 30 cuadros sin camisetas: vale la fila 320.z
         } else s_shN[rd] = -1;   // la GPU todavia no termino (o fallo): se pierde ese cuadro, la lista anterior sigue
