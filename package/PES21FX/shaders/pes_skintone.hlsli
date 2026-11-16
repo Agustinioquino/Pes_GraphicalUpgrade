@@ -315,6 +315,12 @@ void PesNeckSink(inout float3 mP, float3 mN, float3 rest, float3 org) {
   float4 T = IniParams.Load(int2(320, 0));
   bool shirt = T.z > 0.5 && PesCharHasShirt(org) > 0.5;
   float full = min(K.z, 25.0);
+  // (16/11, Agustin: en el escote en V el cuello se ve en parches claros y oscuros SOLO con la luz del editor) con z352 = 9 el torso
+  // y el cuello de la cara (1-18 mm adentro del torso) quedan cruzados en el escote. Con la luz normal del menu (plana, de frente)
+  // no se nota; la luz de prueba viene de arriba y rasante y las dos pieles, que miran distinto, quedan una clara y otra oscura.
+  // Solo en escena de menu (w255) con la luz de prueba prendida (x297) y con camiseta: el torso se hunde 20 mm, queda todo debajo
+  // del cuello de la cara y no hay cruce. En partido y con la luz apagada, z352 tal cual
+  if (shirt && IniParams.Load(int2(255, 0)).w > 0.5 && IniParams.Load(int2(297, 0)).x > 0.5) full = max(full, 20.0);
   float mm = shirt ? full * (1.0 - PesSS(0.06, 0.12, hb)) : min(full, 5.0) * (1.0 - PesSS(0.005, 0.025, hb));
   mP -= mN * rsqrt(max(dot(mN, mN), 1e-8)) * (mm * nk * 0.001);
 }
