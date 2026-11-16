@@ -242,7 +242,7 @@ cbuffer Params : register(b2)
 #define PES_BIB_HANG     0.006    // (m) cuanto cuelga la tela suelta por debajo de su pose de armado
 #define PES_BIB_AIR      0.004    // (m) aire minimo sobre su superficie de armado (lo que tiene abajo)
 #define PES_BIB_SKIN     0.004    // (m) separacion extra de la piel al dibujar, sobre la de la camiseta (y256)
-#define PES_IS_BIB (g_legCount == 0 && g_capsuleCount <= 1 && (g_vertexCount == PES_BIB_VERTS0 || (PES_BIB_VERTS1 > 0 && g_vertexCount == PES_BIB_VERTS1)))
+#define PES_IS_BIB (g_legCount == 0 && g_capsuleCount == 0 && (g_vertexCount == PES_BIB_VERTS0 || (PES_BIB_VERTS1 > 0 && g_vertexCount == PES_BIB_VERTS1)))
 // (15/11 c) pechera de dos capas: la capa de adentro trae la normal hacia adentro, asi que el choque contra el cuerpo por la
 // normal la empujaba para el lado contrario (las capas se separaban). La pechera ya no usa ese choque: la normal se orienta
 // hacia afuera del torso (centro de la prenda, eje vertical) y la tela no puede entrar mas que PES_BIB_IN por debajo de su
@@ -255,6 +255,8 @@ cbuffer Params : register(b2)
 #define PES_JK_TETHER     0.025   // (m) tope de la correa de distancia maxima
 #define PES_JK_DAMP       1.6     // freno relativo al cuerpo (x)
 #define PES_IS_JACKET (g_legCount == 0 && !PES_IS_BIB && g_vertexCount >= PES_JK_MINV)
+// (16/11) las pecheras como las arma el mod hoy (pechera 3542 v, suplente 1226 v, con 1 capsula): solo para la brisa
+#define PES_IS_BIBW (g_legCount == 0 && g_capsuleCount <= 1 && (g_vertexCount == PES_BIB_VERTS0 || g_vertexCount == PES_BIB_VERTS1))
 // (16/11) cuello de la campera (malla 0 de campera_pes21fx, VS de las pecheras): fijo al esqueleto, sin fisica
 #define PES_IS_COLLAR (g_legCount == 0 && g_capsuleCount == 0 && (g_vertexCount == 1074 || g_vertexCount == 1100))
 #define PES_MENU_JUMP    3.0      // (m/s) en menus, mas rapido que esto = salto de pose: la tela viaja con el cuerpo
@@ -1577,7 +1579,8 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                           s_windLen = 2.0; }
             s_pesWindOn = pesWOn; s_windHem = pesEffOk ? pesEff.z : 1.0;
             if (s_menu && PES_MENU_BREEZE > 0.0 && length(windBase) < 0.1) {   // (15/11 b) brisa leve de los menus, con rachas lentas
-                windBase = mul(transpose(W), float3(0.92, 0.0, 0.39)) * (PES_MENU_BREEZE * (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0)));
+                windBase = mul(transpose(W), float3(0.92, 0.0, 0.39)) * (PES_MENU_BREEZE * (PES_IS_BIBW ? 0.8 * sin(g_time * 0.9) * (0.6 + 0.4 * sin(g_time * 0.37 + 1.0))   // (16/11) pecheras: va y viene
+                                   : (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0))));
                 s_windLen = 1.5; }
             // PES21 FX (25/10): el cuerpo real de este personaje (cuerpo.cpp): de las tablas que la DLL armo en el ultimo Present (una
             // por personaje, con la piel del cuadro anterior), la que tiene su origen en el mundo mas cerca del de la prenda
