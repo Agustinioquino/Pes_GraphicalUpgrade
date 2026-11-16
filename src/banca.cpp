@@ -976,7 +976,7 @@ bool BudgetOk(char* why, size_t n) {
 struct LiveSub {
     void* fd = nullptr; int side = 0, order = 0, place = 0, clip = 0, state = 0;   // 0 falta, 1 cargando, 2 sentado, 3 fallo / salio
     uint32_t teamIdx = 0; uint64_t id = 0; char name[40] = {}; Spot spot{}; bool bib = false, gk = false;
-    float t0 = 0, start = 0; double tCreate = 0; int endTicks = 0; uint8_t player[0xF0] = {};
+    float t0 = 0, start = 0, tCreateT = 0; double tCreate = 0; int endTicks = 0; uint8_t player[0xF0] = {};
 };
 enum { kIdle = 0, kWait, kClips, kRun, kOff };
 struct Subs {
@@ -1175,7 +1175,11 @@ void LogRealSubs() {
             uint64_t id = 0; memcpy(&id, pl, 8); uint16_t num = 0; memcpy(&num, pl + 0x86, 2);
             char nm[62] = {}; memcpy(nm, pl + 0x9c, 60); for (char& c : nm) if (c && (unsigned char)c < 0x20) c = '?';
             sig = sig * 1099511628211ull ^ id;
-            if (pos < sizeof line[sd] - 90) pos += (size_t)sprintf_s(line[sd] + pos, sizeof line[sd] - pos, "%s%s (%u, id %llu%s)", cnt[sd] ? ", " : "", nm, (unsigned)num, (unsigned long long)id, pl[8] == 0 ? ", arquero" : "");
+            if (pos + 1 < sizeof line[sd]) {   // _TRUNCATE: un nombre largo corta la linea, no llama al manejador de errores del CRT
+                const int w = _snprintf_s(line[sd] + pos, sizeof line[sd] - pos, _TRUNCATE, "%s%s (%u, id %llu%s)", cnt[sd] ? ", " : "", nm, (unsigned)num,
+                                          (unsigned long long)id, pl[8] == 0 ? ", arquero" : "");
+                pos = w < 0 ? sizeof line[sd] : pos + (size_t)w;
+            }
             cnt[sd]++;
         }
     }
@@ -1266,7 +1270,7 @@ void SubsTick(void* host) {
                 Log("banca: creando suplente %d de %d: %s %llu %s (lugar %d%s%s) en x %.2f y %.2f z %.2f, clip %d; texturas usadas %d de %d", S.cur + 1, S.n,
                     u.side ? "visitante" : "local", (unsigned long long)u.id, u.name, u.place, u.gk ? ", arquero" : "", u.bib ? ", pechera" : "", u.spot.x, u.spot.y, u.spot.z,
                     kClipNo[u.clip], c1, c0);
-                if (SubCreate(u, haveSW, season, weather)) { u.state = 1; u.tCreate = now; }
+                if (SubCreate(u, haveSW, season, weather)) { u.state = 1; u.tCreate = now; u.tCreateT = S.T; }
                 else if (s_subsDead.load()) { Log("banca: suplentes reales: ERROR dentro del juego al crear: no se toca nada mas en esta sesion"); return; }
                 else { u.state = 3; S.cur++; S.tSpawn = now; Log("banca: suplentes reales: sin memoria para el suplente %d", S.cur); }
             }
@@ -1284,7 +1288,7 @@ void SubsTick(void* host) {
                     FdDestroy(u.fd); u.fd = nullptr; u.state = 3;
                 }
                 S.cur++; S.tSpawn = now;
-            } else if (now - u.tCreate > 30.0) {
+            } else if (S.T - u.tCreateT > 30.0f) {   // 30 s de partido corriendo (en pausa no hay reloj y la carga sigue)
                 Log("banca: suplentes reales: %s no cargo en 30 s: se saca", u.name);
                 FdDestroy(u.fd); u.fd = nullptr; u.state = 3; S.cur++; S.tSpawn = now;
             }
