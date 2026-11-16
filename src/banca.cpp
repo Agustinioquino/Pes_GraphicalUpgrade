@@ -176,11 +176,16 @@ void BenchSetVisible(bool vis) {
     std::lock_guard<std::mutex> lk(s_mx); s_st.benchHidden = !vis; s_st.benchSeq++;
 }
 
-// cuerpo -> asa (+0x30) -> entidad (+0x18) StadiumModel con nombre "..._dir_bench..."
-bool IsBenchBody(uintptr_t body) {
+// cuerpo -> asa (+0x30) -> entidad (+0x18) StadiumModel con nombre "..._dir_bench..." (banco de las cinematicas) o
+// "..._back_other..." (16/11 prueba 3: las figuras QUIETAS del banco en el juego no son el dir_bench, que quedo escondido; el unico
+// otro modelo del paquete scarecrow que cubre esa zona es stNNN_sc2020_back_other: caja x -63..66, z -62..-37, y hasta 1,83 m,
+// 0 huesos = figuras quietas detras de la linea lateral; Agustin: "no tienen animaciones", "parecen parte del equipo tecnico")
+bool IsBenchBody(uintptr_t body, char* nameOut = nullptr, size_t n = 0) {
     uintptr_t vt = 0, h = 0, e = 0, evt = 0; char nm[64];
     if (!Rd(body, vt) || vt != kVtBody || !Rd(body + 0x30, h) || !Heap(h) || !Rd(h + 0x18, e) || !Heap(e) || !Rd(e, evt) || evt != kVtStadiumModel) return false;
-    return FoxStr(e + 0x28, nm, sizeof nm) && strstr(nm, "_dir_bench") != nullptr;
+    if (!FoxStr(e + 0x28, nm, sizeof nm) || (!strstr(nm, "_dir_bench") && !strstr(nm, "_back_other"))) return false;
+    if (nameOut && n) strncpy_s(nameOut, n, nm, _TRUNCATE);
+    return true;
 }
 
 // 16/11 prueba 1: el juego vuelve a mostrar el banco al terminar la cinematica (FUN_14191d410 -> FUN_14191d830 -> SetVisible
@@ -206,7 +211,7 @@ void __fastcall hk_Apply(void* body) {
 }
 
 // solo lectura (desde Present): todos los cuerpos "_dir_bench" de las escenas y su estado
-struct BenchSeen { uintptr_t body; uint8_t node, vis; uint32_t drawFlags; bool drawOk; };
+struct BenchSeen { uintptr_t body; uint8_t node, vis; uint32_t drawFlags; bool drawOk; char name[40]; };
 int ScanBenches(BenchSeen* out, int max) {
     int n = 0; uintptr_t first = 0; if (!Rd(kScenes, first) || !Heap(first)) return 0;
     uintptr_t e = first;
@@ -226,8 +231,9 @@ int ScanBenches(BenchSeen* out, int max) {
                     if (vt == kVtModel && Rd(o + 0x100, nfun) && nfun >= 1 && nfun <= 16 && Rd(o + 0x108, funs) && Heap(funs)) {
                         for (uint32_t i = 0; i < nfun && n < max; i++) {
                             uintptr_t f = 0, fvt = 0, c = 0;
-                            if (!Rd(funs + 8 * i, f) || !Heap(f) || !Rd(f, fvt) || fvt != kVtFunctor || !Rd(f + 0x10, c) || !Heap(c) || !IsBenchBody(c)) continue;
-                            BenchSeen& b = out[n++]; b.body = c; b.node = b.vis = 0xff; b.drawFlags = 0; b.drawOk = false;
+                            if (!Rd(funs + 8 * i, f) || !Heap(f) || !Rd(f, fvt) || fvt != kVtFunctor || !Rd(f + 0x10, c) || !Heap(c)) continue;
+                            char nm[40]; if (!IsBenchBody(c, nm, sizeof nm)) continue;
+                            BenchSeen& b = out[n++]; strncpy_s(b.name, nm, _TRUNCATE); b.body = c; b.node = b.vis = 0xff; b.drawFlags = 0; b.drawOk = false;
                             Rd(c + 0x80, b.node); Rd(c + 0x81, b.vis);
                             uintptr_t d = 0; if (Rd(c + 0x88, d) && Heap(d) && Rd(d + 0x1b4, b.drawFlags)) b.drawOk = true;
                         }
@@ -357,9 +363,9 @@ void BancaPresent() {
         if (nextT > 0) Log("banca: reloj del juego %.1f por segundo", (tk - lastTicks) / 10.0);
         // solo lectura: todos los bancos de las escenas y si se dibujan
         BenchSeen bs[8]; const int nb = ScanBenches(bs, 8);
-        char line[512]; int w = sprintf_s(line, "banca: bancos en escena %d, aplicados escondidos %u:", nb, s_applyBench.load(std::memory_order_relaxed));
-        for (int i = 0; i < nb && w > 0 && w < 440; i++)
-            w += sprintf_s(line + w, sizeof line - w, " [%p nodo %u visible %u dibujo %s]", (void*)bs[i].body, bs[i].node, bs[i].vis,
+        char line[640]; int w = sprintf_s(line, "banca: bancos en escena %d, aplicados escondidos %u:", nb, s_applyBench.load(std::memory_order_relaxed));
+        for (int i = 0; i < nb && w > 0 && w < 400; i++)
+            w += sprintf_s(line + w, sizeof line - w, " [%s %p nodo %u visible %u dibujo %s]", bs[i].name, (void*)bs[i].body, bs[i].node, bs[i].vis,
                            !bs[i].drawOk ? "?" : (bs[i].drawFlags & 1) ? "ESCONDIDO" : "se dibuja");
         Log("%s", line);
         ReadSheet();   // convocados tambien sin cinematica (solo lectura)
