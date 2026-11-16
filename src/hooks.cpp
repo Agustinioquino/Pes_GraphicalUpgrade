@@ -1505,6 +1505,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     LeakCheck(c, ps, vs);
     MouthDrawDiag(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawKind == 1 ? t_drawVerts : 0u);   // (09/11) diagnostico del recuadro de la boca
     if (vs) if (ID3D11ShaderResourceView* at = ArmsTextureFor(c, vs->hash, t_drawVerts)) { ArmSwapNote(ps, t_drawVerts); Remember(c, d, true, true, 0); c->PSSetShaderResources(0, 1, &at); }
+    if (vs) if (ID3D11ShaderResourceView* tt = ArmsTorsoForArm()) { Remember(c, d, true, true, 46); c->PSSetShaderResources(46, 1, &tt); }   // (16/11) franja alta del brazo de cara real: tono del torso (PS aa7d t46)
     if (g_cfg.bypass) return d.n > 0;
     if (g_skinDiagArmed.load(std::memory_order_relaxed)) SkinDiagDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts);   // (24/10) skintone.cpp
     if (g_toneChkArmed.load(std::memory_order_relaxed)) SkinToneCheckDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0);   // (24/10 c) punto de los dibujos de piel
@@ -1682,10 +1683,10 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     // (07/11) Agustin: de lejos el torso atraviesa la camiseta. El catalogo tiene otras 3 variantes del G-buffer del kit con las
     // mismas texturas (patron + marking / badge) pero sin SV_IsFrontFace (no se dibujaron en la captura del menu): candidatas a la
     // camiseta de lejos / del arbitro. Sin ellas el personaje no entra en la lista y su torso queda entero (sin x320).
-    if (const int sk = ps ? ShirtPSKind(ps->hash) : -1; sk >= 0) {
+    if (const int sk = ps ? ShirtPSKind(ps->hash) : -1; sk >= 0 && (t_drawKind != 1 || KitDrawIsShirt(c, t_drawVerts, t_drawStart, t_drawBase))) {   // (16/11) el short y las medias no cuentan
         g_shirtSeen.store(true, std::memory_order_relaxed);
         if (sk >= 8) ShirtPSNoteNew(ps->hash, t_drawVerts);
-        TorsoShirtNote(c, (sk & 3) | ((t_drawVerts == 7284 || t_drawVerts == 6006 || t_drawVerts == 7512 || t_drawVerts == 5550) ? 4 : 0));   // (01/11) +4 = camiseta ajustada (indices de [shirt_tight] detect de cloth.ini)   // (31/10 b) camiseta por jugador
+        TorsoShirtNote(c, (sk & 3) | ((t_drawVerts == 7284 || t_drawVerts == 6006 || t_drawVerts == 7512 || t_drawVerts == 5550) ? 4 : 0) | (int)((t_drawVerts & 0x7fffffu) << 8));   // (16/11) + indices del dibujo en los bits altos (registro)   // (01/11) +4 = camiseta ajustada (indices de [shirt_tight] detect de cloth.ini)   // (31/10 b) camiseta por jugador
     }
     // 19/10: SSS separable en pantalla antes de la composicion: la irradiancia (t9) llega ya difundida sobre la piel
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl) {
@@ -2380,6 +2381,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     { static ULONGLONG t = 0; ULONGLONG n = GetTickCount64(); if (n - t > 10000) { t = n; RastroFlush(false); } }
     FaceInjectPresent();   // (09/11) matrices del rig: donde se arma la cara (solo mide, expr_inyeccion)
     SolEditorPresent();   // (09/11) sol real del editor: ganchos (primer Present), aplicar pendiente, log cada 10 s
+    BancaPresent();     // (16/11 8z607v) banco de suplentes paso 1: ganchos en el primer Present, registro
     RedesPresent();     // (13/11 sk9ema) redes de los arcos con el viento unico (ganchos en el primer Present)
     BanderinPresent();  // (14/11 sk9ema) banderin del corner: simula la tela y sube pes_flag (despues de UpdateTimeParams: filas 494 / 157 de este cuadro)
     CamHookPresent();   // (23/10) camara del motor: ganchos (primer Present), cortes de camara -> 160, log

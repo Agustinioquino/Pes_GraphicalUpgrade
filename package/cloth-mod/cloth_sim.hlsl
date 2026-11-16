@@ -216,6 +216,54 @@ cbuffer Params : register(b2)
     uint   g_mapped;
     uint2  g_pad5;
 };
+// PES21 FX (15/11, Agustin: "la fisica de las pecheras deberia ser mas suelta que la remera", "que no atraviese la remera
+// normal y que no se choquen en extremo"). La pechera (bibs.fmdl, pieza 0; bibs_reserve.fmdl, pieza 8) entra al mod de ropa
+// como una camiseta sin mangas (sin capsulas). Se reconoce por eso + su cantidad de vertices. Es una tela liviana que cuelga
+// de los hombros: anclaje a la pose de armado mas flojo, correa mas larga, menos freno y unos mm colgando. Para que no se
+// meta en lo que tiene abajo (torso o camiseta) no puede quedar mas adentro que su superficie de armado + PES_BIB_AIR, y en
+// la correccion al dibujar (x256 = 2) queda PES_BIB_SKIN mas lejos de la piel que la camiseta.
+#define PES_BIB_VERTS0   3542     // bibs.fmdl (visto en cloth.log 15/11: 3542 vertices, 16014 indices)
+#define PES_BIB_VERTS1   1226     // bibs_reserve.fmdl (15/11 c: volcado F7, 6675 indices, 14720 B de posiciones)
+// (15/11 b) cloth.log: la pechera quedaba a 39 / 118 / 132 mm de su pose (p50 / p90 / max; la camiseta 26-28 max) y Agustin la
+// vio "romper el modelo": casi toda es tela libre (fija 4 %, pin ~ 0), el anclaje casi no tiraba y la correa era de 25 cm.
+// Ahora por altura de la pose de armado: hombros y pecho sujetos, y de ahi para abajo cada vez mas suelta. Tope a la blandura
+// del anclaje (caida sin sosten ~ 9.8 x alfa) y a la correa. Abajo queda mas suelta que la camiseta, pero en su lugar.
+#define PES_BIB_Y_HI     1.38     // (m, pose de armado) de aca para arriba: sujeta (hombros, pecho alto)
+#define PES_BIB_Y_LO     1.08     // (m) de aca para abajo: lo mas suelta (faldon y costados)
+#define PES_BIB_ALPHA_HI 0.0003   // tope de blandura del anclaje arriba (~3 mm de caida libre)
+#define PES_BIB_ALPHA_LO 0.004    // idem abajo (~4 cm)
+#define PES_BIB_TETHER_HI 0.008   // (m) tope de la correa arriba
+#define PES_BIB_TETHER_LO 0.055   // (m) idem abajo
+#define PES_BIB_LOOSE(p) smoothstep(0.0, 1.0, saturate((PES_BIB_Y_HI - g_rest[p].posPin.y) / (PES_BIB_Y_HI - PES_BIB_Y_LO)))
+// (15/11 b, Agustin: "si bien no se rompe tanto no tiene movimiento ahora") en los menus (Editar) no hay viento ni empujes del
+// cuerpo: la tela quedaba inmovil. Brisa leve propia solo en los menus y solo si cloth.ini no trae viento ahi (wind_in_menus = 0).
+#define PES_MENU_BREEZE  1.0      // (m/s) brisa de los menus; 0 = sin brisa (tela quieta como antes)
+#define PES_BIB_DAMP     0.70     // freno relativo al cuerpo (<1 = se balancea mas tiempo)
+#define PES_BIB_HANG     0.006    // (m) cuanto cuelga la tela suelta por debajo de su pose de armado
+#define PES_BIB_AIR      0.004    // (m) aire minimo sobre su superficie de armado (lo que tiene abajo)
+#define PES_BIB_SKIN     0.004    // (m) separacion extra de la piel al dibujar, sobre la de la camiseta (y256)
+#define PES_IS_BIB (g_legCount == 0 && g_capsuleCount == 0 && (g_vertexCount == PES_BIB_VERTS0 || (PES_BIB_VERTS1 > 0 && g_vertexCount == PES_BIB_VERTS1)))
+// (15/11 c) pechera de dos capas: la capa de adentro trae la normal hacia adentro, asi que el choque contra el cuerpo por la
+// normal la empujaba para el lado contrario (las capas se separaban). La pechera ya no usa ese choque: la normal se orienta
+// hacia afuera del torso (centro de la prenda, eje vertical) y la tela no puede entrar mas que PES_BIB_IN por debajo de su
+// propia pose (la pose esta 10 mm por fuera de la camiseta): asi no se mete en la camiseta que ahora se dibuja abajo.
+#define PES_BIB_IN       0.002    // (m) cuanto puede entrar la pechera por debajo de su pose
+// (15/11 c, Agustin: "la campera deberia tener una fisica menor, pero un poco visible") campera de entrenamiento: tela mas
+// pesada, anclaje firme, correa corta y mas freno. Se reconoce por su tamano (ninguna camiseta del juego llega a 3900 vertices).
+#define PES_JK_MINV       3900
+#define PES_JK_ALPHA      0.0008  // tope de la blandura del anclaje (~8 mm de caida libre)
+#define PES_JK_TETHER     0.025   // (m) tope de la correa de distancia maxima
+#define PES_JK_DAMP       1.6     // freno relativo al cuerpo (x)
+#define PES_IS_JACKET (g_legCount == 0 && !PES_IS_BIB && g_vertexCount >= PES_JK_MINV)
+// (16/11) las pecheras como las arma el mod hoy (pechera 3542 v, suplente 1226 v, con 1 capsula): solo para la brisa
+#define PES_IS_BIBW (g_legCount == 0 && g_capsuleCount <= 1 && (g_vertexCount == PES_BIB_VERTS0 || g_vertexCount == PES_BIB_VERTS1))
+// (16/11) cuello de la campera (malla 0 de campera_pes21fx, VS de las pecheras): fijo al esqueleto, sin fisica
+#define PES_IS_COLLAR (g_legCount == 0 && ((g_capsuleCount == 0 && (g_vertexCount == 1074 || g_vertexCount == 1100)) || \
+                       (g_capsuleCount >= 4 && (g_vertexCount == 6043 || g_vertexCount == 1158))))   // + brazos y manos (16/11)
+#define PES_BIBW_PUSH    0.008    // (m) separacion extra de las pecheras en pecho y panza
+#define PES_BIBW_ZC      0.05     // (m, pose de armado) eje del torso en z (z mayor = adelante)
+#define PES_CLOTH_OFF (IniParams.Load(int2(181, 0)).x > 0.5)   // (16/11) x181 = 1: fisica de la ropa apagada (Shift+3)
+#define PES_MENU_JUMP_SCALE 0.35  // (16/11) en menus: cambio relativo del determinante de la piel entre cuadros = salto de esqueleto
 struct ParticleRest { float4 posPin; float4 nrm; uint4 skin; };
 struct Capsule      { float4 a; float4 b; };
 ByteAddressBuffer               g_bindPos   : register(t0);
@@ -293,6 +341,7 @@ groupshared uint gBodyCnt[3];  // diagnostico: puntos con piel cerca, empujes, m
 RWBuffer<uint>                  g_bodyDiag  : register(u8);
 #endif
 static bool   s_bodyWant;
+static bool   s_bodySel = false;   // (15/11) la tabla del cuerpo se eligio en este cuadro (correccion al dibujar)
 static uint   s_bodyTab;      // tabla del cuerpo de esta prenda (0xffffffff = ninguna)
 static float  s_bodyTc;       // 0 = la piel es del cuadro anterior (comienzo de la interpolacion), 1 = de este cuadro
 static float4 s_bodyPrm;      // fila 256
@@ -557,15 +606,24 @@ float3 pesRestFollow(float3 pb, float sw)
 }
 // (25/10 b) las costuras (escote, punos, cintura: el mod las sujeta con pin alto) no se corren: el cuello y los punos son mallas
 // aparte que siguen al esqueleto sin la musculatura, y si la tela de la costura se corria quedaba separada del cuello
-float pesPinRest(ParticleRest r) { return (s_flags & 256) ? float((r.skin.w >> 2) & 63) / 63.0 : r.posPin.w; }
+float pesPinRest(ParticleRest r) { return (PES_IS_COLLAR || PES_CLOTH_OFF) ? 1.0 : ((s_flags & 256) ? float((r.skin.w >> 2) & 63) / 63.0 : r.posPin.w); }
 float pesSeamFade(float pin) { return 1.0 - smoothstep(0.25, 0.85, pin); }
 float3 pesMusOf(ParticleRest r) { return pesRestFollow(r.posPin.xyz, g_legCount > 0 ? 0.0 : float((r.skin.w >> 8) & 255) / 255.0) * pesSeamFade(pesPinRest(r)); }
+float pesBibPush(ParticleRest r)   // (16/11) cuanto sale el reposo de la pechera por su normal (con signo)
+{
+    float3 q = r.posPin.xyz;
+    float sgn = dot(r.nrm.xz, float2(q.x, q.z - PES_BIBW_ZC)) < 0.0 ? -1.0 : 1.0;
+    float front = smoothstep(PES_BIBW_ZC - 0.01, PES_BIBW_ZC + 0.04, q.z);
+    float band = smoothstep(0.92, 0.98, q.y) * (1.0 - smoothstep(1.38, 1.45, q.y));   // panza y pecho, sin cuello ni hombros
+    return sgn * PES_BIBW_PUSH * front * band;
+}
 void restAt(uint p, float t, out float3 pos, out float3 nrm)
 {
     ParticleRest r = g_rest[p];
     float3x4 M = skinSlot(r.skin.z, r.skin.x, r.skin.y, t);
     pos = xform(M, r.posPin.xyz + pesMusOf(r));
     nrm = normalize(mul((float3x3)M, r.nrm.xyz));
+    pos += nrm * (PES_IS_BIBW ? pesBibPush(r) : 0.0);   // (16/11) pecheras mas separadas en pecho y panza
 }
 void fillBoneCache(uint gi, float t)
 {
@@ -583,6 +641,7 @@ void restAtC(uint p, out float3 pos, out float3 nrm)
     float3x4 M = skinC(r.skin.z, r.skin.x, r.skin.y);
     pos = xform(M, r.posPin.xyz + pesMusOf(r));
     nrm = normalize(mul((float3x3)M, r.nrm.xyz));
+    pos += nrm * (PES_IS_BIBW ? pesBibPush(r) : 0.0);   // (16/11) pecheras mas separadas en pecho y panza
 }
 float3 rotateBetween(float3 a, float3 b, float3 v)
 {
@@ -594,8 +653,8 @@ float3 rotateBetween(float3 a, float3 b, float3 v)
 uint packHalf2(float a, float b) { return f32tof16(a) | (f32tof16(b) << 16); }
 float pinOf(uint p)
 {
-    if (s_flags & 256) return float((g_rest[p].skin.w >> 2) & 63) / 63.0;
-    return g_rest[p].posPin.w;
+    float pn = (s_flags & 256) ? float((g_rest[p].skin.w >> 2) & 63) / 63.0 : g_rest[p].posPin.w;
+    return (PES_IS_COLLAR || PES_CLOTH_OFF) ? 1.0 : pn;   // (16/11) cuello de la campera: fijo
 }
 // PES21 FX (15/11): cuanto es RUEDO este punto (0..1): tela suelta (pin bajo) en los ~10 cm de mas abajo de la prenda en la pose
 // de reposo (el faldon de la remera, la boca de la pierna del short). Antes "borde libre" era toda la tela con pin < 0.5, o
@@ -636,7 +695,13 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
     float3 vBody = (rest1 - restPrev) / h;
     if (pin >= 0.999) { gx[p] = rest1; vel = vBody; return; }
     // cloth-mod 0.9.9: salto del cuerpo (> 50 m/s, teletransporte / cambio de pose): la tela viaja con el cuerpo, sin velocidad
-    if (dot(vBody, vBody) > 50.0 * 50.0) {
+    // (16/11) en menus, el salto de esqueleto (escala de huesos 1.0 <-> 0.6) se reconoce por la escala de la piel, no por la
+    // velocidad: con 3 m/s las piernas al correr pasaban el limite y el short quedaba quieto
+    float3x4 pesSk0 = skinSlot(g_rest[p].skin.z, g_rest[p].skin.x, g_rest[p].skin.y, 0.0);
+    float3x4 pesSk1 = skinSlot(g_rest[p].skin.z, g_rest[p].skin.x, g_rest[p].skin.y, 1.0);
+    float pesDet0 = abs(determinant((float3x3)pesSk0)), pesDet1 = abs(determinant((float3x3)pesSk1));
+    bool pesScaleJump = s_menu && abs(pesDet1 - pesDet0) > PES_MENU_JUMP_SCALE * max(max(pesDet0, pesDet1), 1e-6);
+    if (dot(vBody, vBody) > 2500.0 || pesScaleJump) {
         gx[p] += rest1 - restPrev;
         xPrev = gx[p];
         vel = 0;
@@ -646,6 +711,8 @@ void predictParticle(uint p, uint s, float h, float3 grav, float3 windBase, floa
     if (s == 0) v += s_kick;
     float sleeveW = float((g_rest[p].skin.w >> 8) & 255) / 255.0;
     float damp = g_damping + g_sleeveDamping * sleeveW;
+    if (PES_IS_BIB) damp *= PES_BIB_DAMP;   // (15/11) pechera: tela liviana
+    if (PES_IS_JACKET) damp *= PES_JK_DAMP;   // (15/11 c) campera: tela pesada
     bool pesShorts = g_legCount > 0;                                   // PES21 FX: esta prenda es el short
     if (pesShorts) { damp *= PES_SHORTS_DAMP; if (s == 0) v += s_kick * (PES_SHORTS_KICK - 1.0); }
     // PES21 FX inercia por zona: la cara que mira en contra de la aceleracion recibe mas impulso (se queda atras)
@@ -876,7 +943,7 @@ float3 pesBodyLift(uint p, uint k, float t, float3 y0)
     float3 T = float3(A[0].w, A[1].w, A[2].w);
     float3 c0 = cross(A[1].xyz, A[2].xyz), c1 = cross(A[2].xyz, A[0].xyz), c2 = cross(A[0].xyz, A[1].xyz);
     float sg = dot(A[0].xyz, c0) < 0.0 ? -1.0 : 1.0;
-    float m = clamp(s_bodyPrm.y * 0.001, 0.0, 0.03);
+    float m = clamp(s_bodyPrm.y * 0.001, 0.0, 0.03) + (PES_IS_BIB ? PES_BIB_SKIN : 0.0);   // (15/11) la pechera va por fuera de la camiseta
     float3 y = y0;
     [unroll] for (uint j = 0; j < 2; ++j) {
         if ((s_bv[k][j].y & 0x10000u) == 0) continue;
@@ -933,8 +1000,9 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
     if (pin < 0.999) {
         float3 x = gx[p];
 #if PES_BODY
-        if (s == 0) pesBodyQuery(p, k, x, rest1);   // (25/10) la piel cercana, una vez por cuadro
-        bool pesBodyHas = ((s_bv[k][0].y | s_bv[k][1].y) & 0x10000u) != 0;
+        // (15/11) x256 = 2 (correccion al dibujar): la fisica no usa la piel real
+        if (s == 0 && s_bodyPrm.x < 1.5) pesBodyQuery(p, k, x, rest1);   // (25/10) la piel cercana, una vez por cuadro
+        bool pesBodyHas = s_bodyPrm.x < 1.5 && ((s_bv[k][0].y | s_bv[k][1].y) & 0x10000u) != 0;
 #if PES_BODY_DIAG
         if (s == 0 && pesBodyHas) { uint dg; InterlockedAdd(gBodyCnt[0], 1u, dg); }
 #endif
@@ -991,6 +1059,7 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         // delgado: el punto de reposo baja con la gravedad -> la remera cuelga mas larga (solo tela libre)
         float3 restT = rest1;
         if (pesFit > 0.0) { float gl = length(s_grav); if (gl > 1e-4) restT += (s_grav / gl) * pesFit * PES_FIT_HANG * fitFree; }
+        if (PES_IS_BIB) { float glb = length(s_grav); if (glb > 1e-4) restT += (s_grav / glb) * PES_BIB_HANG * fitFree; }   // (15/11) la pechera cuelga
         // (02/11) fila 352 (Agustin: en la vida real las mangas van mas pegadas al brazo): el REPOSO de la manga se cierra hacia
         // el eje de su tramo (centro de la tela de ese tramo, como el brazo como volumen): x352 = cuanto del exceso sobre el radio
         // minimo del tramo se saca, y352 = maximo en cm. Solo cambia adonde la tira el anclaje: la manga sigue igual de libre
@@ -1022,9 +1091,13 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
 #else
         float3 restB = rest1;
 #endif
+        if (PES_IS_BIB) alpha = min(alpha, lerp(PES_BIB_ALPHA_HI, PES_BIB_ALPHA_LO, PES_BIB_LOOSE(p)));   // (15/11 b) pechera: suelta abajo, en su lugar
+        if (PES_IS_JACKET) alpha = min(alpha, PES_JK_ALPHA);   // (15/11 c) campera: se mueve poco
         x += (restT - x) * (1.0 / (1.0 + alpha / hh));
         float3 off = x - restT;
         float maxD0 = g_tetherRadius * (1.0 - pin);
+        if (PES_IS_BIB) maxD0 = min(maxD0, lerp(PES_BIB_TETHER_HI, PES_BIB_TETHER_LO, PES_BIB_LOOSE(p)));   // (15/11 b)
+        if (PES_IS_JACKET) maxD0 = min(maxD0, PES_JK_TETHER);   // (15/11 c)
         float maxD = maxD0 * (1.0 + pesSlide * PES_SLIDE_TETHER) * clamp(1.0 + pesFit * 25.0, 0.7, 1.3) * (1.0 + pesLift * 0.6) * clamp(1.0 - pesLimbK * 0.6, 0.6, 1.3) / (1.0 + pesFollow * 0.5);
         float dl = length(off);
         if (dl > maxD) x = restT + off * (maxD / dl);
@@ -1037,14 +1110,20 @@ void collideParticle(uint p, float t, float h, float hh, inout float3 xPrev, ino
         float insetF = inset - min(max(pesFit, 0.0), 0.008);   // PES21 FX: delgado = la tela queda a 'fit' del cuerpo
         // (25/10) donde se conoce la piel real, la tela puede ir mas adentro que el cuerpo que adivina el mod: la frena la piel
         if (pesBodyHas) insetF += clamp(s_bodyPrm.z * 0.01, 0.0, 0.08);   // cm
-        if (capN == 0 && sd < -insetF) {
+        if (!PES_IS_BIB && capN == 0 && sd < -insetF) {
             float3 corr = -(sd + insetF) * rnrm1;
             x += corr;
             xPrev += corr * (1.0 - g_bodyBounce);
-        } else if (pesFit < 0.0 && sd > 0.0) {
+        } else if (!PES_IS_BIB && pesFit < 0.0 && sd > 0.0) {
             // ancho: la tela que quedo despegada se acerca al cuerpo (se marca el torso), sin inyectar velocidad
             float pull = min(sd, 0.03) * saturate(-pesFit / 0.006) * PES_FIT_CLING * fitFree;
             x -= rnrm1 * pull; xPrev -= rnrm1 * pull;
+        }
+        if (PES_IS_BIB) {   // (15/11 c) ver PES_BIB_IN
+            float3 nO = rnrm1;
+            if (s_tOk) { float3 ro = rest1 - s_tC; ro -= s_tUp * dot(ro, s_tUp); if (dot(nO, ro) < 0.0) nO = -nO; }
+            float sdB = dot(x - restT, nO);
+            if (sdB < -PES_BIB_IN) { float3 corrB = (-PES_BIB_IN - sdB) * nO; x += corrB; xPrev += corrB * (1.0 - g_bodyBounce); }
         }
         if (legTracked) {
             float3 ly = 0, ln = 0;
@@ -1371,6 +1450,7 @@ void solveConstraint(uint4 cn, float L, float hh)
     bool tuckedPins = (s_flags & 256) != 0;
     float wa = (cn.w & (tuckedPins ? 8u : 2u)) ? 0.0 : 1.0;
     float wb = (cn.w & (tuckedPins ? 16u : 4u)) ? 0.0 : 1.0;
+    wa = (PES_IS_COLLAR || PES_CLOTH_OFF) ? 0.0 : wa; wb = (PES_IS_COLLAR || PES_CLOTH_OFF) ? 0.0 : wb;   // (16/11) cuello de la campera: todo fijo
     float3 d = gx[cn.x] - gx[cn.y];
     float len = length(d);
     if (len < 1e-7) return;
@@ -1411,6 +1491,11 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             float3 Ow = floor(Tw / 256.0) * 256.0;
             s_W[0].w -= Ow.x; s_W[1].w -= Ow.y; s_W[2].w -= Ow.z;
             s_Wp[0].w -= Ow.x; s_Wp[1].w -= Ow.y; s_Wp[2].w -= Ow.z;
+            // PES21 FX (15/11, Agustin: "el short sigue vibrando" en Editar): a 10 km la matriz del modelo que manda el juego ya viene
+            // redondeada a ~1 mm (un float no da mas) y salta de un cuadro al otro aunque el jugador este quieto. En modo mundo (el
+            // short: world_motion > 0) la tela leia ese salto como movimiento del cuerpo dentro de cada sub-paso y temblaba. En la
+            // escena de menu el cuadro anterior se toma igual al actual: sin velocidad inventada (el partido no pasa por aca).
+            if (s_menu) { s_Wp[0] = s_W[0]; s_Wp[1] = s_W[1]; s_Wp[2] = s_W[2]; }
             s_kick = 0;
         }
     }
@@ -1473,7 +1558,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
 #endif
         GroupMemoryBarrierWithGroupSync();
         if ((mode & 2) && !(mode & 4) && s_substeps > 0) {
-            float h = me.kick.w > 0 ? me.kick.w : g_h;
+            float h = (me.kick.w > 0 && !s_menu) ? me.kick.w : g_h;   // (15/11) en menus paso fijo: el paso por tirones (stutter_smooth) mide el movimiento del cuerpo, que en Editar es el ruido de 1 mm
             float3x3 W = (s_flags & 32) ? float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1)
                                         : float3x3(s_W[0].xyz, s_W[1].xyz, s_W[2].xyz);
             float3 grav = mul(transpose(W), g_gravity.xyz);
@@ -1512,6 +1597,10 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
                           windBase = mul(transpose(W), float3(pesWU.x * pesWU.z, clamp(IniParams.Load(int2(511, 0)).x * kC, -15.0, 15.0), pesWU.y * pesWU.z));
                           s_windLen = 2.0; }
             s_pesWindOn = pesWOn; s_windHem = pesEffOk ? pesEff.z : 1.0;
+            if (s_menu && PES_MENU_BREEZE > 0.0 && length(windBase) < 0.1) {   // (15/11 b) brisa leve de los menus, con rachas lentas
+                windBase = mul(transpose(W), float3(0.92, 0.0, 0.39)) * (PES_MENU_BREEZE * (PES_IS_BIBW ? 0.8 * sin(g_time * 0.9) * (0.6 + 0.4 * sin(g_time * 0.37 + 1.0))   // (16/11) pecheras: va y viene
+                                   : (0.65 + 0.35 * sin(g_time * 0.9) * sin(g_time * 0.37 + 1.0))));
+                s_windLen = 1.5; }
             // PES21 FX (25/10): el cuerpo real de este personaje (cuerpo.cpp): de las tablas que la DLL armo en el ultimo Present (una
             // por personaje, con la piel del cuadro anterior), la que tiene su origen en el mundo mas cerca del de la prenda
             s_bodyTab = 0xffffffffu; s_bodyTc = 0.0;
@@ -1543,6 +1632,7 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             GroupMemoryBarrierWithGroupSync();
             s_bodyTab = gBodyIdx;
             s_bodyTc = 0.0;
+            s_bodySel = true;
             s_hemLow = asfloat(gHemLow) - 10.0;   // (15/11) sin puntos sueltos queda enorme: pesHemOf da 0 igual (pin alto)
 #if PES_BODY_DIAG
             if (gi == 0 && s_bodyWant) {
@@ -1819,14 +1909,32 @@ void main(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
             fillBoneCache(gi, 1.0);
             DeviceMemoryBarrierWithGroupSync();
         }
+#if PES_BODY
+        // PES21 FX (15/11, Agustin: con la ropa chocando con el cuerpo real en la fisica las mangas temblaban): correccion al dibujar
+        // (x256 = 2). La fisica ya guardo su estado sin saber de la piel real; aca, solo para la copia que se dibuja, el punto de
+        // tela que quedo a menos de y256 mm de la piel (o adentro) se saca afuera por el plano de la piel. No vuelve a la fisica:
+        // no puede realimentarse ni temblar. La tabla del cuerpo se eligio en el paso de fisica de este cuadro (s_bodySel).
+        if (s_bodySel && s_bodyPrm.x > 1.5 && s_bodyTab != 0xffffffffu) {
+            [loop] for (uint kd = 0; kd < 2; ++kd) {
+                uint pd = gi + kd * THREADS;
+                if (pd < P && pinOf(pd) < 0.999) {
+                    float3 rd, nd;
+                    restAtC(pd, rd, nd);
+                    pesBodyQuery(pd, kd, gx[pd], rd);
+                    float3 xd = pesBodyLift(pd, kd, 1.0, gx[pd]);
+                    if (all(isfinite(xd))) gx[pd] = xd;
+                }
+            }
+        }
+#endif
         if (g_mapped) {
             for (uint q = gi; q < P; q += THREADS) {
                 float3 rp, rn;
                 restAtC(q, rp, rn);
                 gx[q] -= rp;
             }
-            GroupMemoryBarrierWithGroupSync();
         }
+        GroupMemoryBarrierWithGroupSync();   // (15/11) siempre: la correccion al dibujar tambien escribe gx
         uint pEnd = min(g_partStart + g_partCount, g_vertexCount);
         for (uint i = gi; i < g_vertexCount && !(s_flags & (2 << 12)); i += THREADS) {
             float3 v  = asfloat(g_bindPos.Load3(i * 12));

@@ -129,6 +129,8 @@ static std::vector<Pend> s_pend;
 struct KeyN { ID3D11Buffer* b; UINT f; int n; };
 static std::vector<KeyN> s_keys;                  // bloque de huesos -> tono, dibujos del cuadro
 static thread_local int t_lastTone = 0;           // ultimo torso dibujado en este contexto
+static std::vector<KeyN> s_keysPrev;              // (16/11) las claves del cuadro anterior (el brazo puede dibujarse antes que su torso)
+static thread_local int t_armTorsoTone = 0;       // (16/11) tono del torso del personaje del ultimo brazo de cara real (franja de union, t46)
 static std::atomic<int> s_logs{0};
 static std::atomic<unsigned> s_swaps{0}, s_unknown{0};
 // (27/10 b) fila 327: tono de la cara. La textura de brazo de cada cara real se mide una vez en la GPU (pes_tono_brazo_cs.hlsl:
@@ -356,9 +358,13 @@ ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash
     // (01/11) con la tarjeta de brazos apagada (x321 0) pero el cuello de las caras reales prendido (x322) igual se reconoce el
     // tono del torso dibujado (solo para t29 de la cara, ArmsTorsoTextureForFace): no se cambia ninguna textura del cuerpo
     const bool arms = g_cfg.live[321][0] > 0.5f, collar = g_cfg.live[322][0] > 0.5f;
-    if (vsHash != kSkinVS || (!arms && !collar) || !g_dev.dev) return nullptr;
+    // (16/11, Agustin: no reemplazar las texturas arm / thigh de la cara, igualar "el color del torso") x327 = 2, SOLO EL TORSO: con la
+    // tarjeta de brazos apagada el brazo de la cara real se mide igual (no se le cambia nada) y el torso del mismo personaje pasa a
+    // torso_M del tono mas cercano a ese brazo
+    const bool soloTorso = !arms && g_cfg.live[327][0] > 1.5f;
+    if (vsHash != kSkinVS || (!arms && !collar && !soloTorso) || !g_dev.dev) return nullptr;
     const bool torso = In(kTorsoIdx, 3, indexCount);
-    if (!arms && !torso) return nullptr;
+    if (!arms && !torso && !soloTorso) return nullptr;
     const bool arm = In(kArmIdx, 4, indexCount) || (indexCount && (indexCount == (UINT)(g_cfg.live[302][0] + 0.5f) || indexCount == (UINT)(g_cfg.live[302][1] + 0.5f)));
     const bool thigh = !arm && g_cfg.live[321][1] > 0.5f && In(kThighIdx, 6, indexCount);
     if (!torso && !arm && !thigh) return nullptr;
@@ -379,7 +385,7 @@ ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash
         }
         r->Release();
         if (tone <= 0) return nullptr;
-        if (!arms) { t_lastTone = tone; return nullptr; }   // solo el tono para el cuello (el torso queda con su textura)
+        if (!arms && !soloTorso) { t_lastTone = tone; return nullptr; }   // solo el tono para el cuello (el torso queda con su textura)
         ID3D11Buffer* b = nullptr; UINT f = 0;
         const bool key = KeyOf(c, &b, &f);
         int use = tone;
@@ -401,6 +407,22 @@ ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash
     }
     // brazo, mano o muslo: solo si la textura no es la de TorsoBody (la de una cara real: el atlas de Konami a 2048 / 1024)
     if (td.Width >= 4096 || td.Width < 1024 || td.Width != td.Height) { r->Release(); return nullptr; }
+    if (soloTorso) {   // (16/11) solo medir el brazo de la cara y anotarlo para su torso: la textura queda como esta
+        if (arm) {
+            const int ft = FaceToneOf(c, r, td);
+            ID3D11Buffer* b = nullptr; UINT f = 0;
+            const bool key = KeyOf(c, &b, &f);
+            // tono con el que se dibuja el torso de este personaje (para la franja alta del brazo, pes_armband en el PS aa7d)
+            int tt = 0;
+            if (key) for (const KeyN& k : s_keys) if (k.b == b && k.f == f) { tt = k.n; break; }
+            if (key && !tt) for (const KeyN& k : s_keysPrev) if (k.b == b && k.f == f) { tt = k.n; break; }
+            // (16/11 b) solo con el torso de ESTE personaje (misma clave b6). Sin el (cuerpo propio = pieza aparte, otra clave) no se
+            // corrige: con el tono medido de la cara o el ultimo torso, el brazo se aclaraba debajo del borde del torso (video 15.12.20)
+            t_armTorsoTone = tt;
+            if (ft > 0 && key) { bool had = false; for (KeyN& k : s_faceKeys) if (k.b == b && k.f == f) { k.n = ft; had = true; break; } if (!had && s_faceKeys.size() < 256) s_faceKeys.push_back({ b, f, ft }); }
+        }
+        r->Release(); return nullptr;
+    }
     int tone = (int)(g_cfg.live[321][2] + 0.5f);
     if (tone < 1 || tone > kTones) {
         tone = 0;
@@ -425,6 +447,16 @@ ID3D11ShaderResourceView* ArmsTextureFor(ID3D11DeviceContext* c, uint64_t vsHash
     return v;
 }
 
+// (16/11) despues de ArmsTextureFor: si el dibujo fue un brazo de cara real en modo "solo el torso" (x327 = 2), torso_N del tono
+// de su torso para t46 del PS de la piel (franja alta del brazo llevada al tono del torso, sin cambiar la textura); nullptr = nada
+ID3D11ShaderResourceView* ArmsTorsoForArm() {
+    const int tone = t_armTorsoTone; t_armTorsoTone = 0;
+    if (tone < 1 || tone > kTones) return nullptr;
+    std::lock_guard<std::mutex> lk(s_mx);
+    if (!s_ok) return nullptr;
+    return Tone(tone, K_TORSO);
+}
+
 // dibujo de la cara (PS 5ce3 / ce188): torso_N_bsm de TorsoBody del tono del jugador para t29 (pes_collar.hlsli: el cuello de la
 // cara real toma el color del torso en la union). El tono: el forzado (z321) o el del ultimo torso dibujado en este contexto.
 ID3D11ShaderResourceView* ArmsTorsoTextureForFace() {
@@ -441,7 +473,7 @@ ID3D11ShaderResourceView* ArmsTorsoTextureForFace() {
 // Present (contexto inmediato): leer las huellas pendientes de los torsos del juego y olvidar las claves del cuadro
 void ArmsPresent() {
     std::lock_guard<std::mutex> lk(s_mx);
-    s_keys.clear();
+    s_keysPrev.swap(s_keys); s_keys.clear();
     s_faceKeysPrev.swap(s_faceKeys); s_faceKeys.clear();
     if (!g_dev.imm || !g_dev.dev) return;
     static double s_statT = 0;

@@ -673,6 +673,8 @@ static const DebugParam kDebugParams[] = {
     { 147, 1, 0.5f, 0.0f, "Borde de la mascara de la cara", "Piel", kV1, 1 },
     { 322, 3, 0.5f, 0.0f, "Franja de la union cuello / cuerpo", "Piel", kV1, 1 },
     { 360, 0, 0.5f, 0.0f, "Teselacion: inflar cara y cuerpo / ver teselacion del cuerpo", "Piel", kV27, 2 },
+    { 519, 0, 0.5f, 0.0f, "Cuerpo: ver a traves del torso", "Piel", kV1, 1 },   // (16/11 d9ybe2) pes_debug_cuerpo.hlsli
+    { 519, 2, 0.5f, 0.0f, "Cuerpo: cuadricula de costuras / solo la textura", "Piel", kV27, 2 },
 };
 static const int kDebugN = (int)(sizeof(kDebugParams) / sizeof(kDebugParams[0]));
 int DebugParamCount() { return kDebugN; }
