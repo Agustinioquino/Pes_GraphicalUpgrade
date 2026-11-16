@@ -29,13 +29,15 @@ rep("#define PES_MENU_JUMP    3.0",
     "// (16/11) cuello de la campera (malla 0 de campera_pes21fx, VS de las pecheras): fijo al esqueleto, sin fisica\n"
     "#define PES_IS_COLLAR (g_legCount == 0 && g_capsuleCount == 0 && (g_vertexCount == 1074 || g_vertexCount == 1100))\n"
     "#define PES_MENU_JUMP    3.0")
-rep("float pesPinRest(ParticleRest r) { return (s_flags & 256) ?",
-    "float pesPinRest(ParticleRest r) { if (PES_IS_COLLAR) return 1.0; return (s_flags & 256) ?")
-rep("float pinOf(uint p)\n{\n",
-    "float pinOf(uint p)\n{\n    if (PES_IS_COLLAR) return 1.0;   // (16/11) cuello de la campera\n")
-rep("    bool tuckedPins = (s_flags & 256) != 0;\n    float wa =",
-    "    if (PES_IS_COLLAR) return;   // (16/11) cuello de la campera: todo fijo\n"
-    "    bool tuckedPins = (s_flags & 256) != 0;\n    float wa =")
+# (sin return temprano: fxc pierde la cuenta de que el control es uniforme y rechaza las barreras de main)
+rep("float pesPinRest(ParticleRest r) { return (s_flags & 256) ? float((r.skin.w >> 2) & 63) / 63.0 : r.posPin.w; }",
+    "float pesPinRest(ParticleRest r) { return PES_IS_COLLAR ? 1.0 : ((s_flags & 256) ? float((r.skin.w >> 2) & 63) / 63.0 : r.posPin.w); }")
+rep("    if (s_flags & 256) return float((g_rest[p].skin.w >> 2) & 63) / 63.0;\n    return g_rest[p].posPin.w;\n}\n",
+    "    float pn = (s_flags & 256) ? float((g_rest[p].skin.w >> 2) & 63) / 63.0 : g_rest[p].posPin.w;\n"
+    "    return PES_IS_COLLAR ? 1.0 : pn;   // (16/11) cuello de la campera: fijo\n}\n")
+rep("    float wb = (cn.w & (tuckedPins ? 16u : 4u)) ? 0.0 : 1.0;\n",
+    "    float wb = (cn.w & (tuckedPins ? 16u : 4u)) ? 0.0 : 1.0;\n"
+    "    if (PES_IS_COLLAR) { wa = 0.0; wb = 0.0; }   // (16/11) cuello de la campera: todo fijo\n")
 
 if crlf: t = t.replace('\n', '\r\n')
 open(p, 'wb').write(t.encode('latin1'))

@@ -600,7 +600,7 @@ float3 pesRestFollow(float3 pb, float sw)
 }
 // (25/10 b) las costuras (escote, punos, cintura: el mod las sujeta con pin alto) no se corren: el cuello y los punos son mallas
 // aparte que siguen al esqueleto sin la musculatura, y si la tela de la costura se corria quedaba separada del cuello
-float pesPinRest(ParticleRest r) { if (PES_IS_COLLAR) return 1.0; return (s_flags & 256) ? float((r.skin.w >> 2) & 63) / 63.0 : r.posPin.w; }
+float pesPinRest(ParticleRest r) { return PES_IS_COLLAR ? 1.0 : ((s_flags & 256) ? float((r.skin.w >> 2) & 63) / 63.0 : r.posPin.w); }
 float pesSeamFade(float pin) { return 1.0 - smoothstep(0.25, 0.85, pin); }
 float3 pesMusOf(ParticleRest r) { return pesRestFollow(r.posPin.xyz, g_legCount > 0 ? 0.0 : float((r.skin.w >> 8) & 255) / 255.0) * pesSeamFade(pesPinRest(r)); }
 void restAt(uint p, float t, out float3 pos, out float3 nrm)
@@ -637,9 +637,8 @@ float3 rotateBetween(float3 a, float3 b, float3 v)
 uint packHalf2(float a, float b) { return f32tof16(a) | (f32tof16(b) << 16); }
 float pinOf(uint p)
 {
-    if (PES_IS_COLLAR) return 1.0;   // (16/11) cuello de la campera
-    if (s_flags & 256) return float((g_rest[p].skin.w >> 2) & 63) / 63.0;
-    return g_rest[p].posPin.w;
+    float pn = (s_flags & 256) ? float((g_rest[p].skin.w >> 2) & 63) / 63.0 : g_rest[p].posPin.w;
+    return PES_IS_COLLAR ? 1.0 : pn;   // (16/11) cuello de la campera: fijo
 }
 // PES21 FX (15/11): cuanto es RUEDO este punto (0..1): tela suelta (pin bajo) en los ~10 cm de mas abajo de la prenda en la pose
 // de reposo (el faldon de la remera, la boca de la pierna del short). Antes "borde libre" era toda la tela con pin < 0.5, o
@@ -1427,10 +1426,10 @@ float restLength(uint4 cn)
 }
 void solveConstraint(uint4 cn, float L, float hh)
 {
-    if (PES_IS_COLLAR) return;   // (16/11) cuello de la campera: todo fijo
     bool tuckedPins = (s_flags & 256) != 0;
     float wa = (cn.w & (tuckedPins ? 8u : 2u)) ? 0.0 : 1.0;
     float wb = (cn.w & (tuckedPins ? 16u : 4u)) ? 0.0 : 1.0;
+    if (PES_IS_COLLAR) { wa = 0.0; wb = 0.0; }   // (16/11) cuello de la campera: todo fijo
     float3 d = gx[cn.x] - gx[cn.y];
     float len = length(d);
     if (len < 1e-7) return;
