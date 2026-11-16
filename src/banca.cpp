@@ -55,6 +55,16 @@ const unsigned char kSetVisibleSig[20] = { 0x38,0x91,0x81,0x00,0x00,0x00,0x74,0x
 const uintptr_t kApply = 0x141906600ull;
 const unsigned char kApplySig[19] = { 0x48,0x8b,0xc4,0x55,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8d,0xa8,0x28,0xfe,0xff,0xff };
 
+// (16/11 paso 1g) cobra::rd::impl::SceneStadiumNodeImpl::vf2 (0x1419b75b0) recorre en CADA cuadro todos los StadiumModelImpl del
+// estadio y llama FUN_1419b79f0(impl, dt, mostrar), que pisa el objeto de dibujo: [impl+0x20]+0x1ac = mostrar ? 0 : -1. Por eso el
+// escondido de SetVisible / aplicar (+0x81 -> +0x1ac = -1, +0x1b4 bit 0) duraba hasta el cuadro siguiente y los suplentes se veian.
+// StadiumModelImpl (FUN_1419b1910): +0x20 modelo, +0x38 mascara de direccion, +0x3c mascara de kind, +0x44 = 1 << demoGroup.
+// Prologo: push rbx; sub rsp,20h; mov rbx,rcx; mov rcx,[rcx+20h]; test rcx,rcx; je ...
+const uintptr_t kImplShow = 0x1419b79f0ull;
+const unsigned char kImplShowSig[22] = { 0x40,0x53,0x48,0x83,0xec,0x20,0x48,0x8b,0xd9,0x48,0x8b,0x49,0x20,0x48,0x85,0xc9,0x0f,0x84,0x8e,0x01,0x00,0x00 };
+const uint32_t kGroupBench = 1u << 1;                 // StadiumModel_DemoGroup BENCH = 1
+const uint32_t kKindScarecrow = (1u << 6) | (1u << 7) | (1u << 8);   // STAFF_SCARECROW_A / B / C
+
 const uintptr_t kSheetPtr = 0x1438041d0ull;      // ficha del partido de las cinematicas (DAT_1438041d0)
 const uintptr_t kScenes = 0x14374d958ull;        // primera escena (lista circular por +0)
 const uintptr_t kVtModel = 0x142a0a880ull, kVtFunctor = 0x142a72358ull, kVtBody = 0x142a72268ull, kVtStadiumModel = 0x142a721e8ull;
@@ -64,11 +74,15 @@ typedef void(__fastcall* FdmVf3)(void*);
 typedef void(__fastcall* FdhVf1)(void*, void*, uint32_t, uint8_t, uint64_t, void*);
 typedef void(__fastcall* SetVisibleFn)(void*, char);
 typedef void(__fastcall* ApplyFn)(void*);
-FdmVf3 o_fdm = nullptr; FdhVf1 o_fdh = nullptr; SetVisibleFn o_vis = nullptr; ApplyFn o_apply = nullptr;
+typedef void(__fastcall* ImplShowFn)(void*, float, char);
+FdmVf3 o_fdm = nullptr; FdhVf1 o_fdh = nullptr; SetVisibleFn o_vis = nullptr; ApplyFn o_apply = nullptr; ImplShowFn o_implShow = nullptr;
 
-bool s_tried = false, s_okTick = false, s_okProbe = false, s_okHide = false, s_okVisHook = false, s_okApply = false;
+bool s_tried = false, s_okTick = false, s_okProbe = false, s_okHide = false, s_okVisHook = false, s_okApply = false, s_okImpl = false;
 std::atomic<unsigned> s_applyBench{0};               // veces que el juego aplico la visibilidad de un banco (con la fila prendida)
-std::atomic<unsigned> s_gameShows{0};               // veces que el juego quiso mostrar el banco (queda escondido)
+std::atomic<unsigned> s_gameShows{0};
+std::atomic<unsigned> s_implHidden{0};               // cuadros x modelos que la escena del estadio queria mostrar y quedaron escondidos
+std::atomic<uintptr_t> s_benchDraw[8];               // objetos de dibujo de los "_dir_bench" vistos (los pone ScanBenches)
+std::atomic<uintptr_t> s_implSeen[16]; std::atomic<uint32_t> s_implSeenMask[16]; std::atomic<int> s_implSeenN{0};   // para el registro               // veces que el juego quiso mostrar el banco (queda escondido)
 
 bool Readable(const void* p, size_t n) {
     MEMORY_BASIC_INFORMATION mi{};
@@ -176,11 +190,8 @@ void BenchSetVisible(bool vis) {
     std::lock_guard<std::mutex> lk(s_mx); s_st.benchHidden = !vis; s_st.benchSeq++;
 }
 
-// cuerpo -> asa (+0x30) -> entidad (+0x18) StadiumModel con nombre "..._dir_bench..." (banco de las cinematicas).
-// (16/11 paso 1f) el back_other de 1e se saco: prueba 4 (Monumental + st045) lo dejo escondido y las figuras seguian. Medicion v0.3
-// en st045 (todos los modelos por archivo): fuera de jugadores, DT, camaras, sillas y el dir_bench (escondido), las unicas personas
-// 3D que quedan son las del publico (au00 / 02 / 03 / 05 / 14 / 16 x 3 niveles y au_Low): los del banco son publico sentado en los
-// asientos del banco, con la ropa del color de cada equipo. Los esconde el VS del publico con la caja del dir_bench (filas 517 / 518).
+// cuerpo -> asa (+0x30) -> entidad (+0x18) StadiumModel con nombre "..._dir_bench..." (los suplentes genericos sentados: materiales
+// so_benchmember_2017set_home1 / _away, campera st_jersey_bench00 / 01 con el color de cada equipo, 0 huesos).
 bool IsBenchBody(uintptr_t body, char* nameOut = nullptr, size_t n = 0) {
     uintptr_t vt = 0, h = 0, e = 0, evt = 0; char nm[64];
     if (!Rd(body, vt) || vt != kVtBody || !Rd(body + 0x30, h) || !Heap(h) || !Rd(h + 0x18, e) || !Heap(e) || !Rd(e, evt) || evt != kVtStadiumModel) return false;
@@ -211,8 +222,28 @@ void __fastcall hk_Apply(void* body) {
     o_apply(body);
 }
 
+// 16/11 paso 1g: el que de verdad decide si se dibuja (cada cuadro, hilo del juego). Esconde los StadiumModelImpl del grupo de
+// cinematica BENCH con kind de espantapajaros (todos los estadios: Konami y mods usan el mismo campo demoGroup) o cuyo modelo sea
+// el de un "_dir_bench" visto por nombre (por si un estadio de mod no puso el grupo).
+void __fastcall hk_ImplShow(void* impl, float dt, char show) {
+    if (show && Live(0, 0.0f) > 0.5f && Live(1, 1.0f) > 0.5f) {
+        const uintptr_t im = (uintptr_t)impl; uint32_t kind = 0, group = 0; uintptr_t mdl = 0;
+        bool bench = Rd(im + 0x3c, kind) && Rd(im + 0x44, group) && group == kGroupBench && (kind & kKindScarecrow) != 0;
+        if (!bench && Rd(im + 0x20, mdl) && mdl)
+            for (int i = 0; i < 8 && !bench; i++) bench = s_benchDraw[i].load(std::memory_order_relaxed) == mdl;
+        if (bench) {
+            show = 0;
+            s_implHidden.fetch_add(1, std::memory_order_relaxed);
+            int n = s_implSeenN.load(std::memory_order_relaxed); bool known = false;
+            for (int i = 0; i < n && !known; i++) known = s_implSeen[i].load(std::memory_order_relaxed) == im;
+            if (!known && n < 16) { s_implSeen[n].store(im); s_implSeenMask[n].store((group << 16) | (kind & 0xffff)); s_implSeenN.store(n + 1); }
+        }
+    }
+    o_implShow(impl, dt, show);
+}
+
 // solo lectura (desde Present): todos los cuerpos "_dir_bench" de las escenas y su estado
-struct BenchSeen { uintptr_t body; uint8_t node, vis; uint32_t drawFlags; bool drawOk; char name[40]; float box[6]; };
+struct BenchSeen { uintptr_t body; uint8_t node, vis; uint32_t drawFlags; bool drawOk; char name[40]; };
 int ScanBenches(BenchSeen* out, int max) {
     int n = 0; uintptr_t first = 0; if (!Rd(kScenes, first) || !Heap(first)) return 0;
     uintptr_t e = first;
@@ -235,9 +266,9 @@ int ScanBenches(BenchSeen* out, int max) {
                             if (!Rd(funs + 8 * i, f) || !Heap(f) || !Rd(f, fvt) || fvt != kVtFunctor || !Rd(f + 0x10, c) || !Heap(c)) continue;
                             char nm[40]; if (!IsBenchBody(c, nm, sizeof nm)) continue;
                             BenchSeen& b = out[n++]; strncpy_s(b.name, nm, _TRUNCATE); b.body = c; b.node = b.vis = 0xff; b.drawFlags = 0; b.drawOk = false;
-                            for (int q = 0; q < 6; q++) { b.box[q] = 0.0f; Rd(o + 0x80 + (q < 3 ? 4 * q : 0x10 + 4 * (q - 3)), b.box[q]); }
                             Rd(c + 0x80, b.node); Rd(c + 0x81, b.vis);
                             uintptr_t d = 0; if (Rd(c + 0x88, d) && Heap(d) && Rd(d + 0x1b4, b.drawFlags)) b.drawOk = true;
+                            if (Heap(d) && n <= 8) s_benchDraw[n - 1].store(d, std::memory_order_relaxed);
                         }
                     }
                     if (sg == head) break;
@@ -248,11 +279,9 @@ int ScanBenches(BenchSeen* out, int max) {
         if (next == first) break;
         e = next;
     }
+    for (int i = n < 8 ? n : 8; i < 8; i++) s_benchDraw[i].store(0, std::memory_order_relaxed);   // los de otro estadio ya no valen
     return n;
 }
-
-// caja del banco para el VS del publico (filas 517 / 518, las escribe BancaFrame; no van al ini)
-float s_crowdBox[6] = {}; bool s_crowdBoxOk = false;
 
 // ---------------------------------------------------------------- convocados
 void ReadSheet() {
@@ -342,29 +371,21 @@ void Install() {
     else o_vis = nullptr;
     if (!SigAt(kApply, kApplySig, sizeof kApplySig)) Log("banca: la firma de 0x141906600 (aplicar visibilidad) no coincide: el banco solo se esconde por SetVisible");
     else if (MH_CreateHook((void*)kApply, (void*)&hk_Apply, (void**)&o_apply) == MH_OK && MH_EnableHook((void*)kApply) == MH_OK) s_okApply = true;
+    if (!SigAt(kImplShow, kImplShowSig, sizeof kImplShowSig)) Log("banca: la firma de 0x1419b79f0 (la escena del estadio muestra cada modelo) no coincide: el banco de Konami se sigue viendo");
+    else if (MH_CreateHook((void*)kImplShow, (void*)&hk_ImplShow, (void**)&o_implShow) == MH_OK && MH_EnableHook((void*)kImplShow) == MH_OK) s_okImpl = true;
     if (!SigAt(kFdmVf3, kFdmVf3Sig, sizeof kFdmVf3Sig)) Log("banca: la firma de FixDemoMain::vf3 (0x141f37770) no coincide: sin reloj, no hace nada");
     else if (MH_CreateHook((void*)kFdmVf3, (void*)&hk_Fdm, (void**)&o_fdm) == MH_OK && MH_EnableHook((void*)kFdmVf3) == MH_OK) s_okTick = true;
     if (!SigAt(kFdhVf1, kFdhVf1Sig, sizeof kFdhVf1Sig)) Log("banca: la firma de FixDemoHuman::vf1 (0x141f87e00) no coincide: sin sonda de cinematicas");
     else if (MH_CreateHook((void*)kFdhVf1, (void*)&hk_Fdh, (void**)&o_fdh) == MH_OK && MH_EnableHook((void*)kFdhVf1) == MH_OK) s_okProbe = true;
+    Log("banca: escondido por la escena del estadio (cada cuadro) %s", s_okImpl ? "enganchado" : "NO");
     Log("banca: reloj %s, sonda de cinematicas %s, esconder el banco %s (fila 516: x %.0f)", s_okTick ? "enganchado" : "NO", s_okProbe ? "enganchada" : "NO",
         !s_okHide ? "NO (firma de 0x1419055f0 distinta)" : s_okVisHook ? (s_okApply ? "listo (SetVisible y al aplicar)" : "solo por SetVisible") : "solo en cinematicas (gancho de SetVisible fallo)", Live(0, 0.0f));
 }
 } // namespace
 
-// filas 517 / 518 para el VS del publico (UpdateTimeParams, con g_cfgMutex tomado): 517 = x min, x max, z min, z max;
-// 518 = y desde, y hasta (pies de la figura), z 1 = valida. Margenes: 0,5 m a lo ancho, 1 m de fondo; altura: del piso del banco
-// - 0,6 m a + 0,8 m (la tribuna de adelante esta mas arriba).
-void BancaFrame(float (*p)[4], double) {
-    const bool on = s_crowdBoxOk && Live(0, 0.0f) > 0.5f && Live(1, 1.0f) > 0.5f;
-    if (!on) { for (int k = 0; k < 4; k++) p[517][k] = p[518][k] = 0.0f; return; }
-    const float* b = s_crowdBox;
-    p[517][0] = b[0] - 0.5f; p[517][1] = b[3] + 0.5f; p[517][2] = b[2] - 1.0f; p[517][3] = b[5] + 1.0f;
-    p[518][0] = b[1] - 0.6f; p[518][1] = b[1] + 0.8f; p[518][2] = 1.0f; p[518][3] = 0.0f;
-}
-
 void BancaPresent() {
     if (!s_tried) Install();
-    if (!s_okTick && !s_okProbe && !s_okVisHook && !s_okApply) return;
+    if (!s_okTick && !s_okProbe && !s_okVisHook && !s_okApply && !s_okImpl) return;
     // lineas de la sonda
     const int k = s_logN.load();
     for (int i = 0; i < k; i++) Log("%s", s_logBuf[i]);
@@ -379,27 +400,24 @@ void BancaPresent() {
         if (nextT > 0) Log("banca: reloj del juego %.1f por segundo", (tk - lastTicks) / 10.0);
         // solo lectura: todos los bancos de las escenas y si se dibujan
         BenchSeen bs[8]; const int nb = ScanBenches(bs, 8);
-        char line[640];
-        if (nb > 0) Log("banca: caja del banco para el publico x %.2f..%.2f, y %.2f..%.2f, z %.2f..%.2f (figuras del publico con los pies ahi = escondidas)",
-                        bs[0].box[0], bs[0].box[3], bs[0].box[1], bs[0].box[4], bs[0].box[2], bs[0].box[5]);
-        int w = sprintf_s(line, "banca: bancos en escena %d, aplicados escondidos %u:", nb, s_applyBench.load(std::memory_order_relaxed));
+        char line[640]; int w = sprintf_s(line, "banca: bancos en escena %d, aplicados escondidos %u:", nb, s_applyBench.load(std::memory_order_relaxed));
         for (int i = 0; i < nb && w > 0 && w < 400; i++)
             w += sprintf_s(line + w, sizeof line - w, " [%s %p nodo %u visible %u dibujo %s]", bs[i].name, (void*)bs[i].body, bs[i].node, bs[i].vis,
                            !bs[i].drawOk ? "?" : (bs[i].drawFlags & 1) ? "ESCONDIDO" : "se dibuja");
         Log("%s", line);
+        Log("banca: la escena del estadio quiso mostrar los suplentes de Konami %u veces (quedaron escondidos)", s_implHidden.load(std::memory_order_relaxed));
         ReadSheet();   // convocados tambien sin cinematica (solo lectura)
         lastTicks = tk; nextT = t + 10.0;
     }
     // el juego quiso mostrar el banco y se lo dejo escondido
     static unsigned seenShows = 0; const unsigned shows = s_gameShows.load(std::memory_order_relaxed);
     if (shows != seenShows) { Log("banca: el juego pidio mostrar el banco de Konami (%u veces en total): queda escondido", shows); seenShows = shows; }
-    // caja del banco cada segundo (los munecos del banco en el juego son publico: los esconde el VS del publico, pes_crowd_face.hlsli)
-    static double nextBox = 0;
-    if (!on) s_crowdBoxOk = false;
-    else if (t >= nextBox) {
-        nextBox = t + 1.0;
-        BenchSeen bs[8]; const int nb = ScanBenches(bs, 8);
-        if (nb > 0) { for (int q = 0; q < 6; q++) s_crowdBox[q] = bs[0].box[q]; s_crowdBoxOk = true; } else s_crowdBoxOk = false;
+    // modelos nuevos escondidos por la escena del estadio (una vez cada uno)
+    static int seenImpl = 0; const int ni = s_implSeenN.load();
+    for (; seenImpl < ni; seenImpl++) {
+        const uintptr_t im = s_implSeen[seenImpl].load(); const uint32_t m = s_implSeenMask[seenImpl].load(); uintptr_t mdl = 0; Rd(im + 0x20, mdl);
+        Log("banca: suplentes de Konami escondidos en la escena del estadio: modelo %p (grupo %s, kind %04X)", (void*)mdl,
+            (m >> 16) == kGroupBench ? "BENCH" : "otro, por nombre _dir_bench", m & 0xffff);
     }
     // cambios de convocados / banco
     static unsigned seenSheet = 0, seenBench = 0;
