@@ -1,0 +1,12 @@
+Pes Explorer NEM - entorno visual de PES21 FX (08/11)
+
+0) PesExplorerNEM.exe (lo arma la CI, carpeta visor\ del paquete de la rama build): doble clic y listo, sin Python.
+   Acepta los mismos argumentos (--juego, --trabajo, --puerto). Sus mensajes van a B:\VisualPes21\visor.log.
+1) visor.bat  -> lo mismo desde el repo, APLICACION de escritorio (ventana propia, pywebview / WebView2; con --sin-ventana queda solo el servidor en
+   http://127.0.0.1:21020/ para el navegador). Visor de archivos + escena 3D + panel. Lee el juego en
+   D:\SteamLibrary\steamapps\common\eFootball PES 2021 y extrae a B:\VisualPes21 (nunca escribe en el juego).
+   Necesita Python 3 con numpy y pillow (el .bat los instala si faltan). three.js se baja de internet la primera vez.
+2) Panel en vivo: con el juego abierto y la DLL con panel.cpp, la DLL escucha en http://127.0.0.1:21021/ (solo esta PC;
+   [PES21FX] panel_puerto = 21021, 0 = apagado). La pagina se conecta sola (luz verde "Juego").
+   Si se copia static\index.html a PES21FX\panel\index.html, la DLL tambien la sirve en http://127.0.0.1:21021/.
+3) Rutas dentro de paquetes: "D:\...\dt13_all.cpk!common/anime/x.gani" (tambien .fpk).
