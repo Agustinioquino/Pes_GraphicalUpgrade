@@ -621,11 +621,12 @@ static int VcPageKind(void* win) {   // 1 jugador, 2 comun / ajena, 3 otra del E
         // (15/11 f, Agustin 18:45: "al salir del menu de apariencia, que es el que tiene que permitir mover la camara, la camara tendria
         // que volver a donde esta por default") solo Apariencia y lo que cuelga de ella (cara, pelo, montaje, cuerpo, accesorios)
         const char* r = nm + 12;
-        static const char* kAp[] = { "PlAppearance", "PlFaceType", "PlHairstyle", "PlMontage", "PlBody", "PlAccessory" };
+        // (16/11, Agustin 00:04: "el menu de movimiento no detecta el mouse y no permite mover la camara") tambien Movimiento (PlMotionSetting)
+        static const char* kAp[] = { "PlAppearance", "PlFaceType", "PlHairstyle", "PlMontage", "PlBody", "PlAccessory", "PlMotionSetting" };
         kind = strncmp(r, "Cmn", 3) == 0 ? 2 : 3;
         for (const char* a : kAp) if (strncmp(r, a, strlen(a)) == 0) kind = 1;
     }
-    if (s_n < 64) { s_vt[s_n] = vt; s_kind[s_n] = (int8_t)kind; s_n++; Log("mouse en menus: pagina %s (vtable %p) -> camara del visor %s", nm ? nm : "(sin RTTI)", (void*)vt, kind == 1 ? "si (Apariencia del jugador)" : kind == 3 ? "no (otra parte del Editar: vuelve a la del juego)" : "sin cambio"); }
+    if (s_n < 64) { s_vt[s_n] = vt; s_kind[s_n] = (int8_t)kind; s_n++; Log("mouse en menus: pagina %s (vtable %p) -> camara del visor %s", nm ? nm : "(sin RTTI)", (void*)vt, kind == 1 ? "si (Apariencia / Movimiento del jugador)" : kind == 3 ? "no (otra parte del Editar: vuelve a la del juego)" : "sin cambio"); }
     return kind;
 }
 static bool VcLive() { return s_ok && g_cfg.menuMouse != 0 && g_cfg.menuViewCam != 0 && s_vcPlayer.load() && Now() - s_vcLiveT.load() < 0.3; }
