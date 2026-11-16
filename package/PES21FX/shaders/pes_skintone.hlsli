@@ -289,7 +289,14 @@ void PesTorsoRegrow(inout float3 mP, float3 mN, float3 rest, float3 org) {
   // (15/11, Agustin: "evita que se deforme el torso y los brazos") z327: tambien CON camiseta el torso vuelve a su tamano original
   // (la tela simulada se aparta de la piel real al dibujarse, x256 = 2). La camiseta ajustada no se simula: ahi queda el achicado.
   float kS = PesArmRestore(rest);
-  { float z327 = IniParams.Load(int2(327, 0)).z; if (z327 > 0.0 && PesCharShirtType(org) < 3.5) kS = max(kS, saturate(z327)); }
+  // (16/11, Agustin: manchas oscuras en la remera con la luz normal del Editar; con z327 = 0 se van) el torso de tamano completo queda
+  // pegado a la tela y la sombra fina de los focos del Editar lo toma como si tapara la remera. En la pasada de SOMBRA (VS c6ef0c75,
+  // PES_SHADOW_VS) y solo en escena de menu (w255) el torso con camiseta proyecta achicado; lo que se ve no cambia. Partido igual
+  bool pesShNoZ327 = false;
+#ifdef PES_SHADOW_VS
+  pesShNoZ327 = IniParams.Load(int2(255, 0)).w > 0.5;
+#endif
+  { float z327 = IniParams.Load(int2(327, 0)).z; if (z327 > 0.0 && !pesShNoZ327 && PesCharShirtType(org) < 3.5) kS = max(kS, saturate(z327)); }
   float k = PesCharHasShirt(org) > 0.5 ? kS : max(saturate(R.x), PesArmRestore(rest));
   float mm = PesTorsoShrinkMM(rest, mN) * k;
   if (mm <= 0.0) return;
@@ -315,6 +322,12 @@ void PesNeckSink(inout float3 mP, float3 mN, float3 rest, float3 org) {
   float4 T = IniParams.Load(int2(320, 0));
   bool shirt = T.z > 0.5 && PesCharHasShirt(org) > 0.5;
   float full = min(K.z, 25.0);
+  // (16/11, Agustin: en el escote en V el cuello se ve en parches claros y oscuros SOLO con la luz del editor) con z352 = 9 el torso
+  // y el cuello de la cara (1-18 mm adentro del torso) quedan cruzados en el escote. Con la luz normal del menu (plana, de frente)
+  // no se nota; la luz de prueba viene de arriba y rasante y las dos pieles, que miran distinto, quedan una clara y otra oscura.
+  // Solo en escena de menu (w255) con la luz de prueba prendida (x297) y con camiseta: el torso se hunde 20 mm, queda todo debajo
+  // del cuello de la cara y no hay cruce. En partido y con la luz apagada, z352 tal cual
+  if (shirt && IniParams.Load(int2(255, 0)).w > 0.5 && IniParams.Load(int2(297, 0)).x > 0.5) full = max(full, 20.0);
   float mm = shirt ? full * (1.0 - PesSS(0.06, 0.12, hb)) : min(full, 5.0) * (1.0 - PesSS(0.005, 0.025, hb));
   mP -= mN * rsqrt(max(dot(mN, mN), 1e-8)) * (mm * nk * 0.001);
 }
