@@ -34,6 +34,10 @@
 // cada equipo: naranja el local, verde el visitante, con su escudo), z probar clips (0 al azar; 1 a 8 todos con ese clip, al momento),
 // w clips de la sala de reunion (1 si). La pechera y la campera las pone PecheraPorJugador.lua (v0.15) con los modelos que ya usa en el
 // entrenamiento: lee pes21fx_banca_ropa (abajo) con GetProcAddress y cambia las tablas de piezas 0 y 8 en cada pedido de modelo.
+// (2e, Agustin 17/11 03:39: "si el clima es invierno lluvioso o con nieve se cargue el modelo de campera entero y solo en invierno despejado
+// se cargue sin la parte del pantalon"): con campera y weather 1 (lluvia) o 2 (nieve) del partido, la campera ENTERA: el suplente se pide
+// con el tipo de la ropa de entrenamiento (LoadId+0x4c = 0x16 el local, 0x17 el visitante; sin pechera), y el juego le apaga el uniforme
+// como en el entrenamiento (mascara &= 0x11). El modulo (v0.16) pone en la pieza 7 la campera del visitante.
 #include "core.h"
 #include <MinHook.h>
 #include <atomic>
@@ -49,7 +53,8 @@
 
 // (2e) lo lee PecheraPorJugador.lua v0.15 (GetProcAddress de esta DLL, exportado en d3d11.def). Lo escribe el hilo del juego al armar la
 // lista de suplentes y vuelve a 0 al soltarlos (fin del partido): 0 nada (tablas como siempre), 1 las piezas 0 / 8 son la parte de arriba
-// de la campera del local / del visitante, 2 la pieza 8 es la pechera verde del visitante (pecheras propias de cada equipo).
+// de la campera del local / del visitante, 2 la pieza 8 es la pechera verde del visitante (pecheras propias de cada equipo), 3 campera
+// entera (lluvia o nieve: la pieza 7 = la campera del visitante).
 extern "C" { volatile unsigned char pes21fx_banca_ropa = 0; }
 
 namespace fx {
@@ -1092,6 +1097,7 @@ struct LiveSub {
     float t0 = 0, start = 0, tCreateT = 0, phase0 = 0; double tCreate = 0; int endTicks = 0; bool faceTried = false; uint8_t player[0xF0] = {};
     float heightCm = 0, dyCm = 0;                      // (2d) estatura del modelo (h+0x10) y lo que se bajo la base por ella
     uint8_t bibByte = 0;                               // (2e) pechera del LoadId si le toca: 1 pieza 0, 2 pieza 8
+    uint8_t kindOv = 0;                                // (2e) campera entera (lluvia / nieve): tipo del LoadId 0x16 / 0x17, sin pechera
     int shown = -1;                                    // (2e) clip que tiene puesto (el suyo o el de "probar clips")
 };
 enum { kIdle = 0, kWait, kClips, kRun, kOff };
@@ -1179,6 +1185,7 @@ __declspec(noinline) bool SubCreate(LiveSub& u, bool haveSW, uint8_t season, uin
             uint8_t lid[0xa0];
             ((LoadIdFn)kLoadId)(nullptr, lid, u.side, 0, u.player, u.gk ? 1 : 0, 0, 0, 0, (uint8_t)(u.bib ? u.bibByte : 0));
             if (haveSW) { lid[0x4f] = season; lid[0x50] = weather; }
+            if (u.bib && u.kindOv) lid[0x4c] = u.kindOv;  // (2e) campera entera: tipo de la ropa de entrenamiento (FUN_141f61520 lo pone en +0x4c)
             fd[0x490] = 0; fd[0x514] = 0;                 // sin efectos de lluvia / aliento de la cinematica
             ((FdLoadFn)kFdLoad)(fd, lid, (uint32_t)u.side, (uint8_t)u.place, (uint8_t)(u.gk ? 1 : 0));
         }
@@ -1324,12 +1331,16 @@ int SubsPrepare() {
     const int ropaOpt = (int)(Live3(0, 0.0f) + 0.5f), bibOpt = (int)(Live3(1, 0.0f) + 0.5f);
     const bool known = g_cfg.match.known; const int season = g_cfg.match.season;
     const bool jacket = ropaOpt == 2 || (ropaOpt == 0 && known && season == 1);
-    const uint8_t bb[2] = { (uint8_t)((jacket || bibOpt == 1) ? 1 : 2), 2 };
-    pes21fx_banca_ropa = (unsigned char)(jacket ? 1 : bibOpt == 1 ? 2 : 0);
-    Log("banca: ropa de los suplentes: %s (opcion %s, estacion %s): local pieza %u, visitante pieza %u",
-        jacket ? "la parte de arriba de la campera de cada equipo" : bibOpt == 1 ? "la pechera propia de cada equipo" : "la pechera de suplente del juego",
+    const int wth = g_cfg.match.weather;
+    const bool full = jacket && known && (wth == 1 || wth == 2);   // lluvia o nieve: campera entera
+    const uint8_t bb[2] = { (uint8_t)(full ? 0 : (jacket || bibOpt == 1) ? 1 : 2), (uint8_t)(full ? 0 : 2) };
+    pes21fx_banca_ropa = (unsigned char)(full ? 3 : jacket ? 1 : bibOpt == 1 ? 2 : 0);
+    Log("banca: ropa de los suplentes: %s (opcion %s, estacion %s, tiempo %d)%s",
+        full ? "la campera entera de cada equipo (lluvia o nieve)" : jacket ? "la parte de arriba de la campera de cada equipo" :
+        bibOpt == 1 ? "la pechera propia de cada equipo" : "la pechera de suplente del juego",
         ropaOpt == 0 ? "segun el clima" : ropaOpt == 1 ? "siempre pechera" : "siempre campera",
-        !known ? "sin dato (verano)" : season == 1 ? "invierno" : season == 0 ? "verano" : "otra (como verano)", bb[0] == 1 ? 0u : 8u, 8u);
+        !known ? "sin dato (verano)" : season == 1 ? "invierno" : season == 0 ? "verano" : "otra (como verano)", wth,
+        full ? ": tipo 0x16 el local, 0x17 el visitante" : bb[0] == 1 ? ": local pieza 0, visitante pieza 8" : ": las dos pieza 8");
     // (2e) clips que se reparten: los de la sala de reunion solo con w518 = 1
     int allow[kNumClips], na = 0; const bool sala = Live3(3, 1.0f) > 0.5f;
     for (int i = 0; i < kNumClips; i++) if (sala || !kClipDef[i].sala) allow[na++] = i;
@@ -1352,7 +1363,7 @@ int SubsPrepare() {
         char rowDiag[400]; const int got = BuildSpots(ss, sd, ns, up, fwd, sp, 40, &seats, &rows, rowDiag, sizeof rowDiag);
         const int nb = std::min(got, (int)(got * pct / 100.0f + 0.5f));
         int ord[40]; for (int k = 0; k < got; k++) ord[k] = k;
-        for (int k = 0; k < nb; k++) { const int j = k + (int)(Rnd() % (uint32_t)(got - k)); std::swap(ord[k], ord[j]); tmp[ord[k]].bib = true; tmp[ord[k]].bibByte = bb[sd]; }
+        for (int k = 0; k < nb; k++) { const int j = k + (int)(Rnd() % (uint32_t)(got - k)); std::swap(ord[k], ord[j]); tmp[ord[k]].bib = true; tmp[ord[k]].bibByte = bb[sd]; tmp[ord[k]].kindOv = (uint8_t)(full ? (sd ? 0x17 : 0x16) : 0); }
         // clips: una vuelta mezclada de los permitidos, asi dos vecinos nunca comparten clip; (2b) cada uno arranca en un punto al azar del
         // clip (phase0, se acota al largo real en SubStart), asi los que repiten clip no se mueven juntos.
         int perm[kNumClips]; for (int k = 0; k < na; k++) perm[k] = allow[k];
@@ -1510,7 +1521,7 @@ void SubsTick(void* host) {
                 int c0 = 0, c1 = 0; BudgetRead(0, c0, c1);
                 Log("banca: creando suplente %d de %d: %s %llu %s (lugar %d%s%s) en x %.2f y %.2f z %.2f, clip %s (giro %+.0f) desde %.1f s; texturas usadas %d de %d; %d cargando",
                     next + 1, S.n, u.side ? "visitante" : "local", (unsigned long long)u.id, u.name, u.place, u.gk ? ", arquero" : "",
-                    !u.bib ? "" : u.bibByte == 1 ? ", pechera (pieza 0)" : ", pechera (pieza 8)",
+                    !u.bib ? "" : u.kindOv ? ", campera entera" : u.bibByte == 1 ? ", pechera (pieza 0)" : ", pechera (pieza 8)",
                     u.spot.x, u.spot.y, u.spot.z, kClipDef[u.clip].name, kClipDef[u.clip].yaw, u.phase0, c1, c0, loading);
                 S.tSpawn = now;
                 if (SubCreate(u, haveSW, season, weather)) { u.state = 1; u.tCreate = now; u.tCreateT = S.T; S.tProgress = now; }
