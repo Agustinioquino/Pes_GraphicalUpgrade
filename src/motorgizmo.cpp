@@ -1059,7 +1059,15 @@ static void ToolbarDraw() {
                     if (hd) dl->AddRectFilled(d0, d1, IM_COL32(120, 52, 46, 255), 3.0f * k);
                     const ImVec2 c((d0.x + d1.x) * 0.5f, (d0.y + d1.y) * 0.5f); const float r = 4.0f * k; const ImU32 xc = hd ? ink : dim;
                     dl->AddLine(ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), xc, 1.5f * k); dl->AddLine(ImVec2(c.x - r, c.y + r), ImVec2(c.x + r, c.y - r), xc, 1.5f * k); }
-                y += rowH + 3.0f * k; }
+                y += rowH + 3.0f * k;
+                if (q >= 0) {      // (07:23) tarjeta del elegido: de donde sale, que animacion tiene y como esta
+                    static const char* const kK[3] = { "por id", "jugador base", "igual al del Editar" };
+                    char l1[96], l2[96]; snprintf(l1, sizeof l1, "%s  \xC2\xB7  id %llu  \xC2\xB7  %s", TRS(kK[std::clamp(PI.kind[q], 0, 2)]), (unsigned long long)(PI.id[q] >> 32 ? PI.id[q] >> 32 : PI.id[q] & 0xffff),
+                        TRS(PI.hidden[q] ? "oculto" : PI.st[q] == 3 ? "listo" : PI.st[q] == 4 ? "no carg\xC3\xB3" : "cargando"));
+                    if (PI.clip[q] >= 0) snprintf(l2, sizeof l2, "%s%s", MotorClipFile(PI.clip[q]), PI.paused[q] ? TRS("  (en pausa)") : ""); else snprintf(l2, sizeof l2, "%s", TRS("parado (el de siempre)"));
+                    dl->PushClipRect(ImVec2(fx0, y), ImVec2(fx1, y + 40.0f * k), true);
+                    text(fx0 + 9.0f * k, y + 9.0f * k, dim, l1, fsS - 0.5f * k); text(fx0 + 9.0f * k, y + 27.0f * k, IM_COL32(200, 180, 150, 255), l2, fsS - 0.5f * k);
+                    dl->PopClipRect(); y += 38.0f * k; } }
               y += 6.0f * k;
               text(lx, y + rowH * 0.5f, dim, "Id del jugador", fsS + 1.0f * k);
               numField(2110, ImVec2(x0 + rightW * 0.42f, y + 3.0f * k), ImVec2(fx1, y + rowH - 3.0f * k), s_pjIdF, 1.0f, 1.0f, 9999999.0f, "%.0f", ""); y += rowH;
