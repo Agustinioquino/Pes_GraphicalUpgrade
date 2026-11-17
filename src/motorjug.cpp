@@ -236,7 +236,7 @@ void MotorJugPresent() {
         if (motor) { MotorViewSet(0, 5); Log("motor: al entrar, vista Albedo"); }
         else {
             for (int r = 0; r < 3; r++) MotorViewSet(r, 0);
-            { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[519][0] = 0.0f; g_cfg.live[519][2] = 0.0f; g_cfg.live[426][0] = 0.0f; }
+            { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[519][0] = 0.0f; g_cfg.live[519][2] = 0.0f; g_cfg.live[426][0] = 0.0f; g_cfg.live[426][1] = 0.0f; }
             const int nl = MotorLightsRestore();
             MotorJugReset(); s_uPause.store(false);
             Log("motor: al salir, vista Normal, vistas de prueba apagadas y %d luces como estaban", nl);

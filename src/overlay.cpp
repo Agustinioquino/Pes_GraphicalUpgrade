@@ -2781,6 +2781,10 @@ static void DrawSkeletonView() {
     static const int kOff[4] = { 0x88, 0x90, 0x98, 0xA0 };
     static const ImU32 kCol[4] = { IM_COL32(255, 255, 255, 220), IM_COL32(90, 210, 255, 220), IM_COL32(90, 210, 255, 220), IM_COL32(255, 210, 60, 230) };
     int drawn = 0, bones = 0;
+    const int grp = std::clamp((int)(g_cfg.live[426][1] + 0.5f), 0, 3);
+    const bool names = g_cfg.live[426][0] > 1.5f; const float kk = std::max(1.0f, vp->Size.y / 1080.0f);
+    ImVec2 mouse(-1.0e6f, -1.0e6f); { HWND h = OverlayHwnd(); POINT p{}; RECT rc{}; if (h && GetCursorPos(&p) && ScreenToClient(h, &p) && GetClientRect(h, &rc) && rc.right > rc.left && rc.bottom > rc.top) mouse = ImVec2(vp->Pos.x + (float)p.x * vp->Size.x / (float)(rc.right - rc.left), vp->Pos.y + (float)p.y * vp->Size.y / (float)(rc.bottom - rc.top)); }
+    float bestD2 = 16.0f * 16.0f * kk * kk; ImVec2 bestPt; ImU32 bestCol = 0; char bestNm[40] = {};
     for (int sl = 0; sl < kCharSlots && drawn < 24; sl++) {
         if (!alive[sl] || !ci[sl].node) continue;
         float W[12]; if (!CharNodeMatrix(ci[sl].node, W)) continue;
@@ -2798,6 +2802,11 @@ static void DrawSkeletonView() {
             for (int b = 0; b < n; b++) {
                 ok[b] = false;
                 const char* bone = arr + (size_t)b * 0xc0; const void* cur = nullptr; float x[12];
+                if (grp != 0) {      // (17/11 b) solo un grupo: 1 cara, 2 cuerpo, 3 ropa / ayuda
+                    int g = r == 3 ? 1 : 2;
+                    if (r == 0) { const void* np0 = nullptr; char n0[8] = {}; if (SkCopy(&np0, bone + 0x08, 8) && np0 && SkCopy(n0, np0, 5)) g = !strncmp(n0, "skf_", 4) ? 1 : !strncmp(n0, "sk_", 3) ? 2 : 3; }
+                    if (g != grp) continue;
+                }
                 if (!SkCopy(&cur, bone + 0x18, 8) || !cur || !SkCopy(x, cur, sizeof x)) continue;
                 float t[3] = { x[8], x[9], x[10] }; if (!(fabsf(t[0]) < 3.0f && fabsf(t[1]) < 3.0f && fabsf(t[2]) < 3.0f)) continue;
                 if (att) {   // modelo = enganche.t + rot(enganche.q, enganche.s * t)
@@ -2823,10 +2832,26 @@ static void DrawSkeletonView() {
                     const bool lejos = dx * dx + dy * dy + dz * dz > 0.35f * 0.35f;
                     dl->AddLine(pt[par], pt[b], lejos ? ((kCol[r] & 0x00ffffffu) | 0x30000000u) : kCol[r], r == 3 ? 1.0f : 1.5f); }
                 dl->AddCircleFilled(pt[b], r == 3 ? 1.8f : 2.5f, kCol[r], 8);
+                // (17/11 b, Agustin 04:00: "agregar en la vista de hueso un texto pequeno con el nombre del hueso") nombre del hueso
+                // (hueso + 0x08 = puntero al nombre, como exprbones.cpp): chico al lado de cada punto con x426 = 2, y siempre el del
+                // hueso mas cercano al mouse, mas grande y con fondo
+                const void* np = nullptr; char nb[40] = {};
+                const float mdx = pt[b].x - mouse.x, mdy = pt[b].y - mouse.y, md2 = mdx * mdx + mdy * mdy; const bool near_ = md2 < bestD2;
+                if ((names || near_) && SkCopy(&np, bone + 0x08, 8) && np && SkCopy(nb, np, 39)) {
+                    int q = 0; while (q < 39 && nb[q] >= 0x21 && nb[q] < 0x7f) q++; nb[q] = 0;
+                    if (q >= 2) {
+                        if (names) dl->AddText(nullptr, 11.0f * kk, ImVec2(pt[b].x + 4.0f, pt[b].y - 6.0f * kk), (kCol[r] & 0x00ffffffu) | 0xc0000000u, nb);
+                        if (near_) { bestD2 = md2; bestPt = pt[b]; bestCol = kCol[r]; memcpy(bestNm, nb, sizeof bestNm); }
+                    }
+                }
             }
         }
         drawn++;
     }
+    if (bestNm[0]) { const float fs = 15.0f * kk; const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0.0f, bestNm); const ImVec2 tp(bestPt.x + 12.0f * kk, bestPt.y - ts.y - 8.0f * kk);
+        dl->AddCircle(bestPt, 6.0f * kk, IM_COL32(255, 255, 255, 240), 16, 1.6f * kk);
+        dl->AddRectFilled(ImVec2(tp.x - 6.0f * kk, tp.y - 3.0f * kk), ImVec2(tp.x + ts.x + 6.0f * kk, tp.y + ts.y + 3.0f * kk), IM_COL32(12, 14, 18, 230), 4.0f * kk);
+        dl->AddText(nullptr, fs, tp, bestCol | 0xff000000u, bestNm); }
     char buf[120]; snprintf(buf, sizeof buf, TRS("Esqueleto: %d personajes, %d huesos (blanco cuerpo, celeste manos, amarillo cara)"), drawn, bones);
     ImVec2 tp(vp->Pos.x + 16, vp->Pos.y + vp->Size.y - 34);
     ImVec2 ts = ImGui::CalcTextSize(buf);

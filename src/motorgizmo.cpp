@@ -868,7 +868,11 @@ static void ToolbarDraw() {
               text(lx, y + rowH * 0.5f, dim, "Piezas de colores y costuras", fsS); y += rowH - 4.0f * k;
               { const char* const nms[3] = { "No", "Piezas", "Solo textura" }; seg(1434, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 3, std::clamp(tz, 0, 2), nms); y += rowH + 6.0f * k; }
               text(lx, y + rowH * 0.5f, dim, "Esqueleto (huesos)", fsS); y += rowH - 4.0f * k;
-              { const char* const nms[2] = { "No", "S\xC3\xAD" }; seg(1440, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, g_cfg.live[426][0] > 0.5f ? 1 : 0, nms); y += rowH + 12.0f * k; } }
+              { const char* const nms[3] = { "No", "S\xC3\xAD", "Con nombres" }; seg(1440, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 3, g_cfg.live[426][0] > 1.5f ? 2 : g_cfg.live[426][0] > 0.5f ? 1 : 0, nms); y += rowH + 6.0f * k; }
+              // (17/11 b, Agustin 04:01: "permitirme mostrar solo los huesos de la cara, del cuerpo y del uniforme") y426: 0 todos, 1 cara
+              // (esqueleto de la cara y skf_*), 2 cuerpo (sk_* y manos), 3 ropa (el resto del esqueleto del cuerpo: huesos de ayuda dsk_* y otros)
+              if (g_cfg.live[426][0] > 0.5f) { const char* const nms[4] = { "Todos", "Cara", "Cuerpo", "Ropa" }; seg(1446, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 4, std::clamp((int)(g_cfg.live[426][1] + 0.5f), 0, 3), nms); y += rowH + 6.0f * k; }
+              y += 6.0f * k; }
           if (label("ESCENA GR\xC3\x81" "FICA DEL MOTOR")) { char b1[32];      // lo que el motor tiene cargado ahora (leido de sus listas)
               snprintf(b1, sizeof b1, "%d", s_info.scenes); value("Escenas", b1); snprintf(b1, sizeof b1, "%d", s_info.objects); value("Objetos", b1);
               snprintf(b1, sizeof b1, "%d", s_info.models); value("Modelos", b1); snprintf(b1, sizeof b1, "%d", s_info.lights); value("Luces", b1); }
@@ -1309,7 +1313,8 @@ static void ToolbarDraw() {
         else if (id == 1400) { MotorJugReset(); Note("Jugador al centro"); }
         else if (id == 1430 || id == 1431) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[519][0] = (float)(id - 1430); if (id == 1431 && g_cfg.live[519][1] < 0.5f) g_cfg.live[519][1] = 2.0f; }
         else if (id >= 1434 && id <= 1436) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[519][2] = (float)(id - 1434); }
-        else if (id == 1440 || id == 1441) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[426][0] = (float)(id - 1440); }
+        else if (id >= 1446 && id <= 1449) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[426][1] = (float)(id - 1446); }
+        else if (id >= 1440 && id <= 1442) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[426][0] = (float)(id - 1440); }
         else if (id == 1404 || id == 1405) MotorJugSetFix(id == 1404);
         else if (id == 1410 || id == 1411) { s_jKind = id - 1410; s_jTouched = true; }
         else if (id == 1414 || id == 1415) { const int nMax = s_jKind == 1 ? 162 : 45; int& n = s_jN[s_jKind]; n += id == 1414 ? -1 : 1; if (n < 1) n = nMax; if (n > nMax) n = 1; s_jTouched = true; }
