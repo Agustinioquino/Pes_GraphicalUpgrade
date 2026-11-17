@@ -365,7 +365,7 @@ static void* hk_Factory(void* key, void* name, void* flag) {
     if (mine) { s_motorWin.store(page); s_motorT.store(Now()); }
     if (swap) {
         *(void***)page = &s_vt[1];
-        s_uiWin = page; s_uiPanel.store(false); s_uiPlayer.store(g_cfg.motorStartPlayer != 0); s_uiBack.store(false); s_uiPlayerShown = false; s_uiPanelApplied = -1;
+        s_uiWin = page; s_uiPanel.store(false); s_uiPlayer.store(false);      /* (17/11 03:23, Agustin: "puedes sacar al jugador del editor") el Motor no carga el jugador del visor del Editar */ s_uiBack.store(false); s_uiPlayerShown = false; s_uiPanelApplied = -1;
     }
     return page;
 }
@@ -426,7 +426,7 @@ bool MotorUiOn() { return g_cfg.motorOwnMenu != 0 && g_cfg.motorPage != 0 && s_o
 bool MotorUiPanel() { return s_uiPanel.load(std::memory_order_relaxed); }
 bool MotorUiPlayer() { return s_uiPlayer.load(std::memory_order_relaxed); }
 void MotorUiTogglePanel() { s_uiPanel.store(!s_uiPanel.load()); }
-void MotorUiTogglePlayer() { s_uiPlayer.store(!s_uiPlayer.load()); }
+void MotorUiTogglePlayer() { s_uiPlayer.store(false); }      // (17/11 03:23) ya no se carga el jugador del Editar en el Motor: solo lo saca
 void MotorUiBack() { s_uiBack.store(true); }
 bool MotorUiTakeBack() { return s_uiBack.exchange(false); }
 

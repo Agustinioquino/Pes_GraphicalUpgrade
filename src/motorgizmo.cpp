@@ -780,14 +780,14 @@ static void ToolbarDraw() {
       const bool fS = s_foldStudio, fL = s_foldLights; const int nRows = fS ? 1 : 4;
       // (17/11 03:19) Jugadores: grupo plegable con el del Editar y los propios del Motor, cada uno con su ojo
       MotorPjInfo PJ; MotorPjInfoGet(&PJ); int pjIdx[8], nPjL = 0; for (int q = 0; q < 8; q++) if (PJ.st[q]) pjIdx[nPjL++] = q;
-      const int nSub = (fS || s_foldPj) ? 0 : 1 + nPjL;
-      char pjCnt[24]; snprintf(pjCnt, sizeof pjCnt, "%d", nPjL + (player ? 1 : 0));
+      const int nSub = (fS || s_foldPj) ? 0 : nPjL;      // (03:23) sin el jugador del Editar
+      char pjCnt[24]; snprintf(pjCnt, sizeof pjCnt, "%d", nPjL);
       const char* const nm[4] = { "Estudio", "C\xC3\xA1mara", "Grilla de piso", "Jugadores" }; const char* const st[4] = { "", camFree ? "libre" : "del juego", grid ? "" : "oculta", pjCnt };
       const float rowL = 23.0f * k * rf, yGrp = y0 + rowH * (1.0f + (float)(nRows + nSub)), yL0 = yGrp + rowH;       // luces: filas mas bajas, despues de las filas y el titulo del grupo
       const int maxL = fL ? 0 : std::max(0, (int)((y1 - yL0 - 22.0f * k) / rowL)), shownL = std::min(s_nLights, maxL);
       { const int wd = s_uiWheel.exchange(0); if (wd != 0) s_treeScroll -= (wd > 0 ? 1 : -1) * 3; s_treeScroll = std::clamp(s_treeScroll, 0, std::max(0, s_nLights - maxL)); }
       const int sc = s_treeScroll;      // primera luz a la vista
-      { int subSel = -1; if (s_sel == 3 && nSub > 0) { if (PJ.sel < 0) subSel = 0; else for (int j = 0; j < nPjL; j++) if (pjIdx[j] == PJ.sel) subSel = j + 1; }
+      { int subSel = -1; if (s_sel == 3 && nSub > 0) { for (int j = 0; j < nPjL; j++) if (pjIdx[j] == PJ.sel) subSel = j; }
         const float ty = subSel >= 0 ? y0 + rowH * (float)(1 + nRows + subSel) : s_sel < 4 ? y0 + rowH + (float)s_sel * rowH : yL0 + (float)(s_sel - 4 - sc) * rowL; const float sh = s_sel < 4 ? rowH : rowL;
         if ((s_sel < 4 && s_sel < nRows) || (s_sel >= 4 && s_sel - 4 >= sc && s_sel - 4 - sc < shownL)) { if (s_selY < 0.0f) s_selY = ty; s_selY += (ty - s_selY) * std::min(1.0f, ImGui::GetIO().DeltaTime * 18.0f); if (fabsf(ty - s_selY) < 0.5f) s_selY = ty;
         dl->AddRectFilled(ImVec2(0, s_selY), ImVec2(leftW, s_selY + sh), cRow); dl->AddRectFilled(ImVec2(0, s_selY), ImVec2(3.0f * k, s_selY + sh), acc); } }
@@ -811,18 +811,18 @@ static void ToolbarDraw() {
               dl->AddCircle(o, 6.0f * k, c, 16, 1.5f * k); if (!off) dl->AddCircleFilled(o, 2.6f * k, c, 10); else dl->AddLine(ImVec2(o.x - 7.0f * k, o.y + 6.0f * k), ImVec2(o.x + 7.0f * k, o.y - 6.0f * k), c, 1.5f * k);
           } }
       for (int j = 0; j < nSub; j++) {      // jugadores: el del Editar (ojo = cargarlo / sacarlo) y los propios (clic = elegirlo, ojo = mostrar / ocultar)
-          const int q = j == 0 ? -1 : pjIdx[j - 1]; const float y = y0 + rowH * (float)(1 + nRows + j), yc = y + rowH * 0.5f;
-          const ImVec2 p0(0, y), p1(leftW - 36.0f * k, y + rowH); const bool hv = hit(j == 0 ? 1460 : 1461 + q, p0, p1);
-          const bool isSel = s_sel == 3 && (j == 0 ? PJ.sel < 0 : PJ.sel == q);
+          const int q = pjIdx[j]; const float y = y0 + rowH * (float)(1 + nRows + j), yc = y + rowH * 0.5f;
+          const ImVec2 p0(0, y), p1(leftW - 36.0f * k, y + rowH); const bool hv = hit(1461 + q, p0, p1);
+          const bool isSel = s_sel == 3 && PJ.sel == q;
           if (!isSel && hv) dl->AddRectFilled(p0, ImVec2(leftW, y + rowH), IM_COL32(255, 255, 255, 14));
           const float ind = 56.0f * k; dl->AddRectFilled(ImVec2(ind - 12.0f * k, yc - 1.0f), ImVec2(ind - 4.0f * k, yc), IM_COL32(90, 90, 94, 255));
-          const bool off = j == 0 ? !player : PJ.hidden[q];
+          const bool off = PJ.hidden[q];
           glyph(3, ImVec2(ind + 3.0f * k, yc), 5.0f * k, off ? IM_COL32(100, 100, 104, 255) : IM_COL32(190, 190, 196, 255));
-          char nmj[64]; if (j == 0) snprintf(nmj, sizeof nmj, "%s", TRS("Del Editar")); else snprintf(nmj, sizeof nmj, "%d.  %.30s", q + 1, PJ.name[q]);
+          char nmj[64]; snprintf(nmj, sizeof nmj, "%d.  %.30s", q + 1, PJ.name[q]);
           const float w = text(ind + 15.0f * k, yc, off ? dim : ink, nmj, fsS);
-          const char* stj = j == 0 ? (player ? "visor" : "sin cargar") : PJ.st[q] == 1 || PJ.st[q] == 2 ? "cargando..." : PJ.st[q] == 4 ? "no carg\xC3\xB3" : PJ.st[q] == 5 ? "sacando..." : "";
+          const char* stj = PJ.st[q] == 1 || PJ.st[q] == 2 ? "cargando..." : PJ.st[q] == 4 ? "no carg\xC3\xB3" : PJ.st[q] == 5 ? "sacando..." : "";
           if (stj[0]) text(ind + 15.0f * k + w + 8.0f * k, yc, dim, stj, fsS - 0.5f * k);
-          const ImVec2 e0(leftW - 34.0f * k, y + 3.0f * k), e1(leftW - 8.0f * k, y + rowH - 3.0f * k); const bool he = hit(j == 0 ? 21 : 1490 + q, e0, e1);
+          const ImVec2 e0(leftW - 34.0f * k, y + 3.0f * k), e1(leftW - 8.0f * k, y + rowH - 3.0f * k); const bool he = hit(1490 + q, e0, e1);
           if (he) dl->AddRectFilled(e0, e1, IM_COL32(255, 255, 255, 30), 3.0f * k);
           const ImVec2 o((e0.x + e1.x) * 0.5f, yc); const ImU32 c = off ? IM_COL32(100, 100, 104, 255) : ink;
           dl->AddCircle(o, 6.0f * k, c, 16, 1.5f * k); if (!off) dl->AddCircleFilled(o, 2.6f * k, c, 10); else dl->AddLine(ImVec2(o.x - 7.0f * k, o.y + 6.0f * k), ImVec2(o.x + 7.0f * k, o.y - 6.0f * k), c, 1.5f * k);
@@ -942,7 +942,7 @@ static void ToolbarDraw() {
                   // la lista va en el panel Escena (grupo Jugadores); aca: el elegido (con su X para sacarlo) y agregar
                   { const int q = PI.sel; const ImVec2 p0(fx0, y + 2.0f * k), p1(fx1, y + rowH);
                     dl->AddRectFilled(p0, p1, q >= 0 ? IM_COL32(64, 52, 40, 255) : cField, 3.0f * k); if (q >= 0) dl->AddRect(p0, p1, acc, 3.0f * k, 0, 1.5f * k);
-                    char nmq[64]; if (q >= 0) snprintf(nmq, sizeof nmq, "%d.  %.30s", q + 1, PI.name[q]); else snprintf(nmq, sizeof nmq, "%s", TRS("Jugador del Editar (no se mueve)"));
+                    char nmq[64]; if (q >= 0) snprintf(nmq, sizeof nmq, "%d.  %.30s", q + 1, PI.name[q]); else snprintf(nmq, sizeof nmq, "%s", TRS("Ning\xC3\xBAn jugador elegido"));
                     text(p0.x + 9.0f * k, (p0.y + p1.y) * 0.5f, ink, nmq, fsS + 1.0f * k);
                     if (q >= 0) { const float dx0 = fx1 - rowH + 6.0f * k; const ImVec2 d0(dx0, p0.y + 3.0f * k), d1(p1.x - 3.0f * k, p1.y - 3.0f * k); const bool hd = hit(1470 + q, d0, d1);
                         if (hd) dl->AddRectFilled(d0, d1, IM_COL32(120, 52, 46, 255), 3.0f * k);
@@ -962,20 +962,16 @@ static void ToolbarDraw() {
               }
           }
           MotorJugState J; MotorJugGet(&J); const bool ownPj = MotorPjSel() >= 0;
-          if (!J.hooked) text(lx, y + 10.0f * k, dim, "Mover al jugador no est\xC3\xA1 disponible en este juego.", fsS + 1.0f * k);
-          else if (!player && !ownPj) text(lx, y + 10.0f * k, dim, "El jugador est\xC3\xA1 oculto.", fsS + 1.0f * k);
+          // (17/11 03:23, Agustin: "puedes sacar al jugador del editor, y permitirme opciones correctas") solo los jugadores propios
+          if (!ownPj) { text(lx, y + 9.0f * k, dim, "Agreg\xC3\xA1 un jugador o eleg\xC3\xAD uno en el panel Escena", fsS); y += 20.0f * k; text(lx, y + 9.0f * k, dim, "(grupo Jugadores) para moverlo, girarlo o cambiarle el tama\xC3\xB1o.", fsS); y += 26.0f * k; }
           else {
               float v[5] = { J.pos[0], J.pos[1], J.pos[2], J.yawDeg, J.scale * 100.0f }; bool ch = false;
               auto fld = [&](int id, const char* nmv, float& val, float step, float lo, float hi, const char* fmt, const char* unit) { text(lx, y + rowH * 0.5f, dim, nmv, fsS + 1.0f * k);
                   const bool c2 = numField(id, ImVec2(x0 + rightW * 0.42f, y + 3.0f * k), ImVec2(fx1, y + rowH - 3.0f * k), val, step, lo, hi, fmt, unit); y += rowH; return c2; };
-              // (17/11, Agustin 05:15: mover "tampoco funcionaba en el jugador normal") el jugador del visor es del Editar: no se mueve (solo poses y
-              // festejos); mover, girar y tamano son para los jugadores propios del Motor
-              if (!ownPj) { text(lx, y + 9.0f * k, dim, "Este es el jugador del Editar: no se mueve.", fsS); y += 20.0f * k; text(lx, y + 9.0f * k, dim, "Para mover, girar o cambiar el tama\xC3\xB1o, agreg\xC3\xA1 uno arriba.", fsS); y += 26.0f * k; }
               if (ownPj && label("POSICI\xC3\x93N")) { ch |= fld(2100, "X (costado)", v[0], 0.01f, -100.0f, 100.0f, "%.2f", " m"); ch |= fld(2101, "Y (altura)", v[1], 0.01f, -20.0f, 50.0f, "%.2f", " m"); ch |= fld(2102, "Z (fondo)", v[2], 0.01f, -100.0f, 100.0f, "%.2f", " m"); y += 6.0f * k; }
               if (ownPj && label("GIRO")) { ch |= fld(2103, "Sobre el piso", v[3], 0.5f, -720.0f, 720.0f, "%.1f", "\xC2\xB0"); y += 6.0f * k; }
               if (ownPj && label("TAMA\xC3\x91O")) { ch |= fld(2104, "Escala", v[4], 0.5f, 10.0f, 500.0f, "%.0f", " %"); y += 6.0f * k; }
               if (ch) MotorJugSet(v, v[3], v[4] / 100.0f);
-              if (!ownPj && label("CUANDO SE ANIMA")) { const char* const nms[2] = { "Fijo en su lugar", "Lo lleva el clip" }; seg(1404, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, J.fix ? 0 : 1, nms); y += rowH + 8.0f * k; }
               if (ownPj) {
                   button(1400, "Volver al centro");
                   text(lx, y + 9.0f * k, dim, "Flechas: mover.  Q / E: girar.  R / F: altura.", fsS); y += 20.0f * k;
@@ -983,24 +979,6 @@ static void ToolbarDraw() {
                   text(lx, y + 9.0f * k, dim, "Tambi\xC3\xA9n con los iconos del piso.", fsS); y += 26.0f * k;
               }
               if (ownPj) { if (label("ANIMACI\xC3\x93N")) { text(lx, y + 9.0f * k, dim, "Parado (clip del pasillo de la entrada).", fsS); y += 20.0f * k; text(lx, y + 9.0f * k, dim, "Las animaciones van en la ventana de cinem\xC3\xA1ticas.", fsS); y += 26.0f * k; } }
-              else if (label("ANIMACI\xC3\x93N")) {
-                  if (J.animSt < 0) { text(lx, y + rowH * 0.5f, dim, "No disponible en este juego.", fsS + 1.0f * k); y += rowH; }
-                  else {
-                      { const char* const nms[2] = { "Poses", "Festejos" }; seg(1410, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, s_jKind, nms); y += rowH + 6.0f * k; }
-                      const int nMax = s_jKind == 1 ? 162 : 45; float fn = (float)std::clamp(s_jN[s_jKind], 1, nMax);
-                      if (fld(2105, s_jKind == 1 ? "Festejo" : "Pose", fn, 0.08f, 1.0f, (float)nMax, "%.0f", s_jKind == 1 ? " de 162" : " de 45")) { s_jN[s_jKind] = std::clamp((int)(fn + 0.5f), 1, nMax); s_jTouched = true; }
-                      { const char* const nms[2] = { "Anterior", "Siguiente" }; seg(1414, ImVec2(fx0, y + 4.0f * k), ImVec2(fx1, y + rowH + 4.0f * k), 2, -1, nms); y += rowH + 10.0f * k; }
-                      { const char* const nms[2] = { "En movimiento", "Quieto" }; seg(1418, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, J.pause ? 1 : 0, nms); y += rowH + 6.0f * k; }
-                      // (17/11 b, Agustin 03:49: "la opcion de espejo de las poses si que no funciona") leido en el C: en el visor el espejo
-                      // (upd+0xd2) solo da vuelta el desplazamiento del clip (FUN_1423f3430), no la pose. Se saca hasta los jugadores propios
-                      // del Motor, donde el clip si recibe el espejo (argumento de FixDemoHuman vf1).
-                      // se pide al soltar (arrastrando el numero no se carga un clip por cada paso)
-                      const int want = (s_jKind << 12) | (s_jN[s_jKind] << 1) | (s_jMirror ? 1 : 0);
-                      if (s_jTouched && want != s_jSent && s_dragId != 2105 && s_editId != 2105) { s_jSent = want; MotorJugAnim(s_jKind, s_jKind == 1 ? 0x2b + s_jN[1] : s_jN[0] - 1, s_jMirror); }
-                      const char* const stt[4] = { "Eleg\xC3\xAD una pose o un festejo.", "Pidiendo la animaci\xC3\xB3n al juego...", "Animaci\xC3\xB3n puesta.", "El juego no acept\xC3\xB3 esa animaci\xC3\xB3n." };
-                      text(lx, y + 9.0f * k, J.animSt == 3 ? IM_COL32(255, 150, 120, 255) : dim, stt[std::clamp(J.animSt, 0, 3)], fsS);
-                  }
-              }
           }
       } else if (s_sel >= 4) {
           if (s_sel - 4 < s_nLights) { MotorLight& L = s_lights[s_sel - 4]; char b1[96];
@@ -1383,7 +1361,7 @@ static void ToolbarDraw() {
         else if (id == 1414 || id == 1415) { const int nMax = s_jKind == 1 ? 162 : 45; int& n = s_jN[s_jKind]; n += id == 1414 ? -1 : 1; if (n < 1) n = nMax; if (n > nMax) n = 1; s_jTouched = true; }
         else if (id == 1418 || id == 1419) MotorJugPause(id == 1419);
         else if (id == 1422 || id == 1423) { s_jMirror = id == 1423; s_jTouched = true; }
-        else if (id == 2 || id == 21 || id == 220) MotorUiTogglePlayer();
+        else if (id == 2 || id == 21 || id == 220) { s_sel = 3; s_selObj = 0; }      // (03:23) el jugador del Editar no va en el Motor: abre Jugadores
         else if (id == 3) SetCam(!camFree);
         else if (id >= 10 && id < 14) { s_sel = id - 10; s_selObj = 0; }
         else if (id >= 300 && id < 364 && id - 300 < s_nLights) { s_sel = 4 + (id - 300); s_selObj = s_lights[id - 300].obj; }
