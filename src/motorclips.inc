@@ -19,6 +19,7 @@ static const char* const kClipGroupKey[] = {
     "idle",
     "match",
     "uniselect",
+    "propias",
 };
 struct ClipRow { const char* file; unsigned char group; };
 static const ClipRow kClipRows[] = {
@@ -3071,6 +3072,8 @@ static const ClipRow kClipRows[] = {
     { "idle.gani", 16 },
     { "match_home10.gani", 17 },
     { "uniselect_home_02.gani", 18 },
+    { "zfx_saludo_abrazo_a.gani", 19 },
+    { "zfx_saludo_abrazo_b.gani", 19 },
 };
 static const char* const kFaceBase[] = {
     "angr_brwnit_bite_soft",

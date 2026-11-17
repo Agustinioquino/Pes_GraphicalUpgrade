@@ -185,7 +185,7 @@ static const char* GroupLabel(int g) {
     static const struct { const char* key; const char* es; } kG[] = { { "assistant", "Juez de l\xC3\xADnea" }, { "change", "Cambios" }, { "coach", "T\xC3\xA9" "cnico" },
         { "end", "Final del partido" }, { "ent", "Entrada a la cancha" }, { "foul", "Faltas y tarjetas" }, { "goal", "Goles y festejos" }, { "hugSet", "Abrazos" },
         { "injury", "Lesiones" }, { "md", "Durante el partido (md)" }, { "menu", "Men\xC3\xBAs" }, { "mobH", "Gente alrededor (mobH)" }, { "offsideGoal", "Gol en offside" },
-        { "pk", "Penales" }, { "prop", "Utiler\xC3\xAD" "a" }, { "tu", "Otros (tu)" }, { "idle", "Parado" }, { "match", "Partido" }, { "uniselect", "Elegir uniforme" } };
+        { "pk", "Penales" }, { "prop", "Utiler\xC3\xAD" "a" }, { "tu", "Otros (tu)" }, { "idle", "Parado" }, { "match", "Partido" }, { "uniselect", "Elegir uniforme" }, { "propias", "Propias (hechas a pedido)" } };
     const char* k = MotorClipGroupKey(g); for (const auto& e : kG) if (!strcmp(e.key, k)) return e.es; return k; }
 static void ClipLabel(int c, char* out, size_t n) { snprintf(out, n, "%s", MotorClipFile(c)); }   // (07:27) el nombre del archivo entero
 // (17/11 18:01, Agustin: "mas descripcion") descripcion en castellano armada con las partes del nombre del archivo (motorclipdesc.inc):
@@ -193,6 +193,10 @@ static void ClipLabel(int c, char* out, size_t n) { snprintf(out, n, "%s", Motor
 #include "motorclipdesc.inc"
 static void ClipDesc(int c, char* out, size_t n) {
     const char* f = MotorClipFile(c); char b[192]; snprintf(b, sizeof b, "%s", f);
+    // (17/11 19:30) clips propios (tools/gani_cuerpo.py): nombre armado a mano
+    static const struct { const char* f; const char* es; } kOwn[] = { { "zfx_saludo_abrazo_a.gani", "Saludo, choque de manos y abrazo (jugador A)" },
+        { "zfx_saludo_abrazo_b.gani", "Saludo, choque de manos y abrazo (jugador B)" } };
+    for (const auto& e : kOwn) if (!strcmp(f, e.f)) { snprintf(out, n, "%s", e.es); return; }
     { char* q = strstr(b, ".gani"); if (q) *q = 0; q = strstr(b, "__"); if (q) *q = 0; }
     char* s0 = b; if (!strncmp(s0, "dml_", 4)) s0 += 4;
     std::string o; char* ctx = nullptr;

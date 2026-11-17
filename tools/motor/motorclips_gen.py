@@ -11,6 +11,9 @@ for x in c:
     g = x['grupo'].replace('.gani', '')
     if g not in groups: groups.append(g)
 c.sort(key=lambda x: (groups.index(x['grupo'].replace('.gani', '')), x['nombre']))
+# (17/11 19:30) clips PROPIOS (tools/gani_cuerpo.py), cargados sueltos por Sider en la misma carpeta de FixDemo; van al final
+PROPIOS = ['zfx_saludo_abrazo_a.gani', 'zfx_saludo_abrazo_b.gani']
+groups.append('propias'); c += [{'nombre': x, 'grupo': 'propias'} for x in PROPIOS]
 f = [l.split('\t') for l in open(faces, encoding='utf-8').read().splitlines() if l.strip()]
 assert [int(i) for i, _ in f] == list(range(len(f)))
 with open(out, 'w', encoding='utf-8', newline='\n') as o:
