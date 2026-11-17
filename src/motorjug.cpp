@@ -89,6 +89,16 @@ static bool ScaleWrite(uintptr_t ctl, int i, float s) {      // lo mismo que FUN
         return true;
     } __except (1) { return false; }
 }
+// (17/11 e, Agustin 04:32: "el giro no anda") en la primera DLL (9C6E2EEA) el giro SI se veia escribiendo las tres filas de la raiz
+// del controlador (R = [ctl+0x188] +0xa0 / +0xb0 / +0xc0, como FUN_141afccc0); se vuelve a eso, solo el giro (sin tocar la posicion)
+static bool RootYaw(uintptr_t ctl, float yawRad) {
+    __try {
+        const uintptr_t R = *(uintptr_t*)(ctl + 0x188); if (!PtrOk(R)) return false;
+        float* m = (float*)(R + 0xa0); const float c = cosf(yawRad), s = sinf(yawRad);
+        m[0] = c; m[1] = 0.0f; m[2] = -s; m[4] = 0.0f; m[5] = 1.0f; m[6] = 0.0f; m[8] = s; m[9] = 0.0f; m[10] = c;
+        return true;
+    } __except (1) { return false; }
+}
 static bool UpdCtl(uintptr_t upd, uintptr_t* ctl, uintptr_t* obj) {
     __try { const int kind = *(int*)(upd + 0xc8); *ctl = *(uintptr_t*)(upd + (kind == 1 ? 0x20 : 0x18)); *obj = *(uintptr_t*)(upd + 0xb0); return PtrOk(*obj); } __except (1) { return false; }
 }
@@ -101,7 +111,7 @@ static void UpdPause(uintptr_t upd, bool on) {
 }
 static void __fastcall hk_Yaw(uintptr_t obj, uint32_t bits) {
     s_dYawAll.fetch_add(1, std::memory_order_relaxed);
-    if (t_obj && obj == t_obj) { s_dYawOur.fetch_add(1, std::memory_order_relaxed); float a; memcpy(&a, &bits, 4); s_dYawIn = a; const float add = s_uYaw.load(std::memory_order_relaxed) * 0.017453292f; if (a == a && add != 0.0f) { a += add; memcpy(&bits, &a, 4); } s_dYawOut = a; }
+    if (t_obj && obj == t_obj) { s_dYawOur.fetch_add(1, std::memory_order_relaxed); float a; memcpy(&a, &bits, 4); s_dYawIn = a; const float add = s_uYaw.load(std::memory_order_relaxed) * 0.017453292f; (void)add; s_dYawOut = a; }      // (17/11 e) el giro por esta orden NO se ve (prueba 04:32): va por la raiz del controlador como en la primera DLL
     o_yaw(obj, bits);
 }
 static void __fastcall hk_Pos(uintptr_t obj, const float* v) {
@@ -109,7 +119,7 @@ static void __fastcall hk_Pos(uintptr_t obj, const float* v) {
     if (t_obj && obj == t_obj && v) {
         s_dPosOur.fetch_add(1, std::memory_order_relaxed); memcpy(s_dV, v, 12);
         // el desplazamiento del clip gira con el jugador (sentido del giro del modelo INFERIDO: +angulo lleva +z hacia +x) y despues se suma el lugar pedido
-        const float a = s_uYaw.load(std::memory_order_relaxed) * 0.017453292f, c = cosf(a), s = sinf(a);
+        const float c = 1.0f, s = 0.0f;      // (17/11 e) sin girar el desplazamiento: el giro lo pone la raiz
         const float k = s_uFix.load(std::memory_order_relaxed) ? 0.0f : 1.0f;      // "fijo en su lugar": sin el desplazamiento del clip
         float w[4] = { k * (v[0] * c + v[2] * s) + s_uPos[0].load(), k * v[1] + s_uPos[1].load(), k * (-v[0] * s + v[2] * c) + s_uPos[2].load(), 0.0f };
         for (int i = 0; i < 3; i++) s_wPos[i].store(w[i], std::memory_order_relaxed);
@@ -156,6 +166,8 @@ static void __fastcall hk_Bone(uintptr_t upd, uintptr_t buf) {
         }
         const bool pz = s_uPause.load(std::memory_order_relaxed);
         if (pz || s_paused) { UpdPause(upd, pz); s_paused = pz; }
+        { const float yaw = s_uYaw.load(std::memory_order_relaxed); static bool s_yw = false;
+          if (PtrOk(ctl) && (yaw != 0.0f || s_yw)) { RootYaw(ctl, yaw * 0.017453292f); s_yw = yaw != 0.0f; } }
         t_obj = obj; t_posSent = false;
         o_bone(upd, buf);
         t_obj = 0; DiagTick();
