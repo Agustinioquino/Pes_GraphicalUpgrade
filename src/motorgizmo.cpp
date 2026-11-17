@@ -163,8 +163,8 @@ static int s_pjRowClip[8] = {}, s_pjRowFace[6] = {}, s_pjFaceScroll = 0;
 // clic en el campo y escribir (las letras llegan por WM_CHAR, overlay.cpp MotorUiChar); Esc o la X lo borra. Con texto, la lista muestra
 // los clips de TODOS los grupos cuyo archivo contiene lo escrito (sin distinguir mayusculas).
 static std::mutex s_srMx; static char s_sr[48] = ""; static std::atomic<int> s_srOn{0};   // 0 nada, 1 clips, 2 gestos
-static int s_srTop = 0, s_srFTop = 0;
-struct PjClip { bool ok; float pos[3], yaw, scale, speed, faceW; int clip, face; bool paused, blink; }; static PjClip s_pjCb{};   // (07:23) copiar / pegar entre jugadores static std::atomic<bool> s_srEsc{false};
+static int s_srTop = 0, s_srFTop = 0; static std::atomic<bool> s_srEsc{false};
+struct PjClip { bool ok; float pos[3], yaw, scale, speed, faceW; int clip, face; bool paused, blink; }; static PjClip s_pjCb{};   // (07:23) copiar / pegar entre jugadores
 static bool SrMatch(const char* f, const char* q) { if (!q[0]) return true; for (; *f; f++) { const char* a = f; const char* b = q; while (*a && *b && tolower((unsigned char)*a) == tolower((unsigned char)*b)) { a++; b++; } if (!*b) return true; } return false; }
 bool MotorUiChar(unsigned c) {
     if (!s_srOn.load()) return false;
