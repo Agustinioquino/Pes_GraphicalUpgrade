@@ -366,6 +366,7 @@ void RowScale(Pj& p, float want) {
         if (fabsf(l - want) > 1e-4f) { const float f = want / l; v[0] *= f; v[1] *= f; v[2] *= f; ch = true; } }
     if (ch && fabsf(want - p.scW) > 1e-4f) { p.scW = want; static int nl = 0; if (nl++ < 8) Log("motor (jugadores propios): tamano %.2f en la matriz de la raiz", want); }
 }
+static void StoreTimes(Pj& p, float len, float cur) { std::lock_guard<std::mutex> lk(s_mx); p.lenT = len; p.curT = cur; }   // fuera del __try (C2712)
 int Update(Pj& p, const Pj& w, double now) {
     __try {
         const float* pos = w.pos; const float yaw = w.yaw, scale = w.scale;
@@ -385,7 +386,7 @@ int Update(Pj& p, const Pj& w, double now) {
             const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1), cur = ((ClipTimeFn)kClipTime)(ctl, 0, 1);
             if (len > 0.2f && cur >= len - 0.003f) { if (++p.endTicks >= 6) { ((ClipSeekFn)kClipSeek)(ctl, 0, 0, 0.0f, 1, 1); p.endTicks = 0; } } else p.endTicks = 0;
         }
-        if (ctl) { const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1), cur = ((ClipTimeFn)kClipTime)(ctl, 0, 1); std::lock_guard<std::mutex> lk(s_mx); p.lenT = len; p.curT = cur; }
+        if (ctl) StoreTimes(p, ((ClipTimeFn)kClipLen)(ctl, 0, 1), ((ClipTimeFn)kClipTime)(ctl, 0, 1));
         RowScale(p, scale);
         ((FdPushFn)kFdPush)(p.fd);
         void* h = nullptr; memcpy(&h, p.fd + 0x48, 8);

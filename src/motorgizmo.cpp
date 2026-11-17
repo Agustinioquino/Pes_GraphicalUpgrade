@@ -1436,7 +1436,7 @@ static void ToolbarDraw() {
         text(p0.x + 14.0f * k, p0.y + rowH * 0.5f, ink, "PRUEBA AUTOM\xC3\x81TICA DE SHADERS", fsS + 1.0f * k);
         float y = p0.y + rowH + 8.0f * k; const float lx = p0.x + 16.0f * k, fx0 = p0.x + pw * 0.34f, fx1 = p1.x - 16.0f * k;
         static const char* const kIntro[4] = { "Apaga un momento cada efecto prendido del mod, mide cu\xC3\xA1nto cuesta (procesador y placa), mira si cambia la imagen",
-            "y saca una foto. Despu\xC3\xA9s prende una por una las vistas de depuraci\xC3\xB3n y las fotograf\xC3\xADa. Al final deja todo como estaba (no guarda",
+            "y saca una foto. Despu\xC3\xA9s prende una por una las vistas de depuraci\xC3\xB3n y las fotograf\xC3\xAD" "a. Al final deja todo como estaba (no guarda",
             "nada en el ini) y escribe PES21FX\\diagnostico\\<fecha>\\ con resumen.txt, informe.json y las fotos. Con la c\xC3\xA1mara quieta; tarda",
             "de 2 a 4 minutos (10 a 15 con el rendimiento completo). Conviene esconder los paneles (T y N) para que la foto muestre m\xC3\xA1s escena." };
         for (int i = 0; i < 4; i++) text(lx, y + lh * (0.5f + (float)i), dim, kIntro[i], fsS); y += 4.0f * lh + 4.0f * k;
