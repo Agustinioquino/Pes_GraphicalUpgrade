@@ -695,8 +695,8 @@ struct MotorJugState { bool hooked, seen; float pos[3], yawDeg, scale; int kind,
 void MotorJugPresent(); void MotorJugGet(MotorJugState* s); void MotorJugSet(const float* p, float yawDeg, float scale); void MotorJugSetFix(bool on); void MotorJugAnim(int kind, int id, bool mirror); void MotorJugPause(bool on); void MotorJugReset();   // (16/11) motorvista.cpp: el jugador del Motor en la escena principal
 // (17/11 3icxbh etapa 2) motorpj.cpp: jugadores propios del Motor (FixDemoHuman del juego). kind: 0 por id, 1 jugador base, 2 igual al del Editar;
 // st: 0 libre, 1 pedido, 2 cargando, 3 listo, 4 fallo, 5 sacando
-struct MotorPjInfo { int sel; bool ticking, dead; int st[8], kind[8]; uint64_t id[8]; char name[8][48]; char msg[200]; };
-void MotorPjTick(bool on, uintptr_t impl); int MotorPjAdd(int kind, uint32_t id); void MotorPjRemove(int i); void MotorPjSelect(int i); int MotorPjSel();
+struct MotorPjInfo { int sel; bool ticking, dead, hidden[8]; int st[8], kind[8]; uint64_t id[8]; char name[8][48]; char msg[200]; };
+void MotorPjTick(bool on, uintptr_t impl); int MotorPjAdd(int kind, uint32_t id); void MotorPjRemove(int i); void MotorPjSelect(int i); void MotorPjShow(int i, bool on); int MotorPjSel();
 bool MotorPjGet(int i, float* pos, float* yaw, float* scale); void MotorPjSet(int i, const float* pos, float yaw, float scale); void MotorPjInfoGet(MotorPjInfo* o);
 int MotorSceneLights(MotorLight* out, int max, MotorSceneInfo* info); bool MotorLightSetOn(const MotorLight& L, bool on); int MotorLightsRestore();
 bool MotorLightSetColor(const MotorLight& L, const float* rgba); bool MotorLightSetShadow(const MotorLight& L, bool on); bool MotorLightSetRange(const MotorLight& L, float r); bool MotorLightSetPos(const MotorLight& L, const float* xyz); bool MotorLightCan(const MotorLight& L, int what);

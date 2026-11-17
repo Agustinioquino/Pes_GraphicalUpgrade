@@ -45,7 +45,6 @@ const uintptr_t kFdPush = 0x141f86d40ull, kFdVf4 = 0x141f87340ull, kFdVf0 = 0x14
 const uintptr_t kHumanShow = 0x141ec8320ull, kFaceResPtr = 0x143802ff8ull, kHandResPtr = 0x143803000ull;
 const uintptr_t kResMgr = 0x141b08cf0ull, kResFind = 0x141b079e0ull, kGaniQueue = 0x141eb16e0ull, kGaniPump = 0x141eb0f50ull, kStrAssign = 0x1404023c0ull;
 const uintptr_t kAnimResMgr = 0x141ed1770ull, kAnimResFind = 0x141ed1700ull, kClipIdx = 0x141afa060ull;
-const uintptr_t kBoneScale = 0x141afa3c0ull, kRootScale = 0x141afa690ull, kBoneIdxTab = 0x1438032e0ull;
 const uintptr_t kDbPtr = 0x143714240ull;
 // (17/11 prueba de Agustin 05:13: aparecen pero no se mueven) leido en el C: vf1 / vf2 copian fd+8..+0x14 a la raiz del controlador
 // UNA vez (FUN_141afd060(ctl, x, y, z, 0) + FUN_141afccc0(ctl, giro * pi / 180, 0)) y la base para cuando el clip da la vuelta a
@@ -74,8 +73,6 @@ typedef void(__fastcall* GaniPumpFn)(uint64_t, uint64_t, uint64_t, uint64_t);
 typedef void*(__fastcall* StrAssignFn)(void*, const char*, size_t);
 typedef void*(__fastcall* AnimResFindFn)(void*, void*);
 typedef uint32_t(__fastcall* ClipIdxFn)(void*, const char*);
-typedef void(__fastcall* BoneScaleFn)(void*, int, float);
-typedef void(__fastcall* RootScaleFn)(void*, float);
 typedef void(__fastcall* RootPosFn)(void*, float, float, float, char);
 typedef void(__fastcall* RootYawFn)(void*, float, char);
 struct GStr { union { char buf[16]; char* ptr; }; size_t size, cap; };
@@ -88,7 +85,7 @@ struct Pj {
     float pos[3] = {}, yaw = 0.0f, scale = 1.0f;
     // solo el hilo del juego
     uint8_t* fd = nullptr; double t0 = 0, tLoad = 0; bool faceTried = false;
-    void* scCtl = nullptr; float scBase = 1.0f, scW = 0.0f; int rootIdx = -1;
+    float scW = 1.0f; bool hidden = false;
     float lastPos[3] = {}, lastYaw = 0.0f; void* posCtl = nullptr; int nMoved = 0;
     uint8_t lid[0xa0] = {};
 };
@@ -213,7 +210,7 @@ void RootMove(Pj& p, const float* pos, float yaw) {
     void* ctl = nullptr; memcpy(&ctl, p.fd + 0x50, 8); if (!ctl) return;
     if (ctl == p.posCtl && !memcmp(pos, p.lastPos, 12) && yaw == p.lastYaw) return;
     Place(p, pos, yaw);
-    ((RootPosFn)kRootPos)(ctl, pos[0], pos[1], pos[2], 0);
+    ((RootPosFn)kRootPos)(ctl, pos[0], pos[1], pos[2], 1);   // (prueba 03:19: sin remera, short ni medias al mover) 1 = tambien la ropa (objeto [ctl+0x138]+0x30: +0x100 lugar, +0x120 = 1 salto)
     ((RootYawFn)kRootYaw)(ctl, yaw * 0.017453292f, 0);
     const bool first = ctl != p.posCtl;
     p.posCtl = ctl; memcpy(p.lastPos, pos, 12); p.lastYaw = yaw;
@@ -232,30 +229,32 @@ bool Start(Pj& p, void* res, const float* pos, float yaw) {
         void* h = nullptr; memcpy(&h, p.fd + 0x48, 8); if (h) ((HumanShowFn)kHumanShow)(h, 1);
         void* ctl = nullptr; memcpy(&ctl, p.fd + 0x50, 8);
         p.posCtl = ctl; memcpy(p.lastPos, pos, 12); p.lastYaw = yaw;   // vf1 ya puso este lugar en la raiz
-        p.t0 = Now(); p.scCtl = nullptr; p.scW = 0.0f;
+        p.t0 = Now(); p.scW = 1.0f;
         return ctl != nullptr;
     } __except (1) { s_dead.store(true); return false; }
 }
-void ScaleApply(Pj& p, float want) {
+// (17/11 prueba 03:19: "no el escalar") la escala del hueso raiz se escribia (registro: 1.00 -> 1.38) y no se veia: la raiz del esqueleto no
+// pasa su escala a los demas huesos. Ahora se escala la matriz de la raiz del controlador: las tres filas del giro en [ctl+0x188] + 0xa0 /
+// + 0xb0 / + 0xc0 (las que escribe FUN_141afccc0, con la posicion en + 0xd0) se dejan con largo = escala pedida. Asi se agranda todo el
+// esqueleto alrededor de los pies (la raiz esta en el piso). Cada cuadro despues de vf4, por si el clip vuelve a escribir el giro.
+void RowScale(Pj& p, float want) {
     void* ctl = nullptr; memcpy(&ctl, p.fd + 0x50, 8); if (!ctl) return;
-    if (p.rootIdx < 0) { p.rootIdx = *(const int*)(kBoneIdxTab + 0x13 * 4); }
-    const uintptr_t arr = *(const uintptr_t*)((uintptr_t)ctl + 0x298); if (!PtrOk(arr) || p.rootIdx < 0 || p.rootIdx > 400) return;
-    const float cur = *(const float*)(arr + (size_t)p.rootIdx * 4); if (!(cur > 0.01f && cur < 100.0f)) return;
-    if (ctl != p.scCtl || fabsf(cur - p.scW) > 1e-5f) { p.scCtl = ctl; p.scBase = cur; p.scW = cur; }      // controlador nuevo o el juego volvio a poner la estatura
-    const float s = p.scBase * want;
-    if (fabsf(s - p.scW) > 1e-5f) { ((BoneScaleFn)kBoneScale)(ctl, p.rootIdx, s); ((RootScaleFn)kRootScale)(ctl, s); p.scW = s;
-        static int nl = 0; if (nl++ < 6) Log("motor (jugadores propios): tamano %.2f (estatura del juego %.4f, raiz %d) escrito", want, p.scBase, p.rootIdx); }
+    const uintptr_t R = *(const uintptr_t*)((uintptr_t)ctl + 0x188); if (!PtrOk(R)) return;
+    float* m = (float*)(R + 0xa0); bool ch = false;
+    for (int r = 0; r < 3; r++) { float* v = m + r * 4; const float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (l < 1e-4f || l > 100.0f) return;
+        if (fabsf(l - want) > 1e-4f) { const float f = want / l; v[0] *= f; v[1] *= f; v[2] *= f; ch = true; } }
+    if (ch && fabsf(want - p.scW) > 1e-4f) { p.scW = want; static int nl = 0; if (nl++ < 8) Log("motor (jugadores propios): tamano %.2f en la matriz de la raiz", want); }
 }
 int Update(Pj& p, const float* pos, float yaw, float scale) {
     __try {
         RootMove(p, pos, yaw);
         ((FdVf4Fn)kFdVf4)(p.fd, (float)(Now() - p.t0));
-        ScaleApply(p, scale);
+        RowScale(p, scale);
         ((FdPushFn)kFdPush)(p.fd);
         void* h = nullptr; memcpy(&h, p.fd + 0x48, 8);
         void* face = FaceEnsure(p);
         if (h && face) ((FaceNeutralFn)kFaceNeutral)(h, face, 0);
-        if (h && *((const uint8_t*)h + 0x5a) == 0) ((HumanShowFn)kHumanShow)(h, 1);
+        if (h) { const uint8_t vis = *((const uint8_t*)h + 0x5a); if (p.hidden ? vis != 0 : vis == 0) ((HumanShowFn)kHumanShow)(h, p.hidden ? 0 : 1); }   // (ojo del panel Escena)
         return 1;
     } __except (1) { s_dead.store(true); return -1; }
 }
@@ -342,7 +341,7 @@ int MotorPjAdd(int kind, uint32_t id) {
     std::lock_guard<std::mutex> lk(s_mx);
     int slot = -1, used = 0; for (int i = 0; i < kMax; i++) { if (s_pj[i].state == 0 || s_pj[i].state == 4) { if (slot < 0) slot = i; } else used++; }
     if (slot < 0) { snprintf(s_msg, sizeof s_msg, "Ya hay %d jugadores (el maximo)", kMax); return -1; }
-    Pj& p = s_pj[slot]; p.state = 1; p.kind = kind; p.id = key; memcpy(p.name, nm, sizeof p.name);
+    Pj& p = s_pj[slot]; p.state = 1; p.hidden = false; p.kind = kind; p.id = key; memcpy(p.name, nm, sizeof p.name);
     p.pos[0] = 1.2f * (float)(used + 1); p.pos[1] = 0.0f; p.pos[2] = 0.0f; p.yaw = 0.0f; p.scale = 1.0f;
     snprintf(s_msg, sizeof s_msg, "Cargando %s...", nm);
     s_sel.store(slot);
@@ -350,6 +349,7 @@ int MotorPjAdd(int kind, uint32_t id) {
     return slot;
 }
 void MotorPjRemove(int i) { if (i < 0 || i >= kMax) return; std::lock_guard<std::mutex> lk(s_mx); if (s_pj[i].state == 1 || s_pj[i].state == 4) s_pj[i].state = 0; else if (s_pj[i].state) s_pj[i].state = 5; if (s_sel.load() == i) s_sel.store(-1); }
+void MotorPjShow(int i, bool on) { if (i < 0 || i >= kMax) return; std::lock_guard<std::mutex> lk(s_mx); s_pj[i].hidden = !on; Log("motor (jugadores propios): jugador %d %s", i + 1, on ? "visible" : "oculto"); }
 void MotorPjSelect(int i) { s_sel.store(i >= 0 && i < kMax ? i : -1); }
 int MotorPjSel() { const int i = s_sel.load(); if (i < 0) return -1; std::lock_guard<std::mutex> lk(s_mx); const int st = s_pj[i].state; return (st >= 1 && st <= 3) ? i : -1; }
 bool MotorPjGet(int i, float* pos, float* yaw, float* scale) {
@@ -364,7 +364,7 @@ void MotorPjInfoGet(MotorPjInfo* o) {
     memset(o, 0, sizeof *o); o->sel = s_sel.load();
     const double lt = s_lastTick.load(); o->ticking = lt > 0.0 && Now() - lt < 1.5;
     std::lock_guard<std::mutex> lk(s_mx);
-    for (int i = 0; i < kMax; i++) { const Pj& p = s_pj[i]; o->st[i] = p.state; o->id[i] = p.id; o->kind[i] = p.kind; memcpy(o->name[i], p.name, sizeof o->name[i]); }
+    for (int i = 0; i < kMax; i++) { const Pj& p = s_pj[i]; o->st[i] = p.state; o->hidden[i] = p.hidden; o->id[i] = p.id; o->kind[i] = p.kind; memcpy(o->name[i], p.name, sizeof o->name[i]); }
     memcpy(o->msg, s_msg, sizeof o->msg); o->dead = s_dead.load();
 }
 
