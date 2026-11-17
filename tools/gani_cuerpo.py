@@ -152,8 +152,65 @@ class Jugador:
         self.raiz = raiz or [(0, (0.0, 0.0, 0.0))]           # corrimiento de la raiz (m, en mi modelo)
         self.pies = pies or {'A': [(0, 0.0)], 'B': [(0, 0.0)]}   # adelanto de cada pie (m, z); A = izquierdo, B = derecho
 
+# ---------------------------------------------------------------- PESO DE LA CAMINATA (17/11 20:44, Agustin: "al caminar se nota mas que
+# nada, no tiene inercia, peso, fluidez"): la cadera, la columna, el pecho, el cuello y la cabeza toman lo que hacen en la caminata del juego
+# (dml_end_spectator01_walk02: captura de movimiento) segun la fase del paso, en vez de las curvas armadas a mano. Tambien la subida /
+# bajada y el vaiven al costado de la cadera. Fase 0 = despega el talon izquierdo, 0.5 = el derecho (apoyos medidos 56, 101, 146, ...;
+# despegue = apoyo siguiente - 26, como PASO_REF).
+NB = 48
+MARCHA = {}
+def marcha_cargar(carpeta):
+    b = Base(open(os.path.join(carpeta, 'dml_end_spectator01_walk02.gani'), 'rb').read())
+    ho = [30, 75, 120, 165, 207, 255]
+    chs = (2, 13, 14, 15, 16)
+    todos = {ch: [] for ch in chs}; bins = {ch: [[] for _ in range(NB)] for ch in chs}; py = [[] for _ in range(NB)]; px = [[] for _ in range(NB)]
+    W = [add(b.root[f], b.hips[f]) for f in range(b.n + 1)]
+    for f0, f1 in zip(ho, ho[1:]):
+        for f in range(f0, f1):
+            i = min(NB - 1, int((f - f0) * NB / float(f1 - f0)))
+            for ch in chs: todos[ch].append(b.rot[f][ch]); bins[ch][i].append(b.rot[f][ch])
+            m = [W[g] for g in range(max(0, f - 22), min(b.n, f + 22) + 1)]     # vaiven: contra el promedio de un ciclo
+            py[i].append(W[f][1] - sum(v[1] for v in m) / len(m)); px[i].append(W[f][0] - sum(v[0] for v in m) / len(m))
+    def media(qs):
+        r = qs[0]; acc = (0.0, 0.0, 0.0, 0.0)
+        for q in qs: acc = add(acc, q if dot(q, r) >= 0 else mul(q, -1.0))
+        return qn(acc)
+    for ch in chs:
+        mq = qi(media(todos[ch])); MARCHA[ch] = [qm(mq, media(bins[ch][i])) for i in range(NB)]
+    MARCHA['y'] = [sum(v) / len(v) for v in py]; MARCHA['x'] = [sum(v) / len(v) for v in px]
+
+def marcha_en(clave, fase):
+    t = (fase % 1.0) * NB; i = int(t) % NB; j = (i + 1) % NB; u = t - int(t); a = MARCHA[clave][i]; c = MARCHA[clave][j]
+    if isinstance(a, float): return a + (c - a) * u
+    return qslerp(a, c, u)
+
+def fases(pL, pR, n, w_lleno=24, w_nada=36, borde=14):
+    """fase y peso de la caminata por cuadro, a partir de los despegues de talon de los dos pies"""
+    ev = sorted([(a, 0.0) for a, _, _, _ in _tramos(pL)] + [(a, 0.5) for a, _, _, _ in _tramos(pR)])
+    fa = []; am = []
+    for f in range(n + 1):
+        if f <= ev[0][0]:
+            g0, g1 = ev[0], ev[1]; gap = g1[0] - g0[0]; ph = g0[1] - 0.5 * (g0[0] - f) / gap; a = max(0.0, 1.0 - (g0[0] - f) / float(borde))
+        elif f >= ev[-1][0]:
+            g0, g1 = ev[-2], ev[-1]; gap = g1[0] - g0[0]; ph = g1[1] + 0.5 * (f - g1[0]) / gap; a = max(0.0, 1.0 - (f - g1[0] - 26) / float(borde)) if f > g1[0] + 26 else 1.0
+        else:
+            k = max(i for i in range(len(ev)) if ev[i][0] <= f); g0, g1 = ev[k], ev[k + 1]; gap = g1[0] - g0[0]
+            d = (g1[1] - g0[1]) % 1.0 or 1.0
+            ph = g0[1] + d * (f - g0[0]) / gap; a = 1.0
+        a *= max(0.0, min(1.0, (w_nada - gap) / float(w_nada - w_lleno))) * max(0.0, min(1.0, (gap - 10) / 8.0))   # pasos sueltos muy juntos: no es caminata
+        fa.append(ph % 1.0); am.append(a)
+    sm = []
+    for f in range(n + 1):        # el peso cambia despacio (arranca y frena con inercia)
+        v = am[max(0, f - 9):f + 10]; sm.append(sum(v) / len(v))
+    return fa, sm
+
 def cuerpo(base, J, f):
     rot = dict(base.rot[f])
+    fz = getattr(J, 'fase', None)
+    if fz:
+        ph, a = fz[0][f], fz[1][f] * J.marcha_amp
+        if a > 1e-3:
+            for ch in (2, 13, 14, 15, 16): rot[ch] = qm(rot[ch], qslerp((0.0, 0.0, 0.0, 1.0), marcha_en(ch, ph), a))
     for ch, keys in J.giros.items(): rot[ch] = qm(rot[ch], qeuler(pista(keys, f)))
     fn = getattr(J, 'giros_fn', None)
     if fn:
@@ -339,7 +396,13 @@ def pie_en(keys, f, Ay, Q0, lado=1.0):
     v = pista(keys, f)
     return (v[0], Ay, v[1]), qm(_ry(v[2]), Q0)
 
-def filtrar(salida, J, chs=((19, 0.30), (20, 0.24), (21, 0.17), (24, 0.30), (25, 0.24), (26, 0.17))):
+# (20:44, Agustin: "respetar los principios de la animacion, inercia") resorte por hueso, (canal, frecuencia por cuadro, amortiguacion):
+# menos amortiguado y mas lento cuanto mas lejos del cuerpo = el brazo sigue, la mano llega despues y se pasa un poco (seguimiento y
+# accion superpuesta); la columna arrastra al cuello y a la cabeza. ANTICIPACION: antes de un movimiento grande el hueso va un poco al reves.
+RESORTES = ((13, 0.36, 0.85), (14, 0.30, 0.75), (15, 0.25, 0.65), (16, 0.21, 0.58), (17, 0.30, 0.75), (22, 0.30, 0.75),
+            (19, 0.27, 0.62), (20, 0.23, 0.55), (21, 0.18, 0.50), (24, 0.27, 0.62), (25, 0.23, 0.55), (26, 0.18, 0.50))
+ANTICIPA = {19: 0.22, 24: 0.22, 14: 0.15, 20: 0.12, 25: 0.12}
+def filtrar(salida, J, chs=RESORTES):
     """PESO: resorte (amortiguado justo) por canal del brazo: el brazo llega un poco despues y la mano despues del antebrazo.
     En los tramos de contacto (J.contacto = [(desde, hasta)]) se apaga con rampas de 6 cuadros para que las manos lleguen exactas."""
     n = len(salida) - 1
@@ -350,14 +413,19 @@ def filtrar(salida, J, chs=((19, 0.30), (20, 0.24), (21, 0.17), (24, 0.30), (25,
             if a - 6 < f < a: c = max(c, (f - (a - 6)) / 6.0)
             if b < f < b + 6: c = max(c, 1.0 - (f - b) / 6.0)
         return 1.0 - c
-    for ch, w in chs:
-        x = salida[0][ch]; v = (0.0, 0.0, 0.0, 0.0)
+    for ch, w, z in chs:
+        src = [salida[f][ch] for f in range(n + 1)]
+        for f in range(1, n + 1):
+            if dot(src[f - 1], src[f]) < 0: src[f] = tuple(-c for c in src[f])
+        k = ANTICIPA.get(ch, 0.0); L = 7
+        x = src[0]; v = (0.0, 0.0, 0.0, 0.0)
         for f in range(n + 1):
-            y = salida[f][ch]
+            y = src[f]
+            if k: y = qn(add(y, mul(sub(y, src[min(n, f + L)]), k * libre(min(n, f + L)))))   # se carga al reves de lo que viene
             if dot(x, y) < 0: y = tuple(-c for c in y)
-            a = add(mul(sub(y, x), w * w), mul(v, -2.0 * w)); v = add(v, a); x = add(x, v)
-            m = libre(f); out = qn(lerp(y, x, m))
-            if m < 1.0: x = lerp(x, y, 1.0 - m); v = mul(v, m)
+            a = add(mul(sub(y, x), w * w), mul(v, -2.0 * z * w)); v = add(v, a); x = add(x, v)
+            m = libre(f); out = qn(lerp(src[f], qn(x), m))
+            if m < 1.0: x = lerp(x, src[f], 1.0 - m); v = mul(v, m)
             salida[f][ch] = out
 
 # ---------------------------------------------------------------- armado de los dos clips
@@ -472,6 +540,7 @@ def coreografia(D, quien, pie0):
     pR = pasos(R_(WALK - 3.14), [(-22 + ow, 4 + ow, R_(WALK - 2.18)), (22 + ow, 48 + ow, R_(WALK - 1.22)), (66 + ow, 92 + ow, R_(WALK - 0.32)),
                                   (114 + ow, 134 + ow, R_(WALK)), (170, 192, R_(WALK + PASO)), (284, 308, R_(WB))] + (otro_ if A else guia))
     pies = {'A': pL, 'B': pR}
+    FZ = fases(pL, pR, N); MAMP = 0.85        # zancada 0.96 contra 1.19 del juego: un poco menos de vaiven
     ox, oz = 0.5 * (lx + rx), 0.5 * (lz + rz)
     def yaw_de(f): return 0.5 * (huella(pL, f)[2] + huella(pR, f)[2])
     def frente(f): y = math.radians(yaw_de(f)); return (math.sin(y), 0.0, math.cos(y))
@@ -482,14 +551,13 @@ def coreografia(D, quien, pie0):
         for g in range(f - 8, f + 9):
             a_ = huella(pL, g); b_ = huella(pR, g); xs.append(0.5 * (a_[0] + b_[0])); zs.append(0.5 * (a_[1] + b_[1]))
         x = sum(xs) / len(xs) - ox; z = sum(zs) / len(zs) - oz
-        sp = abs(adelanto(f, pL, pR))     # cadera mas baja con los pies abiertos, mas alta al pasar (juego: 3 cm)
-        y = -(0.008 + 0.030 * min(1.0, sp / 0.5)) + 0.008 * max(_arco(pL, f), _arco(pR, f))
-        lat = 0.028 * (_arco(pR, f) - _arco(pL, f)); yw = math.radians(yaw_de(f))     # el peso pasa al pie de apoyo
+        ph, a = FZ[0][f], FZ[1][f] * MAMP      # subida / bajada y vaiven de la cadera de la caminata del juego (el peso pasa al pie de apoyo)
+        sp = abs(adelanto(f, pL, pR))          # cadera mas baja con los pies abiertos (para que la pierna llegue)
+        y = -(0.008 + 0.030 * min(1.0, sp / 0.5)) + 0.6 * marcha_en('y', ph) * a
+        lat = 0.6 * marcha_en('x', ph) * a; yw = math.radians(yaw_de(f))
         return (x + lat * math.cos(yw), y, z - lat * math.sin(yw))
     def giros_fn(f):          # media vuelta (raiz); cadera que gira con el paso (juego: +-8 grados) y el pecho la sigue casi entera
-        d = adelanto(f, pL, pR) / 0.48; lr = _arco(pL, f) - _arco(pR, f)
-        return {0: (0.0, yaw_de(f), 0.0), 2: (0.0, -8.5 * d, -2.5 * lr), 13: (0.0, 1.0 * d, 1.5 * lr), 14: (0.0, 0.5 * d, 1.0 * lr),
-                15: (0.0, 2.0 * d, 0.0), 16: (0.0, 2.5 * d, 0.0)}
+        return {0: (0.0, yaw_de(f), 0.0)}      # (20:44) cadera / pecho / cabeza del paso: capa de la caminata del juego (cuerpo())
     # ------- columna / cabeza / claviculas (grados: x adelante, y gira a la izquierda, z inclina a la derecha)
     inc = 9.0 if A else 8.0
     def asiente(f0, f1, amp=3.5, cada=20):   # cabeceos al hablar, con los golpes
@@ -587,7 +655,7 @@ def coreografia(D, quien, pie0):
     else: kL += [(448, balanceo('L')), (458, charla('L', 456, gB, 20)), (500, charla('L', 456, gB, 20)), (510, balanceo('L')), (N, balanceo('L'))]
     w = [(0, 1.0), (N, 1.0)]
     J = Jugador('A' if A else 'B', giros, {'R': {'k': kR, 'w': w}, 'L': {'k': kL, 'w': w}}, raiz, pies)
-    J.giros_fn = giros_fn
+    J.giros_fn = giros_fn; J.fase = FZ; J.marcha_amp = MAMP
     J.contacto = [(C - 3, C + 6), (186, 276), (C2 - 2, C2 + 27)]
     # ------- cara y manos (las pone el Motor junto con el clip): (cuadro, gesto de la cara, peso, mano izquierda, mano derecha)
     if A:
@@ -608,7 +676,52 @@ def coreografia(D, quien, pie0):
                    (C2 + 30, 'smil_soft', 0.8, 'relax', 'relax'), (400, 'smil_mho_soft', 0.7, 'relax', 'relax'), (420, 'smil_soft', 0.7, 'relax', 'relax'),
                    (452, 'smil_talk_blink_soft', 0.85, 'hiraki_normal', 'relax'), (512, 'smil_mho_soft', 0.9, 'relax', 'relax'),
                    (530, 'smil_soft', 0.7, 'relax', 'relax')]
+    J.pista = cara_y_dedos_vivos(J.pista, A, C, C2)
     return J
+
+# (20:43-20:46, Agustin: "les falta mucho movimiento en los dedos", "faltan movimientos en los ojos y las cejas") encima de las claves de
+# arriba: al hablar, en cada golpe la mano se abre y se relaja (poses del juego), y las cejas suben en los acentos; caminando, los dedos
+# cambian de a poco entre relajados, normales y apenas cerrados. Fuera de los contactos (choque, abrazo, apreton) y del dedo que senala.
+def cara_y_dedos_vivos(pista, A, C, C2):
+    def libre(f): return not (C - 12 <= f <= C + 16 or 184 <= f <= 342)
+    hablaR = [(18, 46, 20), (70, 92, 20), (392, 440, 20)] if A else [(72, 116, 20)]
+    hablaL = [(22, 46, 24)] if A else [(80, 112, 22), (456, 500, 20)]
+    habla_cara = [(14, 92, 20), (388, 444, 20)] if A else [(70, 122, 20), (452, 512, 20)]
+    extra = {'L': [], 'R': []}
+    for lado, rangos in (('R', hablaR), ('L', hablaL)):
+        for f0, f1, cada in rangos:
+            for k, g in enumerate(range(f0, f1, cada)):
+                extra[lado] += [(g, 'hiraki_normal' if k % 2 == 0 else 'open_full_half'), (g + 9, 'normal'), (g + 15, 'relax')]
+    caminar = [(0, 130), (350, 540)]
+    for lado, rangos in (('R', hablaR), ('L', hablaL)):
+        ocup = [(a - 4, b + 16) for a, b, _ in rangos] + ([(44, 76)] if A and lado == 'R' else [])
+        for a, b in caminar:
+            for k, g in enumerate(range(a + (0 if lado == 'R' else 9), b, 17)):
+                if any(x <= g <= y for x, y in ocup): continue
+                extra[lado].append((g, ('relax', 'normal', 'relax', 'soft_nigiri')[k % 4]))
+    cejas = []
+    for f0, f1, cada in habla_cara:
+        for k, g in enumerate(range(f0 + 6, f1, cada)):
+            cejas.append((g, 'neut_brwup_mho_eyo_soft_l' if k % 3 == 0 else 'smug_brwup_smirk_l' if k % 3 == 1 else 'neut_brwup_breth', 0.55))
+            cejas.append((g + 8, None, None))
+    marcos = sorted(set([k[0] for k in pista] + [g for g, _ in extra['L'] + extra['R']] + [g for g, *_ in cejas]))
+    out = []
+    for f in marcos:
+        base = max((k for k in pista if k[0] <= f), key=lambda k: k[0]); exacta = base[0] == f
+        cara, peso = base[1], base[2]
+        ce = [c for c in cejas if c[0] <= f]
+        if ce and ce[-1][1] and not exacta and libre(f): cara, peso = ce[-1][1], ce[-1][2]
+        mano = {}
+        for lado, col in (('L', 3), ('R', 4)):
+            ks = [e for e in extra[lado] if e[0] <= f]
+            v = base[col]
+            if ks and ks[-1][0] > base[0] and libre(f) and base[col] not in ('pointing', 'handshake_normal1', 'open_full'): v = ks[-1][1]
+            mano[lado] = v
+        out.append((f, cara, peso, mano['L'], mano['R']))
+    limpio = [out[0]]
+    for k in out[1:]:
+        if k[1:] != limpio[-1][1:]: limpio.append(k)
+    return limpio
 
 def distancia_auto(base):
     """los pechos se tocan en el abrazo: distancia entre raices = pecho de A + pecho de B (inclinados) + grosor de los dos"""
@@ -666,7 +779,7 @@ def pista_inc(Js, nombres, D):
 def main():
     a = sys.argv[1:]
     if len(a) < 2: print(__doc__ or 'uso: gani_cuerpo.py carpeta salida [distancia en el abrazo] [--inc src/motorpista.inc]'); return 1
-    base = Base(open(os.path.join(a[0], 'dml_ent_aisle_cmn_idle01.gani'), 'rb').read())
+    base = Base(open(os.path.join(a[0], 'dml_ent_aisle_cmn_idle01.gani'), 'rb').read()); marcha_cargar(a[0])
     Dh = float(a[2]) if len(a) > 2 and not a[2].startswith('--') and float(a[2]) > 0 else distancia_auto(base)
     base.extender(N)
     D = round(Dh + 2 * (PASO + WALK), 2)
