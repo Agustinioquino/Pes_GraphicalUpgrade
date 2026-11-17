@@ -162,7 +162,7 @@ MARCHA = {}
 def marcha_cargar(carpeta):
     b = Base(open(os.path.join(carpeta, 'dml_end_spectator01_walk02.gani'), 'rb').read())
     ho = [30, 75, 120, 165, 207, 255]
-    chs = (2, 13, 14, 15, 16)
+    chs = (2, 13, 14, 15, 16, 17, 19, 20, 21)     # (21:00, Agustin: "las manos moviendose, los hombros") + clavicula y brazo izquierdo (el suelto)
     todos = {ch: [] for ch in chs}; bins = {ch: [[] for _ in range(NB)] for ch in chs}; py = [[] for _ in range(NB)]; px = [[] for _ in range(NB)]
     W = [add(b.root[f], b.hips[f]) for f in range(b.n + 1)]
     for f0, f1 in zip(ho, ho[1:]):
@@ -177,6 +177,9 @@ def marcha_cargar(carpeta):
         return qn(acc)
     for ch in chs:
         mq = qi(media(todos[ch])); MARCHA[ch] = [qm(mq, media(bins[ch][i])) for i in range(NB)]
+    # el brazo derecho de walk02 va levantado: el derecho es el izquierdo espejado (x -> -x) y medio ciclo corrido (el otro pie)
+    for l, r in ((17, 22), (19, 24), (20, 25), (21, 26)):
+        MARCHA[r] = [(q[0], -q[1], -q[2], q[3]) for q in (MARCHA[l][(i + NB // 2) % NB] for i in range(NB))]
     MARCHA['y'] = [sum(v) / len(v) for v in py]; MARCHA['x'] = [sum(v) / len(v) for v in px]
 
 def marcha_en(clave, fase):
@@ -441,6 +444,24 @@ def filtrar(salida, J, chs=RESORTES):
             if m < 1.0: x = lerp(x, src[f], 1.0 - m); v = mul(v, m)
             salida[f][ch] = out
 
+_SUELTO = {}
+def brazo_suelto(J, lado):
+    k = (id(J), lado)
+    if k not in _SUELTO:
+        ks = J.brazos[lado]['k']; n = N; v = []
+        for f in range(n + 1):
+            a = max([x for x in ks if x[0] <= f], key=lambda x: x[0], default=ks[0]); b = min([x for x in ks if x[0] > f], key=lambda x: x[0], default=ks[-1])
+            v.append(1.0 if getattr(a[1], 'balanceo', False) and getattr(b[1], 'balanceo', False) else 0.0)
+        _SUELTO[k] = [sum(v[max(0, f - 8):f + 9]) / len(v[max(0, f - 8):f + 9]) for f in range(n + 1)]
+    return _SUELTO[k]
+
+def puntas(i, f):
+    dif = ESCALA[1 - i] - ESCALA[i]
+    if dif <= 0.01: return 0.0
+    h = min(0.06, 0.55 * (dif - 0.01)) / ESCALA[i]; w = 0.0
+    for a, b in ((CHOQUE - 16, CHOQUE + 12), (176, 280)): w = max(w, smooth((f - a) / 10.0) * smooth((b - f) / 12.0))
+    return h * w
+
 # ---------------------------------------------------------------- armado de los dos clips
 def armar(base, Js, D):
     n = base.n; salida = [dict() for _ in Js]; info = []; prev = {}; raices = [[] for _ in Js]; self_estira = [0.0]
@@ -449,10 +470,16 @@ def armar(base, Js, D):
         if f == 0: P0 = Pp                                   # los pies quedan donde estan en el cuadro 0 del parado (fijos, + el paso)
         rots = []; Ps = []
         for i, J in enumerate(Js):
-            rp = add(base.root[f], J.raiz(f) if callable(J.raiz) else pista(J.raiz, f)); raices[i].append(rp)
+            rp = add(base.root[f], J.raiz(f) if callable(J.raiz) else pista(J.raiz, f))
+            # (20:58, Agustin: "si uno es mas alto, que el otro levante la punta de los pies para alcanzarlo en el choque alto y en el abrazo;
+            # con la misma altura eso no pasa") puntas de pie del mas bajo: talon arriba segun la diferencia de estatura (hasta 6 cm)
+            tp = puntas(i, f); rp = add(rp, (0.0, tp, 0.0)); raices[i].append(rp)
             r = cuerpo(base, J, f); P = fk(r, rp, base.hips[f])
             for pie, (ct, ck, cp) in (('A', (6, 7, 8)), ('B', (10, 11, 12))):
                 T, Qp = pie_en(J.pies[pie], f, P0['foot' + pie][0][1], P0['foot' + pie][1], 1.0 if pie == 'A' else -1.0)
+                if tp > 1e-4:     # el pie gira sobre la punta: tobillo arriba y punta abajo
+                    yw = math.radians(huella(J.pies[pie], f)[2]); th = math.degrees(math.asin(min(0.9, tp / 0.13)))
+                    T = add(T, (0.0, tp, 0.0)); Qp = qm(qaxis((math.cos(yw), 0.0, -math.sin(yw)), th), Qp)
                 ref = qrot(qm(P['root'][1], qi(Pp['root'][1])), qrot(Pp['thigh' + pie][1], (1, 0, 0)))   # con el giro de la raiz
                 r[ct], r[ck], r[cp], est = ik_pierna(pie, P, T, Qp, ref)
                 self_estira[0] = max(self_estira[0], est)
@@ -468,6 +495,13 @@ def armar(base, Js, D):
                 qu, qf, qh, E, og = ik_brazo(lado, P, r, W, cd, dd, pd, prev.get((i, lado)))
                 prev[(i, lado)] = og
                 r[ua] = qslerp(r[ua], qu, w); r[fa] = qslerp(r[fa], qf, w); r[ha] = qslerp(r[ha], qh, w)
+            if getattr(J, 'fase', None):     # brazos y hombros de la caminata del juego encima (solo con el brazo colgando; hombros siempre)
+                ph = J.fase[0][f]; am = J.fase[1][f] * J.marcha_amp
+                if am > 1e-3:
+                    for lado, chs_ in (('L', (19, 20, 21)), ('R', (24, 25, 26))):
+                        wb = brazo_suelto(J, lado)[f] * am
+                        for ch in chs_: r[ch] = qm(r[ch], qslerp((0.0, 0.0, 0.0, 1.0), marcha_en(ch, ph), wb))
+                    for ch in (17, 22): r[ch] = qm(r[ch], qslerp((0.0, 0.0, 0.0, 1.0), marcha_en(ch, ph), am))
             fin.append(r)
         for i in range(len(Js)): salida[i][f] = fin[i]
         for i in range(len(Js)): fin[i]['raiz'] = raices[i][f]
@@ -630,7 +664,8 @@ def coreografia(D, quien, pie0):
         sg = ARM[lado][4]; mio, opu = (pR, pL) if lado == 'R' else (pL, pR)
         def fn(f, P, Po):
             d = max(-1.0, min(1.0, adelanto(f, opu, mio) / 0.48))
-            return en_raiz(P, (sg * 0.25, 0.92 + 0.07 * max(0.0, d), 0.06 + 0.28 * d), (sg * 0.3, 0, -1), (0, -1, 0.15 + 0.5 * d), (-sg, 0, 0.2))
+            return en_raiz(P, (sg * 0.25, 0.92 + 0.02 * max(0.0, d), 0.08 + 0.06 * d), (sg * 0.3, 0, -1), (0, -1, 0.15 + 0.1 * d), (-sg, 0, 0.2))
+        fn.balanceo = True     # (21:00) el vaiven lo pone la capa de la caminata del juego (brazos_marcha)
         return fn
     def charla(lado, f0, puntos, cada=20):   # mano adelante, palma arriba y adentro, de golpe en golpe
         sg = ARM[lado][4]
@@ -659,6 +694,9 @@ def coreografia(D, quien, pie0):
     # apreton de manos formal y bajo (las dos derechas en el medio, a la altura de la cintura): palma hacia adentro (A +x, B tambien en
     # su marco: quedan enfrentadas), dedos adelante, pulgar arriba; tres sacudidas cortas
     def apreton(dy=0.0): return mundo((0.0, 1.02 + dy, cm), (-1, -0.8, -0.4), unit((0.25, -0.15, 1)), (1, 0, 0))
+    hombro_R = otro('chest', (0.18, 0.22, 0.09), (1, -0.5, 0.6), (-0.2, 0.3, -1), (0, -1, 0.2))      # mi derecha en su hombro izquierdo
+    hombro_L = otro('chest', (-0.18, 0.22, 0.09), (-1, -0.5, 0.6), (0.2, 0.3, -1), (0, -1, 0.2))     # mi izquierda en su hombro derecho
+    pre_apreton = mundo((-0.14, 0.97, cm - 0.30), (-1, -0.9, -0.2), unit((0.25, -0.35, 1)), unit((1, 0, 0.2)))
     apreton_ida = mundo((-0.07, 1.06, cm - 0.12), (-1, -0.8, -0.4), unit((0.2, -0.1, 1)), unit((1, 0, 0.2)))
     apreton_suelta = mundo((-0.09, 1.00, cm - 0.15), (-1, -0.8, -0.4), unit((0.15, -0.2, 1)), unit((1, 0, 0.2)))
     # golpes del que habla (dx hacia afuera, dy arriba, dz adelante, m)
@@ -673,7 +711,10 @@ def coreografia(D, quien, pie0):
     kR += [(C - 7 + ow // 8, prepara('R')), (C, contacto('R')), (C + 7, rebote('R')), (172, sobre_hombro), (190, espalda_alta)]
     pats = [212, 228, 244] if A else [220, 238]
     for p in pats: kR += [(p - 1, espalda_alta), (p + 4, palmada(1)), (p + 9, espalda_alta)]
-    kR += [(276, espalda_alta), (292, sobre_hombro), (302, apreton_ida), (C2 - 2, apreton()), (C2 + 4, apreton(0.03)), (C2 + 10, apreton(-0.025)),
+    # (20:59, Agustin: "la transicion entre el abrazo y el apreton de mano no me gusta") al soltarse las manos se deslizan de la espalda a
+    # los hombros del otro y se quedan ahi mientras dan el paso atras (se miran a un brazo de distancia); despues la derecha baja, se
+    # carga un poco atras y va al apreton
+    kR += [(276, espalda_alta), (286, sobre_hombro), (293, hombro_R), (297, hombro_R), (305, pre_apreton), (C2 - 2, apreton()), (C2 + 4, apreton(0.03)), (C2 + 10, apreton(-0.025)),
            (C2 + 16, apreton(0.02)), (C2 + 22, apreton(-0.01)), (C2 + 27, apreton()), (C2 + 34, apreton_suelta), (C2 + 46, balanceo('R'))]
     if A: kR += [(386, balanceo('R')), (394, charla('R', 392, gA, 20)), (436, charla('R', 392, gA, 20)), (446, balanceo('R')), (N, balanceo('R'))]
     else: kR += [(N, balanceo('R'))]
@@ -685,13 +726,13 @@ def coreografia(D, quien, pie0):
         kL = [(0, balanceo('L')), (72, balanceo('L')), (84, charla('L', 80, [(0.0, 0.0, 0.0), (0.03, 0.04, 0.03), (0.0, 0.01, 0.0), (0.04, 0.05, 0.03)], 22)),
               (110, charla('L', 80, [(0.0, 0.0, 0.0), (0.03, 0.04, 0.03), (0.0, 0.01, 0.0), (0.04, 0.05, 0.03)], 22)), (122, balanceo('L')), (C - 16, balanceo('L'))]
     kL += [(C - 7 + ow // 8, prepara('L')), (C, contacto('L')), (C + 7, rebote('L')), (178, bajo_brazo), (194, espalda_baja),
-           (278, espalda_baja), (296, salida_baja), (C2, abajo('L')), (340, abajo('L')), (352 + t, balanceo('L'))]
+           (278, espalda_baja), (288, salida_baja), (296, hombro_L), (304, hombro_L), (C2 + 4, abajo('L')), (340, abajo('L')), (352 + t, balanceo('L'))]
     if A: kL += [(N, balanceo('L'))]
     else: kL += [(448, balanceo('L')), (458, charla('L', 456, gB, 20)), (500, charla('L', 456, gB, 20)), (510, balanceo('L')), (N, balanceo('L'))]
     w = [(0, 1.0), (N, 1.0)]
     J = Jugador('A' if A else 'B', giros, {'R': {'k': kR, 'w': w}, 'L': {'k': kL, 'w': w}}, raiz, pies)
     J.giros_fn = giros_fn; J.fase = FZ; J.marcha_amp = MAMP
-    J.contacto = [(C - 3, C + 6), (186, 276), (C2 - 2, C2 + 27)]
+    J.contacto = [(C - 3, C + 6), (186, 297), (C2 - 2, C2 + 27)]
     # ------- cara y manos (las pone el Motor junto con el clip): (cuadro, gesto de la cara, peso, mano izquierda, mano derecha)
     if A:
         J.pista = [(0, 'smil_talk_blink_soft', 0.8, 'relax', 'relax'), (20, 'smil_talk_blink_soft', 0.8, 'relax', 'hiraki_normal'),
