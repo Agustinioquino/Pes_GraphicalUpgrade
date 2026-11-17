@@ -139,6 +139,13 @@ struct Pj {
     int clipA = -2, clipFail = -2, restartA = 0, seekA = 0, endTicks = 0; uint32_t seed = 0;   // clipA: el clip puesto
     uint8_t lid[0xa0] = {};
     bool reload = false; double reloadAt = 0;   // (17/11 17:22) el primero de cada apertura del Motor se vuelve a crear una vez (ropa)
+    // (17/11 22:55, Agustin: "creo que las alturas de los jugadores no se respetan"; registro: los dos "estatura del modelo 180.0 cm")
+    // estatura (cm) y peso (kg) de la base: byte +0 y +1 del registro (campos 0x2e / 0x2f del getter FUN_1414cc040; FUN_141590500 los
+    // copia junto con el id de +0x2c y c_140e96750 los pasa a float como estatura). 0 = no se sabe (se usa 180 / 75 como antes).
+    uint8_t hcm = 0, wkg = 0;
+    // (17/11 22:55, "no coinciden correctamente") contactos de la pareja de clips propios (ContactIK): solo el hilo del juego
+    int partner = -1; float lift = 0.0f, shr[2] = { 0.0f, 0.0f }; double cLog = 0.0; int cN = 0;
+    struct Snap { bool ok = false; float t = 0; float hand[2][3] = {}; float chest[3] = {}; float X[3] = {}; float sc = 1.0f; } sn[2];
 };
 // (17/11 17:21-17:22, prueba de Agustin con B35F155B y captura) el PRIMER jugador que se crea al abrir el Motor sale sin remera, con el short a
 // medias y sin medias; los que se agregan despues (aun con el mismo id) salen vestidos, y sacarlo y volver a agregarlo lo viste (reusa el
@@ -183,6 +190,10 @@ uintptr_t DbFind(uint32_t want, uint64_t* key) {
         }
         return 0;
     } __except (1) { return 0; }
+}
+void DbBody(uintptr_t r, uint8_t* hcm, uint8_t* wkg) {
+    __try { const uint8_t h = *(const uint8_t*)r, w = *(const uint8_t*)(r + 1);
+        *hcm = (h >= 140 && h <= 220) ? h : 0; *wkg = (w >= 40 && w <= 140) ? w : 0; } __except (1) { *hcm = 0; *wkg = 0; }
 }
 void DbName(uintptr_t r, char* out, size_t n) {
     out[0] = 0;
@@ -265,7 +276,7 @@ bool Create(Pj& p, int slot, const uint8_t* visorLid) {
         if (fd) {
             if (p.kind == 2 && visorLid) memcpy(p.lid, visorLid, sizeof p.lid);
             else {
-                uint8_t pl[0xF0] = {}; memcpy(pl, &p.id, 8); pl[8] = 1; pl[0x39] = 180; pl[0x3a] = 75;
+                uint8_t pl[0xF0] = {}; memcpy(pl, &p.id, 8); pl[8] = 1; pl[0x39] = p.hcm ? p.hcm : 180; pl[0x3a] = p.wkg ? p.wkg : 75;   // (22:55) los de la base
                 strncpy_s((char*)pl + 0x9c, 61, p.name, _TRUNCATE);
                 ((LoadIdFn)kLoadId)(nullptr, p.lid, 0, 0, pl, 0, 0, 0, 0, 0);
             }
@@ -536,41 +547,61 @@ static bool ReadRootPos(void* ctl, float* o) { const uintptr_t R = *(const uintp
 // la de padres, se gira solo ese hueso (se anota en el registro).
 #include "skbonenames.inc"
 static const char* SkName(uint32_t h) { for (const auto& e : kSkNames) if (e.h == h) return e.n; return nullptr; }
-struct SkDesc { uintptr_t desc = 0; int n = 0; int par[400]; bool parOk = false; uint32_t hash[400]; bool hashOk = false; };
+struct SkDesc { uintptr_t desc = 0; int n = 0; int par[400]; bool parOk = false; uint32_t hash[400]; bool hashOk = false;
+    // (17/11 22:55) papeles de los huesos para los contactos (0 izquierda, 1 derecha), por los padres y el lugar (SkRoles)
+    bool roleTried = false, roleOk = false; int head = -1, chest = -1, thigh[2] = { -1, -1 }, foot[2] = { -1, -1 }, up[2] = { -1, -1 }, fo[2] = { -1, -1 }, hand[2] = { -1, -1 }; };
 static SkDesc s_sk[kMax];
+// (17/11 22:55, registro de la prueba de las 19:53 con B4FCF296) en el FixDemoHuman [[ctl+0x100]+0x20] es el mismo objeto que [ctl+0x88]
+// (el de los lugares en +0x50): su +0xf8 es un puntero, no la cantidad. La cantidad esta en +0x18 (0x14 = 20, igual que ctl+0x18 / +0x1c,
+// y 20 = los huesos del clip de cuerpo: raiz, cadera, 2 x (muslo, rodilla, pie), columna, pecho, cuello, cabeza, 2 x (clavicula, brazo,
+// antebrazo, mano)). Los padres pueden estar un nivel mas adentro (objeto compartido del esqueleto, el mismo puntero en los dos jugadores):
+// se buscan en la descripcion y en los objetos a los que apunta.
+static bool SkParTry(SkDesc& d, uintptr_t q, int n) {
+    MEMORY_BASIC_INFORMATION mi{}; if (!VirtualQuery((void*)q, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) || q + (size_t)n * 4 > (uintptr_t)mi.BaseAddress + mi.RegionSize) return false;
+    for (int wdt = 1; wdt <= 4; wdt *= 2) {      // padres de 1, 2 o 4 bytes
+        bool okp = true; int roots = 0; static int pv[400]; static int kids[400];
+        for (int i = 0; i < n && okp; i++) { int v = wdt == 1 ? (int)*(const uint8_t*)(q + i) : wdt == 2 ? (int)*(const uint16_t*)(q + 2 * i) : *(const int*)(q + 4 * i);
+            const int none = wdt == 1 ? 0xff : wdt == 2 ? 0xffff : -1;
+            if (v == none) { roots++; pv[i] = -1; continue; } if (v < 0 || v >= i) okp = false; else pv[i] = v; }
+        if (!okp || roots < 1 || roots > 2 || pv[0] != -1) continue;
+        for (int i = 0; i < n; i++) kids[i] = 0; for (int i = 0; i < n; i++) if (pv[i] >= 0) kids[pv[i]]++;
+        int leaves = 0; for (int i = 0; i < n; i++) if (!kids[i]) leaves++;
+        if (leaves < 3 || leaves * 2 > n + 2) continue;     // un esqueleto tiene pocas puntas (cabeza, manos, pies)
+        for (int i = 0; i < n; i++) d.par[i] = pv[i]; d.parOk = true; return true;
+    }
+    return false;
+}
 static void SkScan(int slot, void* ctl) {
     SkDesc& d = s_sk[slot];
     __try {
         const uintptr_t a = *(const uintptr_t*)((uintptr_t)ctl + 0x100); if (!PtrOk(a)) return;
         const uintptr_t desc = *(const uintptr_t*)(a + 0x20); if (!PtrOk(desc)) return;
-        const int n = *(const int*)(desc + 0xf8); if (d.desc == desc && d.n == n) return;
+        int n = *(const int*)(desc + 0xf8);
+        if (n < 2 || n > 400) { const int n1 = *(const int*)(desc + 0x18), n2 = *(const int*)((uintptr_t)ctl + 0x18); if (n1 >= 2 && n1 <= 400 && n1 == n2) n = n1; }
+        if (d.desc == desc && d.n == n) return;
         d = SkDesc{}; d.desc = desc; d.n = n;
         if (n < 2 || n > 400) { d.n = 0;
-            // (17/11 15:48 PC: "749176384 huesos") +0xf8 de [[ctl+0x100]+0x20] no es la cantidad en el controlador del FixDemoHuman: se
-            // anota el controlador para encontrarla (una vez por jugador): qwords de ctl, de [ctl+0x100] y de la descripcion
             static bool said[kMax]; if (!said[slot]) { said[slot] = true; char hx[1100]; int o;
                 auto dump = [&](const char* nm, uintptr_t base, int len) { o = 0; for (int q = 0; q < len; q += 8) o += snprintf(hx + o, sizeof hx - o, "%s%llx", q ? " " : "", (unsigned long long)*(const uint64_t*)(base + q)); Log("motor (posar): %s %p: %s", nm, (void*)base, hx); };
-                dump("ctl", (uintptr_t)ctl, 0x140); dump("ctl+0x140", (uintptr_t)ctl + 0x140, 0x100); dump("[ctl+0x100]", a, 0x80); dump("desc", desc, 0x100); dump("desc+0x100", desc + 0x100, 0x60);
-                const uintptr_t r = *(const uintptr_t*)((uintptr_t)ctl + 0x88); if (PtrOk(r)) dump("[ctl+0x88]", r, 0x80); }
+                dump("ctl", (uintptr_t)ctl, 0x140); dump("[ctl+0x100]", a, 0x80); dump("desc", desc, 0x100); }
             return; }
-        int parOff = -1, parW = 0, hashOff = -1;
-        for (int off = 0; off <= 0x1f0 && (parOff < 0 || hashOff < 0); off += 8) {
+        int parOff = -1, parIn = -1, hashOff = -1;
+        for (int off = 0; off <= 0x1f0 && (!d.parOk || hashOff < 0); off += 8) {
             const uintptr_t q = *(const uintptr_t*)(desc + off); if (!PtrOk(q)) continue;
-            MEMORY_BASIC_INFORMATION mi{}; if (!VirtualQuery((void*)q, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) || q + (size_t)n * 4 > (uintptr_t)mi.BaseAddress + mi.RegionSize) continue;
-            for (int wdt = 1; wdt <= 4 && parOff < 0; wdt *= 2) {      // padres de 1, 2 o 4 bytes
-                bool okp = true; int roots = 0;
-                for (int i = 0; i < n && okp; i++) { int v = wdt == 1 ? (int)*(const uint8_t*)(q + i) : wdt == 2 ? (int)*(const uint16_t*)(q + 2 * i) : *(const int*)(q + 4 * i);
-                    const int none = wdt == 1 ? 0xff : wdt == 2 ? 0xffff : -1;
-                    if (v == none) { roots++; continue; } if (v < 0 || v >= i) okp = false; }
-                if (okp && roots >= 1 && roots <= 2) { parOff = off; parW = wdt;
-                    for (int i = 0; i < n; i++) { int v = wdt == 1 ? (int)*(const uint8_t*)(q + i) : wdt == 2 ? (int)*(const uint16_t*)(q + 2 * i) : *(const int*)(q + 4 * i);
-                        d.par[i] = (v == (wdt == 1 ? 0xff : wdt == 2 ? 0xffff : -1)) ? -1 : v; } d.parOk = true; }
-            }
-            if (hashOff < 0) { int hit = 0; for (int i = 0; i < n; i++) if (SkName(*(const uint32_t*)(q + 4 * i))) hit++;
-                if (hit * 3 >= n) { hashOff = off; for (int i = 0; i < n; i++) d.hash[i] = *(const uint32_t*)(q + 4 * i); d.hashOk = true; } }
+            if (!d.parOk && SkParTry(d, q, n)) parOff = off;
+            if (hashOff < 0) { MEMORY_BASIC_INFORMATION mi{};
+                if (VirtualQuery((void*)q, &mi, sizeof mi) && mi.State == MEM_COMMIT && !(mi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) && q + (size_t)n * 4 <= (uintptr_t)mi.BaseAddress + mi.RegionSize) {
+                    int hit = 0; for (int i = 0; i < n; i++) if (SkName(*(const uint32_t*)(q + 4 * i))) hit++;
+                    if (hit * 3 >= n) { hashOff = off; for (int i = 0; i < n; i++) d.hash[i] = *(const uint32_t*)(q + 4 * i); d.hashOk = true; } } }
         }
-        Log("motor (posar): jugador %d: esqueleto %p con %d huesos; padres %s (+0x%x, %d bytes); nombres %s (+0x%x)", slot + 1, (void*)desc, n,
-            d.parOk ? "encontrados" : "NO encontrados (se gira solo el hueso)", parOff, parW, d.hashOk ? "encontrados" : "NO encontrados", hashOff);
+        for (int off = 0; off <= 0x1f0 && !d.parOk; off += 8) {     // un nivel mas adentro
+            const uintptr_t q = *(const uintptr_t*)(desc + off); if (!PtrOk(q)) continue;
+            MEMORY_BASIC_INFORMATION mi{}; if (!VirtualQuery((void*)q, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) || q + 0x100 > (uintptr_t)mi.BaseAddress + mi.RegionSize) continue;
+            for (int o2 = 0; o2 < 0x100 && !d.parOk; o2 += 8) { const uintptr_t q2 = *(const uintptr_t*)(q + o2); if (PtrOk(q2) && SkParTry(d, q2, n)) { parOff = off; parIn = o2; } }
+        }
+        Log("motor (posar): jugador %d: esqueleto %p con %d huesos; padres %s (+0x%x%s%x); nombres %s (+0x%x)", slot + 1, (void*)desc, n,
+            d.parOk ? "encontrados" : "NO encontrados (se gira solo el hueso)", parOff, parIn >= 0 ? " y adentro +0x" : "", parIn >= 0 ? parIn : 0, d.hashOk ? "encontrados" : "NO encontrados", hashOff);
+        if (d.parOk) { char b[1400]; int o = 0; for (int i = 0; i < n && o < 1300; i++) o += snprintf(b + o, sizeof b - o, "%s%d", i ? " " : "", d.par[i]); Log("motor (posar): padres: %s", b); }
     } __except (1) { d = SkDesc{}; }
 }
 static inline void QMul(const float* a, const float* b, float* o) {      // o = a * b (x, y, z, w)
@@ -602,6 +633,185 @@ static void PoseApply(Pj& p, void* ctl, const Pj& w) {
                 for (int c = 0; c < 3; c++) bw[c] = rt[c] + M[c] * m[0] + M[4 + c] * m[1] + M[8 + c] * m[2]; wok = true; } }
     } __except (1) { return; }
     StoreBone(p, bw, wok);
+}
+// ---- (17/11 22:55, Agustin con video: "no se coinciden correctamente", "creo que las alturas de los jugadores no se respetan"; 23:03:
+// "que se adapte dependiendo la diferencia: si miden mas o menos lo mismo no hace falta que se ponga en puntas de pie, solo que levante
+// un poco los hombros y brazos") CONTACTOS de la pareja de clips propios. Los .gani se arman sobre un esqueleto aproximado y a estatura 1;
+// en el juego cada brazo mide distinto y cada jugador tiene su estatura, asi que las manos no caen justas. motorpista.inc trae por
+// cuadro donde tiene que quedar cada muneca respecto del otro (su muneca o su pecho + vector en su marco). Aca, despues de PoseApply y
+// antes de mandar la pose: se miden los huesos reales (lugares del controlador pasados al mundo con la raiz), se escala el vector por el
+// tamano del otro y se corrige el brazo con IK de dos huesos (en el choque y el apreton cada uno pone la mitad: se encuentran en el
+// medio). Si el brazo no llega, el mas bajo sube el hombro (desde 3 cm de diferencia) y, si aun falta, se pone en puntas de pie (desde
+// 8 cm de diferencia; cuanto mas diferencia, mas alto). Los papeles de los huesos (cabeza, pecho, muslos, pies, brazos) salen de los
+// padres y del lugar en el primer cuadro (SkRoles). INFERIDO: los lugares de [[ctl+0x88]+0x50] estan en el espacio del modelo y la
+// matriz de [ctl+0x188]+0xa0 (filas = ejes del modelo en el mundo) + el lugar de +0xd0 los pasa al mundo (como el marcador de PoseApply).
+static inline void V3(float* o, float x, float y, float z) { o[0] = x; o[1] = y; o[2] = z; }
+static inline void VSub(const float* a, const float* b, float* o) { o[0] = a[0] - b[0]; o[1] = a[1] - b[1]; o[2] = a[2] - b[2]; }
+static inline float VDot(const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+static inline float VLen(const float* a) { return sqrtf(VDot(a, a)); }
+static inline void VCross(const float* a, const float* b, float* o) { const float x = a[1] * b[2] - a[2] * b[1], y = a[2] * b[0] - a[0] * b[2], z = a[0] * b[1] - a[1] * b[0]; o[0] = x; o[1] = y; o[2] = z; }
+static inline bool VNorm(float* a) { const float l = VLen(a); if (l < 1e-6f) return false; a[0] /= l; a[1] /= l; a[2] /= l; return true; }
+static inline void QAxisAng(const float* ax, float ang, float* q) { const float h = 0.5f * ang, sn = sinf(h); q[0] = ax[0] * sn; q[1] = ax[1] * sn; q[2] = ax[2] * sn; q[3] = cosf(h); }
+static void QFromTo(const float* a0, const float* b0, float* q) {     // giro mas corto de la direccion a a la b
+    float a[3] = { a0[0], a0[1], a0[2] }, b[3] = { b0[0], b0[1], b0[2] }; if (!VNorm(a) || !VNorm(b)) { V3(q, 0, 0, 0); q[3] = 1; return; }
+    float c[3]; VCross(a, b, c); const float d = VDot(a, b);
+    if (d < -0.9999f) { float t[3] = { 1, 0, 0 }; if (fabsf(a[0]) > 0.9f) V3(t, 0, 1, 0); VCross(a, t, c); VNorm(c); V3(q, c[0], c[1], c[2]); q[3] = 0; return; }
+    q[0] = c[0]; q[1] = c[1]; q[2] = c[2]; q[3] = 1.0f + d; const float l = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]); for (int k = 0; k < 4; k++) q[k] /= l;
+}
+// gira el hueso b y todo lo que cuelga de el, alrededor del punto pv (giros y lugares en el espacio del modelo)
+static void RotSub(float* Q, float* P, int n, const int* par, int b, const float* R, const float* pv) {
+    for (int i = 0; i < n; i++) {
+        bool in = i == b; for (int j = par[i], g = 0; !in && j >= 0 && g < 64; j = par[j], g++) if (j == b) in = true;
+        if (!in) continue;
+        float o[4]; QMul(R, Q + i * 4, o); memcpy(Q + i * 4, o, 16);
+        const float v[3] = { P[i * 4] - pv[0], P[i * 4 + 1] - pv[1], P[i * 4 + 2] - pv[2] }; float rv[3]; QRot(R, v, rv);
+        for (int c = 0; c < 3; c++) P[i * 4 + c] = pv[c] + rv[c];
+    }
+}
+struct RootX { float rt[3]; float A[9]; float Ai[9]; };       // mundo = rt + Pm.x * fila0 + Pm.y * fila1 + Pm.z * fila2
+static bool RootGet(void* ctl, RootX& x) {
+    if (!ReadRootPos(ctl, x.rt)) return false;
+    const uintptr_t R0 = *(const uintptr_t*)((uintptr_t)ctl + 0x188); if (!PtrOk(R0)) return false;
+    const float* M = (const float*)(R0 + 0xa0);
+    for (int r = 0; r < 3; r++) for (int c = 0; c < 3; c++) { const float v = M[r * 4 + c]; if (!(v == v) || fabsf(v) > 100.0f) return false; x.A[r * 3 + c] = v; }
+    // mundo = A^T Pm -> Pm = (A^T)^-1 (mundo - rt)
+    float T[9]; for (int r = 0; r < 3; r++) for (int c = 0; c < 3; c++) T[r * 3 + c] = x.A[c * 3 + r];
+    const float det = T[0] * (T[4] * T[8] - T[5] * T[7]) - T[1] * (T[3] * T[8] - T[5] * T[6]) + T[2] * (T[3] * T[7] - T[4] * T[6]);
+    if (fabsf(det) < 1e-6f) return false; const float id = 1.0f / det;
+    x.Ai[0] = (T[4] * T[8] - T[5] * T[7]) * id; x.Ai[1] = (T[2] * T[7] - T[1] * T[8]) * id; x.Ai[2] = (T[1] * T[5] - T[2] * T[4]) * id;
+    x.Ai[3] = (T[5] * T[6] - T[3] * T[8]) * id; x.Ai[4] = (T[0] * T[8] - T[2] * T[6]) * id; x.Ai[5] = (T[2] * T[3] - T[0] * T[5]) * id;
+    x.Ai[6] = (T[3] * T[7] - T[4] * T[6]) * id; x.Ai[7] = (T[1] * T[6] - T[0] * T[7]) * id; x.Ai[8] = (T[0] * T[4] - T[1] * T[3]) * id;
+    return true;
+}
+static inline void ToWorld(const RootX& x, const float* m, float* w) { for (int c = 0; c < 3; c++) w[c] = x.rt[c] + m[0] * x.A[c] + m[1] * x.A[3 + c] + m[2] * x.A[6 + c]; }
+static inline void DirToModel(const RootX& x, const float* d, float* m) { for (int r = 0; r < 3; r++) m[r] = x.Ai[r * 3] * d[0] + x.Ai[r * 3 + 1] * d[1] + x.Ai[r * 3 + 2] * d[2]; }
+static inline void ToModel(const RootX& x, const float* w, float* m) { float d[3]; VSub(w, x.rt, d); DirToModel(x, d, m); }
+static bool SkRoles(int slot, SkDesc& d, const float* P) {
+    const int n = d.n; static int kids[400]; for (int i = 0; i < n; i++) kids[i] = 0; for (int i = 0; i < n; i++) if (d.par[i] >= 0) kids[d.par[i]]++;
+    int lv[16], nl = 0; for (int i = 0; i < n && nl < 16; i++) if (!kids[i]) lv[nl++] = i;
+    auto y = [&](int i) { return P[i * 4 + 1]; };
+    auto bad = [&](const char* why) { Log("motor (contactos): jugador %d: no se reconocen los huesos (%s; %d puntas); sin correccion", slot + 1, why, nl); return false; };
+    if (nl != 5) return bad("hacen falta 5 puntas: cabeza, 2 manos, 2 pies");
+    for (int a = 0; a < nl; a++) for (int b = a + 1; b < nl; b++) if (y(lv[b]) > y(lv[a])) std::swap(lv[a], lv[b]);   // de arriba a abajo
+    d.head = lv[0]; int hd[2] = { lv[1], lv[2] }, ft[2] = { lv[3], lv[4] };
+    auto gp = [&](int i) { return i >= 0 ? d.par[i] : -1; };
+    for (int k = 0; k < 2; k++) { if (gp(gp(hd[k])) < 0 || gp(gp(ft[k])) < 0) return bad("cadenas cortas"); }
+    if (P[gp(gp(ft[0])) * 4] < P[gp(gp(ft[1])) * 4]) std::swap(ft[0], ft[1]);        // x del modelo = izquierda (0)
+    if (P[gp(gp(hd[0])) * 4] < P[gp(gp(hd[1])) * 4]) std::swap(hd[0], hd[1]);
+    for (int k = 0; k < 2; k++) { d.foot[k] = ft[k]; d.thigh[k] = gp(gp(ft[k])); d.hand[k] = hd[k]; d.fo[k] = gp(hd[k]); d.up[k] = gp(d.fo[k]); }
+    const int cl = gp(d.up[0]); d.chest = gp(cl); if (d.chest < 0) return bad("sin pecho");
+    float L[4]; for (int k = 0; k < 2; k++) { float v[3]; VSub(P + d.fo[k] * 4, P + d.up[k] * 4, v); L[k * 2] = VLen(v); VSub(P + d.hand[k] * 4, P + d.fo[k] * 4, v); L[k * 2 + 1] = VLen(v); }
+    for (int k = 0; k < 4; k++) if (L[k] < 0.12f || L[k] > 0.5f) return bad("largos de brazo raros");
+    Log("motor (contactos): jugador %d: cabeza %d, pecho %d, muslos %d/%d, pies %d/%d, brazo izq %d-%d-%d (%.1f + %.1f cm), der %d-%d-%d (%.1f + %.1f cm)", slot + 1,
+        d.head, d.chest, d.thigh[0], d.thigh[1], d.foot[0], d.foot[1], d.up[0], d.fo[0], d.hand[0], L[0] * 100, L[1] * 100, d.up[1], d.fo[1], d.hand[1], L[2] * 100, L[3] * 100);
+    { char b[1600]; int o = 0; for (int i = 0; i < n && o < 1500; i++) o += snprintf(b + o, sizeof b - o, "%s%d(%.2f %.2f %.2f)", i ? " " : "", i, P[i * 4], P[i * 4 + 1], P[i * 4 + 2]); Log("motor (contactos): lugares en el modelo: %s", b); }
+    return true;
+}
+// IK de dos huesos en el espacio del modelo: el codo se dobla para la distancia y el brazo entero gira para apuntar al objetivo
+static void ArmIK(float* Q, float* P, const SkDesc& d, int k, const float* T, const float* upM) {
+    const int u = d.up[k], f = d.fo[k], h = d.hand[k];
+    float S[3], E[3], W[3]; memcpy(S, P + u * 4, 12); memcpy(E, P + f * 4, 12); memcpy(W, P + h * 4, 12);
+    float uv[3], vv[3], st[3]; VSub(E, S, uv); VSub(W, E, vv); VSub(T, S, st);
+    const float a = VLen(uv), b = VLen(vv); if (a < 1e-3f || b < 1e-3f) return;
+    const float dT = std::clamp(VLen(st), fabsf(a - b) + 0.01f, (a + b) * 0.995f);
+    float nx[3]; VCross(uv, vv, nx);
+    if (!VNorm(nx)) { float back[3]; VCross(uv, upM, back); VCross(back, uv, nx); if (!VNorm(nx)) return; }   // brazo recto: dobla hacia abajo
+    const float beta = acosf(std::clamp(VDot(uv, vv) / (a * b), -1.0f, 1.0f));          // 0 = recto
+    const float beta2 = 3.14159265f - acosf(std::clamp((a * a + b * b - dT * dT) / (2.0f * a * b), -1.0f, 1.0f));
+    float R[4]; QAxisAng(nx, beta2 - beta, R); RotSub(Q, P, d.n, d.par, f, R, E);
+    float W2[3], sw[3]; memcpy(W2, P + h * 4, 12); VSub(W2, S, sw);
+    QFromTo(sw, st, R); RotSub(Q, P, d.n, d.par, u, R, S);
+}
+static void ContactIK(Pj& p, void* ctl, float dtR) {
+    const int slot = (int)(&p - s_pj); SkDesc& d = s_sk[slot];
+    p.sn[1] = p.sn[0]; p.sn[0].ok = false;
+    const OwnTrack* tr = OwnTrackOf(p.clipA);
+    if (!tr || !d.parOk || d.n < 2) { p.lift = 0.0f; return; }
+    __try {
+        const uintptr_t qa = *(const uintptr_t*)((uintptr_t)ctl + 0x20); const uintptr_t r = *(const uintptr_t*)((uintptr_t)ctl + 0x88); if (!PtrOk(qa) || !PtrOk(r)) return;
+        const uintptr_t pa = *(const uintptr_t*)(r + 0x50); if (!PtrOk(pa)) return;
+        float* Q = (float*)qa; float* P = (float*)pa;
+        if (!d.roleTried) { d.roleTried = true; d.roleOk = SkRoles(slot, d, P); }
+        if (!d.roleOk) return;
+        RootX X; if (!RootGet(ctl, X)) return;
+        const float t = ((ClipTimeFn)kClipTime)(ctl, 0, 1);
+        // lo de este jugador antes de corregir (lo usa el otro)
+        Pj::Snap& s0 = p.sn[0]; s0.t = t;
+        for (int k = 0; k < 2; k++) ToWorld(X, P + d.hand[k] * 4, s0.hand[k]);
+        ToWorld(X, P + d.chest * 4, s0.chest);
+        float tl[3], tr_[3], hw[3]; ToWorld(X, P + d.thigh[0] * 4, tl); ToWorld(X, P + d.thigh[1] * 4, tr_); ToWorld(X, P + d.head * 4, hw);
+        VSub(tl, tr_, s0.X); s0.X[1] = 0.0f; if (!VNorm(s0.X)) return;
+        { const float mid[3] = { 0.5f * (tl[0] + tr_[0]), 0.5f * (tl[1] + tr_[1]), 0.5f * (tl[2] + tr_[2]) }; float v[3]; VSub(hw, mid, v); s0.sc = tr->torso > 0.1f ? std::clamp(VLen(v) / tr->torso, 0.6f, 1.5f) : 1.0f; }
+        s0.ok = true;
+        if (p.partner < 0 || p.partner >= kMax || p.partner == slot) { p.lift = 0.0f; return; }
+        const Pj& o = s_pj[p.partner]; if (!o.sn[0].ok) return;
+        float k1 = 0.0f; const float dt01 = o.sn[1].ok ? o.sn[0].t - o.sn[1].t : 0.0f;
+        if (fabsf(t - o.sn[0].t) > 0.25f) return;                                    // fuera de sincronia: sin corregir
+        if (dt01 > 0.001f && dt01 < 0.25f) k1 = std::clamp((t - o.sn[0].t) / dt01, -1.0f, 1.5f);   // lo del otro llevado a mi segundo
+        auto at = [&](const float* a0, const float* a1, float* out) { for (int c = 0; c < 3; c++) out[c] = a0[c] + (k1 != 0.0f ? (a0[c] - a1[c]) * k1 : 0.0f); };
+        const float up[3] = { 0, 1, 0 }; float Z[3]; VCross(o.sn[0].X, up, Z);
+        const float fr = t * 30.0f;
+        float goal[2][3]; bool has[2] = { false, false }; float errC[2] = { 0, 0 };
+        for (int si = 0; si < tr->nSeg; si++) {
+            const OwnSeg& g = tr->seg[si]; if (g.hand < 0 || g.hand > 1 || has[g.hand]) continue;
+            const float kf = fr - (float)g.f0; if (kf < 0.0f || kf > (float)(g.n - 1)) continue;
+            const int i0 = std::min((int)kf, g.n - 1), i1 = std::min(i0 + 1, g.n - 1); const float a = kf - (float)i0;
+            const float* c0 = tr->cdat + (size_t)(g.off + i0) * 4; const float* c1 = tr->cdat + (size_t)(g.off + i1) * 4;
+            const float w = c0[0] + (c1[0] - c0[0]) * a; if (w <= 0.001f) continue;
+            const float v[3] = { c0[1] + (c1[1] - c0[1]) * a, c0[2] + (c1[2] - c0[2]) * a, c0[3] + (c1[3] - c0[3]) * a };
+            float A[3]; if (g.anchor < 2) at(o.sn[0].hand[g.anchor], o.sn[1].hand[g.anchor], A); else at(o.sn[0].chest, o.sn[1].chest, A);
+            const float sc = g.anchor == 2 ? o.sn[0].sc : 0.5f * (o.sn[0].sc + s0.sc);
+            float Tw[3]; for (int c = 0; c < 3; c++) Tw[c] = A[c] + sc * (v[0] * o.sn[0].X[c] + v[1] * up[c] + v[2] * Z[c]);
+            float e[3]; VSub(Tw, s0.hand[g.hand], e); if (g.anchor < 2) for (int c = 0; c < 3; c++) e[c] *= 0.5f;
+            const float el = VLen(e); errC[g.hand] = el;
+            if (el > 0.40f) { if (p.cN < 40 && p.cLog + 1.0 < s_lastTick.load()) { p.cN++; p.cLog = s_lastTick.load(); Log("motor (contactos): jugador %d cuadro %.0f: la mano %s esta a %.0f cm del punto: demasiado lejos, sin corregir", slot + 1, fr, g.hand ? "der" : "izq", el * 100.0f); } continue; }
+            for (int c = 0; c < 3; c++) goal[g.hand][c] = s0.hand[g.hand][c] + w * e[c];
+            has[g.hand] = true;
+        }
+        // diferencia de estatura (cm; > 0 = el otro es mas alto): hombros desde 3 cm, puntas de pie desde 8 cm
+        const float diff = (p.hcm && o.hcm) ? (float)o.hcm - (float)p.hcm : (o.sn[0].sc - s0.sc) * 180.0f;
+        const float shMax = std::clamp((diff - 3.0f) / 8.0f, 0.0f, 1.0f) * 0.2443f;          // hasta 14 grados de hombro
+        const float tipMax = std::clamp((diff - 8.0f) / 12.0f, 0.0f, 1.0f) * 0.06f * s0.sc;   // hasta 6 cm de talon
+        float upM[3]; DirToModel(X, up, upM); VNorm(upM);
+        float shW[2] = { 0, 0 }, liftW = 0.0f;
+        for (int k = 0; k < 2; k++) {
+            if (!has[k]) continue;
+            float Sw[3], Ew[3], Hw[3], v[3]; ToWorld(X, P + d.up[k] * 4, Sw); ToWorld(X, P + d.fo[k] * 4, Ew); ToWorld(X, P + d.hand[k] * 4, Hw);
+            VSub(Ew, Sw, v); float L = VLen(v); VSub(Hw, Ew, v); L = (L + VLen(v)) * 0.97f;
+            VSub(goal[k], Sw, v); float over = VLen(v) - L; if (over <= 0.0f || v[1] <= 0.0f) continue;
+            over *= v[1] / std::max(VLen(v), 1e-3f);                     // lo que falta para arriba
+            const int cl = d.par[d.up[k]]; float cw[3]; ToWorld(X, P + cl * 4, cw); VSub(Sw, cw, v); const float rc = std::max(0.05f, VLen(v));
+            const float a = std::min(shMax, asinf(std::min(1.0f, over / rc))); shW[k] = a; over -= rc * sinf(a);
+            if (over > 0.0f) liftW = std::max(liftW, std::min(tipMax, over));
+        }
+        const float kk = std::clamp(dtR * 6.0f, 0.0f, 1.0f);
+        p.lift += (liftW - p.lift) * kk; for (int k = 0; k < 2; k++) p.shr[k] += (shW[k] - p.shr[k]) * kk;
+        // puntas de pie: todo el cuerpo sube y cada pie gira sobre la punta (talon arriba, la punta queda en el piso)
+        if (p.lift > 0.001f) {
+            for (int i = 0; i < d.n; i++) for (int c = 0; c < 3; c++) P[i * 4 + c] += upM[c] * p.lift;
+            float xm[3]; VSub(P + d.thigh[0] * 4, P + d.thigh[1] * 4, xm); const float dd = VDot(xm, upM); for (int c = 0; c < 3; c++) xm[c] -= upM[c] * dd;
+            if (VNorm(xm)) {
+                const float ha = 0.08f * s0.sc, tz = 0.14f * s0.sc, Rr = sqrtf(ha * ha + tz * tz), ph = atan2f(tz, ha);
+                const float th = std::max(0.0f, ph - acosf(std::min(1.0f, (ha + p.lift) / Rr)));
+                float R[4]; QAxisAng(xm, th, R);
+                for (int k = 0; k < 2; k++) { float pv[3]; memcpy(pv, P + d.foot[k] * 4, 12); RotSub(Q, P, d.n, d.par, d.foot[k], R, pv); }
+            }
+        }
+        // hombro arriba (clavicula): gira alrededor de su base hacia arriba
+        for (int k = 0; k < 2; k++) {
+            if (p.shr[k] < 0.002f) continue;
+            const int cl = d.par[d.up[k]]; if (cl < 0) continue;
+            float dir[3], ax[3]; VSub(P + d.up[k] * 4, P + cl * 4, dir); VCross(dir, upM, ax); if (!VNorm(ax)) continue;
+            float R[4], pv[3]; memcpy(pv, P + cl * 4, 12); QAxisAng(ax, p.shr[k], R); RotSub(Q, P, d.n, d.par, cl, R, pv);
+        }
+        for (int k = 0; k < 2; k++) { if (!has[k]) continue; float Tm[3]; ToModel(X, goal[k], Tm); ArmIK(Q, P, d, k, Tm, upM); }
+        if ((has[0] || has[1]) && p.cN < 40 && p.cLog + 0.5 < s_lastTick.load()) { p.cN++; p.cLog = s_lastTick.load();
+            float aw[2][3]; for (int k = 0; k < 2; k++) ToWorld(X, P + d.hand[k] * 4, aw[k]);
+            float r0[3], r1[3]; VSub(aw[0], goal[0], r0); VSub(aw[1], goal[1], r1);
+            Log("motor (contactos): jugador %d cuadro %.0f: corrijo izq %.1f cm (queda %.1f), der %.1f cm (queda %.1f); hombros %.0f / %.0f grados, puntas %.1f cm (el otro %+.0f cm; estaturas %.2f / %.2f)",
+                slot + 1, fr, has[0] ? errC[0] * 100 : 0.0f, has[0] ? VLen(r0) * 100 : 0.0f, has[1] ? errC[1] * 100 : 0.0f, has[1] ? VLen(r1) * 100 : 0.0f,
+                p.shr[0] * 57.3f, p.shr[1] * 57.3f, p.lift * 100.0f, diff, s0.sc, o.sn[0].sc); }
+    } __except (1) { return; }
 }
 // (17/11 20:45, Agustin: "la animacion no vuelve hacia atras", "no respetan sus posiciones") vf4 solo va para adelante y el recorrido
 // de la raiz se va sumando al lugar del jugador: al mover el clip con FUN_141afa7b0 el lugar queda donde estaba. En los clips propios
@@ -654,6 +864,7 @@ int Update(Pj& p, const Pj& w, double now) {
         if (gs) GraphScale(ctl, 1.0f);
         memcpy(&ctl, p.fd + 0x50, 8);
         if (ctl) PoseApply(p, ctl, w);
+        if (ctl) ContactIK(p, ctl, (float)dt);         // (22:55) contactos de la pareja de clips propios
         if (ctl && !w.paused && w.mode == 0) {      // si el clip no da la vuelta solo (como la banca): 6 cuadros quieto en el final -> al principio
             const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1), cur = ((ClipTimeFn)kClipTime)(ctl, 0, 1);
             if (len > 0.2f && cur >= len - 0.003f) { if (++p.endTicks >= 6) { if (walk) { Replay(p, ctl, 0.0f); p.tPlay = 0.0; } else ((ClipSeekFn)kClipSeek)(ctl, 0, 0, 0.0f, 1, 1); p.endTicks = 0; } } else p.endTicks = 0;
@@ -751,7 +962,7 @@ void MotorPjTick(bool on, uintptr_t impl) {
             }
             if (ia >= 0 && ib >= 0) { pr = &q; break; }
         }
-        for (int i = 0; i < kMax; i++) s_pj[i].pairB = false;
+        for (int i = 0; i < kMax; i++) { s_pj[i].pairB = false; s_pj[i].partner = -1; }
         if (pr) {
             Pj& A = s_pj[ia]; Pj& B = s_pj[ib];
             const float sc = 0.5f * ((A.scW > 0.0f ? A.scW : 1.0f) + (B.scW > 0.0f ? B.scW : 1.0f));
@@ -761,7 +972,7 @@ void MotorPjTick(bool on, uintptr_t impl) {
             memcpy(want[ib].pos, bp, 12); want[ib].yaw = by;
             want[ib].speed = want[ia].speed; want[ib].paused = want[ia].paused; want[ib].mode = want[ia].mode;
             { std::lock_guard<std::mutex> lk(s_mx); memcpy(s_pj[ib].pos, bp, 12); s_pj[ib].yaw = by; s_pj[ib].speed = want[ia].speed; s_pj[ib].paused = want[ia].paused; s_pj[ib].mode = want[ia].mode; }
-            B.pairB = true;
+            B.pairB = true; A.partner = ib; B.partner = ia;
             if (A.clipA == want[ia].clip && B.clipA == want[ib].clip) {
                 if (ia != s_pa || ib != s_pb) {
                     A.syncT = 0.0f; B.syncT = 0.0f; s_pa = ia; s_pb = ib;
@@ -839,23 +1050,25 @@ static int AddSlot(int kind, uint64_t key, const char* nm, const Pj* like) {
     if (slot < 0) { snprintf(s_msg, sizeof s_msg, "Ya hay %d jugadores (el maximo)", kMax); return -1; }
     Pj& p = s_pj[slot]; p.state = 1; p.hidden = false; p.kind = kind; p.id = key; memcpy(p.name, nm, sizeof p.name);
     p.pos[0] = 1.2f * (float)(used + 1); p.pos[1] = 0.0f; p.pos[2] = 0.0f; p.yaw = 0.0f; p.scale = 1.0f;
-    p.clip = -1; p.speed = 1.0f; p.paused = false; p.face = -1; p.faceW = 1.0f; p.blink = true;
-    if (like) { memcpy(p.pos, like->pos, 12); p.pos[0] += 1.0f; p.yaw = like->yaw; p.scale = like->scale; p.clip = like->clip; p.speed = like->speed; p.paused = like->paused; p.face = like->face; p.faceW = like->faceW; p.blink = like->blink; }
+    p.clip = -1; p.speed = 1.0f; p.paused = false; p.face = -1; p.faceW = 1.0f; p.blink = true; p.hcm = 0; p.wkg = 0;
+    if (like) { p.hcm = like->hcm; p.wkg = like->wkg; memcpy(p.pos, like->pos, 12); p.pos[0] += 1.0f; p.yaw = like->yaw; p.scale = like->scale; p.clip = like->clip; p.speed = like->speed; p.paused = like->paused; p.face = like->face; p.faceW = like->faceW; p.blink = like->blink; }
     snprintf(s_msg, sizeof s_msg, "Cargando %s...", nm);
     s_sel.store(slot);
     return slot;
 }
 int MotorPjAdd(int kind, uint32_t id) {
-    char nm[48] = {}; uint64_t key = 0;
+    char nm[48] = {}; uint64_t key = 0; uint8_t hcm = 0, wkg = 0;
     if (kind == 0) {
         const uintptr_t r = DbFind(id, &key);
         if (!r) { Msg("no encontre el id %u en la base de datos del juego", id); return -1; }
         DbName(r, nm, sizeof nm); if (!nm[0]) snprintf(nm, sizeof nm, "Jugador %u", id);
+        DbBody(r, &hcm, &wkg);
     } else if (kind == 1) { key = 0xffffull; snprintf(nm, sizeof nm, "Jugador base"); }
     else snprintf(nm, sizeof nm, "Igual al del Editar");
     std::lock_guard<std::mutex> lk(s_mx);
     const int slot = AddSlot(kind, key, nm, nullptr); if (slot < 0) return -1;
-    Log("motor (jugadores propios): pedido %s (id %u, clave 0x%llx) en el lugar %d", nm, id, (unsigned long long)key, slot + 1);
+    s_pj[slot].hcm = hcm; s_pj[slot].wkg = wkg;
+    Log("motor (jugadores propios): pedido %s (id %u, clave 0x%llx) en el lugar %d; estatura %u cm, peso %u kg en la base", nm, id, (unsigned long long)key, slot + 1, hcm, wkg);
     return slot;
 }
 void MotorPjRemove(int i) { if (i < 0 || i >= kMax) return; std::lock_guard<std::mutex> lk(s_mx); if (s_pj[i].state == 1 || s_pj[i].state == 4) s_pj[i].state = 0; else if (s_pj[i].state) s_pj[i].state = 5; if (s_sel.load() == i) s_sel.store(-1); }

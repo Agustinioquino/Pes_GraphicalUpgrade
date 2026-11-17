@@ -889,17 +889,60 @@ def revisar(info, D):
                 if a_[1] < 0.085 and b_[1] < 0.085: pat = max(pat, norm(sub(a_, b_)))
         print('jugador %s: tobillos de %.3f a %.3f m de alto; lo maximo que se mueve un pie apoyado en un cuadro = %.1f mm' % ('AB'[i], min(ys), max(ys), pat * 1000))
 
-def pista_inc(Js, nombres, D):
-    """src/motorpista.inc: la cara y las manos de cada clip propio (las pone el Motor mientras corre el clip)"""
+# (17/11 22:55, Agustin con video: "no coinciden correctamente", "las alturas de los jugadores no se respetan") en el juego los brazos
+# miden distinto que este esqueleto aproximado y cada jugador tiene su estatura: las manos no caen justas. Para cada contacto (choque de
+# las dos manos, abrazo, apreton) se guarda DONDE tiene que quedar mi muneca respecto del otro: punto de anclaje del otro (su muneca o su
+# pecho) + vector en el marco del otro (x = su izquierda, de cadera a cadera; y = arriba; z = adelante), en metros a estatura 1. El
+# Motor (motorpj.cpp ContactIK) lo lleva al cuerpo real de cada uno: mide los huesos, escala el vector por el tamano del otro y corrige
+# hombro y codo hacia ese punto (en el choque y el apreton cada uno pone la mitad: se encuentran en el medio).
+RAMPA_C = 8
+def ventanas_contacto():
+    C, C2 = CHOQUE, CHOQUE2      # mano: 0 izquierda, 1 derecha; ancla: 0 su muneca izquierda, 1 su muneca derecha, 2 su pecho
+    return [(C - 3, C + 6, {0: 1, 1: 0}), (186, 297, {0: 2, 1: 2}), (C2 - 2, C2 + 27, {1: 1})]
+
+def marco(P):
+    x = sub(P['thighA'][0], P['thighB'][0]); x = unit((x[0], 0.0, x[2])); return x, (0.0, 1.0, 0.0), cross(x, (0.0, 1.0, 0.0))
+
+def contactos(info, D, i):
+    o = 1 - i; segs = []; datos = []; nmano = {0: 'handL', 1: 'handR'}; nancla = {0: 'handL', 1: 'handR', 2: 'chest'}
+    for f0, f1, mapa in ventanas_contacto():
+        for mano, ancla in sorted(mapa.items()):
+            a = max(0, f0 - RAMPA_C); b = min(len(info) - 1, f1 + RAMPA_C); off = len(datos)
+            for f in range(a, b + 1):
+                if f < f0: w = (f - a) / float(f0 - a)
+                elif f > f1: w = (b - f) / float(b - f1)
+                else: w = 1.0
+                w = w * w * (3 - 2 * w)
+                Po = info[f][o]; W = al_otro(info[f][i][nmano[mano]][0], D)     # mi muneca en el modelo del otro
+                d = sub(W, Po[nancla[ancla]][0]); X, Y, Z = marco(Po)
+                datos.append((w, dot(d, X), dot(d, Y), dot(d, Z)))
+            segs.append((mano, ancla, a, b - a + 1, off))
+    P0 = info[0][i]; cad = lerp(P0['thighA'][0], P0['thighB'][0], 0.5)
+    return segs, datos, norm(sub(P0['head'][0], cad))
+
+def pista_inc(Js, nombres, D, info):
+    """src/motorpista.inc: la cara y las manos de cada clip propio (las pone el Motor mientras corre el clip) y los contactos"""
     o = ['// generado por tools/gani_cuerpo.py (no editar a mano): cara y manos de los clips propios, por cuadro (30 por segundo)',
-         'struct OwnKey { int frame; const char* face; float faceW; const char* handL; const char* handR; };']
-    for J, nm in zip(Js, nombres):
+         'struct OwnKey { int frame; const char* face; float faceW; const char* handL; const char* handR; };',
+         '// contactos: mano (0 izq, 1 der), ancla del otro (0 su muneca izq, 1 der, 2 pecho), primer cuadro, cuadros, lugar en kOwnC_X',
+         '// (por cuadro: peso, vector x y z en el marco del otro a estatura 1); torso = cabeza - medio de los muslos en el cuadro 0',
+         'struct OwnSeg { int hand; int anchor; int f0; int n; int off; };']
+    for i, (J, nm) in enumerate(zip(Js, nombres)):
         o.append('static const OwnKey kOwn_%s[] = {' % J.nombre)
         for k in J.pista: o.append('    { %d, "%s", %.2ff, "%s", "%s" },' % k)
         o.append('};')
-    o.append('struct OwnTrack { const char* file; const OwnKey* keys; int n; };')
+        segs, datos, torso = contactos(info, D, i); J.torso_ref = torso
+        o.append('static const OwnSeg kOwnS_%s[] = {' % J.nombre)
+        for sg in segs: o.append('    { %d, %d, %d, %d, %d },' % sg)
+        o.append('};')
+        o.append('static const float kOwnC_%s[] = {' % J.nombre)
+        for k in range(0, len(datos), 4): o.append('    ' + ' '.join('%.4ff, %.4ff, %.4ff, %.4ff,' % q for q in datos[k:k + 4]))
+        o.append('};')
+    o.append('struct OwnTrack { const char* file; const OwnKey* keys; int n; const OwnSeg* seg; int nSeg; const float* cdat; float torso; };')
     o.append('static const OwnTrack kOwnTracks[] = {')
-    for J, nm in zip(Js, nombres): o.append('    { "%s", kOwn_%s, (int)(sizeof kOwn_%s / sizeof kOwn_%s[0]) },' % (nm, J.nombre, J.nombre, J.nombre))
+    for J, nm in zip(Js, nombres):
+        X = J.nombre
+        o.append('    { "%s", kOwn_%s, (int)(sizeof kOwn_%s / sizeof kOwn_%s[0]), kOwnS_%s, (int)(sizeof kOwnS_%s / sizeof kOwnS_%s[0]), kOwnC_%s, %.4ff },' % (nm, X, X, X, X, X, X, X, J.torso_ref))
     o.append('};')
     o.append('// pareja: B empieza a D metros delante de A, mirandolo (girado 180); los dos clips van al mismo tiempo')
     o.append('struct OwnPair { const char* a; const char* b; float dist; };')
@@ -924,7 +967,7 @@ def main():
         fn = os.path.join(a[1], nm); open(fn, 'wb').write(b)
         G = GC.leer_gani(b)
         print('%s: %d B, %d cuadros, %d canales' % (fn, len(b), G['cuadros'], G['ncanales']))
-    if '--inc' in a: open(a[a.index('--inc') + 1], 'w', newline='\n').write(pista_inc(Js, nombres, D))
+    if '--inc' in a: open(a[a.index('--inc') + 1], 'w', newline='\n').write(pista_inc(Js, nombres, D, info))
     return 0, D
 
 if __name__ == "__main__": r = main(); sys.exit(r[0] if isinstance(r, tuple) else r)
