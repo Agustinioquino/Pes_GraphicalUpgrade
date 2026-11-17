@@ -222,7 +222,13 @@ static uint64_t __fastcall hk_Tick(uintptr_t impl, uintptr_t a, uintptr_t b, uin
             } else { s_aSt.store(3); Log("motor (jugador): animacion sin poner: este tick no es el del visor del Editar (impl %p)", (void*)impl); }
         }
     }
-    return o_tick(impl, a, b, c);
+    const uint64_t r = o_tick(impl, a, b, c);
+    // (17/11 etapa 2) reloj de los jugadores propios del Motor (motorpj.cpp): una vez por cuadro, con el tick del visor del Editar
+    {   uintptr_t mv = 0, task = 0, im = 0; static ULONGLONG s_pjT = 0; const ULONGLONG nowMs = GetTickCount64();
+        const bool vis = RdP(kMV, &mv) && PtrOk(mv) && RdP(mv + 0x78, &task) && PtrOk(task) && RdP(task + 0x90, &im) && PtrOk(im);
+        if (vis ? im == impl : nowMs - s_pjT >= 8) { s_pjT = nowMs; MotorPjTick(s_on.load(std::memory_order_relaxed), vis ? im : 0); }
+    }
+    return r;
 }
 
 static bool Readable(const void* p, size_t n) {
@@ -267,17 +273,25 @@ void MotorJugPresent() {
             for (int r = 0; r < 3; r++) MotorViewSet(r, 0);
             { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[519][0] = 0.0f; g_cfg.live[519][2] = 0.0f; g_cfg.live[426][0] = 0.0f; g_cfg.live[426][1] = 0.0f; }
             const int nl = MotorLightsRestore();
-            MotorJugReset(); s_uPause.store(false);
+            MotorPjSelect(-1); MotorJugReset(); s_uPause.store(false);      // (etapa 2) los jugadores propios los saca su reloj (motorpj.cpp) al ver el Motor cerrado
             Log("motor: al salir, vista Normal, vistas de prueba apagadas y %d luces como estaban", nl);
         }
     }
 }
 void MotorJugGet(MotorJugState* s) {
+    {   // (17/11 etapa 2) con un jugador propio elegido, los iconos del piso, las teclas y el Inspector lo mueven a el
+        const int pj = MotorPjSel(); float p[3], y, sc;
+        if (pj >= 0 && MotorPjGet(pj, p, &y, &sc)) {
+            memset(s, 0, sizeof *s); s->hooked = true; s->seen = true; for (int i = 0; i < 3; i++) { s->pos[i] = p[i]; s->wpos[i] = p[i]; }
+            s->yawDeg = y; s->scale = sc; s->rootScale = s_rootSc.load(); s->animSt = -1; s->id = 0x2b; return;
+        }
+    }
     s->hooked = s_okBone; s->seen = s_seen.load(); for (int i = 0; i < 3; i++) s->pos[i] = s_uPos[i].load(); s->yawDeg = s_uYaw.load(); s->scale = s_uScale.load();
     s->kind = s_aKind.load(); s->id = s_aId.load(); s->pause = s_uPause.load(); s->mirror = s_aMirror.load(); s->fix = s_uFix.load(); s->animSt = (s_okTick && s_okAnim) ? s_aSt.load() : -1;
     for (int i = 0; i < 3; i++) s->wpos[i] = s_wPos[i].load(); s->rootScale = s_rootSc.load(); s->hooked = s_okBone && s_okCmd;
 }
 void MotorJugSet(const float* p, float yawDeg, float scale) {
+    { const int pj = MotorPjSel(); if (pj >= 0) { MotorPjSet(pj, p, yawDeg, scale); return; } }
     for (int i = 0; i < 3; i++) s_uPos[i].store(std::clamp(p[i], -200.0f, 200.0f)); s_uYaw.store(std::clamp(yawDeg, -720.0f, 720.0f)); s_uScale.store(std::clamp(scale, 0.05f, 10.0f));
 }
 void MotorJugSetFix(bool on) { s_uFix.store(on); }

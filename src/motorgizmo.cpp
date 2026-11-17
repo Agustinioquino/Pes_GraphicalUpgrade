@@ -150,6 +150,7 @@ static int s_prefCat = 0, s_prefSave = 0, s_selEd = -1; static float s_pendScale
 // (15/11 p, Agustin 05:37: "que tambien funcione el atajo, y que se muestre el icono abajo a la derecha") el ultimo atajo del Motor y lo que hizo
 static char s_kbLabel[64] = ""; static std::atomic<double> s_kbLabelT{-1.0e9};
 static std::atomic<int> s_curKind{0};      // (15/11 p) cursor que pide el editor: 0 el normal, 3 flecha doble de costado (borde de un panel), 4 vertical
+static float s_pjIdF = 7511.0f;      // (17/11 etapa 2) id escrito en el Inspector para agregar un jugador propio
 static void KbLabel(const char* t) { snprintf(s_kbLabel, sizeof s_kbLabel, "%s", TRS(t)); s_kbLabelT.store(Now()); }
 const char* MotorKeyLabel(double* t) { if (t) *t = s_kbLabelT.load(); return s_kbLabel; }
 static const float kBarH = 38.0f, kStatH = 26.0f;
@@ -908,9 +909,40 @@ static void ToolbarDraw() {
       } else if (s_sel == 3) {
           // (17/11, Agustin 03:00 / 03:06: "que pueda mover el jugador con opciones", "opciones de mover rotar", "escalar", "la pestana
           // de animaciones") motorjug.cpp: lugar, giro y tamano del jugador y sus animaciones (poses y festejos del juego)
-          MotorJugState J; MotorJugGet(&J);
+          // (17/11 etapa 2, Agustin 04:35 / 04:37: jugadores propios, "importar jugadores por su id", "cargar el jugador base de konami")
+          // motorpj.cpp: lista de jugadores del Motor; el elegido es el que mueven los campos de abajo, los iconos del piso y las teclas
+          {   MotorPjInfo PI; MotorPjInfoGet(&PI);
+              if (label("JUGADORES DEL MOTOR")) {
+                  auto row = [&](int id, const char* nm, const char* st, bool on, int delId) {
+                      const ImVec2 p0(fx0, y + 2.0f * k), p1(fx1, y + rowH); const float dx0 = fx1 - rowH + 6.0f * k;
+                      const bool hv = hit(id, p0, ImVec2(delId >= 0 ? dx0 - 2.0f * k : p1.x, p1.y));
+                      dl->AddRectFilled(p0, p1, on ? IM_COL32(64, 52, 40, 255) : hv ? IM_COL32(52, 52, 56, 255) : cField, 3.0f * k);
+                      if (on) dl->AddRect(p0, p1, acc, 3.0f * k, 0, 1.5f * k);
+                      text(p0.x + 9.0f * k, (p0.y + p1.y) * 0.5f, on ? ink : IM_COL32(200, 200, 204, 255), nm, fsS + 1.0f * k);
+                      if (st && st[0]) { const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, TRS(st)); text((delId >= 0 ? dx0 : p1.x) - ts.x - 8.0f * k, (p0.y + p1.y) * 0.5f, dim, st, fsS); }
+                      if (delId >= 0) { const ImVec2 d0(dx0, p0.y + 3.0f * k), d1(p1.x - 3.0f * k, p1.y - 3.0f * k); const bool hd = hit(delId, d0, d1);
+                          if (hd) dl->AddRectFilled(d0, d1, IM_COL32(120, 52, 46, 255), 3.0f * k);
+                          const ImVec2 c((d0.x + d1.x) * 0.5f, (d0.y + d1.y) * 0.5f); const float r = 4.0f * k; const ImU32 xc = hd ? ink : dim;
+                          dl->AddLine(ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), xc, 1.5f * k); dl->AddLine(ImVec2(c.x - r, c.y + r), ImVec2(c.x + r, c.y - r), xc, 1.5f * k); }
+                      y += rowH + 3.0f * k; };
+                  row(1460, "Jugador del Editar", player ? "visor" : "oculto", PI.sel < 0, -1);
+                  static const char* const kSt[6] = { "", "en cola", "cargando...", "", "no carg\xC3\xB3", "sacando..." };
+                  for (int i = 0; i < 8; i++) if (PI.st[i]) { char nm[64]; snprintf(nm, sizeof nm, "%d.  %s", i + 1, PI.name[i]); row(1461 + i, nm, kSt[std::clamp(PI.st[i], 0, 5)], PI.sel == i && PI.st[i] >= 1 && PI.st[i] <= 3, 1470 + i); }
+                  y += 6.0f * k;
+                  text(lx, y + rowH * 0.5f, dim, "Id del jugador", fsS + 1.0f * k);
+                  numField(2110, ImVec2(x0 + rightW * 0.42f, y + 3.0f * k), ImVec2(fx1, y + rowH - 3.0f * k), s_pjIdF, 1.0f, 1.0f, 9999999.0f, "%.0f", ""); y += rowH;
+                  button(1480, "Agregar por id");
+                  button(1481, "Agregar el jugador base");
+                  button(1482, "Agregar igual al del Editar");
+                  if (PI.dead) text(lx, y + 9.0f * k, IM_COL32(255, 150, 120, 255), "Hubo un error dentro del juego: jugadores propios apagados hasta reiniciar.", fsS);
+                  else if (PI.msg[0]) text(lx, y + 9.0f * k, dim, PI.msg, fsS);
+                  else if (!PI.ticking) text(lx, y + 9.0f * k, dim, "Esperando al juego (el visor del Editar no avanza).", fsS);
+                  y += 26.0f * k;
+              }
+          }
+          MotorJugState J; MotorJugGet(&J); const bool ownPj = MotorPjSel() >= 0;
           if (!J.hooked) text(lx, y + 10.0f * k, dim, "Mover al jugador no est\xC3\xA1 disponible en este juego.", fsS + 1.0f * k);
-          else if (!player) text(lx, y + 10.0f * k, dim, "El jugador est\xC3\xA1 oculto.", fsS + 1.0f * k);
+          else if (!player && !ownPj) text(lx, y + 10.0f * k, dim, "El jugador est\xC3\xA1 oculto.", fsS + 1.0f * k);
           else {
               float v[5] = { J.pos[0], J.pos[1], J.pos[2], J.yawDeg, J.scale * 100.0f }; bool ch = false;
               auto fld = [&](int id, const char* nmv, float& val, float step, float lo, float hi, const char* fmt, const char* unit) { text(lx, y + rowH * 0.5f, dim, nmv, fsS + 1.0f * k);
@@ -919,12 +951,13 @@ static void ToolbarDraw() {
               if (label("GIRO")) { ch |= fld(2103, "Sobre el piso", v[3], 0.5f, -720.0f, 720.0f, "%.1f", "\xC2\xB0"); y += 6.0f * k; }
               if (label("TAMA\xC3\x91O")) { ch |= fld(2104, "Escala", v[4], 0.5f, 10.0f, 500.0f, "%.0f", " %"); y += 6.0f * k; }
               if (ch) MotorJugSet(v, v[3], v[4] / 100.0f);
-              if (label("CUANDO SE ANIMA")) { const char* const nms[2] = { "Fijo en su lugar", "Lo lleva el clip" }; seg(1404, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, J.fix ? 0 : 1, nms); y += rowH + 8.0f * k; }
+              if (!ownPj && label("CUANDO SE ANIMA")) { const char* const nms[2] = { "Fijo en su lugar", "Lo lleva el clip" }; seg(1404, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, J.fix ? 0 : 1, nms); y += rowH + 8.0f * k; }
               button(1400, "Volver al centro");
               text(lx, y + 9.0f * k, dim, "Flechas: mover.  Q / E: girar.  R / F: altura.", fsS); y += 20.0f * k;
               text(lx, y + 9.0f * k, dim, "+ / -: tama\xC3\xB1o.  May\xC3\xBAs: m\xC3\xA1s r\xC3\xA1pido.", fsS); y += 20.0f * k;
               text(lx, y + 9.0f * k, dim, "Tambi\xC3\xA9n con los iconos del piso.", fsS); y += 26.0f * k;
-              if (label("ANIMACI\xC3\x93N")) {
+              if (ownPj) { if (label("ANIMACI\xC3\x93N")) { text(lx, y + 9.0f * k, dim, "Parado (clip del pasillo de la entrada).", fsS); y += 20.0f * k; text(lx, y + 9.0f * k, dim, "Las animaciones van en la ventana de cinem\xC3\xA1ticas.", fsS); y += 26.0f * k; } }
+              else if (label("ANIMACI\xC3\x93N")) {
                   if (J.animSt < 0) { text(lx, y + rowH * 0.5f, dim, "No disponible en este juego.", fsS + 1.0f * k); y += rowH; }
                   else {
                       { const char* const nms[2] = { "Poses", "Festejos" }; seg(1410, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, s_jKind, nms); y += rowH + 6.0f * k; }
@@ -1311,6 +1344,10 @@ static void ToolbarDraw() {
         if (id == 0) { if (s_exitT < 0.0) { s_exitT = Now(); s_exitSent = false; MotorGlitchSound(1); } }      // salir: primero el fundido (abajo)
         else if (id == 1 || id == 20) g_cfg.motorGrid = grid ? 0 : 1;
         else if (id == 1400) { MotorJugReset(); Note("Jugador al centro"); }
+        else if (id == 1460) { MotorPjSelect(-1); Note("Jugador del Editar"); }
+        else if (id >= 1461 && id <= 1468) MotorPjSelect(id - 1461);
+        else if (id >= 1470 && id <= 1477) { MotorPjRemove(id - 1470); Note("Jugador sacado"); }
+        else if (id >= 1480 && id <= 1482) { if (MotorPjAdd(id - 1480, (uint32_t)(s_pjIdF + 0.5f)) >= 0) Note(id == 1480 ? "Cargando jugador por id" : id == 1481 ? "Cargando el jugador base" : "Cargando igual al del Editar"); }
         else if (id == 1430 || id == 1431) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[519][0] = (float)(id - 1430); if (id == 1431 && g_cfg.live[519][1] < 0.5f) g_cfg.live[519][1] = 2.0f; }
         else if (id >= 1434 && id <= 1436) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[519][2] = (float)(id - 1434); }
         else if (id >= 1446 && id <= 1449) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[426][1] = (float)(id - 1446); }
