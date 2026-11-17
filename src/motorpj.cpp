@@ -436,17 +436,23 @@ void OwnFace(Pj& p, void* h, void* face, const OwnTrack* tr, float tc, bool blin
     const float fr = std::max(0.0f, tc) * 30.0f;
     int i = 0; while (i + 1 < tr->n && (float)tr->keys[i + 1].frame <= fr) i++;
     const OwnKey& k = tr->keys[i]; const OwnKey* q = i > 0 ? &tr->keys[i - 1] : nullptr;
-    const float a = q ? std::clamp((fr - (float)k.frame) / 6.0f, 0.0f, 1.0f) : 1.0f;
+    // (20:49, Agustin: "a las animaciones faciales les hace falta una transicion mas realista") fundido de 11 cuadros (o lo que dure la
+    // clave anterior si es mas corta) con entrada y salida suaves; cada gesto sigue su propio tiempo desde que empezo (si la clave siguiente
+    // repite el gesto no vuelve a 0), asi el habla y el parpadeo del gesto no se cortan en cada clave
+    const float fade = q ? std::clamp((float)(k.frame - q->frame), 4.0f, 11.0f) : 1.0f;
+    float a = q ? std::clamp((fr - (float)k.frame) / fade, 0.0f, 1.0f) : 1.0f; a = a * a * (3.0f - 2.0f * a);
+    auto desde = [&](int j) { while (j > 0 && !strcmp(tr->keys[j - 1].face, tr->keys[j].face)) j--; return (float)tr->keys[j].frame; };
+    const float fk0 = desde(i), fq0 = q ? desde(i - 1) : 0.0f;
     const int g = FaceIndexOf(k.face), gq = q ? FaceIndexOf(q->face) : -1;
     float w0 = g >= 0 ? a * std::clamp(k.faceW, 0.0f, 1.0f) : 0.0f, w1 = gq >= 0 ? (1.0f - a) * std::clamp(q->faceW, 0.0f, 1.0f) : 0.0f;
     if (g >= 0) {
         if (((AnimGetClipFn)kAnimGetClip)(an, 0) != (uint32_t)g) ((AnimSetBaseFn)kAnimSetBase)(an, 0, (uint32_t)g, 0, 0, 0, 0);
-        ((AnimTimeFn)kAnimTime)(an, 0, (fr - (float)k.frame) / 30.0f);
+        ((AnimTimeFn)kAnimTime)(an, 0, (fr - fk0) / 30.0f);
     }
     ((AnimWeightFn)kAnimWeight)(an, 0, w0);
     if (gq >= 0 && w1 > 0.001f) {
         if (((AnimGetClipFn)kAnimGetClip)(an, 1) != (uint32_t)gq) ((AnimSetBaseFn)kAnimSetBase)(an, 1, (uint32_t)gq, 0, 0, 0, 0);
-        ((AnimTimeFn)kAnimTime)(an, 1, (fr - (float)q->frame) / 30.0f);
+        ((AnimTimeFn)kAnimTime)(an, 1, (fr - fq0) / 30.0f);
     } else w1 = 0.0f;
     ((AnimWeightFn)kAnimWeight)(an, 1, w1);
     const float wr = std::max(0.0f, 1.0f - w0 - w1);

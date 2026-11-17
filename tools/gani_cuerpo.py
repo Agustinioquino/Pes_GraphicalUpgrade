@@ -210,7 +210,11 @@ def cuerpo(base, J, f):
     if fz:
         ph, a = fz[0][f], fz[1][f] * J.marcha_amp
         if a > 1e-3:
-            for ch in (2, 13, 14, 15, 16): rot[ch] = qm(rot[ch], qslerp((0.0, 0.0, 0.0, 1.0), marcha_en(ch, ph), a))
+            # (20:50, Agustin: "se mueve mucho la cadera"): la cadera a la mitad de la captura; el torso y la cabeza van 3 cuadros atrasados
+            # respecto de los pies (el peso del cuerpo llega despues del paso)
+            ph2 = fz[0][max(0, f - 3)]
+            for ch, k in ((2, 0.45), (13, 0.75), (14, 0.75), (15, 0.6), (16, 0.55)):
+                rot[ch] = qm(rot[ch], qslerp((0.0, 0.0, 0.0, 1.0), marcha_en(ch, ph if ch == 2 else ph2), a * k))
     for ch, keys in J.giros.items(): rot[ch] = qm(rot[ch], qeuler(pista(keys, f)))
     fn = getattr(J, 'giros_fn', None)
     if fn:
@@ -521,9 +525,15 @@ def coreografia(D, quien, pie0):
     def giro(off, deg): x, z = _rot2(off, 0.0, deg); return (cx + x, cz + z, deg)
     t = 0 if A else 4                                   # B se da vuelta un poco despues
     ow = 0 if A else 8                                  # B llega un poco despues que A (desfasados)
+    # (20:50, Agustin: "el problema son los tiempos, un poco de desfase en la caminata") los pasos no van todos iguales: cada uno despega
+    # y apoya uno o dos cuadros antes o despues (cada jugador con su propio desfase), salvo los del abrazo y el apreton
+    J_ = (0, 2, -1, 1, -2, 1, 0, -1, 2, -1, 1) if A else (1, -1, 2, 0, -2, 1, -1, 2, 0, 1, -1)
     def pasos(ini, lista):    # lista = [(desde, hasta, huella)]: despega el talon en 'desde', queda plano en 'hasta'
-        k = [(-100, ini)]; cur = ini
-        for a, b, v in lista: k += [(a, cur), (b, v)]; cur = v
+        k = [(-100, ini)]; cur = ini; n_ = 0
+        for a, b, v in lista:
+            if not (150 <= a <= 320):
+                j = J_[n_ % len(J_)]; j2 = J_[(n_ + 3) % len(J_)]; n_ += 1; a, b = a + j, b + j + (1 if j2 > 0 else 0)
+            k += [(a, cur), (b, v)]; cur = v
         return k
     # (20:13, Agustin: "despues del saludo los dos salgan caminando y charlando para un mismo lado") al soltar el abrazo medio paso atras,
     # se dan la mano y giran hacia el mismo lado: A a su izquierda, B a su derecha (en el mundo los dos van hacia +x de A), uno al lado
@@ -554,7 +564,7 @@ def coreografia(D, quien, pie0):
         ph, a = FZ[0][f], FZ[1][f] * MAMP      # subida / bajada y vaiven de la cadera de la caminata del juego (el peso pasa al pie de apoyo)
         sp = abs(adelanto(f, pL, pR))          # cadera mas baja con los pies abiertos (para que la pierna llegue)
         y = -(0.008 + 0.030 * min(1.0, sp / 0.5)) + 0.6 * marcha_en('y', ph) * a
-        lat = 0.6 * marcha_en('x', ph) * a; yw = math.radians(yaw_de(f))
+        lat = 0.4 * marcha_en('x', ph) * a; yw = math.radians(yaw_de(f))
         return (x + lat * math.cos(yw), y, z - lat * math.sin(yw))
     def giros_fn(f):          # media vuelta (raiz); cadera que gira con el paso (juego: +-8 grados) y el pecho la sigue casi entera
         return {0: (0.0, yaw_de(f), 0.0)}      # (20:44) cadera / pecho / cabeza del paso: capa de la caminata del juego (cuerpo())
@@ -703,7 +713,7 @@ def cara_y_dedos_vivos(pista, A, C, C2):
     for f0, f1, cada in habla_cara:
         for k, g in enumerate(range(f0 + 6, f1, cada)):
             cejas.append((g, 'neut_brwup_mho_eyo_soft_l' if k % 3 == 0 else 'smug_brwup_smirk_l' if k % 3 == 1 else 'neut_brwup_breth', 0.55))
-            cejas.append((g + 8, None, None))
+            cejas.append((g + 12, None, None))
     marcos = sorted(set([k[0] for k in pista] + [g for g, _ in extra['L'] + extra['R']] + [g for g, *_ in cejas]))
     out = []
     for f in marcos:
