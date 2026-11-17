@@ -2201,6 +2201,7 @@ static void ToolbarDraw() {
 // disco del centro = mover libre sobre el piso; flecha roja X y azul Z = mover por ese eje; flecha verde = altura; aro amarillo con
 // perilla = girar; cuadrado blanco = tamano. Se arrastran con el boton izquierdo. Tamano en el mundo, segun el jugador (17/11 tarde).
 static std::atomic<float> s_fh[6][3]; static std::atomic<int> s_fhN{0}, s_fDrag{-1}; static float s_wY = 0.0f, s_cen[2] = {};
+static float PtSegD2(float px, float py, const ImVec2& a, const ImVec2& b);
 static void JugFloorGizmo() {
     s_fhN.store(0, std::memory_order_relaxed);
     MotorJugState J; MotorJugGet(&J);
