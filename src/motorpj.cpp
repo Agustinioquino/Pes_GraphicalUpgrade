@@ -382,6 +382,23 @@ void RowScale(Pj& p, float want) {
 // hueso root_main (indice = tabla 0x1438032e0 [0x13]) con FUN_141afa3c0(ctl, i, s) y la guarda por hueso en fd + 0x2cc + 4 * i (fd + 0x2c8 = 1
 // ya calculado); en los controladores siguientes usa ese valor guardado. Aca: base = la del juego (leida una vez), s = base x escala pedida,
 // con la funcion real sobre el controlador actual y el mismo valor en fd + 0x2cc, asi un clip nuevo lo conserva.
+// (17/11 17:54, Agustin: "la escala sigue sin afectar al tamano del jugador"; el registro si mostraba root_main 1.18) Leido en el C:
+// la escala del hueso 0 (arr [ctl+0x298][0]) la pasa al grafo de la animacion cobra::And::BodyAnimControl::vf2 (0x141af9c60), que
+// escribe s y 1/s en tres nodos del grafo ([[ctl+0x88]+0x68]: entrada 1 +0x20/+0x24, entradas 11 y 13 +0xb0/+0xb4) antes de evaluar. El
+// FixDemoHuman evalua con vf4 sin pasar por ahi. Aca se escribe lo mismo justo antes de vf4 y se deja en 1 despues (el grafo puede ser
+// compartido con otros jugadores del mismo recurso).
+static bool GraphScale(void* ctl, float sc) {
+    __try {
+        const uintptr_t r = *(const uintptr_t*)((uintptr_t)ctl + 0x88); if (!PtrOk(r)) return false;
+        const uintptr_t g = *(const uintptr_t*)(r + 0x68); if (!PtrOk(g)) return false;
+        const unsigned cnt = *(const uint16_t*)(g + 0xc); const uint32_t off = *(const uint32_t*)(g + 8); if (!off || cnt < 2) return false;
+        const uintptr_t T = g + off; const float inv = 1.0f / sc; bool any = false;
+        { const uint32_t o = *(const uint32_t*)(T + 4); if (o) { float* q = (float*)(g + o + 0x20); q[0] = sc; q[1] = inv; any = true; } }
+        if (cnt > 0xb) { const uint32_t o = *(const uint32_t*)(T + 0x2c); if (o) { float* q = (float*)(g + o + 0xb0); q[0] = sc; q[1] = inv; } }
+        if (cnt > 0xd) { const uint32_t o = *(const uint32_t*)(T + 0x34); if (o) { float* q = (float*)(g + o + 0xb0); q[0] = sc; q[1] = inv; } }
+        return any;
+    } __except (1) { return false; }
+}
 typedef void (__fastcall* BoneScaleFn)(void*, unsigned, float);
 static void RootMainScale(Pj& p, float scale) {
     void* ctl = nullptr; memcpy(&ctl, p.fd + 0x50, 8); if (!ctl) return;
@@ -415,7 +432,10 @@ int Update(Pj& p, const Pj& w, double now) {
             const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1); const float t = std::clamp(w.seek, 0.0f, std::max(0.0f, len - 0.001f));
             ((ClipSeekFn)kClipSeek)(ctl, 0, 0, t, 1, 1); p.tPlay = t; p.endTicks = 0; }
         else if (!w.paused) p.tPlay += dt * (double)std::clamp(w.speed, 0.0f, 4.0f);
+        bool gs = false; if (ctl && p.scW > 0.0f && fabsf(p.scW - 1.0f) > 1e-4f) gs = GraphScale(ctl, p.scW);      // (17:54) tamano en el grafo, solo durante vf4
+        { static int nl = 0; if (gs && nl++ < 3) Log("motor (jugadores propios): tamano %.3f en el grafo de la animacion", p.scW); }
         ((FdVf4Fn)kFdVf4)(p.fd, (float)p.tPlay);
+        if (gs) GraphScale(ctl, 1.0f);
         memcpy(&ctl, p.fd + 0x50, 8);
         if (ctl && !w.paused) {      // si el clip no da la vuelta solo (como la banca): 6 cuadros quieto en el final -> al principio
             const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1), cur = ((ClipTimeFn)kClipTime)(ctl, 0, 1);

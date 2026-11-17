@@ -85,6 +85,14 @@ static void __fastcall hk_CtxFrame(uintptr_t ctx) {
       if (nw - t > 5000 && nl < 24) { t = nw; nl++; uintptr_t* b0 = nullptr; uintptr_t* e0 = nullptr; __try { b0 = *(uintptr_t**)(ctx + 0x08); e0 = *(uintptr_t**)(ctx + 0x10); } __except (1) {}
         Log("motor (escena): cuadro de visor %p: leido %d, cerrado %d, %ux%u, objetos %lld, escena %p, camara %p, vista %p, principal %p, movido %d",
             (void*)ctx, rd ? 1 : 0, closed ? 1 : 0, w, h, (long long)((PtrOk((uintptr_t)b0) && e0 >= b0) ? e0 - b0 : -1), (void*)own, (void*)cam, (void*)view, (void*)main, s_moved ? 1 : 0); }
+      // (17/11 17:54, Agustin: "el problema de la vista en orto con los jugadores": la grilla pasa a ortografica y los jugadores no) que camara
+      // usa la vista principal: puntero en +0x4a0 y los datos (lugar +0x10, objetivo +0x1c, proyeccion +0x3c, cerca / lejos +0x34 / +0x38, campo +0x40)
+      { static ULONGLONG tc = 0; static int nc = 0; if (rd && nw - tc > 4000 && nc < 40) { tc = nw; nc++; uint64_t mc = 0; R64(main + 0x4a0, &mc);
+          float a[14] = {}, m[14] = {}; int pa = -1, pm = -1;
+          __try { memcpy(a, (const void*)(cam + 0x10), sizeof a); pa = *(const int*)(cam + 0x3c); } __except (1) {}
+          __try { if (PtrOk((uintptr_t)mc)) { memcpy(m, (const void*)((uintptr_t)mc + 0x10), sizeof m); pm = *(const int*)((uintptr_t)mc + 0x3c); } } __except (1) {}
+          Log("motor (escena): camaras: visor %p lugar (%.2f, %.2f, %.2f) cerca/lejos %.2f/%.1f proy %d campo %.4f | principal +0x4a0 %p lugar (%.2f, %.2f, %.2f) cerca/lejos %.2f/%.1f proy %d campo %.4f | camara libre %p",
+              (void*)cam, a[0], a[1], a[2], a[9], a[10], pa, a[12], (void*)mc, m[0], m[1], m[2], m[9], m[10], pm, m[12], FreeCamLastCamPtr()); } }
     }
     if (!rd || closed || w < 512 || h < 256) { o_ctxFrame(ctx); return; }   // solo el visor grande
     uintptr_t scene = 0; { uint64_t v = 0; if (R64(kMainScene, &v)) scene = (uintptr_t)v; }

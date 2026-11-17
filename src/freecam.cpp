@@ -625,8 +625,10 @@ static bool s_tried = false, s_okEditor = false;
 static unsigned char s_orig[0x50]; static bool s_haveOrig = false, s_restore = false;
 
 static std::mutex s_wcMx; static float s_wc[11] = {}; static double s_wcT = 0.0;
+static std::atomic<void*> s_lastCam{nullptr};
+void* FreeCamLastCamPtr() { return s_lastCam.load(); }
 static void hk_SetCam(void* rt, unsigned char* cam) {
-    s_editorCalls++;
+    s_editorCalls++; s_lastCam.store(cam);
     if (cam && !FreeCamActive() && s_restore) {
         if (s_haveOrig) { memcpy(cam + 0x10, s_orig, sizeof s_orig); Log("camara libre: camara del visor restaurada a la original"); }
         s_restore = false; s_haveOrig = false;
