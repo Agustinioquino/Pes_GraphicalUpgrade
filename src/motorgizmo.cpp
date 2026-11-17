@@ -154,7 +154,8 @@ static std::atomic<int> s_curKind{0};      // (15/11 p) cursor que pide el edito
 static float s_pjIdF = 7511.0f;      // (17/11 etapa 2) id escrito en el Inspector para agregar un jugador propio
 // (17/11 06:36..06:38) hasta 32 jugadores: la lista del panel Escena muestra kPjRows filas y corre con la rueda; animacion y gesto por jugador
 static const int kPjRows = 10; static int s_pjScroll = 0; static int s_pjGroup = -1;   // s_pjGroup: grupo de clips a la vista en el Inspector
-static bool s_pjSnap = false;        // ajustar a la grilla (lugar a la celda, giro de a 15 grados) al arrastrar
+static bool s_pjSnap = false, s_camFollow = false;   // s_camFollow (07:16): la camara acompana al jugador elegido cuando se mueve
+        // ajustar a la grilla (lugar a la celda, giro de a 15 grados) al arrastrar
 static int s_pjListTop = -1;         // primera fila de la lista de clips del Inspector
 static int s_pjRowClip[8] = {}, s_pjRowFace[6] = {}, s_pjFaceScroll = 0;
 static int s_tlMode = 0;             // (06:52) linea de tiempo abajo: 0 automatica (con jugadores), 1 siempre, 2 oculta; s_tlAll: los botones mueven a todos
@@ -643,7 +644,12 @@ static void ToolbarDraw() {
         dl->AddRectFilled(a, b, cField, 3.0f * k); const float w = (b.x - a.x) / (float)std::max(1, n);
         for (int i = 0; i < n; i++) { const ImVec2 p0(a.x + (float)i * w, a.y), p1(a.x + (float)(i + 1) * w, b.y); const bool hv = hit(id0 + i, p0, p1);
             if (i == cur) dl->AddRectFilled(ImVec2(p0.x + 1.0f, p0.y + 1.0f), ImVec2(p1.x - 1.0f, p1.y - 1.0f), acc, 2.0f * k); else if (hv) dl->AddRectFilled(p0, p1, IM_COL32(255, 255, 255, 22), 2.0f * k);
-            textC(p0, p1, i == cur ? IM_COL32(20, 20, 20, 255) : hv ? ink : IM_COL32(190, 190, 192, 255), names[i], fsS + 1.0f * k); }
+            // (17/11 07:16, Agustin: "mejora un poco la interfaz") el texto que no entra en su parte se achica (hasta 70 %) y se recorta: antes se
+            // pisaba con la parte de al lado ("Si Con teselaci...", "on nombres")
+            { float fz = fsS + 1.0f * k; const char* t = TRS(names[i]); const float tw = font->CalcTextSizeA(fz, FLT_MAX, 0.0f, t).x, room = w - 8.0f * k;
+              if (tw > room && tw > 0.0f) fz = std::max(fz * 0.7f, fz * room / tw);
+              dl->PushClipRect(ImVec2(p0.x + 2.0f, p0.y), ImVec2(p1.x - 2.0f, p1.y), true);
+              textC(p0, p1, i == cur ? IM_COL32(20, 20, 20, 255) : hv ? ink : IM_COL32(190, 190, 192, 255), names[i], fz); dl->PopClipRect(); } }
         dl->AddRect(a, b, cLine, 3.0f * k);
     };
     // (15/11 o) campo numerico editable (ids 2000..2499): arrastrar de costado cambia el valor (step por punto de pantalla, Shift = fino);
@@ -1037,6 +1043,9 @@ static void ToolbarDraw() {
               if (label("MOVER")) {
                   { const char* const nms[2] = { "Libre", "A la grilla" }; text(lx, y + rowH * 0.5f, dim, "Al arrastrar", fsS + 1.0f * k);
                     seg(3303, ImVec2(x0 + rightW * 0.42f, y), ImVec2(fx1, y + rowH), 2, s_pjSnap ? 1 : 0, nms); y += rowH + 8.0f * k; }
+                  // (17/11 07:16, Agustin: "permite la opcion de seguir la camara") la camara se corre junto con el jugador elegido
+                  { const char* const nms[2] = { "Quieta", "Sigue al elegido" }; text(lx, y + rowH * 0.5f, dim, "C\xC3\xA1mara", fsS + 1.0f * k);
+                    seg(3305, ImVec2(x0 + rightW * 0.42f, y), ImVec2(fx1, y + rowH), 2, s_camFollow ? 1 : 0, nms); y += rowH + 8.0f * k; }
                   button(1400, "Volver al centro");
                   button(3300, "Duplicar (mismo jugador al lado)");
                   button(3301, "Mirar a la c\xC3\xA1mara");
@@ -1625,6 +1634,7 @@ static void ToolbarDraw() {
             const int nC = MotorClipCount(), nG = std::max(1, MotorClipGroupCount()), nF = MotorFaceCount();
             const int cur = q >= 0 && PI.clip[q] >= 0 && PI.clip[q] < nC ? PI.clip[q] : MotorClipIdle();
             if (id == 3303 || id == 3304) s_pjSnap = id == 3304;
+            else if (id == 3305 || id == 3306) { s_camFollow = id == 3306; Note(s_camFollow ? "La c\xC3\xA1mara sigue al jugador elegido" : "C\xC3\xA1mara quieta"); }
             else if (id == 3302) {      // todos en fila sobre X, mirando a +Z, separados 1,2 m, centrados
                 int idx[kMotorPjMax], n = 0; for (int i = 0; i < kMotorPjMax; i++) if (PI.st[i] >= 1 && PI.st[i] <= 3) idx[n++] = i;
                 for (int j = 0; j < n; j++) { float p[3], yw, sc; if (!MotorPjGet(idx[j], p, &yw, &sc)) continue; p[0] = ((float)j - 0.5f * (float)(n - 1)) * 1.2f; p[1] = 0.0f; p[2] = 0.0f; MotorPjSet(idx[j], p, 0.0f, sc); }
@@ -2062,6 +2072,14 @@ void MotorGizmoDraw() {
     if (MotorPageActive() && MotorVistaLive() && g_dev.imm) { ID3D11ShaderResourceView* g = MotorGridOverlay(g_dev.imm); MotorGridOverlayStore(g);
         if (g && !MotorGridCompBound()) ImGui::GetBackgroundDrawList()->AddImage((ImTextureID)(uintptr_t)g, ImVec2(0, 0), ImGui::GetIO().DisplaySize); }
     else MotorGridOverlayStore(nullptr);
+    // (07:16) camara que sigue al elegido: cuando el jugador se mueve (arrastre, campos, teclas o la animacion) la camara se corre lo mismo
+    {   static int s_fq = -1; static float s_fp[3];
+        const int q = MotorPageActive() && s_camFollow ? MotorPjSel() : -1; float p[3], yw, sc;
+        if (q >= 0 && MotorPjGet(q, p, &yw, &sc)) {
+            if (q == s_fq) { const float d[3] = { p[0] - s_fp[0], p[1] - s_fp[1], p[2] - s_fp[2] };
+                if (fabsf(d[0]) + fabsf(d[1]) + fabsf(d[2]) > 1e-4f && fabsf(d[0]) + fabsf(d[2]) < 50.0f) { float cp[3], cy, cpt; if (!FreeCamOrtho() && FreeCamGetPose(cp, &cy, &cpt)) { for (int i = 0; i < 3; i++) cp[i] += d[i]; FreeCamSetPose(cp, cy, cpt); } } }
+            s_fq = q; memcpy(s_fp, p, sizeof s_fp);
+        } else s_fq = -1; }
     if (MotorPageActive()) { JugFloorGizmo(); JugPick(); } else { s_fhN.store(0); s_fDrag.store(-1); s_phN.store(0); s_pickDrag.store(-1); }
     if (MotorUiOn()) ToolbarDraw();
     if (g_cfg.motorGizmo == 0) { s_drawT.store(Now()); return; }
