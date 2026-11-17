@@ -109,6 +109,9 @@ static void UpdPause(uintptr_t upd, bool on) {
         else { u[0xcd] = u[0xcc] == 0; u[0xcf] = u[0xce] == 0; u[0xd1] = u[0xd0] == 0; }
     } __except (1) {}
 }
+// (17/11 d) contadores del registro de mover (DiagTick, mas abajo)
+static std::atomic<int> s_dPosAll{0}, s_dPosOur{0}, s_dYawAll{0}, s_dYawOur{0}, s_dScW{0}, s_dScFail{0};
+static float s_dV[3] = {}, s_dW[3] = {}, s_dYawIn = 0.0f, s_dYawOut = 0.0f;
 static void __fastcall hk_Yaw(uintptr_t obj, uint32_t bits) {
     s_dYawAll.fetch_add(1, std::memory_order_relaxed);
     if (t_obj && obj == t_obj) { s_dYawOur.fetch_add(1, std::memory_order_relaxed); float a; memcpy(&a, &bits, 4); s_dYawIn = a; const float add = s_uYaw.load(std::memory_order_relaxed) * 0.017453292f; (void)add; s_dYawOut = a; }      // (17/11 e) el giro por esta orden NO se ve (prueba 04:32): va por la raiz del controlador como en la primera DLL
@@ -130,8 +133,6 @@ static void __fastcall hk_Pos(uintptr_t obj, const float* v) {
 // (17/11 d) prueba de Agustin 04:30 con 059236F2: el giro anda pero el lugar y el tamano no se ven, y el registro no decia nada de
 // lo que se mandaba. Cada 2 s (solo si algo cambio) se anota: cuantas ordenes de lugar / giro pasaron por el gancho y cuantas eran del
 // jugador del Motor, lo ultimo que mando el juego y lo que se mando en su lugar, y como quedo la escala de la raiz.
-static std::atomic<int> s_dPosAll{0}, s_dPosOur{0}, s_dYawAll{0}, s_dYawOur{0}, s_dScW{0}, s_dScFail{0};
-static float s_dV[3] = {}, s_dW[3] = {}, s_dYawIn = 0.0f, s_dYawOut = 0.0f;
 static void DiagTick() {
     static ULONGLONG t = 0; const ULONGLONG n = GetTickCount64(); if (n - t < 2000) return; t = n;
     static float last[5] = { 1e9f, 1e9f, 1e9f, 1e9f, 1e9f }; const float cur[5] = { s_uPos[0].load(), s_uPos[1].load(), s_uPos[2].load(), s_uYaw.load(), s_uScale.load() };
