@@ -73,7 +73,14 @@ static void __fastcall hk_CtxFrame(uintptr_t ctx) {
     const bool want = s_want.load(std::memory_order_relaxed);
     if (!want) { if (s_moved && ctx == s_ctx) Undo("Motor cerrado o motor_escena = 0"); o_ctxFrame(ctx); return; }
     uintptr_t own = 0, cam = 0, view = 0, main = 0; unsigned w = 0, h = 0; bool closed = false;
-    if (!ReadCtx(ctx, &own, &cam, &view, &main, &w, &h, &closed) || closed || w < 512 || h < 256) { o_ctxFrame(ctx); return; }   // solo el visor grande
+    const bool rd = ReadCtx(ctx, &own, &cam, &view, &main, &w, &h, &closed);
+    { // (17/11 07:47) para mover a los jugadores propios sin el jugador del Editar: que visores corren su cuadro y con que datos (cada 5 s, 24 veces)
+      static ULONGLONG t = 0; static int nl = 0; const ULONGLONG nw = GetTickCount64();
+      if (nw - t > 5000 && nl < 24) { t = nw; nl++; uintptr_t* b0 = nullptr; uintptr_t* e0 = nullptr; __try { b0 = *(uintptr_t**)(ctx + 0x08); e0 = *(uintptr_t**)(ctx + 0x10); } __except (1) {}
+        Log("motor (escena): cuadro de visor %p: leido %d, cerrado %d, %ux%u, objetos %lld, escena %p, camara %p, vista %p, principal %p, movido %d",
+            (void*)ctx, rd ? 1 : 0, closed ? 1 : 0, w, h, (long long)((PtrOk((uintptr_t)b0) && e0 >= b0) ? e0 - b0 : -1), (void*)own, (void*)cam, (void*)view, (void*)main, s_moved ? 1 : 0); }
+    }
+    if (!rd || closed || w < 512 || h < 256) { o_ctxFrame(ctx); return; }   // solo el visor grande
     uintptr_t scene = 0; { uint64_t v = 0; if (R64(kMainScene, &v)) scene = (uintptr_t)v; }
     if (!PtrOk(scene)) { o_ctxFrame(ctx); return; }
     if (s_moved && ctx != s_ctx) { o_ctxFrame(ctx); return; }   // otro visor: no se toca
