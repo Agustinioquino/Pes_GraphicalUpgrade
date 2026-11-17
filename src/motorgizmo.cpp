@@ -2099,11 +2099,11 @@ void MotorGizmoDraw() {
     int hot = -1;
     for (int i = 5; i >= 0 && hot < 0; i--) { const float ex = mx - pt[i].p.x, ey = my - pt[i].p.y; if (ex * ex + ey * ey <= er * er * 1.3f) hot = pt[i].idx; }
     // botones debajo de la bola
-    const float bs = 34.0f * k, gap = 8.0f * k; const float by = C.y + R + 16.0f * k, bx = C.x - bs - gap * 0.5f;
-    const ImVec2 b0(bx, by), b1(bx + bs + gap, by);
-    { const float sx = s_rad.load() / R; s_bx0.store(b0.x * sx); s_by0.store(b0.y * sx); s_bx1.store((b1.x + bs) * sx); s_by1.store((b1.y + bs) * sx); }
+    const float bs = 34.0f * k, gap = 8.0f * k; const float by = C.y + R + 16.0f * k, bx = C.x - bs * 1.5f - gap;
+    const ImVec2 b0(bx, by), b1(bx + bs + gap, by), b2(bx + 2.0f * (bs + gap), by);   // (17/11 07:12, Agustin) b2 = perspectiva / ortografica
+    { const float sx = s_rad.load() / R; s_bx0.store(b0.x * sx); s_by0.store(b0.y * sx); s_bx1.store((b2.x + bs) * sx); s_by1.store((b1.y + bs) * sx); }
     auto inBtn = [&](const ImVec2& b) { return mx >= b.x && mx <= b.x + bs && my >= b.y && my <= b.y + bs; };
-    const int hotBtn = inBtn(b0) ? 0 : inBtn(b1) ? 1 : -1;
+    const int hotBtn = inBtn(b0) ? 0 : inBtn(b1) ? 1 : inBtn(b2) ? 2 : -1;
     // --- entrada ---
     if (lEdge && (inBall || hotBtn >= 0)) { s_press = true; s_moved = false; s_px = s_lx = mx; s_py = s_ly = my; s_dragging.store(inBall && hotBtn < 0); }
     if (s_press && lNow && s_dragging.load()) {
@@ -2115,6 +2115,7 @@ void MotorGizmoDraw() {
         if (!s_moved) {
             if (hotBtn == 0) SetCam(!camOn);
             else if (hotBtn == 1) { if (!camOn) SetCam(true); FreeCamGizmoHome(); Log("motor (gizmo): inicio"); }
+            else if (hotBtn == 2) { const int on = !FreeCamOrtho(); if (on && !camOn) SetCam(true); FreeCamOrthoSet(on); Log("motor (gizmo): %s", on ? "ortografica" : "perspectiva"); }
             else if (hot >= 0) { if (!camOn) SetCam(true); FreeCamGizmoAxis(hot); }
         }
         s_press = false; s_dragging.store(false);
@@ -2158,7 +2159,13 @@ void MotorGizmoDraw() {
         dl->AddTriangleFilled(ImVec2(o.x, o.y - w), ImVec2(o.x - w, o.y), ImVec2(o.x + w, o.y), ink);
         dl->AddRectFilled(ImVec2(o.x - w * 0.68f, o.y), ImVec2(o.x + w * 0.68f, o.y + w * 0.85f), ink);
     }
-    const char* txt = camOn ? "Camara libre" : "Camara del juego";
+    boton(b2, hotBtn == 2, FreeCamOrtho());
+    {   // proyeccion: cuadrado = ortografica, trapecio (lejos mas chico) = perspectiva
+        const ImVec2 o(b2.x + bs * 0.5f, b2.y + bs * 0.5f); const float w = bs * 0.24f, t = FreeCamOrtho() ? w : w * 0.55f;
+        const ImVec2 q[4] = { ImVec2(o.x - t, o.y - w), ImVec2(o.x + t, o.y - w), ImVec2(o.x + w, o.y + w), ImVec2(o.x - w, o.y + w) };
+        dl->AddPolyline(q, 4, ink, ImDrawFlags_Closed, 1.8f * k);
+    }
+    const char* txt = camOn ? (FreeCamOrtho() ? "Camara libre - ortografica" : "Camara libre - perspectiva") : "Camara del juego";
     const float ft = 14.0f * k; const ImVec2 ts = font->CalcTextSizeA(ft, FLT_MAX, 0.0f, txt);
     const ImVec2 tp(C.x - ts.x * 0.5f, by + bs + 6.0f * k);
     dl->AddText(font, ft, ImVec2(tp.x + 1.0f, tp.y + 1.0f), IM_COL32(0, 0, 0, 200), txt);
