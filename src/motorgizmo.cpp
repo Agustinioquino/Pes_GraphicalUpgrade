@@ -117,7 +117,7 @@ static MotorLight s_lights[64]; static int s_nLights = 0; static MotorSceneInfo 
 static int s_sel = 0, s_hotPrev = -1;                // fila marcada del arbol (0 render, 1 camara, 2 grilla, 3 jugador)
 // (15/11 o, Agustin 05:13 / 05:15: "los botones para abrir o cerrar la seccion de luces no funciona la flecha", "la flecha de escena
 // tampoco") secciones del arbol que se pliegan con su flecha (y la de luces tambien con un clic en su fila); la flecha gira animada
-static int s_jKind = 0, s_jN[2] = { 44, 1 }, s_jSent = -1; static bool s_jMirror = false;      // (17/11) Inspector del jugador: animacion elegida (pose 1..45, festejo 1..162); s_jSent < 0 = todavia no se pidio ninguna
+static int s_jKind = 0, s_jN[2] = { 44, 1 }, s_jSent = -1; static bool s_jMirror = false, s_jTouched = false;      // (17/11) Inspector del jugador: animacion elegida (pose 1..45, festejo 1..162); s_jSent < 0 = todavia no se pidio ninguna
 static bool s_foldStudio = false, s_foldLights = false; static float s_foldA[2] = { 1.0f, 1.0f };
 // (15/11 o, Agustin 05:12: "opciones para mover las pestanas de la izquierda y derecha asi como opciones para cerrarlas y abrirlas, para
 // mover o reescalar el tamano, algo asi como funciona blender") paneles: el borde de adentro se arrastra (ancho), la X del titulo lo
@@ -922,13 +922,13 @@ static void ToolbarDraw() {
                   else {
                       { const char* const nms[2] = { "Poses", "Festejos" }; seg(1410, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, s_jKind, nms); y += rowH + 6.0f * k; }
                       const int nMax = s_jKind == 1 ? 162 : 45; float fn = (float)std::clamp(s_jN[s_jKind], 1, nMax);
-                      if (fld(2105, s_jKind == 1 ? "Festejo" : "Pose", fn, 0.08f, 1.0f, (float)nMax, "%.0f", s_jKind == 1 ? " de 162" : " de 45")) s_jN[s_jKind] = std::clamp((int)(fn + 0.5f), 1, nMax);
+                      if (fld(2105, s_jKind == 1 ? "Festejo" : "Pose", fn, 0.08f, 1.0f, (float)nMax, "%.0f", s_jKind == 1 ? " de 162" : " de 45")) { s_jN[s_jKind] = std::clamp((int)(fn + 0.5f), 1, nMax); s_jTouched = true; }
                       { const char* const nms[2] = { "Anterior", "Siguiente" }; seg(1414, ImVec2(fx0, y + 4.0f * k), ImVec2(fx1, y + rowH + 4.0f * k), 2, -1, nms); y += rowH + 10.0f * k; }
                       { const char* const nms[2] = { "En movimiento", "Quieto" }; seg(1418, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, J.pause ? 1 : 0, nms); y += rowH + 6.0f * k; }
                       { const char* const nms[2] = { "Normal", "Espejo" }; seg(1422, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, s_jMirror ? 1 : 0, nms); y += rowH + 6.0f * k; }
                       // se pide al soltar (arrastrando el numero no se carga un clip por cada paso)
                       const int want = (s_jKind << 12) | (s_jN[s_jKind] << 1) | (s_jMirror ? 1 : 0);
-                      if (s_jSent >= 0 && want != s_jSent && s_dragId != 2105 && s_editId != 2105) { s_jSent = want; MotorJugAnim(s_jKind, s_jKind == 1 ? 0x2b + s_jN[1] : s_jN[0] - 1, s_jMirror); }
+                      if (s_jTouched && want != s_jSent && s_dragId != 2105 && s_editId != 2105) { s_jSent = want; MotorJugAnim(s_jKind, s_jKind == 1 ? 0x2b + s_jN[1] : s_jN[0] - 1, s_jMirror); }
                       const char* const stt[4] = { "Eleg\xC3\xAD una pose o un festejo.", "Pidiendo la animaci\xC3\xB3n al juego...", "Animaci\xC3\xB3n puesta.", "El juego no acept\xC3\xB3 esa animaci\xC3\xB3n." };
                       text(lx, y + 9.0f * k, J.animSt == 3 ? IM_COL32(255, 150, 120, 255) : dim, stt[std::clamp(J.animSt, 0, 3)], fsS);
                   }
@@ -1306,10 +1306,10 @@ static void ToolbarDraw() {
         else if (id >= 1434 && id <= 1436) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[519][2] = (float)(id - 1434); }
         else if (id == 1440 || id == 1441) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[426][0] = (float)(id - 1440); }
         else if (id == 1404 || id == 1405) MotorJugSetFix(id == 1404);
-        else if (id == 1410 || id == 1411) { s_jKind = id - 1410; if (s_jSent < 0) s_jSent = -2; }
-        else if (id == 1414 || id == 1415) { const int nMax = s_jKind == 1 ? 162 : 45; int& n = s_jN[s_jKind]; n += id == 1414 ? -1 : 1; if (n < 1) n = nMax; if (n > nMax) n = 1; if (s_jSent < 0) s_jSent = -2; }
+        else if (id == 1410 || id == 1411) { s_jKind = id - 1410; s_jTouched = true; }
+        else if (id == 1414 || id == 1415) { const int nMax = s_jKind == 1 ? 162 : 45; int& n = s_jN[s_jKind]; n += id == 1414 ? -1 : 1; if (n < 1) n = nMax; if (n > nMax) n = 1; s_jTouched = true; }
         else if (id == 1418 || id == 1419) MotorJugPause(id == 1419);
-        else if (id == 1422 || id == 1423) { s_jMirror = id == 1423; if (s_jSent < 0) s_jSent = -2; }
+        else if (id == 1422 || id == 1423) { s_jMirror = id == 1423; s_jTouched = true; }
         else if (id == 2 || id == 21 || id == 220) MotorUiTogglePlayer();
         else if (id == 3) SetCam(!camFree);
         else if (id >= 10 && id < 14) { s_sel = id - 10; s_selObj = 0; }
