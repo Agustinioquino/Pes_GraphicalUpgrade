@@ -132,7 +132,7 @@ struct Pj {
     struct PoseK { int bone; float e[3]; }; PoseK pose[kPoseMax] = {}; int nPose = 0;   // (17/11 18:23) posar: giro por hueso sobre la animacion (grados)
     float boneW[3] = {}; bool boneWOk = false; int boneQ = -1;                          // lugar en el mundo del hueso que mira la interfaz (lo escribe el juego)
     // solo el hilo del juego
-    uint8_t* fd = nullptr; double tLoad = 0, tLast = 0, tPlay = 0; bool faceTried = false;
+    uint8_t* fd = nullptr; double tLoad = 0, tLast = 0, tPlay = 0; bool faceTried = false; bool ownSaid = false;
     float scW = 1.0f; void* scCtl = nullptr; float scBase = 0.0f;   // (17/11 tarde) tamano por root_main como FUN_141f87eb0
     float lastPos[3] = {}, lastYaw = 0.0f; void* posCtl = nullptr; int nMoved = 0;
     int clipA = -2, clipFail = -2, restartA = 0, seekA = 0, endTicks = 0; uint32_t seed = 0;   // clipA: el clip puesto
@@ -370,6 +370,98 @@ void FaceGesture(Pj& p, void* h, void* face, int g, float w, bool blink) {
     void** vt = *(void***)h; if (!vt || !((HumanOkFn)vt[2])(h)) return;
     ((FhSendFn)kFhSend)(face, hp, 3, 0);
 }
+// (17/11 19:31-19:45, Agustin: dedos, sonrisa y parpadeo en el saludo) clips propios (grupo "propias", hechos con tools/gani_cuerpo.py):
+// la cara y las manos van por cuadro desde src/motorpista.inc mientras corre el clip y el Inspector no tiene un gesto elegido.
+// Manos: el juego arma su juego de poses de mano (DAT_143803000, FUN_141ec1330) agregando en orden los 162 nombres de la lista del exe
+// 0x143535a50..0x143535f60 (la .data del exe en disco esta cifrada: la lista se lee en memoria). Solo si el juego tiene las 162 (cuenta
+// en +0x50 del juego, como FUN_141b05a60) el numero de pose = lugar en la lista; si no, manos neutras como siempre (modo 3).
+// Animadores (FUN_141ec21a0 evalua los tres): cara [ctl+0], mano izquierda [ctl+8], mano derecha [ctl+0x10] (INFERIDO: la secuencia del
+// juego guarda "handL" y despues "handR", y el cuadro de 300 B de FUN_141ec04b0 / FUN_141ec0960 los pasa a +8 y +0x10 en ese orden).
+// FUN_141ec4970 modo 0 = cara y manos desde los animadores.
+#include "motorpista.inc"
+const uintptr_t kHandList = 0x143535a50ull; const int kHandN = 162;
+static const char* s_handName[kHandN] = {}; static int s_handSt = 0;   // 0 sin leer, 1 lista usable, 2 no (solo el hilo del juego)
+static bool HandNameEq(const char* a, const char* b) { while (*a && *a == *b) { a++; b++; } return *b == 0 && (*a == 0 || *a == '.'); }
+int HandIndexOf(const char* n) {
+    __try {
+        if (s_handSt == 0) {
+            s_handSt = 2;
+            const uintptr_t set = *(const uintptr_t*)kHandResPtr;
+            const uint32_t cnt = PtrOk(set) ? *(const uint32_t*)(set + 0x50) : 0;
+            int ok = 0;
+            for (int i = 0; i < kHandN; i++) { const uintptr_t a = *(const uintptr_t*)(kHandList + 8ull * i); s_handName[i] = PtrOk(a) ? (const char*)a : nullptr; ok += s_handName[i] ? 1 : 0; }
+            if (cnt == (uint32_t)kHandN && ok == kHandN) s_handSt = 1;
+            Log("motor (manos): el juego tiene %u poses de mano; lista del exe %s (0 = %s, 161 = %s)", cnt, s_handSt == 1 ? "usada" : "NO usada (manos neutras)",
+                s_handName[0] ? s_handName[0] : "?", s_handName[kHandN - 1] ? s_handName[kHandN - 1] : "?");
+        }
+        if (s_handSt != 1 || !n) return -1;
+        for (int i = 0; i < kHandN; i++) if (HandNameEq(s_handName[i], n)) return i;
+    } __except (1) { s_handSt = 2; }
+    return -1;
+}
+const OwnTrack* OwnTrackOf(int clip) {
+    if (clip < 0 || clip >= kClipN) return nullptr;
+    for (const OwnTrack& t : kOwnTracks) if (!strcmp(t.file, kClipRows[clip].file)) return &t;
+    return nullptr;
+}
+// capa 0 la pose de ahora (peso a), capa 1 la anterior (1 - a); 2 y 3 apagadas. Poses de un cuadro: tiempo 0.
+static void HandLayers(void* an, int c, int pv, float a) {
+    if (!an || c < 0) return;
+    if (((AnimGetClipFn)kAnimGetClip)(an, 0) != (uint32_t)c) ((AnimSetBaseFn)kAnimSetBase)(an, 0, (uint32_t)c, 0, 0, 0, 0);
+    ((AnimTimeFn)kAnimTime)(an, 0, 0.0f); ((AnimWeightFn)kAnimWeight)(an, 0, pv >= 0 ? a : 1.0f);
+    if (pv >= 0 && a < 0.999f) {
+        if (((AnimGetClipFn)kAnimGetClip)(an, 1) != (uint32_t)pv) ((AnimSetBaseFn)kAnimSetBase)(an, 1, (uint32_t)pv, 0, 0, 0, 0);
+        ((AnimTimeFn)kAnimTime)(an, 1, 0.0f); ((AnimWeightFn)kAnimWeight)(an, 1, 1.0f - a);
+    } else ((AnimWeightFn)kAnimWeight)(an, 1, 0.0f);
+    ((AnimWeightFn)kAnimWeight)(an, 2, 0.0f); ((AnimWeightFn)kAnimWeight)(an, 3, 0.0f);
+}
+static void Blink(Pj& p, void* an, float t, bool blink) {
+    float bw = 0.0f;
+    if (blink) {
+        if (((AnimGetClipFn)kAnimGetClip)(an, 4) != 0xa8u) { uint64_t m = 0xb8a0bf169f98ull; ((AddMaskFn)kAddMask)(&m, 2); ((AnimSetClipFn)kAnimSetClip)(an, 4, 0xa8u, 0, 0, 0, m); }
+        const float per = 3.2f + (float)(p.seed % 7) * 0.15f, ph = fmodf(t + (float)(p.seed % 97) * 0.031f, per);
+        if (ph < 0.26f) { bw = 1.0f; ((AnimTimeFn)kAnimTime)(an, 4, ph); }
+    }
+    ((AnimWeightFn)kAnimWeight)(an, 4, bw);
+    for (uint32_t l = 5; l < 8; l++) ((AnimWeightFn)kAnimWeight)(an, l, 0.0f);
+}
+// claves de la pista: cambio suave en 6 cuadros. Cara: capa 0 la de ahora, 1 la anterior, 2 base_normal con el resto, 4 parpadeo.
+void OwnFace(Pj& p, void* h, void* face, const OwnTrack* tr, float tc, bool blink) {
+    void* an = nullptr; memcpy(&an, face, 8); if (!an || !h || !tr || tr->n <= 0) return;
+    const float fr = std::max(0.0f, tc) * 30.0f;
+    int i = 0; while (i + 1 < tr->n && (float)tr->keys[i + 1].frame <= fr) i++;
+    const OwnKey& k = tr->keys[i]; const OwnKey* q = i > 0 ? &tr->keys[i - 1] : nullptr;
+    const float a = q ? std::clamp((fr - (float)k.frame) / 6.0f, 0.0f, 1.0f) : 1.0f;
+    const int g = FaceIndexOf(k.face), gq = q ? FaceIndexOf(q->face) : -1;
+    float w0 = g >= 0 ? a * std::clamp(k.faceW, 0.0f, 1.0f) : 0.0f, w1 = gq >= 0 ? (1.0f - a) * std::clamp(q->faceW, 0.0f, 1.0f) : 0.0f;
+    if (g >= 0) {
+        if (((AnimGetClipFn)kAnimGetClip)(an, 0) != (uint32_t)g) ((AnimSetBaseFn)kAnimSetBase)(an, 0, (uint32_t)g, 0, 0, 0, 0);
+        ((AnimTimeFn)kAnimTime)(an, 0, (fr - (float)k.frame) / 30.0f);
+    }
+    ((AnimWeightFn)kAnimWeight)(an, 0, w0);
+    if (gq >= 0 && w1 > 0.001f) {
+        if (((AnimGetClipFn)kAnimGetClip)(an, 1) != (uint32_t)gq) ((AnimSetBaseFn)kAnimSetBase)(an, 1, (uint32_t)gq, 0, 0, 0, 0);
+        ((AnimTimeFn)kAnimTime)(an, 1, (fr - (float)q->frame) / 30.0f);
+    } else w1 = 0.0f;
+    ((AnimWeightFn)kAnimWeight)(an, 1, w1);
+    const float wr = std::max(0.0f, 1.0f - w0 - w1);
+    if (kBaseNormal >= 0 && wr > 0.001f) {
+        if (((AnimGetClipFn)kAnimGetClip)(an, 2) != (uint32_t)kBaseNormal) ((AnimSetBaseFn)kAnimSetBase)(an, 2, (uint32_t)kBaseNormal, 0, 0, 0, 0);
+        ((AnimTimeFn)kAnimTime)(an, 2, tc); ((AnimWeightFn)kAnimWeight)(an, 2, wr);
+    } else ((AnimWeightFn)kAnimWeight)(an, 2, 0.0f);
+    ((AnimWeightFn)kAnimWeight)(an, 3, 0.0f);
+    Blink(p, an, tc, blink);
+    const int hl = HandIndexOf(k.handL), hr = HandIndexOf(k.handR);
+    const int ql = q ? HandIndexOf(q->handL) : -1, qr = q ? HandIndexOf(q->handR) : -1;
+    void* anL = nullptr; void* anR = nullptr; memcpy(&anL, (const uint8_t*)face + 8, 8); memcpy(&anR, (const uint8_t*)face + 0x10, 8);
+    const bool hands = s_handSt == 1 && hl >= 0 && hr >= 0 && anL && anR;
+    if (hands) { HandLayers(anL, hl, ql, a); HandLayers(anR, hr, qr, a); }
+    if (!p.ownSaid) { p.ownSaid = true; Log("motor (clip propio): %s con cara y manos de la pista (%d claves; manos %s)", tr->file, tr->n, hands ? "del clip" : "neutras"); }
+    ((FhEvalFn)kFhEval)(face, 0.0f);
+    void* hp = nullptr; memcpy(&hp, (const uint8_t*)h + 0x148, 8); if (!hp) return;
+    void** vt = *(void***)h; if (!vt || !((HumanOkFn)vt[2])(h)) return;
+    ((FhSendFn)kFhSend)(face, hp, hands ? 0 : 3, 0);
+}
 // (17/11 prueba 03:19: "no el escalar") la escala del hueso raiz se escribia (registro: 1.00 -> 1.38) y no se veia: la raiz del esqueleto no
 // pasa su escala a los demas huesos. Ahora se escala la matriz de la raiz del controlador: las tres filas del giro en [ctl+0x188] + 0xa0 /
 // + 0xb0 / + 0xc0 (las que escribe FUN_141afccc0, con la posicion en + 0xd0) se dejan con largo = escala pedida. Asi se agranda todo el
@@ -538,7 +630,11 @@ int Update(Pj& p, const Pj& w, double now) {
         ((FdPushFn)kFdPush)(p.fd);
         void* h = nullptr; memcpy(&h, p.fd + 0x48, 8);
         void* face = FaceEnsure(p);
-        if (h && face) { if (w.face >= 0 && w.face < kFaceN) FaceGesture(p, h, face, w.face, w.faceW, w.blink); else ((FaceNeutralFn)kFaceNeutral)(h, face, 0); }
+        const OwnTrack* own = w.face < 0 ? OwnTrackOf(p.clipA) : nullptr;     // clip propio: su cara y sus manos (si no hay gesto elegido)
+        if (h && face) {
+            if (own) OwnFace(p, h, face, own, ctl ? ((ClipTimeFn)kClipTime)(ctl, 0, 1) : (float)p.tPlay, w.blink);
+            else if (w.face >= 0 && w.face < kFaceN) FaceGesture(p, h, face, w.face, w.faceW, w.blink); else ((FaceNeutralFn)kFaceNeutral)(h, face, 0);
+        }
         if (h) { const uint8_t vis = *((const uint8_t*)h + 0x5a); if (p.hidden ? vis != 0 : vis == 0) ((HumanShowFn)kHumanShow)(h, p.hidden ? 0 : 1); }   // (ojo del panel Escena)
         return 1;
     } __except (1) { s_dead.store(true); return -1; }
