@@ -114,7 +114,7 @@ typedef char(__fastcall* HumanOkFn)(void*);
 struct GStr { union { char buf[16]; char* ptr; }; size_t size, cap; };
 
 const int kMax = kMotorPjMax;
-constexpr int kPoseMax = 24;
+constexpr int kPoseMax = 32;
 struct Pj {
     // lo escribe la interfaz (con s_mx)
     int state = 0;                  // 0 libre, 1 pedido, 2 cargando, 3 listo, 4 fallo, 5 sacar
@@ -146,6 +146,10 @@ struct Pj {
     // (17/11 22:55, "no coinciden correctamente") contactos de la pareja de clips propios (ContactIK): solo el hilo del juego
     int partner = -1; float lift = 0.0f, shr[2] = { 0.0f, 0.0f }; double cLog = 0.0; int cN = 0;
     struct Snap { bool ok = false; float t = 0; float hand[2][3] = {}; float chest[3] = {}; float X[3] = {}; float sc = 1.0f; } sn[2];
+    // (17/11 23:08, Agustin: "darme opciones para editar las animaciones en tiempo real, mover huesos, expresiones, con ayudas de ia")
+    // EDITOR: lugares de los huesos en el mundo para la vista (los escribe el juego, con s_mx) y mano / pie agarrado (lo escribe la interfaz)
+    float bw[32][3] = {}; int bwN = 0; int bpar[32] = {}; int blab[32] = {}; float bax[3][3] = {}; float bsc = 1.0f;
+    int grab = -1; float grabT[3] = {};       // 0 mano izq, 1 mano der, 2 pie izq, 3 pie der; grabT = punto en el mundo
 };
 // (17/11 17:21-17:22, prueba de Agustin con B35F155B y captura) el PRIMER jugador que se crea al abrir el Motor sale sin remera, con el short a
 // medias y sin medias; los que se agregan despues (aun con el mismo id) salen vestidos, y sacarlo y volver a agregarlo lo viste (reusa el
@@ -158,6 +162,72 @@ std::atomic<int> s_sel{-1};
 std::atomic<bool> s_dead{false};
 std::atomic<double> s_lastTick{0.0};
 char s_msg[200] = {};               // con s_mx
+// ---- (17/11 23:08, Agustin: "enfoquemonos en darme opciones para editar las animaciones gani en tiempo real, mover huesos, expresiones,
+// con ayudas de ia") EDITOR: claves por jugador encima del clip. Cada clave tiene un segundo y, por hueso, un giro (grados en los ejes del
+// modelo, como POSAR: primero Z, despues X, despues Y). Entre claves cada hueso va por su curva: Fluida (pasa por las claves con
+// velocidad, Catmull-Rom), Con peso (frena y arranca en cada clave) o Lineal. Lo que no tiene claves queda en la pose fija de POSAR.
+// "Auto clave": tocar un hueso guarda (o cambia) la clave del segundo actual.
+constexpr int kEdB = 32, kEdK = 96;
+struct EdKey { float t; uint32_t mask; float e[kEdB][3]; };
+struct EdLayer { int n = 0; EdKey k[kEdK]; };
+static EdLayer s_ed[kMax];                    // con s_mx
+static int s_edInterp = 0; static bool s_edAuto = true;     // con s_mx
+static EdKey s_edClip; static bool s_edClipOk = false;      // copiar / pegar clave
+static int EdKeyAt(const EdLayer& L, float t) { for (int i = 0; i < L.n; i++) if (fabsf(L.k[i].t - t) < 0.5f / 30.0f) return i; return -1; }
+static int EdKeyNew(EdLayer& L, float t) {
+    if (L.n >= kEdK) return -1;
+    int at = L.n; while (at > 0 && L.k[at - 1].t > t) { L.k[at] = L.k[at - 1]; at--; }
+    memset(&L.k[at], 0, sizeof L.k[at]); L.k[at].t = t; L.n++; return at; }
+static bool EdEvalBone(const EdLayer& L, int b, float t, int mode, float* e) {
+    int id[kEdK], m = 0; const uint32_t bit = 1u << b;
+    for (int i = 0; i < L.n; i++) if (L.k[i].mask & bit) id[m++] = i;
+    if (!m) return false;
+    if (m == 1 || t <= L.k[id[0]].t) { memcpy(e, L.k[id[0]].e[b], 12); return true; }
+    if (t >= L.k[id[m - 1]].t) { memcpy(e, L.k[id[m - 1]].e[b], 12); return true; }
+    int j = 0; while (j + 1 < m && L.k[id[j + 1]].t <= t) j++;
+    const EdKey& A = L.k[id[j]]; const EdKey& B = L.k[id[j + 1]]; const float dt = std::max(1e-4f, B.t - A.t), u = std::clamp((t - A.t) / dt, 0.0f, 1.0f);
+    if (mode == 2) { for (int c = 0; c < 3; c++) e[c] = A.e[b][c] + (B.e[b][c] - A.e[b][c]) * u; return true; }
+    if (mode == 1) { const float s = u * u * (3.0f - 2.0f * u); for (int c = 0; c < 3; c++) e[c] = A.e[b][c] + (B.e[b][c] - A.e[b][c]) * s; return true; }
+    // Fluida: Hermite con la velocidad de los vecinos (Catmull-Rom con tiempos distintos); en las puntas, velocidad 0
+    const EdKey* P0 = j > 0 ? &L.k[id[j - 1]] : nullptr; const EdKey* P3 = j + 2 < m ? &L.k[id[j + 2]] : nullptr;
+    const float u2 = u * u, u3 = u2 * u, h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2;
+    for (int c = 0; c < 3; c++) {
+        const float m0 = P0 ? (B.e[b][c] - P0->e[b][c]) / std::max(1e-4f, B.t - P0->t) * dt : 0.0f;
+        const float m1 = P3 ? (P3->e[b][c] - A.e[b][c]) / std::max(1e-4f, P3->t - A.t) * dt : 0.0f;
+        e[c] = h00 * A.e[b][c] + h10 * m0 + h01 * B.e[b][c] + h11 * m1; }
+    return true;
+}
+// giro del hueso en el editor (grados) <-> cuaternion, mismo orden que PoseApply: q = Ry * Rx * Rz
+static void EulQ(const float* e, float* q) {
+    const float hx = e[0] * 0.00872665f, hy = e[1] * 0.00872665f, hz = e[2] * 0.00872665f;
+    const float qx[4] = { sinf(hx), 0, 0, cosf(hx) }, qy[4] = { 0, sinf(hy), 0, cosf(hy) }, qz[4] = { 0, 0, sinf(hz), cosf(hz) };
+    const float x = qy[3] * qx[0], y = qy[1] * qx[3], z = -qy[1] * qx[0], w = qy[3] * qx[3];      // qy * qx
+    const float t[4] = { x, y, z, w };
+    q[0] = t[3] * qz[0] + t[0] * qz[3] + t[1] * qz[2] - t[2] * qz[1]; q[1] = t[3] * qz[1] - t[0] * qz[2] + t[1] * qz[3] + t[2] * qz[0];
+    q[2] = t[3] * qz[2] + t[0] * qz[1] - t[1] * qz[0] + t[2] * qz[3]; q[3] = t[3] * qz[3] - t[0] * qz[0] - t[1] * qz[1] - t[2] * qz[2]; }
+static void QEul(const float* q, float* e) {
+    const float x = q[0], y = q[1], z = q[2], w = q[3];
+    const float m11 = 1 - 2 * (y * y + z * z), m13 = 2 * (x * z + y * w), m21 = 2 * (x * y + z * w), m22 = 1 - 2 * (x * x + z * z), m23 = 2 * (y * z - x * w), m31 = 2 * (x * z - y * w), m33 = 1 - 2 * (x * x + y * y);
+    const float sx = std::clamp(-m23, -1.0f, 1.0f); e[0] = asinf(sx) * 57.29578f;
+    if (fabsf(m23) < 0.99999f) { e[1] = atan2f(m13, m33) * 57.29578f; e[2] = atan2f(m21, m22) * 57.29578f; } else { e[1] = atan2f(-m31, m11) * 57.29578f; e[2] = 0.0f; } }
+// guarda el giro de un hueso: clave del segundo t (Auto clave o si ya hay claves) o pose fija (con s_mx tomado)
+static void EdPutLocked(int i, float t, int bone, const float* e) {
+    Pj& p = s_pj[i]; EdLayer& L = s_ed[i];
+    if (bone < 0 || bone >= kEdB) return;
+    if (s_edAuto || L.n > 0) { int k = EdKeyAt(L, t); if (k < 0) k = EdKeyNew(L, t); if (k < 0) return;
+        if (e) { memcpy(L.k[k].e[bone], e, 12); L.k[k].mask |= 1u << bone; } else L.k[k].mask &= ~(1u << bone); return; }
+    for (int k = 0; k < p.nPose; k++) if (p.pose[k].bone == bone) { if (e) memcpy(p.pose[k].e, e, 12); else { for (int q = k; q + 1 < p.nPose; q++) p.pose[q] = p.pose[q + 1]; p.nPose--; } return; }
+    if (!e || p.nPose >= kPoseMax) return;
+    int at = p.nPose; while (at > 0 && p.pose[at - 1].bone > bone) { p.pose[at] = p.pose[at - 1]; at--; }
+    p.pose[at].bone = bone; memcpy(p.pose[at].e, e, 12); p.nPose++; }
+// la pose del segundo t: claves + pose fija (con s_mx tomado)
+static void EdEvalLocked(int i, float t, Pj::PoseK* out, int* n) {
+    const Pj& p = s_pj[i]; const EdLayer& L = s_ed[i]; int m = 0;
+    for (int b = 0; b < kEdB && m < kPoseMax; b++) {
+        float e[3] = { 0, 0, 0 }; bool any = EdEvalBone(L, b, t, s_edInterp, e);
+        for (int k = 0; k < p.nPose; k++) if (p.pose[k].bone == b) { for (int c = 0; c < 3; c++) e[c] += p.pose[k].e[c]; any = true; }
+        if (any) { out[m].bone = b; memcpy(out[m].e, e, 12); m++; } }
+    *n = m; }
 bool s_pumpSaid = false;            // hilo del juego
 // clips de cuerpo pedidos al gestor del juego (compartidos entre jugadores); solo el hilo del juego
 const int kClipMax = 40;
@@ -549,7 +619,8 @@ static bool ReadRootPos(void* ctl, float* o) { const uintptr_t R = *(const uintp
 static const char* SkName(uint32_t h) { for (const auto& e : kSkNames) if (e.h == h) return e.n; return nullptr; }
 struct SkDesc { uintptr_t desc = 0; int n = 0; int par[400]; bool parOk = false; uint32_t hash[400]; bool hashOk = false;
     // (17/11 22:55) papeles de los huesos para los contactos (0 izquierda, 1 derecha), por los padres y el lugar (SkRoles)
-    bool roleTried = false, roleOk = false; int head = -1, chest = -1, thigh[2] = { -1, -1 }, foot[2] = { -1, -1 }, up[2] = { -1, -1 }, fo[2] = { -1, -1 }, hand[2] = { -1, -1 }; };
+    bool roleTried = false, roleOk = false; int head = -1, chest = -1, thigh[2] = { -1, -1 }, foot[2] = { -1, -1 }, up[2] = { -1, -1 }, fo[2] = { -1, -1 }, hand[2] = { -1, -1 };
+    int lab[400]; };      // (23:08) nombre de cada hueso para el editor (MotorBoneLabel); 0 = sin nombre
 static SkDesc s_sk[kMax];
 // (17/11 22:55, registro de la prueba de las 19:53 con B4FCF296) en el FixDemoHuman [[ctl+0x100]+0x20] es el mismo objeto que [ctl+0x88]
 // (el de los lugares en +0x50): su +0xf8 es un puntero, no la cantidad. La cantidad esta en +0x18 (0x14 = 20, igual que ctl+0x18 / +0x1c,
@@ -702,26 +773,38 @@ static bool SkRoles(int slot, SkDesc& d, const float* P) {
     const int cl = gp(d.up[0]); d.chest = gp(cl); if (d.chest < 0) return bad("sin pecho");
     float L[4]; for (int k = 0; k < 2; k++) { float v[3]; VSub(P + d.fo[k] * 4, P + d.up[k] * 4, v); L[k * 2] = VLen(v); VSub(P + d.hand[k] * 4, P + d.fo[k] * 4, v); L[k * 2 + 1] = VLen(v); }
     for (int k = 0; k < 4; k++) if (L[k] < 0.12f || L[k] > 0.5f) return bad("largos de brazo raros");
+    {   // nombres para el editor: 1 raiz, 2 cadera, 3 columna, 4 pecho, 5 cuello, 6 cabeza, 7-10 clavicula / brazo / antebrazo / mano izq,
+        // 11-14 der, 15-17 muslo / pierna / pie izq, 18-20 der
+        for (int i = 0; i < n; i++) d.lab[i] = 0;
+        for (int i = 0; i < n; i++) if (d.par[i] < 0) d.lab[i] = 1;
+        const int hips = gp(d.thigh[0]); if (hips >= 0 && d.lab[hips] == 0) d.lab[hips] = 2;
+        for (int j = gp(d.chest), g = 0; j >= 0 && j != hips && g < 16; j = gp(j), g++) if (!d.lab[j]) d.lab[j] = 3;
+        d.lab[d.chest] = 4; d.lab[d.head] = 6; if (gp(d.head) >= 0 && gp(d.head) != d.chest) d.lab[gp(d.head)] = 5;
+        for (int k = 0; k < 2; k++) { if (gp(d.up[k]) >= 0 && gp(d.up[k]) != d.chest) d.lab[gp(d.up[k])] = 7 + 4 * k; d.lab[d.up[k]] = 8 + 4 * k; d.lab[d.fo[k]] = 9 + 4 * k; d.lab[d.hand[k]] = 10 + 4 * k;
+            d.lab[d.thigh[k]] = 15 + 3 * k; d.lab[gp(d.foot[k])] = 16 + 3 * k; d.lab[d.foot[k]] = 17 + 3 * k; }
+    }
     Log("motor (contactos): jugador %d: cabeza %d, pecho %d, muslos %d/%d, pies %d/%d, brazo izq %d-%d-%d (%.1f + %.1f cm), der %d-%d-%d (%.1f + %.1f cm)", slot + 1,
         d.head, d.chest, d.thigh[0], d.thigh[1], d.foot[0], d.foot[1], d.up[0], d.fo[0], d.hand[0], L[0] * 100, L[1] * 100, d.up[1], d.fo[1], d.hand[1], L[2] * 100, L[3] * 100);
     { char b[1600]; int o = 0; for (int i = 0; i < n && o < 1500; i++) o += snprintf(b + o, sizeof b - o, "%s%d(%.2f %.2f %.2f)", i ? " " : "", i, P[i * 4], P[i * 4 + 1], P[i * 4 + 2]); Log("motor (contactos): lugares en el modelo: %s", b); }
     return true;
 }
-// IK de dos huesos en el espacio del modelo: el codo se dobla para la distancia y el brazo entero gira para apuntar al objetivo
-static void ArmIK(float* Q, float* P, const SkDesc& d, int k, const float* T, const float* upM) {
-    const int u = d.up[k], f = d.fo[k], h = d.hand[k];
+// IK de dos huesos en el espacio del modelo: el codo (o la rodilla) se dobla para la distancia y la cadena entera gira para apuntar al
+// objetivo. Re / Rs = los dos giros hechos (codo primero, despues la cadena desde el hombro), para pasarlos a la pose del editor.
+static void IK2(float* Q, float* P, const SkDesc& d, int u, int f, int h, const float* T, const float* upM, float* Re, float* Rs) {
+    V3(Re, 0, 0, 0); Re[3] = 1; V3(Rs, 0, 0, 0); Rs[3] = 1;
     float S[3], E[3], W[3]; memcpy(S, P + u * 4, 12); memcpy(E, P + f * 4, 12); memcpy(W, P + h * 4, 12);
     float uv[3], vv[3], st[3]; VSub(E, S, uv); VSub(W, E, vv); VSub(T, S, st);
     const float a = VLen(uv), b = VLen(vv); if (a < 1e-3f || b < 1e-3f) return;
     const float dT = std::clamp(VLen(st), fabsf(a - b) + 0.01f, (a + b) * 0.995f);
     float nx[3]; VCross(uv, vv, nx);
-    if (!VNorm(nx)) { float back[3]; VCross(uv, upM, back); VCross(back, uv, nx); if (!VNorm(nx)) return; }   // brazo recto: dobla hacia abajo
+    if (!VNorm(nx)) { float back[3]; VCross(uv, upM, back); VCross(back, uv, nx); if (!VNorm(nx)) return; }   // recto: dobla hacia abajo
     const float beta = acosf(std::clamp(VDot(uv, vv) / (a * b), -1.0f, 1.0f));          // 0 = recto
     const float beta2 = 3.14159265f - acosf(std::clamp((a * a + b * b - dT * dT) / (2.0f * a * b), -1.0f, 1.0f));
-    float R[4]; QAxisAng(nx, beta2 - beta, R); RotSub(Q, P, d.n, d.par, f, R, E);
+    QAxisAng(nx, beta2 - beta, Re); RotSub(Q, P, d.n, d.par, f, Re, E);
     float W2[3], sw[3]; memcpy(W2, P + h * 4, 12); VSub(W2, S, sw);
-    QFromTo(sw, st, R); RotSub(Q, P, d.n, d.par, u, R, S);
+    QFromTo(sw, st, Rs); RotSub(Q, P, d.n, d.par, u, Rs, S);
 }
+static void ArmIK(float* Q, float* P, const SkDesc& d, int k, const float* T, const float* upM) { float Re[4], Rs[4]; IK2(Q, P, d, d.up[k], d.fo[k], d.hand[k], T, upM, Re, Rs); }
 static void ContactIK(Pj& p, void* ctl, float dtR) {
     const int slot = (int)(&p - s_pj); SkDesc& d = s_sk[slot];
     p.sn[1] = p.sn[0]; p.sn[0].ok = false;
@@ -813,6 +896,45 @@ static void ContactIK(Pj& p, void* ctl, float dtR) {
                 p.shr[0] * 57.3f, p.shr[1] * 57.3f, p.lift * 100.0f, diff, s0.sc, o.sn[0].sc); }
     } __except (1) { return; }
 }
+// ---- (23:08) EDITOR en el hilo del juego: mano / pie agarrado (IK hacia el punto del mouse, el giro queda en la pose del editor) y los
+// lugares de todos los huesos en el mundo para la vista (puntos, anillos, nombres)
+static void EdPutGame(int slot, float t, int bone, const float* e) { std::lock_guard<std::mutex> lk(s_mx); EdPutLocked(slot, t, bone, e); }
+static void StoreBones(Pj& p, const float (*bw)[3], int n, const int* par, const int* lab, const float (*ax)[3], float sc) {
+    std::lock_guard<std::mutex> lk(s_mx); p.bwN = n; memcpy(p.bw, bw, sizeof(float) * 3 * n); memcpy(p.bpar, par, sizeof(int) * n); memcpy(p.blab, lab, sizeof(int) * n); memcpy(p.bax, ax, sizeof p.bax); p.bsc = sc; }
+static void EditPass(Pj& p, void* ctl, const Pj& w) {
+    const int slot = (int)(&p - s_pj); SkDesc& d = s_sk[slot];
+    if (!d.parOk || d.n < 2) return;
+    float bw[32][3]; int par[32], lab[32], n = 0; float ax[3][3]; float sc = 1.0f; bool ok = false;
+    int wb[2] = { -1, -1 }; float we[2][3] = {}; float tNow = 0.0f;
+    __try {
+        const uintptr_t qa = *(const uintptr_t*)((uintptr_t)ctl + 0x20); const uintptr_t r = *(const uintptr_t*)((uintptr_t)ctl + 0x88); if (!PtrOk(qa) || !PtrOk(r)) return;
+        const uintptr_t pa = *(const uintptr_t*)(r + 0x50); if (!PtrOk(pa)) return;
+        float* Q = (float*)qa; float* P = (float*)pa;
+        if (!d.roleTried) { d.roleTried = true; d.roleOk = SkRoles(slot, d, P); }
+        RootX X; if (!RootGet(ctl, X)) return;
+        tNow = ((ClipTimeFn)kClipTime)(ctl, 0, 1);
+        if (d.roleOk && w.grab >= 0 && w.grab < 4) {      // agarrar: IK de la cadena hacia el punto, y el giro hecho pasa a la pose
+            const int k = w.grab & 1; const bool leg = w.grab >= 2;
+            const int u = leg ? d.thigh[k] : d.up[k], f = leg ? d.par[d.foot[k]] : d.fo[k], h = leg ? d.foot[k] : d.hand[k];
+            if (u >= 0 && f >= 0 && h >= 0 && u < kEdB && f < kEdB) {
+                float upM[3]; const float up[3] = { 0, 1, 0 }; DirToModel(X, up, upM); VNorm(upM);
+                float Tm[3]; ToModel(X, w.grabT, Tm); float Re[4], Rs[4]; IK2(Q, P, d, u, f, h, Tm, upM, Re, Rs);
+                float Ou[4] = { 0, 0, 0, 1 }, Of[4] = { 0, 0, 0, 1 };
+                for (int q = 0; q < w.nPose; q++) { if (w.pose[q].bone == u) EulQ(w.pose[q].e, Ou); if (w.pose[q].bone == f) EulQ(w.pose[q].e, Of); }
+                // aplicado sobre la pose: hombro Rs * Ou; codo Rs * Re * Of * Rs^-1 (PoseApply gira primero el hombro y despues el codo)
+                float nu[4], t1[4], t2[4], nf[4]; const float Rsi[4] = { -Rs[0], -Rs[1], -Rs[2], Rs[3] };
+                QMul(Rs, Ou, nu); QMul(Rs, Re, t1); QMul(t1, Of, t2); QMul(t2, Rsi, nf);
+                wb[0] = u; QEul(nu, we[0]); wb[1] = f; QEul(nf, we[1]);
+            }
+        }
+        n = std::min(d.n, 32);
+        for (int i = 0; i < n; i++) { ToWorld(X, P + i * 4, bw[i]); par[i] = d.par[i]; lab[i] = d.roleOk ? d.lab[i] : 0; }
+        for (int r2 = 0; r2 < 3; r2++) { float v[3] = { X.A[r2 * 3], X.A[r2 * 3 + 1], X.A[r2 * 3 + 2] }; VNorm(v); memcpy(ax[r2], v, 12); }
+        sc = p.sn[0].ok ? p.sn[0].sc : 1.0f; ok = true;
+    } __except (1) { return; }
+    for (int q = 0; q < 2; q++) if (wb[q] >= 0) EdPutGame(slot, tNow, wb[q], we[q]);
+    if (ok) StoreBones(p, bw, n, par, lab, ax, sc);
+}
 // (17/11 20:45, Agustin: "la animacion no vuelve hacia atras", "no respetan sus posiciones") vf4 solo va para adelante y el recorrido
 // de la raiz se va sumando al lugar del jugador: al mover el clip con FUN_141afa7b0 el lugar queda donde estaba. En los clips propios
 // (que caminan) se vuelve la raiz al lugar puesto, el clip a 0 y se repasa con vf4 hasta el segundo pedido (como si hubiera corrido).
@@ -865,13 +987,16 @@ int Update(Pj& p, const Pj& w, double now) {
         memcpy(&ctl, p.fd + 0x50, 8);
         if (ctl) PoseApply(p, ctl, w);
         if (ctl) ContactIK(p, ctl, (float)dt);         // (22:55) contactos de la pareja de clips propios
+        if (ctl) EditPass(p, ctl, w);                   // (23:08) editor: agarrar mano / pie y lugares de los huesos para la vista
         if (ctl && !w.paused && w.mode == 0) {      // si el clip no da la vuelta solo (como la banca): 6 cuadros quieto en el final -> al principio
             const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1), cur = ((ClipTimeFn)kClipTime)(ctl, 0, 1);
             if (len > 0.2f && cur >= len - 0.003f) { if (++p.endTicks >= 6) { if (walk) { Replay(p, ctl, 0.0f); p.tPlay = 0.0; } else ((ClipSeekFn)kClipSeek)(ctl, 0, 0, 0.0f, 1, 1); p.endTicks = 0; } } else p.endTicks = 0;
         }
         if (ctl) StoreTimes(p, ((ClipTimeFn)kClipLen)(ctl, 0, 1), ((ClipTimeFn)kClipTime)(ctl, 0, 1));
         RootMainScale(p, scale);
-        { float rw[3]; if (ctl && ReadRootPos(ctl, rw)) StoreWorld(p, rw); }
+        // (23:20 Agustin: "asegurate que el cursor siempre este abajo del jugador en las animaciones") el lugar de los iconos del piso es
+        // la cadera real en el mundo (x / z) a la altura de la raiz: los clips que caminan llevan el cuerpo y la raiz puede quedar atras
+        { float rw[3]; if (ctl && ReadRootPos(ctl, rw)) { for (int b = 0; b < p.bwN && b < 32; b++) if (p.blab[b] == 2) { rw[0] = p.bw[b][0]; rw[2] = p.bw[b][2]; break; } StoreWorld(p, rw); } }
         ((FdPushFn)kFdPush)(p.fd);
         void* h = nullptr; memcpy(&h, p.fd + 0x48, 8);
         void* face = FaceEnsure(p);
@@ -947,7 +1072,7 @@ void MotorPjTick(bool on, uintptr_t impl) {
     static Pj want[kMax];
     { std::lock_guard<std::mutex> lk(s_mx); for (int i = 0; i < kMax; i++) { const Pj& q = s_pj[i]; Pj& w = want[i];
         w.state = q.state; w.kind = q.kind; w.id = q.id; memcpy(w.name, q.name, sizeof w.name); memcpy(w.pos, q.pos, 12); w.yaw = q.yaw; w.scale = q.scale;
-        w.clip = q.clip; w.speed = q.speed; w.paused = q.paused; w.restart = q.restart; w.seek = q.seek; w.seekN = q.seekN; w.face = q.face; w.faceW = q.faceW; w.blink = q.blink; w.hidden = q.hidden; w.mode = q.mode; memcpy(w.pose, q.pose, sizeof w.pose); w.nPose = q.nPose; w.boneQ = q.boneQ; } }
+        w.clip = q.clip; w.speed = q.speed; w.paused = q.paused; w.restart = q.restart; w.seek = q.seek; w.seekN = q.seekN; w.face = q.face; w.faceW = q.faceW; w.blink = q.blink; w.hidden = q.hidden; w.mode = q.mode; EdEvalLocked(i, (float)q.tPlay, w.pose, &w.nPose); w.boneQ = q.boneQ; w.grab = q.grab; memcpy(w.grabT, q.grabT, 12); } }
     // (17/11 20:45, Agustin: "no respetan sus posiciones", "a la hora de chocar las manos las alturas no coinciden") pareja de clips
     // propios (kOwnPairs): con A en un jugador y B en otro, B se pone a la distancia del clip delante de A, mirandolo, y los dos van al
     // mismo segundo (al formarse la pareja arrancan juntos desde 0; despues B sigue el reloj, la velocidad, la pausa y el modo de A).
@@ -1144,4 +1269,74 @@ void MotorPjInfoGet(MotorPjInfo* o) {
     memcpy(o->msg, s_msg, sizeof o->msg); o->dead = s_dead.load();
 }
 
+
+// ---- (17/11 23:08) EDITOR: lo que usa la interfaz (motorgizmo.cpp)
+const char* MotorBoneLabel(int lab) {
+    static const char* const k[21] = { "", "Ra\xC3\xADz", "Cadera", "Columna", "Pecho", "Cuello", "Cabeza", "Clav\xC3\xAD" "cula izq.", "Brazo izq.", "Antebrazo izq.", "Mano izq.",
+        "Clav\xC3\xAD" "cula der.", "Brazo der.", "Antebrazo der.", "Mano der.", "Muslo izq.", "Pierna izq.", "Pie izq.", "Muslo der.", "Pierna der.", "Pie der." };
+    return lab >= 0 && lab < 21 ? k[lab] : ""; }
+bool MotorEdInfoGet(int i, MotorEdInfo* o) {
+    memset(o, 0, sizeof *o); if (i < 0 || i >= kMax) return false; std::lock_guard<std::mutex> lk(s_mx); const Pj& p = s_pj[i]; if (p.state != 3) return false;
+    o->n = std::min(p.bwN, 32); memcpy(o->pos, p.bw, sizeof o->pos); memcpy(o->par, p.bpar, sizeof o->par); memcpy(o->lab, p.blab, sizeof o->lab); memcpy(o->ax, p.bax, sizeof o->ax);
+    o->sc = p.bsc; o->curT = p.curT; o->lenT = p.lenT; const EdLayer& L = s_ed[i]; o->nKeys = L.n; for (int k = 0; k < L.n; k++) o->keyT[k] = L.k[k].t;
+    o->interp = s_edInterp; o->autoKey = s_edAuto; o->grab = p.grab; return o->n > 0; }
+bool MotorEdGet(int i, int bone, float* e) {
+    e[0] = e[1] = e[2] = 0.0f; if (i < 0 || i >= kMax || bone < 0 || bone >= kEdB) return false; std::lock_guard<std::mutex> lk(s_mx);
+    Pj::PoseK v[kPoseMax]; int n = 0; EdEvalLocked(i, s_pj[i].curT, v, &n);
+    for (int k = 0; k < n; k++) if (v[k].bone == bone) { memcpy(e, v[k].e, 12); return true; } return false; }
+// e = giro total que se quiere ver en el hueso (claves + pose fija): a la clave va lo que falta sobre la pose fija
+void MotorEdSet(int i, int bone, const float* e) {
+    if (i < 0 || i >= kMax || bone < 0 || bone >= kEdB) return; std::lock_guard<std::mutex> lk(s_mx); Pj& p = s_pj[i];
+    if (!e) { EdPutLocked(i, p.curT, bone, nullptr); return; }
+    float v[3] = { e[0], e[1], e[2] };
+    if (s_edAuto || s_ed[i].n > 0) for (int k = 0; k < p.nPose; k++) if (p.pose[k].bone == bone) for (int c = 0; c < 3; c++) v[c] -= p.pose[k].e[c];
+    EdPutLocked(i, p.curT, bone, v); }
+void MotorEdGrab(int i, int limb, const float* w) { if (i < 0 || i >= kMax) return; std::lock_guard<std::mutex> lk(s_mx); Pj& p = s_pj[i]; p.grab = (w && limb >= 0 && limb < 4) ? limb : -1; if (w) memcpy(p.grabT, w, 12); }
+void MotorEdOpt(int interp, int autoKey) { std::lock_guard<std::mutex> lk(s_mx); if (interp >= 0 && interp <= 2) s_edInterp = interp; if (autoKey >= 0) s_edAuto = autoKey != 0; }
+// op: 0 clave aqui con todo, 1 borrar la clave idx, 2 mover la clave idx al segundo t, 3 copiar la clave de aqui, 4 pegar aqui,
+// 5 sacar todo (claves y pose fija), 6 espejar lo editado aqui (izquierda <-> derecha), 7 ir a la clave idx (devuelve su segundo)
+float MotorEdKey(int i, int op, int idx, float t) {
+    if (i < 0 || i >= kMax) return -1.0f; std::lock_guard<std::mutex> lk(s_mx); Pj& p = s_pj[i]; EdLayer& L = s_ed[i]; const float now = p.curT;
+    auto all = [&](float at, float (*e)[3], uint32_t* mask) { Pj::PoseK v[kPoseMax]; int n = 0; EdEvalLocked(i, at, v, &n); *mask = 0;
+        for (int b = 0; b < kEdB; b++) V3(e[b], 0, 0, 0); for (int k = 0; k < n; k++) { memcpy(e[v[k].bone], v[k].e, 12); *mask |= 1u << v[k].bone; } };
+    if (op == 0) { static float e[kEdB][3]; uint32_t m = 0; all(now, e, &m);
+        for (int b = 0; b < kEdB && b < p.bwN; b++) if (p.blab[b]) m |= 1u << b;     // los huesos con nombre quedan fijos aca (aunque esten en 0)
+        p.nPose = 0; int k = EdKeyAt(L, now); if (k < 0) k = EdKeyNew(L, now); if (k < 0) return -1.0f;
+        memcpy(L.k[k].e, e, sizeof e); L.k[k].mask = m; return now; }
+    if (op == 1) { if (idx < 0 || idx >= L.n) return -1.0f; for (int q = idx; q + 1 < L.n; q++) L.k[q] = L.k[q + 1]; L.n--; return now; }
+    if (op == 2) { if (idx < 0 || idx >= L.n) return -1.0f; EdKey K = L.k[idx]; for (int q = idx; q + 1 < L.n; q++) L.k[q] = L.k[q + 1]; L.n--;
+        K.t = std::max(0.0f, t); const int at = EdKeyNew(L, K.t); if (at >= 0) L.k[at] = K; return K.t; }
+    if (op == 3) { uint32_t m = 0; all(now, s_edClip.e, &m); s_edClip.mask = m; s_edClipOk = m != 0; return now; }
+    if (op == 4) { if (!s_edClipOk) return -1.0f; int k = EdKeyAt(L, now); if (k < 0) k = EdKeyNew(L, now); if (k < 0) return -1.0f;
+        for (int b = 0; b < kEdB; b++) if (s_edClip.mask & (1u << b)) memcpy(L.k[k].e[b], s_edClip.e[b], 12); L.k[k].mask |= s_edClip.mask; return now; }
+    if (op == 5) { L.n = 0; p.nPose = 0; return now; }
+    if (op == 6) { static float e[kEdB][3], o[kEdB][3]; uint32_t m = 0; all(now, e, &m); int twin[kEdB];
+        for (int b = 0; b < kEdB; b++) { twin[b] = b; const int lb = b < p.bwN ? p.blab[b] : 0; if (!lb) continue;
+            const int want = (lb >= 7 && lb <= 10) ? lb + 4 : (lb >= 11 && lb <= 14) ? lb - 4 : (lb >= 15 && lb <= 17) ? lb + 3 : (lb >= 18 && lb <= 20) ? lb - 3 : lb;
+            for (int c = 0; c < kEdB && c < p.bwN; c++) if (p.blab[c] == want) twin[b] = c; }
+        uint32_t m2 = 0; for (int b = 0; b < kEdB; b++) { const int s2 = twin[b]; o[b][0] = e[s2][0]; o[b][1] = -e[s2][1]; o[b][2] = -e[s2][2]; if (m & (1u << s2)) m2 |= 1u << b; }
+        p.nPose = 0; int k = EdKeyAt(L, now); if (k < 0) k = EdKeyNew(L, now); if (k < 0) return -1.0f;
+        for (int b = 0; b < kEdB; b++) if (m2 & (1u << b)) memcpy(L.k[k].e[b], o[b], 12); L.k[k].mask |= m2; return now; }
+    if (op == 7) return idx >= 0 && idx < L.n ? L.k[idx].t : -1.0f;
+    return -1.0f; }
+// archivo de trabajo del editor (texto): "zfx_editor 1", "clip <archivo>", "suave <0-2>", y por clave "clave <segundo>" + "hueso <i> <x> <y> <z>"
+bool MotorEdSave(int i, const wchar_t* path) {
+    if (i < 0 || i >= kMax) return false; FILE* fp = nullptr; if (_wfopen_s(&fp, path, L"wb") || !fp) return false;
+    { std::lock_guard<std::mutex> lk(s_mx); const Pj& p = s_pj[i]; const EdLayer& L = s_ed[i];
+      fprintf(fp, "zfx_editor 1\nclip %s\nsuave %d\n", (p.clip >= 0 && p.clip < kClipN) ? kClipRows[p.clip].file : "-", s_edInterp);
+      for (int k = 0; k < L.n; k++) { fprintf(fp, "clave %.4f\n", L.k[k].t); for (int b = 0; b < kEdB; b++) if (L.k[k].mask & (1u << b)) fprintf(fp, "hueso %d %.3f %.3f %.3f\n", b, L.k[k].e[b][0], L.k[k].e[b][1], L.k[k].e[b][2]); }
+      for (int k = 0; k < p.nPose; k++) fprintf(fp, "fijo %d %.3f %.3f %.3f\n", p.pose[k].bone, p.pose[k].e[0], p.pose[k].e[1], p.pose[k].e[2]); }
+    fclose(fp); return true; }
+bool MotorEdLoad(int i, const wchar_t* path, char* clipOut, size_t cn) {
+    if (i < 0 || i >= kMax) return false; FILE* fp = nullptr; if (_wfopen_s(&fp, path, L"rb") || !fp) return false;
+    static EdLayer L; L.n = 0; Pj::PoseK fxp[kPoseMax]; int nf = 0; int interp = -1; char ln[256]; bool ok = false; if (clipOut && cn) clipOut[0] = 0;
+    while (fgets(ln, sizeof ln, fp)) { float t, x, y, z; int b; char nm[200];
+        if (!strncmp(ln, "zfx_editor", 10)) ok = true;
+        else if (sscanf_s(ln, "clip %199s", nm, (unsigned)sizeof nm) == 1) { if (clipOut && cn) snprintf(clipOut, cn, "%s", nm); }
+        else if (sscanf_s(ln, "suave %d", &b) == 1) interp = b;
+        else if (sscanf_s(ln, "clave %f", &t) == 1) { if (L.n < kEdK) { memset(&L.k[L.n], 0, sizeof L.k[L.n]); L.k[L.n].t = t; L.n++; } }
+        else if (sscanf_s(ln, "hueso %d %f %f %f", &b, &x, &y, &z) == 4) { if (L.n > 0 && b >= 0 && b < kEdB) { EdKey& K = L.k[L.n - 1]; K.e[b][0] = x; K.e[b][1] = y; K.e[b][2] = z; K.mask |= 1u << b; } }
+        else if (sscanf_s(ln, "fijo %d %f %f %f", &b, &x, &y, &z) == 4) { if (nf < kPoseMax && b >= 0 && b < kEdB) { fxp[nf].bone = b; fxp[nf].e[0] = x; fxp[nf].e[1] = y; fxp[nf].e[2] = z; nf++; } } }
+    fclose(fp); if (!ok) return false;
+    std::lock_guard<std::mutex> lk(s_mx); s_ed[i] = L; memcpy(s_pj[i].pose, fxp, sizeof(Pj::PoseK) * nf); s_pj[i].nPose = nf; if (interp >= 0 && interp <= 2) s_edInterp = interp; return true; }
 } // namespace fx

@@ -168,7 +168,7 @@ static double s_tipT = 0.0; static int s_tipId = -1; static ImVec2 s_tipA, s_tip
 // clic en el campo y escribir (las letras llegan por WM_CHAR, overlay.cpp MotorUiChar); Esc o la X lo borra. Con texto, la lista muestra
 // los clips de TODOS los grupos cuyo archivo contiene lo escrito (sin distinguir mayusculas).
 static std::mutex s_srMx; static char s_sr[48] = ""; static std::atomic<int> s_srOn{0};   // 0 nada, 1 clips, 2 gestos
-static int s_poseBone = 0; static int s_srTop = 0, s_srFTop = 0; static std::atomic<bool> s_srEsc{false};
+static int s_poseBone = 0; static bool s_edPts = true;   // (23:08) editor: puntos de los huesos en la vista static int s_srTop = 0, s_srFTop = 0; static std::atomic<bool> s_srEsc{false};
 struct PjClip { bool ok; float pos[3], yaw, scale, speed, faceW; int clip, face; bool paused, blink; }; static PjClip s_pjCb{};   // (07:23) copiar / pegar entre jugadores
 static bool SrMatch(const char* f, const char* q) { if (!q[0]) return true; for (; *f; f++) { const char* a = f; const char* b = q; while (*a && *b && tolower((unsigned char)*a) == tolower((unsigned char)*b)) { a++; b++; } if (!*b) return true; } return false; }
 bool MotorUiChar(unsigned c) {
@@ -1315,23 +1315,41 @@ static void ToolbarDraw() {
                   button(3342, "Este gesto a todos");
                   text(lx, y + 9.0f * k, dim, "El gesto sigue el reloj de la animaci\xC3\xB3n del jugador.", fsS); y += 26.0f * k;
               }
-              // (17/11 18:23, Agustin: "avanzar en el sistema avanzado") POSAR: girar huesos encima de la animacion (motorpj.cpp PoseApply).
-              // El hueso elegido se marca en la vista con un aro naranja.
-              if (label("POSAR (PRIMERA PARTE)")) { char b1[96], bn[64]; float e[3]; int nB = 0, nP = 0; float bw[3];
-                  const bool hasW = MotorPjPoseGet(qs, s_poseBone, e, &nB, &nP, bn, sizeof bn, bw);
-                  if (nB <= 0) { text(lx, y + 9.0f * k, dim, "Esperando el esqueleto del jugador...", fsS); y += 26.0f * k; }
-                  else { s_poseBone = std::clamp(s_poseBone, 0, nB - 1);
-                      snprintf(b1, sizeof b1, "%d / %d  \xC2\xB7  %s", s_poseBone, nB - 1, bn); arrowRow(3700, 3701, "Hueso", b1, true);
-                      bool ch = false; ch |= fld(2130, "Girar en X", e[0], 0.5f, -180.0f, 180.0f, "%.1f", "\xC2\xB0"); ch |= fld(2131, "Girar en Y", e[1], 0.5f, -180.0f, 180.0f, "%.1f", "\xC2\xB0"); ch |= fld(2132, "Girar en Z", e[2], 0.5f, -180.0f, 180.0f, "%.1f", "\xC2\xB0");
-                      if (ch) MotorPjPoseSet(qs, s_poseBone, e);
-                      y += 6.0f * k; snprintf(b1, sizeof b1, nP == 1 ? "1 hueso girado" : "%d huesos girados", nP); text(lx, y + 9.0f * k, dim, b1, fsS); y += 22.0f * k;
-                      button(3702, "Este hueso sin giro"); button(3703, "Sacar toda la pose");
-                      text(lx, y + 9.0f * k, dim, "Flechas del hueso: May\xC3\xBAs = de a 10. Lo que cuelga del hueso gira con \xC3\xA9l.", fsS); y += 26.0f * k;
-                      if (hasW) { float u, v; if (MotorGridProject(bw, &u, &v)) { ImDrawList* fg = ImGui::GetForegroundDrawList(); const ImVec2 c(u * ds.x, v * ds.y);
-                          fg->AddCircle(c, 9.0f * k, IM_COL32(0, 0, 0, 160), 20, 4.0f * k); fg->AddCircle(c, 9.0f * k, acc, 20, 2.2f * k); fg->AddCircleFilled(c, 2.5f * k, acc, 10);
-                          const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, bn); fg->AddRectFilled(ImVec2(c.x + 12.0f * k, c.y - ts.y * 0.5f - 3.0f * k), ImVec2(c.x + 20.0f * k + ts.x, c.y + ts.y * 0.5f + 3.0f * k), IM_COL32(18, 18, 20, 220), 3.0f * k);
-                          fg->AddText(font, fsS, ImVec2(c.x + 16.0f * k, c.y - ts.y * 0.5f), IM_COL32(240, 240, 240, 255), bn); } } }
-              }
+              // (17/11 23:08, Agustin: "enfoquemonos en darme opciones para editar las animaciones gani en tiempo real, mover huesos,
+              // expresiones, etc. con ayudas de ia"; 23:10 "la vista de huesos deberia ser mas responsiva para el usuario") EDITAR ANIMACION:
+              // los puntos de las articulaciones salen solos sobre el jugador elegido (BoneEditGizmo); clic = elegir, anillos = girar,
+              // cuadradito de mano / pie = agarrar (IK). Claves en la linea de tiempo; entre claves la curva elegida.
+              if (label("EDITAR ANIMACI\xC3\x93N")) { static MotorEdInfo E; char b1[96]; const bool hasE = MotorEdInfoGet(qs, &E);
+                  if (!hasE) { text(lx, y + 9.0f * k, dim, "Esperando los huesos del jugador...", fsS); y += 26.0f * k; }
+                  else {
+                      if (s_poseBone < 0 || s_poseBone >= E.n || !E.lab[s_poseBone]) { s_poseBone = -1; for (int bb = 0; bb < E.n; bb++) if (E.lab[bb] == 4) s_poseBone = bb; if (s_poseBone < 0) s_poseBone = 0; }
+                      snprintf(b1, sizeof b1, "%s", E.lab[s_poseBone] ? TRS(MotorBoneLabel(E.lab[s_poseBone])) : "-"); arrowRow(3700, 3701, "Hueso", b1, true);
+                      float e[3]; MotorEdGet(qs, s_poseBone, e); bool ch = false;
+                      ch |= fld(2130, "Adelante / atr\xC3\xA1s (X)", e[0], 0.5f, -180.0f, 180.0f, "%.1f", "\xC2\xB0"); ch |= fld(2131, "Girar (Y)", e[1], 0.5f, -180.0f, 180.0f, "%.1f", "\xC2\xB0"); ch |= fld(2132, "Al costado (Z)", e[2], 0.5f, -180.0f, 180.0f, "%.1f", "\xC2\xB0");
+                      if (ch) MotorEdSet(qs, s_poseBone, e);
+                      y += 6.0f * k;
+                      auto two = [&](int ia, const char* ta, int ib, const char* tb) { const float mid = (fx0 + fx1) * 0.5f;
+                          const ImVec2 a0(fx0, y + 4.0f * k), a1(mid - 3.0f * k, y + rowH + 6.0f * k), b0(mid + 3.0f * k, y + 4.0f * k), b1_(fx1, y + rowH + 6.0f * k);
+                          const bool ha = hit(ia, a0, a1), hb = hit(ib, b0, b1_);
+                          dl->AddRectFilled(a0, a1, ha ? IM_COL32(86, 86, 92, 255) : IM_COL32(66, 66, 70, 255), 3.0f * k); dl->AddRect(a0, a1, cLine, 3.0f * k); textC(a0, a1, ink, ta, fsS + 0.5f * k);
+                          dl->AddRectFilled(b0, b1_, hb ? IM_COL32(86, 86, 92, 255) : IM_COL32(66, 66, 70, 255), 3.0f * k); dl->AddRect(b0, b1_, cLine, 3.0f * k); textC(b0, b1_, ink, tb, fsS + 0.5f * k);
+                          y += rowH + 12.0f * k; };
+                      two(3709, "Clave aqu\xC3\xAD (K)", 3710, "Borrar clave");
+                      two(3714, "\xE2\x97\x80 Clave anterior", 3715, "Clave siguiente \xE2\x96\xB6");
+                      two(3711, "Copiar pose", 3712, "Pegar pose");
+                      two(3713, "Espejar (izq. \xE2\x86\x94 der.)", 3702, "Hueso sin giro");
+                      { text(lx, y + rowH * 0.5f, dim, "Entre claves", fsS + 1.0f * k); const char* const nms[3] = { "Fluida", "Con peso", "Lineal" };
+                        seg(3704, ImVec2(x0 + rightW * 0.42f, y), ImVec2(fx1, y + rowH), 3, E.interp, nms); y += rowH + 8.0f * k; }
+                      { text(lx, y + rowH * 0.5f, dim, "Auto clave", fsS + 1.0f * k); const char* const nms[2] = { "S\xC3\xAD", "No" };
+                        seg(3707, ImVec2(x0 + rightW * 0.42f, y), ImVec2(fx1, y + rowH), 2, E.autoKey ? 0 : 1, nms); y += rowH + 8.0f * k; }
+                      { text(lx, y + rowH * 0.5f, dim, "Puntos", fsS + 1.0f * k); const char* const nms[2] = { "Ver", "Ocultar" };
+                        seg(3718, ImVec2(x0 + rightW * 0.42f, y), ImVec2(fx1, y + rowH), 2, s_edPts ? 0 : 1, nms); y += rowH + 8.0f * k; }
+                      snprintf(b1, sizeof b1, E.nKeys == 1 ? TRS("1 clave (rombos en la l\xC3\xADnea de tiempo)") : TRS("%d claves (rombos en la l\xC3\xADnea de tiempo)"), E.nKeys); text(lx, y + 9.0f * k, dim, b1, fsS); y += 22.0f * k;
+                      two(3716, "Guardar trabajo", 3717, "Abrir trabajo");
+                      button(3703, "Sacar todo lo editado");
+                      text(lx, y + 9.0f * k, dim, "Clic en un punto del jugador = elegir. Anillos = girar.", fsS); y += 18.0f * k;
+                      text(lx, y + 9.0f * k, dim, "Cuadradito de mano o pie = agarrar y llevar.", fsS); y += 26.0f * k;
+                  } }
           }
       } else if (s_sel >= 4) {
           if (s_sel - 4 < s_nLights) { MotorLight& L = s_lights[s_sel - 4]; char b1[96];
@@ -1920,9 +1938,29 @@ static void ToolbarDraw() {
             else if (id == 3342) { MotorPjFaceSet(-1, PI.face[q], PI.faceW[q], PI.blink[q]); Note("Gesto puesto a todos"); }
             else if (id == 3343) MotorPjFaceSet(q, -1, PI.faceW[q], PI.blink[q]);
         }
-        else if (id >= 3700 && id <= 3703) { const int q = MotorPjSel(); const int stp = (GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 10 : 1;
-            if (id == 3700) s_poseBone = std::max(0, s_poseBone - stp); else if (id == 3701) s_poseBone += stp;
-            else if (q >= 0 && id == 3702) MotorPjPoseSet(q, s_poseBone, nullptr); else if (q >= 0 && id == 3703) { MotorPjPoseSet(q, -1, nullptr); Note("Pose sacada"); } }
+        else if (id >= 3700 && id <= 3719) { const int q = MotorPjSel();       // (23:08) EDITAR ANIMACION
+            static MotorEdInfo E; const bool hasE = q >= 0 && MotorEdInfoGet(q, &E);
+            auto seekKey = [&](float t) { if (t < 0.0f || q < 0) return; MotorPjInfo PI2; MotorPjInfoGet(&PI2); MotorPjSeek(q, t); MotorPjAnimSet(q, PI2.clip[q], PI2.speed[q], true); };
+            auto clipPath = [&](std::wstring& out) { MotorPjInfo PI2; MotorPjInfoGet(&PI2); const std::wstring& d = SceneDir(); if (d.empty() || q < 0) return false;
+                const char* f = PI2.clip[q] >= 0 ? MotorClipFile(PI2.clip[q]) : "parado"; char nm[160]; snprintf(nm, sizeof nm, "editor_%s.txt", f); out = ScenePath(nm); return true; };
+            if ((id == 3700 || id == 3701) && hasE) { const int dir = id == 3700 ? -1 : 1; int b = s_poseBone;      // solo los huesos con nombre
+                for (int g = 0; g < E.n; g++) { b = (b + dir + E.n) % E.n; if (E.lab[b]) break; } s_poseBone = b; }
+            else if (q < 0) {}
+            else if (id == 3702) { MotorEdSet(q, s_poseBone, nullptr); Note("Hueso sin giro"); }
+            else if (id == 3703) { MotorEdKey(q, 5, 0, 0.0f); Note("Se sac\xC3\xB3 todo lo editado"); }
+            else if (id >= 3704 && id <= 3706) { MotorEdOpt(id - 3704, -1); static const char* const nn[3] = { "Entre claves: fluida", "Entre claves: con peso", "Entre claves: lineal" }; Note("%s", TRS(nn[id - 3704])); }
+            else if (id == 3707 || id == 3708) MotorEdOpt(-1, id == 3707 ? 1 : 0);
+            else if (id == 3709) { if (MotorEdKey(q, 0, 0, 0.0f) >= 0.0f) Note("Clave guardada"); }
+            else if (id == 3710 && hasE) { int best = -1; for (int k2 = 0; k2 < E.nKeys; k2++) if (fabsf(E.keyT[k2] - E.curT) < 0.5f / 30.0f) best = k2; if (best >= 0) { MotorEdKey(q, 1, best, 0.0f); Note("Clave borrada"); } else Note("No hay clave en este cuadro"); }
+            else if ((id == 3714 || id == 3715) && hasE) { float t = -1.0f;
+                for (int k2 = 0; k2 < E.nKeys; k2++) { const float kt = E.keyT[k2]; if (id == 3714 ? kt < E.curT - 0.01f : kt > E.curT + 0.01f) { if (t < 0.0f || (id == 3714 ? kt > t : kt < t)) t = kt; } }
+                if (t >= 0.0f) seekKey(t); }
+            else if (id == 3711) { if (MotorEdKey(q, 3, 0, 0.0f) >= 0.0f) Note("Pose copiada"); }
+            else if (id == 3712) { if (MotorEdKey(q, 4, 0, 0.0f) >= 0.0f) Note("Pose pegada"); else Note("Primero copi\xC3\xA1 una pose"); }
+            else if (id == 3713) { MotorEdKey(q, 6, 0, 0.0f); Note("Pose espejada"); }
+            else if (id == 3716) { std::wstring f; if (clipPath(f) && MotorEdSave(q, f.c_str())) Note("Trabajo guardado (content\\motor-tiempo-real)"); else MotorErr("No se pudo guardar el trabajo del editor"); }
+            else if (id == 3717) { std::wstring f; char cl[160]; if (clipPath(f) && MotorEdLoad(q, f.c_str(), cl, sizeof cl)) Note("Trabajo abierto"); else MotorErr("No hay trabajo guardado para esta animaci\xC3\xB3n"); }
+            else if (id == 3718 || id == 3719) s_edPts = id == 3718; }
         else if (id >= 3600 && id <= 3604) { MotorLightSetReq(id - 3600); static const char* const nn[5] = { "Luces del Editar", "Luces: Default", "Luces: EditFace", "Luces: EditSpike", "Luces: MatchMenu" }; Note("%s", TRS(nn[id - 3600])); }
         else if ((id >= 3380 && id <= 3388)) {      // (18:01) pestanas de la lista, modo al terminar y desfase
             static MotorPjInfo PI; MotorPjInfoGet(&PI); const int q = MotorPjSel();
@@ -2064,6 +2102,7 @@ static void ToolbarDraw() {
           if (tSpc) kact(3502); else if (tCm) kact(3501); else if (tDot) kact(3503);      // (07:23) Espacio = reproducir / pausa, coma / punto = un cuadro atras / adelante
           else if (tG) kact(1); else if (tJ) kact(2); else if (tC) kact(3); else if (tV) kact(shift ? 741 : 740); else if (tZ) kact(742);
           else if (tT) kact(794); else if (tN) kact(795); else if (tX) kact(968);
+          else if (tap('K') && MotorPjSel() >= 0) { if (MotorEdKey(MotorPjSel(), 0, 0, 0.0f) >= 0.0f) { KbLabel("Clave aqu\xC3\xAD"); Note("Clave guardada"); } }
           else if (tH && s_sel == 3 && MotorPjSel() >= 0) { if (shift) { PjShowAll(); KbLabel("Mostrar todos"); } else { PjHideSel(); KbLabel("Ocultar / mostrar"); } }
           else if (tDel && s_sel == 3 && MotorPjSel() >= 0) { MotorPjRemove(MotorPjSel()); Note("Jugador sacado (Supr)"); }
           else if (tL) { bool any = false; for (int i = 0; i < s_nLights; i++) if (s_lights[i].on) any = true; kact(shift ? 702 : any ? 701 : 700); }
@@ -2431,15 +2470,30 @@ void MotorGizmoDraw() {
         const int q = MotorPageActive() && s_camFollow ? MotorPjSel() : -1; float p[3], yw, sc;
         if (q >= 0 && MotorPjGet(q, p, &yw, &sc)) {
             float wr[3]; if (MotorPjWorld(q, wr)) { p[0] = wr[0]; p[2] = wr[2]; }      // (20:47) la raiz animada (camina con el clip), no solo el lugar puesto
+            // (17/11 23:18, Agustin: "la camara de seguir va con muchos saltos") la raiz se actualiza con el reloj del juego, no con el de la
+            // pantalla, y la camara copiaba cada paso de golpe: ahora sigue un punto suavizado (se acerca al jugador con un retraso de ~0.15 s)
+            { static float s_sm[3]; static int s_smq = -1; const float dtu = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.1f), a = 1.0f - expf(-dtu * 7.0f);
+              if (s_smq != q) { memcpy(s_sm, p, sizeof s_sm); s_smq = q; } else for (int i = 0; i < 3; i++) s_sm[i] += (p[i] - s_sm[i]) * a;
+              memcpy(p, s_sm, sizeof s_sm); }
             if (q == s_fq) { const float d[3] = { p[0] - s_fp[0], p[1] - s_fp[1], p[2] - s_fp[2] };
                 float cp[3], cy, cpt;
                 if (fabsf(d[0]) + fabsf(d[2]) < 50.0f && !FreeCamOrtho() && FreeCamGetPose(cp, &cy, &cpt)) {
                     for (int i = 0; i < 3; i++) cp[i] += d[i];
-                    if (s_camFollow == 2) {     // mira la cara: la cabeza a 1.62 m por el tamano; giro y altura de la camara con suavidad
-                        const float hx = p[0] - cp[0], hy = p[1] + 1.62f * sc - cp[1], hz = p[2] - cp[2], hd = sqrtf(hx * hx + hz * hz);
+                    if (s_camFollow == 2) {     // mira la cara
+                        // (17/11 23:17, Agustin: "la camara de la cara no funciona correctamente, deberia seguir el rostro con un zoom, apuntar
+                        // siempre hacia la cara") antes miraba a 1.62 m sobre los pies desde donde estaba la camara: con el jugador agachado o
+                        // inclinado se perdia la cara. Ahora: el hueso real de la cabeza (MotorEdInfoGet), la camara se va adelante de la cara
+                        // a 1.05 m (cabeza y hombros) y la mira; lugar y giro con suavidad.
+                        static MotorEdInfo E; float H[3] = { p[0], p[1] + 1.62f * sc, p[2] }, fw[3] = { sinf(yw * 0.017453292f), 0.0f, cosf(yw * 0.017453292f) }; float s2 = sc;
+                        if (MotorEdInfoGet(q, &E)) { for (int b = 0; b < E.n; b++) if (E.lab[b] == 6) { memcpy(H, E.pos[b], 12);
+                            const float l = sqrtf(E.ax[2][0] * E.ax[2][0] + E.ax[2][2] * E.ax[2][2]); if (l > 0.1f) { fw[0] = E.ax[2][0] / l; fw[2] = E.ax[2][2] / l; } s2 = E.sc; } }
+                        const float F[3] = { H[0] + fw[0] * 0.05f * s2, H[1] + 0.07f * s2, H[2] + fw[2] * 0.05f * s2 };
+                        const float C[3] = { F[0] + fw[0] * 1.05f * s2, F[1] + 0.04f * s2, F[2] + fw[2] * 1.05f * s2 };
+                        const float af = 1.0f - expf(-std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.1f) * 5.0f); float c0[3]; for (int i = 0; i < 3; i++) { c0[i] = cp[i] - d[i]; cp[i] = c0[i] + (C[i] - c0[i]) * af; }
+                        const float hx = F[0] - cp[0], hy = F[1] - cp[1], hz = F[2] - cp[2], hd = sqrtf(hx * hx + hz * hz);
                         if (hd > 0.05f) { float ty = atan2f(hx, hz), tp = atan2f(hy, hd), dy = ty - cy;
                             while (dy > 3.14159265f) dy -= 6.2831853f; while (dy < -3.14159265f) dy += 6.2831853f;
-                            cy += dy * 0.18f; cpt += (tp - cpt) * 0.18f; } }
+                            cy += dy * std::min(1.0f, af * 2.0f); cpt += (tp - cpt) * std::min(1.0f, af * 2.0f); } }
                     if (fabsf(d[0]) + fabsf(d[1]) + fabsf(d[2]) > 1e-4f || s_camFollow == 2) FreeCamSetPose(cp, cy, cpt); } }
             s_fq = q; memcpy(s_fp, p, sizeof s_fp);
         } else s_fq = -1; }

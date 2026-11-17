@@ -702,6 +702,11 @@ void MotorPjTick(bool on, uintptr_t impl); int MotorPjAdd(int kind, uint32_t id)
 bool MotorPjGet(int i, float* pos, float* yaw, float* scale); bool MotorPjWorld(int i, float* w); void MotorPjSet(int i, const float* pos, float yaw, float scale); void MotorPjInfoGet(MotorPjInfo* o);
 // (17/11 06:36..06:38) duplicar, animacion y gesto por jugador (i = -1: a todos); clip -1 = parado; face -1 = cara neutra del juego
 int MotorPjDup(int i); void MotorPjAnimSet(int i, int clip, float speed, bool paused); void MotorPjRestart(int i); void MotorPjSeek(int i, float t); void MotorPjModeSet(int i, int mode); void MotorPjPoseSet(int i, int bone, const float* e); bool MotorPjPoseGet(int i, int bone, float* e, int* nBones, int* nPosed, char* name, size_t nn, float* world); bool MotorClipIsProp(int c); void MotorLightSetReq(int which); int MotorLightSetGet(int* state); void MotorPjFaceSet(int i, int face, float w, bool blink);
+// (17/11 23:08) EDITOR de animaciones (motorpj.cpp): huesos del jugador en el mundo, claves, agarrar mano / pie, archivo de trabajo
+struct MotorEdInfo { int n; float pos[32][3]; int par[32]; int lab[32]; float ax[3][3]; float sc, curT, lenT; int nKeys; float keyT[96]; int interp; bool autoKey; int grab; };
+const char* MotorBoneLabel(int lab); bool MotorEdInfoGet(int i, MotorEdInfo* o); bool MotorEdGet(int i, int bone, float* e); void MotorEdSet(int i, int bone, const float* e);
+void MotorEdGrab(int i, int limb, const float* w); void MotorEdOpt(int interp, int autoKey); float MotorEdKey(int i, int op, int idx, float t);
+bool MotorEdSave(int i, const wchar_t* path); bool MotorEdLoad(int i, const wchar_t* path, char* clipOut, size_t cn);
 int MotorClipCount(); const char* MotorClipFile(int i); int MotorClipGroup(int i); int MotorClipGroupCount(); const char* MotorClipGroupKey(int g); int MotorClipIdle(); int MotorFaceCount(); const char* MotorFaceName(int i);
 int MotorSceneLights(MotorLight* out, int max, MotorSceneInfo* info); bool MotorLightSetOn(const MotorLight& L, bool on); int MotorLightsRestore();
 bool MotorLightSetColor(const MotorLight& L, const float* rgba); bool MotorLightSetShadow(const MotorLight& L, bool on); bool MotorLightSetRange(const MotorLight& L, float r); bool MotorLightSetPos(const MotorLight& L, const float* xyz); bool MotorLightCan(const MotorLight& L, int what);
