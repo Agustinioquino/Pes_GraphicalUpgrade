@@ -286,6 +286,10 @@ def ik_pierna(pie, P, T, Qpie, ref):
     Qs = qm(Qt, qk)
     return qm(qi(Qh), Qt), qk, qm(qi(Qs), Qpie), norm(d) - L
 
+# (20:55, Agustin: "que sea adaptable para la altura de cada jugador", "mostrame una vista previa con distintas alturas") estatura de
+# cada jugador (1 = la del clip). Los puntos de encuentro ('mundo': choque, apreton) quedan a la altura media de los dos y los del otro
+# ('otro': la espalda en el abrazo) se toman del cuerpo del otro a su tamano; todo pasado a mi modelo (dividido por mi estatura).
+ESCALA = [1.0, 1.0]; YO = [0]
 def objetivo_mundo(o, Pyo, Potro, D):
     """punto de la muneca + direcciones en mi modelo"""
     lado_hueso = o['t']
@@ -293,7 +297,9 @@ def objetivo_mundo(o, Pyo, Potro, D):
     P = Pyo if quien == 'yo' else Potro
     pos, q = ((0, 0, 0), (0, 0, 0, 1)) if quien == 'mundo' else P[hueso]
     pw = add(pos, qrot(q, loc)); cd = qrot(q, o['codo']); dd = qrot(q, o['dedos']); pd = qrot(q, o['palma'])
-    if quien == 'otro': pw = al_otro(pw, D); cd = dir_otro(cd); dd = dir_otro(dd); pd = dir_otro(pd)
+    sy = ESCALA[YO[0]]; so = ESCALA[1 - YO[0]]; sm = 0.5 * (sy + so)
+    if quien == 'otro': pw = mul(al_otro(mul(pw, so), D * sm), 1.0 / sy); cd = dir_otro(cd); dd = dir_otro(dd); pd = dir_otro(pd)
+    elif quien == 'mundo': pw = mul(pw, sm / sy)
     dd = unit(dd); pd = unit(perp(pd, dd))
     return sub(pw, add(mul(dd, HANDO), mul(pd, 0.02))), cd, dd, pd     # muneca = centro de la palma - dedos - grosor
 
@@ -453,7 +459,7 @@ def armar(base, Js, D):
             rots.append(r); Ps.append(fk(r, rp, base.hips[f]))
         fin = []
         for i, J in enumerate(Js):
-            r = dict(rots[i]); P = Ps[i]; Po = Ps[1 - i]
+            r = dict(rots[i]); P = Ps[i]; Po = Ps[1 - i]; YO[0] = i
             for lado in ('R', 'L'):
                 w = pista(J.brazos[lado]['w'], f)
                 if w <= 0: continue
