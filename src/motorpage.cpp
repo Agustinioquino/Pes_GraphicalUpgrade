@@ -404,7 +404,10 @@ static void UiTick(void* win) {
     // pedido se carga tambien el del visor, como en 5F08210D. Esconderlo sin perder la vista principal queda para despues.
     bool anyPj = false; for (int i = 0; i < 32 && !anyPj; i++) { float p3[3], y = 0, sc = 1; anyPj = MotorPjGet(i, p3, &y, &sc); }
     // (17:22) con el jugador del Editar oculto ya no hace falta cargarlo: el visor corre su cuadro con la lista vacia (motorvista.cpp)
-    const bool wantPlayer = s_uiPlayer.load(std::memory_order_relaxed) || (anyPj && !MotorVistaEditorHidden());
+    // (17/11 17:52, captura de Agustin: con el jugador del Editar oculto, NINGUN jugador propio sale vestido) la ropa de los jugadores
+    // propios sale del uniforme que el visor del Editar carga para su jugador: con jugadores propios el jugador del Editar se carga
+    // siempre; "Oculto" solo lo deja en la escena del visor (motorvista s_hideEd), no lo saca.
+    const bool wantPlayer = s_uiPlayer.load(std::memory_order_relaxed) || anyPj;
     if (wantPlayer != s_uiPlayerShown) {
         static double askT = -1.0;
         if (wantPlayer) {

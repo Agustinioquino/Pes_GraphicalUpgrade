@@ -264,6 +264,10 @@ bool Create(Pj& p, int slot, const uint8_t* visorLid) {
                 ((LoadIdFn)kLoadId)(nullptr, p.lid, 0, 0, pl, 0, 0, 0, 0, 0);
             }
             LidUnique(p, slot);
+            if (p.reload) {      // (17/11 17:50, Agustin: "salio sin estar vestido messi") el recreado reusaba el MISMO modelo (registro: mismo puntero,
+                                 // "listo en 0.0 s"): el juego guarda el modelo por LoadId. El primero (el que sale sin ropa) se pide con tres espacios
+                                 // de mas en el nombre; asi el recreado, con el nombre de verdad, es un modelo nuevo y nunca se reusa el roto.
+                char* nm = (char*)p.lid + 0x58; const size_t l = strnlen(nm, 0x3d); if (l + 3 < 0x3d) { memcpy(nm + l, "   ", 3); nm[l + 3] = 0; } }
             fd[0x490] = 0; fd[0x514] = 0;                   // sin efectos de lluvia / aliento
             ((FdLoadFn)kFdLoad)(fd, p.lid, 0u, 0, 0);
         }

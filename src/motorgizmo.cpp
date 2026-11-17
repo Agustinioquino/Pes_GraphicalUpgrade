@@ -1435,6 +1435,14 @@ static void ToolbarDraw() {
                         else if (paused || ref < 0) dl->AddTriangleFilled(ImVec2(c.x - r * 0.7f, c.y - r), ImVec2(c.x - r * 0.7f, c.y + r), ImVec2(c.x + r, c.y), ic);
                         else { dl->AddRectFilled(ImVec2(c.x - r * 0.8f, c.y - r), ImVec2(c.x - r * 0.25f, c.y + r), ic); dl->AddRectFilled(ImVec2(c.x + r * 0.25f, c.y - r), ImVec2(c.x + r * 0.8f, c.y + r), ic); } }
                     const char* const nms[2] = { "El elegido", "Todos" }; const float sx0 = b.x - 230.0f * k;
+                    {   // (17/11 17:52, Agustin: "una opcion para reproducir en camara lenta o frame a frame en la linea de tiempo") velocidad
+                        static const float kSp[4] = { 0.1f, 0.25f, 0.5f, 1.0f }; static const char* const kSpN[4] = { "0,1\xC3\x97", "0,25\xC3\x97", "0,5\xC3\x97", "1\xC3\x97" };
+                        const float sw = 46.0f * k, s0 = cx + 5.0f * (bw + 4.0f * k) + 14.0f * k; const float cur = ref >= 0 ? TI.speed[ref] : 1.0f;
+                        if (s0 + 4.0f * (sw + 3.0f * k) < sx0 - 8.0f * k)
+                            for (int i = 0; i < 4; i++) { const ImVec2 p0(s0 + (float)i * (sw + 3.0f * k), cy), p1(p0.x + sw, cy + bh); const bool hv = hit(3510 + i, p0, p1);
+                                const bool on = ref >= 0 && fabsf(cur - kSp[i]) < 0.01f;
+                                dl->AddRectFilled(p0, p1, on ? IM_COL32(240, 138, 36, 255) : hv ? IM_COL32(86, 86, 92, 255) : IM_COL32(56, 56, 60, 255), 3.0f * k);
+                                textC(p0, p1, on ? IM_COL32(20, 20, 20, 255) : ink, kSpN[i], fsS - 0.5f * k); } }
                     if (sx0 > cx + 5.0f * (bw + 4.0f * k) + 10.0f * k) seg(3505, ImVec2(sx0, cy), ImVec2(b.x - 40.0f * k, cy + bh), 2, s_tlAll ? 1 : 0, nms);
                     xBtn(3507, b.x - 18.0f * k, a.y + rowH * 0.5f);      // ocultar la linea de tiempo (Ver > Linea de tiempo la vuelve a mostrar)
                     if (ref >= 0) { char t[64]; snprintf(t, sizeof t, "%.2f / %.2f s   cuadro %d", TI.curT[ref], TI.lenT[ref], (int)(TI.curT[ref] * 30.0f + 0.5f)); text(a.x + 150.0f * k, a.y + rowH * 0.5f, ink, t, fsS); }
@@ -1745,6 +1753,12 @@ static void ToolbarDraw() {
         else if (id == 3524) MenuTestStop();
         else if (id == 3525 || id == 3526) s_atScene = (s_atScene + (id == 3526 ? 1 : PerfSceneCount() - 1)) % std::max(1, PerfSceneCount());
         else if (id == 3527 || id == 3528) s_atBypass = id == 3528;
+        else if (id >= 3510 && id <= 3513) {      // (17:52) velocidad de la linea de tiempo: al elegido o a todos (segun "El elegido / Todos")
+            static const float kSp[4] = { 0.1f, 0.25f, 0.5f, 1.0f }; const float sp = kSp[id - 3510];
+            static MotorPjInfo PI; MotorPjInfoGet(&PI); const int qs = MotorPjSel(); int n = 0;
+            for (int i = 0; i < kMotorPjMax; i++) { if (PI.st[i] != 3 || (!s_tlAll && qs >= 0 && i != qs)) continue; MotorPjAnimSet(i, PI.clip[i], sp, PI.paused[i]); n++; }
+            Note(n ? "Velocidad %.2fx" : "No hay jugadores listos", sp);
+        }
         else if (id >= 3500 && id <= 3507) {      // (06:52) linea de tiempo: principio, cuadro atras, reproducir / pausa, cuadro adelante, final
             static MotorPjInfo PI; MotorPjInfoGet(&PI);
             if (id == 3505 || id == 3506) s_tlAll = id == 3506;
