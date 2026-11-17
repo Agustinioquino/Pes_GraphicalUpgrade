@@ -47,6 +47,11 @@ const uintptr_t kResMgr = 0x141b08cf0ull, kResFind = 0x141b079e0ull, kGaniQueue 
 const uintptr_t kAnimResMgr = 0x141ed1770ull, kAnimResFind = 0x141ed1700ull, kClipIdx = 0x141afa060ull;
 const uintptr_t kBoneScale = 0x141afa3c0ull, kRootScale = 0x141afa690ull, kBoneIdxTab = 0x1438032e0ull;
 const uintptr_t kDbPtr = 0x143714240ull;
+// (17/11 prueba de Agustin 05:13: aparecen pero no se mueven) leido en el C: vf1 / vf2 copian fd+8..+0x14 a la raiz del controlador
+// UNA vez (FUN_141afd060(ctl, x, y, z, 0) + FUN_141afccc0(ctl, giro * pi / 180, 0)) y la base para cuando el clip da la vuelta a
+// fd+0x18..+0x24 (FUN_141f86d40 la vuelve a poner con fd+0x416). Escribir fd+8 despues no mueve nada: al cambiar el pedido se llaman
+// esas dos funciones (como el juego) y se copia tambien la base de la vuelta.
+const uintptr_t kRootPos = 0x141afd060ull, kRootYaw = 0x141afccc0ull;
 const char* const kClipPath = "cpk_dat/common/demo/anime/FoxAnim/FixDemo/Animations/dml_ent_aisle_cmn_idle01.gani";   // parado esperando (pasillo)
 
 typedef void*(__fastcall* AllocFn)(uint32_t*, size_t, size_t);
@@ -71,6 +76,8 @@ typedef void*(__fastcall* AnimResFindFn)(void*, void*);
 typedef uint32_t(__fastcall* ClipIdxFn)(void*, const char*);
 typedef void(__fastcall* BoneScaleFn)(void*, int, float);
 typedef void(__fastcall* RootScaleFn)(void*, float);
+typedef void(__fastcall* RootPosFn)(void*, float, float, float, char);
+typedef void(__fastcall* RootYawFn)(void*, float, char);
 struct GStr { union { char buf[16]; char* ptr; }; size_t size, cap; };
 
 const int kMax = 8;
@@ -82,6 +89,7 @@ struct Pj {
     // solo el hilo del juego
     uint8_t* fd = nullptr; double t0 = 0, tLoad = 0; bool faceTried = false;
     void* scCtl = nullptr; float scBase = 1.0f, scW = 0.0f; int rootIdx = -1;
+    float lastPos[3] = {}, lastYaw = 0.0f; void* posCtl = nullptr; int nMoved = 0;
     uint8_t lid[0xa0] = {};
 };
 Pj s_pj[kMax];
@@ -198,7 +206,19 @@ void* FaceEnsure(Pj& p) {
     uint32_t saved = 0, id = 0x19; ((HeapPushFn)kHeapPush)(&saved, &id); ((FdVf3Fn)f3)(p.fd, 0, 0, 0); ((HeapPopFn)kHeapPop)(&saved);
     memcpy(&face, p.fd + 0x58, 8); return face;
 }
-void Place(Pj& p, const float* pos, float yaw) { memcpy(p.fd + 8, &pos[0], 4); memcpy(p.fd + 0xc, &pos[1], 4); memcpy(p.fd + 0x10, &pos[2], 4); memcpy(p.fd + 0x14, &yaw, 4); }
+void Place(Pj& p, const float* pos, float yaw) { memcpy(p.fd + 8, &pos[0], 4); memcpy(p.fd + 0xc, &pos[1], 4); memcpy(p.fd + 0x10, &pos[2], 4); memcpy(p.fd + 0x14, &yaw, 4);
+    memcpy(p.fd + 0x18, &pos[0], 4); memcpy(p.fd + 0x1c, &pos[1], 4); memcpy(p.fd + 0x20, &pos[2], 4); memcpy(p.fd + 0x24, &yaw, 4); }
+// lugar y giro a la raiz del controlador del cuerpo, solo cuando cambian (o hay controlador nuevo)
+void RootMove(Pj& p, const float* pos, float yaw) {
+    void* ctl = nullptr; memcpy(&ctl, p.fd + 0x50, 8); if (!ctl) return;
+    if (ctl == p.posCtl && !memcmp(pos, p.lastPos, 12) && yaw == p.lastYaw) return;
+    Place(p, pos, yaw);
+    ((RootPosFn)kRootPos)(ctl, pos[0], pos[1], pos[2], 0);
+    ((RootYawFn)kRootYaw)(ctl, yaw * 0.017453292f, 0);
+    const bool first = ctl != p.posCtl;
+    p.posCtl = ctl; memcpy(p.lastPos, pos, 12); p.lastYaw = yaw;
+    if (!first && p.nMoved++ < 4) Log("motor (jugadores propios): jugador movido a (%.2f, %.2f, %.2f) giro %.1f", pos[0], pos[1], pos[2], yaw);
+}
 bool Start(Pj& p, void* res, const float* pos, float yaw) {
     __try {
         Place(p, pos, yaw);
@@ -211,6 +231,7 @@ bool Start(Pj& p, void* res, const float* pos, float yaw) {
         p.faceTried = false; FaceEnsure(p);
         void* h = nullptr; memcpy(&h, p.fd + 0x48, 8); if (h) ((HumanShowFn)kHumanShow)(h, 1);
         void* ctl = nullptr; memcpy(&ctl, p.fd + 0x50, 8);
+        p.posCtl = ctl; memcpy(p.lastPos, pos, 12); p.lastYaw = yaw;   // vf1 ya puso este lugar en la raiz
         p.t0 = Now(); p.scCtl = nullptr; p.scW = 0.0f;
         return ctl != nullptr;
     } __except (1) { s_dead.store(true); return false; }
@@ -222,11 +243,12 @@ void ScaleApply(Pj& p, float want) {
     const float cur = *(const float*)(arr + (size_t)p.rootIdx * 4); if (!(cur > 0.01f && cur < 100.0f)) return;
     if (ctl != p.scCtl || fabsf(cur - p.scW) > 1e-5f) { p.scCtl = ctl; p.scBase = cur; p.scW = cur; }      // controlador nuevo o el juego volvio a poner la estatura
     const float s = p.scBase * want;
-    if (fabsf(s - p.scW) > 1e-5f) { ((BoneScaleFn)kBoneScale)(ctl, p.rootIdx, s); ((RootScaleFn)kRootScale)(ctl, s); p.scW = s; }
+    if (fabsf(s - p.scW) > 1e-5f) { ((BoneScaleFn)kBoneScale)(ctl, p.rootIdx, s); ((RootScaleFn)kRootScale)(ctl, s); p.scW = s;
+        static int nl = 0; if (nl++ < 6) Log("motor (jugadores propios): tamano %.2f (estatura del juego %.4f, raiz %d) escrito", want, p.scBase, p.rootIdx); }
 }
 int Update(Pj& p, const float* pos, float yaw, float scale) {
     __try {
-        Place(p, pos, yaw);
+        RootMove(p, pos, yaw);
         ((FdVf4Fn)kFdVf4)(p.fd, (float)(Now() - p.t0));
         ScaleApply(p, scale);
         ((FdPushFn)kFdPush)(p.fd);
