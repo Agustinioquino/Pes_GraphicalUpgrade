@@ -83,7 +83,13 @@ static void __fastcall hk_Bone(uintptr_t upd, uintptr_t buf) {
     static std::atomic<int> nl{0};
     const bool on = s_on.load(std::memory_order_relaxed);
     uintptr_t ctl = 0;
-    if ((on || s_applied || s_paused) && UpdCtl(upd, &ctl)) {
+    // un solo controlador a la vez: si en el mismo cuadro corre otro (otro modelo con su pose), no se toca; uno nuevo se toma recien
+    // cuando el anterior dejo de correr (0,1 s), asi su lugar de fabrica se lee antes de escribirle nada
+    static ULONGLONG s_ctlT = 0; const ULONGLONG nowMs = GetTickCount64();
+    const bool have = (on || s_applied || s_paused) && UpdCtl(upd, &ctl);
+    if (have && s_applied && ctl != s_ctl && nowMs - s_ctlT < 100) { o_bone(upd, buf); return; }
+    if (have && ctl == s_ctl) s_ctlT = nowMs;
+    if (have) {
         if (on) {
             s_seen.store(true, std::memory_order_relaxed);
             float u[3] = { s_uPos[0].load(), s_uPos[1].load(), s_uPos[2].load() }; const float yaw = s_uYaw.load() * 0.017453292f, sc = s_uScale.load();
@@ -92,7 +98,7 @@ static void __fastcall hk_Bone(uintptr_t upd, uintptr_t buf) {
                 float b[3];
                 if ((!ident || s_applied) && RootRead(ctl, b)) {
                     if (ctl != s_ctl || !s_applied) { memcpy(s_base, b, sizeof b); if (nl.fetch_add(1) < 6) Log("motor (jugador): controlador del clip %p (hilo %lu): lugar de fabrica (%.2f, %.2f, %.2f) m", (void*)ctl, GetCurrentThreadId(), b[0], b[1], b[2]); }
-                    s_ctl = ctl; s_upd = upd; s_applied = true; memcpy(s_prevU, u, sizeof u);
+                    s_ctl = ctl; s_upd = upd; s_applied = true; s_ctlT = nowMs; memcpy(s_prevU, u, sizeof u);
                 }
             }
             if (s_applied && ctl == s_ctl) {
