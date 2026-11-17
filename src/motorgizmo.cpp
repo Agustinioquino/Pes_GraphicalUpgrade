@@ -222,7 +222,9 @@ static std::string AtUtf8(const std::string& in) {      // los textos de menutes
     bool ok = true; for (size_t i = 0; i < in.size() && ok;) { const unsigned char c = (unsigned char)in[i]; const int n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 0;
         if (!n || i + n > in.size()) { ok = false; break; } for (int q = 1; q < n; q++) if (((unsigned char)in[i + q] >> 6) != 2) ok = false; i += n; }
     if (ok) return in; std::string o; for (unsigned char c : in) { if (c < 0x80) o += (char)c; else { o += (char)(0xC0 | (c >> 6)); o += (char)(0x80 | (c & 0x3F)); } } return o; }
-static std::atomic<int> s_tlZone{-1}, s_tlWheel{0};   // (06:52) zona de la linea de tiempo: la rueda encima corre las pistas
+static std::atomic<int> s_tlZone{-1}, s_tlWheel{0};
+// (17/11 07:50, Agustin: "le falta a la barra de inspector poder usar el mouse") el Inspector se corre con la rueda y con una barra de desplazamiento
+static std::atomic<int> s_inZone{-1}, s_inWheel{0}; static float s_inScroll = 0.0f, s_inMax = 0.0f, s_inDragY0 = 0.0f, s_inDragS0 = 0.0f; static bool s_inDrag = false; static int s_inSelWas = -1;   // (06:52) zona de la linea de tiempo: la rueda encima corre las pistas
 static std::atomic<int> s_treeZone{-1};      // zona del arbol de escena (la rueda encima corre la lista de luces)
 static const int kMenuOrd[7] = { 0, 6, 1, 2, 3, 4, 5 };      // orden de los menus en la barra: Archivo, Editar, Escena, Ver, Render, Luces, Ayuda
 static void Note(const char* fmt, ...) { va_list ap; va_start(ap, fmt); vsnprintf(s_note, sizeof s_note, TRS(fmt), ap); va_end(ap); s_noteT = Now(); Log("motor (editor): %s", s_note); }
@@ -633,7 +635,8 @@ static void ToolbarDraw() {
             if (a < 0.999f) { const ImU32 al = (ImU32)((float)(v.col >> 24) * std::max(0.0f, a)); v.col = (v.col & 0x00ffffffu) | (al << 24); } } };
     int hot = -1; const int hp = s_hotPrev;
     bool hitOff = false;      // (15/11 o) panel abriendo / cerrando: sus botones no se pueden tocar
-    auto hit = [&](int id, const ImVec2& a, const ImVec2& b) { if (!hitOff && mx >= a.x && mx <= b.x && my >= a.y && my <= b.y) hot = id; return hp == id && !hitOff; };
+    float hitY0 = -1.0e9f, hitY1 = 1.0e9f;      // (07:50) parte visible del Inspector corrido: lo tapado no se toca
+    auto hit = [&](int id, const ImVec2& a, const ImVec2& b) { if (!hitOff && mx >= a.x && mx <= b.x && my >= a.y && my <= b.y && my >= hitY0 && my <= hitY1) hot = id; return hp == id && !hitOff; };
     auto text = [&](float x, float yc, ImU32 c, const char* t, float size) { t = TRS(t); const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t); dl->AddText(font, size, ImVec2(x, yc - ts.y * 0.5f), c, t); return ts.x; };
     auto textC = [&](const ImVec2& a, const ImVec2& b, ImU32 c, const char* t, float size) { t = TRS(t); const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t); dl->AddText(font, size, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), c, t); };
     int nz = 0;
@@ -654,7 +657,7 @@ static void ToolbarDraw() {
     };
     // (15/11 o) campo numerico editable (ids 2000..2499): arrastrar de costado cambia el valor (step por punto de pantalla, Shift = fino);
     // un clic sin arrastrar lo deja escribir. Devuelve true si v cambio en este cuadro (quien llama lo aplica al juego).
-    auto inside = [&](const ImVec2& a, const ImVec2& b) { return mx >= a.x && mx <= b.x && my >= a.y && my <= b.y; };
+    auto inside = [&](const ImVec2& a, const ImVec2& b) { return mx >= a.x && mx <= b.x && my >= a.y && my <= b.y && my >= hitY0 && my <= hitY1; };
     float pOffC = 0.0f;      // (15/11 q) corrimiento del panel que se esta dibujando: los recortes van a su lugar real
     // (15/11 r) el recorte se pone en el lugar de dibujo (sin corrimiento): ImGui descarta las letras que caen fuera del recorte al
     // armarlas, y con el recorte ya corrido el texto del panel movido desaparecia (Agustin 18:43). Al final del panel clipShift corre
@@ -898,10 +901,10 @@ static void ToolbarDraw() {
       { const float tx = dx + (Q.dock == 1 ? 1.0f : Q.dock == 0 ? -1.0f : 0.0f) * (1.0f - eo) * leftW; anim(v0, tx, 0.0f, eo * std::min(1.0f, aL * 1.6f) * (pMoving ? 0.85f : 1.0f)); clipShift(c0, tx); } hitOff = false;
       } mx += dx; pOffC = 0.0f; pMoving = false; };
     // ---------------- inspector ----------------
-    auto drawInsp = [&]() { const PLay& Q = P[1]; if (Q.V <= 0.5f) return;
+    auto drawInsp = [&]() { const PLay& Q = P[1]; s_inZone.store(-1); if (Q.V <= 0.5f) return;
       const float rightW = Q.W, y0 = Q.ya, y1 = Q.yb, aR = Q.a; const float slide = Q.dock == 0 ? -(Q.W - Q.V) : Q.dock == 1 ? (Q.W - Q.V) : 0.0f, dx = Q.x + slide - (ds.x - Q.W);
       pMoving = s_mvOn && s_mvId == 2; mx -= dx; pOffC = dx;
-      { float vx0, vx1; pVis(Q, vx0, vx1); zone(ImVec2(vx0, y0), ImVec2(vx1, y1)); }
+      { float vx0, vx1; pVis(Q, vx0, vx1); s_inZone.store(nz); zone(ImVec2(vx0, y0), ImVec2(vx1, y1)); }
       { const int c0 = clipBegin(); const int v0 = dl->VtxBuffer.Size; int v1 = v0; const float x0 = ds.x - rightW; const ImVec2 a(x0, y0), b(ds.x, y1); hitOff = aR < 0.999f || pMoving;
       dl->AddRectFilled(a, b, cPanel); dl->AddLine(ImVec2(x0, y0), ImVec2(x0, y1), cLine, 1.0f); if (Q.dock != 1) dl->AddLine(ImVec2(ds.x - 1.0f, y0), ImVec2(ds.x - 1.0f, y1), cLine, 1.0f);
       if (Q.dock == 2) dl->AddRect(a, b, IM_COL32(70, 70, 76, 255), 0.0f, 0, 1.0f);
@@ -912,8 +915,15 @@ static void ToolbarDraw() {
       const char* const title[4] = { "Estudio  \xC2\xB7  Render", "C\xC3\xA1mara", "Grilla de piso", "Jugador" };
       float y = y0 + rowH; dl->AddRectFilled(ImVec2(x0 + 1.0f, y), ImVec2(ds.x, y + rowH + 4.0f * k), IM_COL32(45, 45, 48, 255)); { char tl[64]; const MotorLight* SL = s_sel >= 4 && s_sel - 4 < s_nLights ? &s_lights[s_sel - 4] : nullptr;
         if (SL) snprintf(tl, sizeof tl, "%s  \xC2\xB7  %.30s", TRS(kKind[SL->kind]), SL->name[0] ? SL->name : TRS("sin nombre")); else snprintf(tl, sizeof tl, "%s", title[std::min(s_sel, 3)]);
-        text(x0 + 12.0f * k, y + (rowH + 4.0f * k) * 0.5f, ink, tl, fs + 1.0f * k); } y += rowH + 4.0f * k + 8.0f * k;
-      const float lx = x0 + 12.0f * k, fx0 = x0 + 12.0f * k, fx1 = ds.x - 12.0f * k;
+        text(x0 + 12.0f * k, y + (rowH + 4.0f * k) * 0.5f, ink, tl, fs + 1.0f * k); } y += rowH + 4.0f * k;
+      // (07:50) contenido corrible: rueda encima del Inspector, barra a la derecha (arrastrable o clic en el riel)
+      const float yC = y, viewH = std::max(10.0f, y1 - yC);
+      if (s_sel != s_inSelWas) { s_inSelWas = s_sel; s_inScroll = 0.0f; }
+      { const int wd = s_inWheel.exchange(0); if (wd != 0) s_inScroll -= (float)wd / 120.0f * 60.0f * k; }
+      s_inScroll = std::clamp(s_inScroll, 0.0f, s_inMax);
+      clipPush(ImVec2(x0, yC), b); hitY0 = yC; hitY1 = y1;
+      y += 8.0f * k - s_inScroll; const float yTop = y;
+      const float lx = x0 + 12.0f * k, fx0 = x0 + 12.0f * k, fx1 = ds.x - 12.0f * k - (s_inMax > 0.0f ? 6.0f * k : 0.0f);
       v1 = dl->VtxBuffer.Size;          // desde aca: contenido de lo marcado (fundido al cambiar)
       // (17/11 07:18, Agustin: "mejora las tarjetas, el diseno mas intuitivo") cada seccion del Inspector es una tarjeta: borde redondeado,
       // fondo apenas mas claro y franja de color a la izquierda del titulo; se cierra cuando empieza la siguiente o al final del panel
@@ -1189,6 +1199,17 @@ static void ToolbarDraw() {
           text(lx, y + 8.0f * k, dim, "Es el \xC3\xBAltimo jugador que abriste en Editar.", fsS);
       }
       cardClose();
+      dl->PopClipRect(); hitY0 = -1.0e9f; hitY1 = 1.0e9f;
+      { const float contH = (y - yTop) + 16.0f * k; s_inMax = std::max(0.0f, contH - viewH); s_inScroll = std::min(s_inScroll, s_inMax);
+        if (s_inMax > 0.0f) {      // barra de desplazamiento
+          const float tx0 = ds.x - 7.0f * k, tx1 = ds.x - 2.0f * k, th = std::max(24.0f * k, viewH * viewH / (viewH + s_inMax)), ty = yC + (viewH - th) * (s_inScroll / s_inMax);
+          const ImVec2 r0(tx0 - 3.0f * k, yC), r1(ds.x, y1); const bool over = !hitOff && inside(r0, r1);
+          if (lEdge0 && over) { s_inDrag = true; if (my < ty || my > ty + th) s_inScroll = std::clamp((my - yC - th * 0.5f) / std::max(1.0f, viewH - th) * s_inMax, 0.0f, s_inMax); s_inDragY0 = my; s_inDragS0 = s_inScroll; }
+          if (s_inDrag) { if (!lDown) s_inDrag = false; else s_inScroll = std::clamp(s_inDragS0 + (my - s_inDragY0) / std::max(1.0f, viewH - th) * s_inMax, 0.0f, s_inMax); }
+          dl->AddRectFilled(ImVec2(tx0, yC + 2.0f * k), ImVec2(tx1, y1 - 2.0f * k), IM_COL32(255, 255, 255, 10), 2.5f * k);
+          dl->AddRectFilled(ImVec2(tx0, ty), ImVec2(tx1, ty + th), (over || s_inDrag) ? IM_COL32(200, 200, 205, 200) : IM_COL32(150, 150, 155, 140), 2.5f * k);
+          if (s_inScroll > 0.5f) dl->AddRectFilledMultiColor(ImVec2(x0 + 1.0f, yC), ImVec2(ds.x - 8.0f * k, yC + 10.0f * k), IM_COL32(0, 0, 0, 90), IM_COL32(0, 0, 0, 90), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
+        } else s_inDrag = false; }
       dl->PopClipRect();
       anim(v1, (1.0f - s_inspA) * 14.0f * k, 0.0f, s_inspA);
       { const float tx = dx + (Q.dock == 0 ? -1.0f : Q.dock == 1 ? 1.0f : 0.0f) * (1.0f - eo) * rightW; anim(v0, tx, 0.0f, eo * std::min(1.0f, aR * 1.6f) * (pMoving ? 0.85f : 1.0f)); clipShift(c0, tx); } hitOff = false;
@@ -2064,7 +2085,7 @@ bool MotorUiWheel(int delta) {
     if (!MotorUiOn() || Now() - s_drawT.load(std::memory_order_relaxed) > 0.3) return false;
     HWND h = OverlayHwnd(); POINT p{}; if (!h || !GetCursorPos(&p) || !ScreenToClient(h, &p)) return false;
     const int n = s_hrN.load();
-    for (int i = 0; i < n && i < 16; i++) if ((float)p.x >= s_hr[i][0].load() && (float)p.x <= s_hr[i][2].load() && (float)p.y >= s_hr[i][1].load() && (float)p.y <= s_hr[i][3].load()) { if (i == s_treeZone.load()) s_uiWheel.fetch_add(delta); else if (i == s_tlZone.load()) s_tlWheel.fetch_add(delta); return true; }
+    for (int i = 0; i < n && i < 16; i++) if ((float)p.x >= s_hr[i][0].load() && (float)p.x <= s_hr[i][2].load() && (float)p.y >= s_hr[i][1].load() && (float)p.y <= s_hr[i][3].load()) { if (i == s_treeZone.load()) s_uiWheel.fetch_add(delta); else if (i == s_tlZone.load()) s_tlWheel.fetch_add(delta); else if (i == s_inZone.load()) s_inWheel.fetch_add(delta); return true; }
     return false;
 }
 
