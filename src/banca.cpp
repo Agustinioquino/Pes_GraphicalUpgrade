@@ -470,7 +470,9 @@ bool ScanBenchNear(uint8_t* self, const char* pre, float* mn, float* mx) {
 // 0,18 m mas alta). De cada malla sale un asiento: centro en x, fondo y frente en z, piso y cabeza en y, y el lado por el nombre
 // del material. Una malla de suplentes mas ancha que una persona (estadios de mods que las juntan) se parte en piezas conectadas,
 // se juntan las que se tocan y cada grupo da un asiento cada 0,62 m. Se guardan por estadio ("stNNN") al cargar el fmdl.
-struct Seat { float x, z0, z1, y0, y1; int side; };
+// (2d) bLo / bHi: lo mas adelante / atras en z de la figura en la franja del asiento (0,38..0,65 m sobre sus pies) = la cola;
+// en BuildSpots se toma el lado del respaldo. NAN si la figura no tiene vertices ahi.
+struct Seat { float x, z0, z1, y0, y1; int side; float bLo, bHi; };
 struct SeatSet { char pre[8] = {}; ULONGLONG t = 0; int n = 0; Seat s[64]; unsigned seq = 0; };
 std::mutex s_seatMx; SeatSet s_seats;
 bool SeatAdd(const char* pre, const Seat& s) {
@@ -495,6 +497,19 @@ bool StrHas(const char* s, size_t len, const char* w) {
     return false;
 }
 const float kSeatMinH = 0.85f, kSeatMaxH = 1.75f, kSeatOneW = 1.05f, kSeatPitch = 0.62f;
+// (2d, Agustin 17/11: "no apoyados del todo bien en las sillas") la cola de la figura de Konami: los vertices entre 0,38 y 0,65 m
+// sobre sus pies dentro de la caja [xa, xb] x [za, zb]; lo y hi = sus z extremos (NAN si no hay). Medido en st009_sc2020 (22
+// figuras): el alto del asiento queda a 0,40 m de los pies y en 15 de 22 la cola es lo mas atras de la figura (las que se apoyan
+// en el respaldo con la espalda la tienen 0,10..0,27 m mas adelante).
+void ButtBand(const FmMesh& m, float y0, float xa, float xb, float za, float zb, float& lo, float& hi) {
+    lo = INFINITY; hi = -INFINITY;
+    for (uint32_t v = 0; v < m.nv; v++) {
+        float q[3]; memcpy(q, m.pos + (size_t)v * m.stride, 12);
+        if (q[0] < xa || q[0] > xb || q[2] < za || q[2] > zb || q[1] < y0 + 0.38f || q[1] > y0 + 0.65f) continue;
+        lo = std::min(lo, q[2]); hi = std::max(hi, q[2]);
+    }
+    if (lo > hi) lo = hi = NAN;
+}
 unsigned SeatsFromMeshes(const Fm& f, const std::vector<FmMesh>& ms, const char* pre) {
     unsigned added = 0;
     for (const FmMesh& m : ms) {
@@ -509,8 +524,10 @@ unsigned SeatsFromMeshes(const Fm& f, const std::vector<FmMesh>& ms, const char*
         }
         const float wx = mx[0] - mn[0], h = mx[1] - mn[1], wz = mx[2] - mn[2];
         if (wx <= kSeatOneW) {   // una figura = una malla (Konami)
-            if (h >= kSeatMinH && h <= kSeatMaxH && wx >= 0.3f && wz >= 0.3f && wz <= 1.8f)
-                if (SeatAdd(pre, Seat{ (mn[0] + mx[0]) * 0.5f, mn[2], mx[2], mn[1], mx[1], side })) added++;
+            if (h >= kSeatMinH && h <= kSeatMaxH && wx >= 0.3f && wz >= 0.3f && wz <= 1.8f) {
+                float bLo, bHi; ButtBand(m, mn[1], mn[0], mx[0], mn[2], mx[2], bLo, bHi);
+                if (SeatAdd(pre, Seat{ (mn[0] + mx[0]) * 0.5f, mn[2], mx[2], mn[1], mx[1], side, bLo, bHi })) added++;
+            }
             continue;
         }
         if (!isSub || !m.idx || m.nv > 60000) continue;   // utileria larga (microfonos) o demasiado grande
@@ -553,8 +570,10 @@ unsigned SeatsFromMeshes(const Fm& f, const std::vector<FmMesh>& ms, const char*
             const Box& b = g[i]; const float gw = b.mx[0] - b.mn[0], gh = b.mx[1] - b.mn[1], gz = b.mx[2] - b.mn[2];
             if (gh < kSeatMinH || gh > kSeatMaxH || gz < 0.3f || gw < 0.3f) continue;
             const int k = gw <= kSeatOneW ? 1 : std::min(20, std::max(1, (int)(gw / kSeatPitch + 0.5f)));
-            for (int q = 0; q < k; q++)
-                if (SeatAdd(pre, Seat{ b.mn[0] + (q + 0.5f) * gw / k, b.mn[2], b.mx[2], b.mn[1], b.mx[1], side })) added++;
+            for (int q = 0; q < k; q++) {
+                float bLo, bHi; ButtBand(m, b.mn[1], b.mn[0] + q * gw / k, b.mn[0] + (q + 1) * gw / k, b.mn[2], b.mx[2], bLo, bHi);
+                if (SeatAdd(pre, Seat{ b.mn[0] + (q + 0.5f) * gw / k, b.mn[2], b.mx[2], b.mn[1], b.mx[1], side, bLo, bHi })) added++;
+            }
         }
     }
     return added;
@@ -564,22 +583,22 @@ unsigned SeatsFromMeshes(const Fm& f, const std::vector<FmMesh>& ms, const char*
 // mas cerca de la cancha) y, dentro de la fila, del medio de la cancha hacia afuera. Cada fila usa el piso y el fondo del medio de
 // sus figuras. Si hay mas suplentes que figuras, se reparten parejo a lo ancho de cada fila (no menos de 0,50 m entre dos).
 struct Spot { float x, y, z, yaw; };
-int BuildSpots(const SeatSet& ss, int side, int want, float upCm, float fwdCm, Spot* out, int max, int* seatsOut, int* rowsOut) {
-    if (seatsOut) *seatsOut = 0; if (rowsOut) *rowsOut = 0;
+int BuildSpots(const SeatSet& ss, int side, int want, float upCm, float fwdCm, Spot* out, int max, int* seatsOut, int* rowsOut, char* diag = nullptr, size_t dn = 0) {
+    if (seatsOut) *seatsOut = 0; if (rowsOut) *rowsOut = 0; if (diag && dn) diag[0] = 0;
     if (ss.n <= 0 || want <= 0) return 0;
     float zc = 0; for (int i = 0; i < ss.n; i++) zc += (ss.s[i].z0 + ss.s[i].z1) * 0.5f; zc /= ss.n;
     const float dir = zc > 0 ? -1.0f : 1.0f;                    // hacia la cancha
     const float yaw = zc > 0 ? 180.0f : 0.0f;                   // el jugador mira a +z con giro 0
-    struct S { float x, back, y0; }; S s[64]; int n = 0;
+    struct S { float x, back, y0, butt; }; S s[64]; int n = 0;
     for (int i = 0; i < ss.n; i++) {
         const Seat& a = ss.s[i]; const int sd = a.side >= 0 ? a.side : (a.x < 0 ? 0 : 1);
         if (sd != side) continue;
-        s[n++] = S{ a.x, dir < 0 ? a.z1 : a.z0, a.y0 };
+        s[n++] = S{ a.x, dir < 0 ? a.z1 : a.z0, a.y0, dir < 0 ? a.bHi : a.bLo };
     }
     if (seatsOut) *seatsOut = n;
     if (!n) return 0;
     std::sort(s, s + n, [](const S& a, const S& b) { return fabsf(a.back) < fabsf(b.back); });
-    struct Row { int first, count; float back, floor, x0, x1; }; Row rows[8]; int nr = 0;
+    struct Row { int first, count, nb; float back, floor, x0, x1, butt; }; Row rows[8]; int nr = 0;
     for (int i = 0; i < n; ) {
         int j = i + 1; while (j < n && fabsf(s[j].back) - fabsf(s[i].back) <= 0.45f) j++;
         if (nr < 8) {
@@ -587,18 +606,36 @@ int BuildSpots(const SeatSet& ss, int side, int want, float upCm, float fwdCm, S
             float tb[64], tf[64]; for (int k = i; k < j; k++) { tb[k - i] = s[k].back; tf[k - i] = s[k].y0; }
             std::sort(tb, tb + r.count); std::sort(tf, tf + r.count);
             r.back = tb[r.count / 2]; r.floor = tf[r.count / 2];
+            // (2d) la cola de la fila: el cuartil del lado del respaldo de las colas medidas (las figuras que se tiran atras con la
+            // espalda la tienen mas adelante y no cuentan); una cola a mas de 0,45 m del fondo de la fila no es de esta fila
+            float tc[64]; r.nb = 0;
+            for (int k = i; k < j; k++) if (!std::isnan(s[k].butt) && fabsf(s[k].butt - r.back) <= 0.45f) tc[r.nb++] = s[k].butt;
+            std::sort(tc, tc + r.nb);
+            r.butt = r.nb ? tc[dir < 0 ? (r.nb * 3) / 4 : (r.nb - 1) / 4] : NAN;
             std::sort(s + i, s + j, [](const S& a, const S& b) { return fabsf(a.x) < fabsf(b.x); });
             r.x0 = r.x1 = s[i].x; for (int k = i; k < j; k++) { r.x0 = std::min(r.x0, s[k].x); r.x1 = std::max(r.x1, s[k].x); }
         }
         i = j;
     }
     if (rowsOut) *rowsOut = nr;
-    const float kBack = 0.25f + fwdCm * 0.01f;                  // de la espalda de la figura a la cadera
+    // (2d) cadera (la raiz del clip: la pista 3 de los clips sentados no corre la cadera en x / z) a kHipButt de la cola de la fila,
+    // hacia la cancha. Antes iba a 0,25 m de la espalda de la figura: con la cola en el respaldo quedaba 15..19 cm adelante, en el
+    // borde de la silla (capturas 17/11). Sin colas medidas, como antes.
+    const float kHipButt = 0.09f, kBackOld = 0.25f;
+    auto hipZ = [&](const Row& r) { return std::isnan(r.butt) ? r.back + dir * (kBackOld + fwdCm * 0.01f) : r.butt + dir * (kHipButt + fwdCm * 0.01f); };
+    if (diag && dn) {
+        size_t pos = 0;
+        for (int r = 0; r < nr && pos + 1 < dn; r++) {
+            const int w = _snprintf_s(diag + pos, dn - pos, _TRUNCATE, "%sfila %d: fondo z %.2f, cola z %.2f (%d de %d figuras), cadera z %.2f, piso y %.2f", r ? "; " : "", r + 1,
+                                      rows[r].back, rows[r].butt, rows[r].nb, rows[r].count, hipZ(rows[r]), rows[r].floor);
+            pos = w < 0 ? dn : pos + (size_t)w;
+        }
+    }
     int o = 0;
     if (want <= n) {
         for (int r = 0; r < nr && o < want && o < max; r++)
             for (int k = 0; k < rows[r].count && o < want && o < max; k++)
-                out[o++] = Spot{ s[rows[r].first + k].x, rows[r].floor + upCm * 0.01f, rows[r].back + dir * kBack, yaw };
+                out[o++] = Spot{ s[rows[r].first + k].x, rows[r].floor + upCm * 0.01f, hipZ(rows[r]), yaw };
         return o;
     }
     int left = want;
@@ -610,7 +647,7 @@ int BuildSpots(const SeatSet& ss, int side, int want, float upCm, float fwdCm, S
         const bool inner0 = fabsf(a) < fabsf(b);
         for (int k = 0; k < t && o < max; k++) {
             const float u = (k + 0.5f) / t;
-            out[o++] = Spot{ inner0 ? a + u * width : b - u * width, w.floor + upCm * 0.01f, w.back + dir * kBack, yaw };
+            out[o++] = Spot{ inner0 ? a + u * width : b - u * width, w.floor + upCm * 0.01f, hipZ(w), yaw };
         }
         left -= t;
     }
@@ -937,6 +974,13 @@ typedef void(__fastcall* HumanShowFn)(void*, uint8_t);
 //  Aca: el controlador se crea con vf3(fd, 0, 0) (fd+0x6a = 0: la cinematica no le pone clip de cara) y cada cuadro se manda la
 //  pose neutra como los jugadores del partido.
 const uintptr_t kFdVf3 = 0x141f882b0ull, kFaceNeutral = 0x141ec7b10ull;
+// (2d) FUN_141f88270(fd, k): la cinematica baja la base por la estatura del modelo: fd+0xc += (h+0x10 - 180) * -0.01 * k (k sale del
+// corte, +0x124 del registro de la persona; lo llama FUN_141f45950 al activar a cada jugador). Sentado, un modelo mas alto lleva la cola
+// mas arriba (s = altura / 180 escala el esqueleto): para dejarla en el asiento (0,40 m sobre los pies, figuras de Konami) se baja
+// la base (s - 1) * 0,40 m = (altura - 180) * 0,0022 m -> k = 0,22.
+const uintptr_t kFdHeight = 0x141f88270ull;
+typedef void(__fastcall* FdHeightFn)(void*, float);
+const float kStatureK = 0.22f;
 const uintptr_t kFaceResPtr = 0x143802ff8ull, kHandResPtr = 0x143803000ull;   // recursos que usa FUN_141ebf3c0 (cara 9 capas, manos)
 typedef void(__fastcall* FdVf3Fn)(void*, uint8_t, uint32_t, uint64_t);
 typedef void(__fastcall* FaceNeutralFn)(void*, void*, uint8_t);
@@ -1020,16 +1064,20 @@ struct LiveSub {
     void* fd = nullptr; int side = 0, order = 0, place = 0, clip = 0, state = 0;   // 0 falta, 1 cargando, 2 sentado, 3 fallo / salio
     uint32_t teamIdx = 0; uint64_t id = 0; char name[40] = {}; Spot spot{}; bool bib = false, gk = false;
     float t0 = 0, start = 0, tCreateT = 0, phase0 = 0; double tCreate = 0; int endTicks = 0; bool faceTried = false; uint8_t player[0xF0] = {};
+    float heightCm = 0, dyCm = 0;                      // (2d) estatura del modelo (h+0x10) y lo que se bajo la base por ella
 };
 enum { kIdle = 0, kWait, kClips, kRun, kOff };
 struct Subs {
     int phase = kIdle; uintptr_t match = 0, team[2] = {}; LiveSub s[48]; int n = 0, cur = 0;
     float T = 0; double tPhase = 0, lastTick = 0, lastCheck = 0, tSpawn = 0, tRetry = 0, tProgress = 0; bool pumpOwn = false, seekSaid = false, sheetSaid = false, doneSaid = false, resSaid = false;
+    float A = 0; double lastG = -1.0;                  // (2d) reloj de la animacion (el del juego: pausa = quieto) y la ultima lectura de la fila 157
 };
 Subs s_subs;                                           // solo el hilo del juego (y el destructor, con s_subMx)
 std::recursive_mutex s_subMx;
 std::atomic<int> s_subActive{0}; std::atomic<unsigned> s_subTicks{0}, s_subSkipped{0};
 std::atomic<bool> s_subsDead{false};                   // hubo un error dentro del juego: no se toca nada mas en esta sesion
+std::atomic<float> s_animSum{0.0f}, s_realSum{0.0f};   // (2d) segundos de animacion / reales de los sentados desde el ultimo informe
+std::atomic<bool> s_animGame{false};                   // (2d) el reloj de la animacion sigue al del juego (fila 157 reconocida)
 std::atomic<unsigned long> s_implThread{0}, s_pushThread{0}, s_srcThread{0};
 std::atomic<int> s_src{0};                             // 0 sin decidir, 1 match::Human vf19, 2 escena del estadio
 std::atomic<ULONGLONG> s_matchEnd{0};
@@ -1146,6 +1194,12 @@ __declspec(noinline) bool SubStart(LiveSub& u, void* res, float T) {
     __try {
         uint8_t* fd = (uint8_t*)u.fd;
         memcpy(fd + 8, &u.spot.x, 4); memcpy(fd + 0xc, &u.spot.y, 4); memcpy(fd + 0x10, &u.spot.z, 4); memcpy(fd + 0x14, &u.spot.yaw, 4);
+        {   // (2d) estatura: como la cinematica (FUN_141f88270), solo con una altura creible
+            void* hh = nullptr; memcpy(&hh, fd + 0x48, 8); float hc = 0;
+            if (hh) memcpy(&hc, (const uint8_t*)hh + 0x10, 4);
+            u.heightCm = hc; u.dyCm = 0;
+            if (hh && hc >= 150.0f && hc <= 215.0f) { ((FdHeightFn)kFdHeight)(fd, kStatureK); float y = 0; memcpy(&y, fd + 0xc, 4); u.dyCm = (y - u.spot.y) * 100.0f; }
+        }
         fd[0x416] = 1;                                    // al dar la vuelta el clip vuelve a la base (FUN_141f86d40)
         uint32_t saved = 0, id = 0x19;
         ((HeapPushFn)kHeapPush)(&saved, &id);
@@ -1170,7 +1224,7 @@ __declspec(noinline) bool SubStart(LiveSub& u, void* res, float T) {
     } __except (EXCEPTION_EXECUTE_HANDLER) { s_subsDead.store(true); return false; }
 }
 // avanza y manda la pose; devuelve 2 si tuvo que volver el clip al principio a mano
-__declspec(noinline) int SubUpdate(LiveSub& u, float T) {
+__declspec(noinline) int SubUpdate(LiveSub& u, float T, bool moved) {
     __try {
         uint8_t* fd = (uint8_t*)u.fd;
         ((FdVf4Fn)kFdVf4)(fd, T - u.t0);
@@ -1183,7 +1237,7 @@ __declspec(noinline) int SubUpdate(LiveSub& u, float T) {
         if (ctl) {
             const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1), cur = ((ClipTimeFn)kClipTime)(ctl, 0, 1);
             if (len > 1.0f && cur >= len - 0.003f) {
-                if (++u.endTicks >= 6) { ((ClipSeekFn)kClipSeek)(ctl, 0, 0, 0.0f, 1, 1); u.endTicks = 0; return 2; }
+                if (moved && ++u.endTicks >= 6) { ((ClipSeekFn)kClipSeek)(ctl, 0, 0, 0.0f, 1, 1); u.endTicks = 0; return 2; }
             } else u.endTicks = 0;
         }
         return 1;
@@ -1226,7 +1280,7 @@ int SubsPrepare() {
         }
         if (cap > 0 && ns > cap) ns = cap;
         Spot sp[40]; int seats = 0, rows = 0;
-        const int got = BuildSpots(ss, sd, ns, up, fwd, sp, 40, &seats, &rows);
+        char rowDiag[400]; const int got = BuildSpots(ss, sd, ns, up, fwd, sp, 40, &seats, &rows, rowDiag, sizeof rowDiag);
         const int nb = std::min(got, (int)(got * pct / 100.0f + 0.5f));
         int ord[40]; for (int k = 0; k < got; k++) ord[k] = k;
         for (int k = 0; k < nb; k++) { const int j = k + (int)(Rnd() % (uint32_t)(got - k)); std::swap(ord[k], ord[j]); tmp[ord[k]].bib = true; }
@@ -1238,8 +1292,8 @@ int SubsPrepare() {
             LiveSub& u = tmp[k]; u.spot = sp[k]; u.order = S.n; u.clip = perm[k % kNumClips]; u.start = 0.0f; u.phase0 = (float)(Rnd() % 9000u) / 1000.0f;
             S.s[S.n++] = u;
         }
-        Log("banca: %s: %d convocados, %d suplentes, %d asientos en %d fila(s) (%s); se sientan %d, %d con pechera (%.0f %%)", sd ? "visitante" : "local", (int)conv[sd], ns,
-            seats, rows, ss.pre, got, nb, pct);
+        Log("banca: %s: %d convocados, %d suplentes, %d asientos en %d fila(s) (%s); se sientan %d, %d con pechera (%.0f %%); %s", sd ? "visitante" : "local", (int)conv[sd], ns,
+            seats, rows, ss.pre, got, nb, pct, rowDiag);
     }
     return 0;
 }
@@ -1280,6 +1334,19 @@ void SubsTick(void* host) {
     if (S.lastTick > 0 && now - S.lastTick < 0.002) return;          // una vez por cuadro
     const float dt = S.lastTick > 0 ? (float)std::min(0.1, now - S.lastTick) : 0.0f;
     S.lastTick = now; S.T += dt;
+    // (2d, Agustin 17/11: "no siguen el gameclock cuando se pausa el juego"; "el gameclock es lo mismo que usa la fisica de la ropa")
+    // La animacion de los sentados va con el reloj del juego: la fila 157 (config.cpp) = m_timeParam.x de SysCB, el mismo que usan
+    // cloth-mod (game_clock = 1), los gestos (AnimT) y las arrugas (WrClock): la pausa lo para, la camara lenta lo frena, el salto
+    // atras al empezar una repeticion no cuenta. Hasta que ese reloj se reconoce (157.w = 0), el real. S.T (real) queda para los
+    // tiempos de espera de la carga.
+    float adt = dt;
+    if (g_cfg.live[157][3] >= 0.5f) {
+        const double g = (double)g_cfg.live[157][0];
+        double dG = S.lastG < 0.0 ? 0.0 : g - S.lastG; if (dG < -50000.0) dG += 100000.0;   // vuelta del reloj (100000 s)
+        S.lastG = g; adt = (float)std::clamp(dG, 0.0, 0.1); s_animGame.store(true, std::memory_order_relaxed);
+    } else { S.lastG = -1.0; s_animGame.store(false, std::memory_order_relaxed); }
+    S.A += adt;                                        // (vf4 recibe A - t0: los dos del mismo reloj; sin vuelta, como S.T)
+    if (s_subActive.load(std::memory_order_relaxed) > 0) { s_animSum.store(s_animSum.load(std::memory_order_relaxed) + adt, std::memory_order_relaxed); s_realSum.store(s_realSum.load(std::memory_order_relaxed) + dt, std::memory_order_relaxed); }
     s_subTicks.fetch_add(1, std::memory_order_relaxed);
     const bool on = Live(0, 0.0f) > 0.5f && Live(1, 1.0f) > 0.5f && Live2(0, 1.0f) > 0.5f;
     if (!on) { if (S.phase != kIdle) SubsDestroyAll("opcion apagada"); return; }
@@ -1387,11 +1454,11 @@ void SubsTick(void* host) {
             if (r < 0) { u.state = 5; Log("banca: suplentes reales: ERROR dentro del juego al cargar a %s: no se toca nada mas en esta sesion", u.name); return; }
             if (r == 1) {
                 void* res = FixdemoRes();
-                if (res && SubStart(u, res, S.T)) {
+                if (res && SubStart(u, res, S.A)) {
                     u.state = 2; s_subActive.fetch_add(1); S.tProgress = now;
                     void* face = nullptr; memcpy(&face, (uint8_t*)u.fd + 0x58, 8);
-                    Log("banca: suplente %d sentado: %s (cargo en %.1f s; cara y manos %s)", k + 1, u.name, now - u.tCreate,
-                        face ? "con controlador" : u.faceTried ? "SIN controlador (fallo vf3)" : "esperando los recursos del juego");
+                    Log("banca: suplente %d sentado: %s (cargo en %.1f s; cara y manos %s; estatura %.0f cm, base %+.1f cm)", k + 1, u.name, now - u.tCreate,
+                        face ? "con controlador" : u.faceTried ? "SIN controlador (fallo vf3)" : "esperando los recursos del juego", u.heightCm, u.dyCm);
                 } else {
                     if (s_subsDead.load()) { Log("banca: suplentes reales: ERROR dentro del juego al dar el clip a %s: no se toca nada mas en esta sesion", u.name); return; }
                     Log("banca: suplentes reales: %s cargo pero no tomo el clip: se saca", u.name);
@@ -1410,7 +1477,7 @@ void SubsTick(void* host) {
     // mover a los sentados
     for (int k = 0; k < S.n; k++) {
         LiveSub& u = S.s[k]; if (u.state != 2 || !u.fd) continue;
-        const int r = SubUpdate(u, S.T);
+        const int r = SubUpdate(u, S.A, adt > 0.0f);
         if (r < 0) { u.state = 5; Log("banca: suplentes reales: ERROR dentro del juego al mover a %s: no se toca nada mas en esta sesion", u.name); return; }
         if (r == 2 && !S.seekSaid) { S.seekSaid = true; Log("banca: suplentes reales: el clip no da la vuelta solo; se lo vuelve al principio a mano"); }
     }
@@ -1643,6 +1710,11 @@ void BancaPresent() {
                 Live2(0, 1.0f) > 0.5f ? "prendido" : "apagado", s_subActive.load(), nextT > 0 ? (st - lastSub) / 10.0 : 0.0, nextT > 0 ? (md - lastMode) / 10.0 : 0.0,
                 s_modeThread.load(), s_matchState.load(), s_srcThread.load(), s_threadChanges.load(), s_pushCalls.load(), s_unloadBlocked.load(),
                 s_faceMade.load(), s_faceFail.load(), s_subsDead.load() ? "; APAGADO por un error dentro del juego" : "");
+            {   // (2d) cuanto avanzo la animacion de los sentados contra el tiempo real (pausa = 0, camara lenta < 1)
+                const float a = s_animSum.exchange(0.0f), r = s_realSum.exchange(0.0f);
+                if (r > 0.5f) Log("banca: animacion de los suplentes: %.1f s en %.1f s reales (%.2f; con el reloj %s)", a, r, a / r,
+                                  s_animGame.load() ? "del juego, como la ropa" : "real: el del juego todavia no se reconocio");
+            }
             lastSub = st; lastMode = md;
         }
         lastTicks = tk; nextT = t + 10.0;
