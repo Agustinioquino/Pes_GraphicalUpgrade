@@ -131,7 +131,13 @@ struct Pj {
     float lastPos[3] = {}, lastYaw = 0.0f; void* posCtl = nullptr; int nMoved = 0;
     int clipA = -2, clipFail = -2, restartA = 0, seekA = 0, endTicks = 0; uint32_t seed = 0;   // clipA: el clip puesto
     uint8_t lid[0xa0] = {};
+    bool reload = false; double reloadAt = 0;   // (17/11 17:22) el primero de cada apertura del Motor se vuelve a crear una vez (ropa)
 };
+// (17/11 17:21-17:22, prueba de Agustin con B35F155B y captura) el PRIMER jugador que se crea al abrir el Motor sale sin remera, con el short a
+// medias y sin medias; los que se agregan despues (aun con el mismo id) salen vestidos, y sacarlo y volver a agregarlo lo viste (reusa el
+// mismo modelo: "listo en 0.0 s"). INFERIDO: el primero se arma antes de que el juego tenga cargada la ropa. Arreglo: el primer jugador de
+// cada apertura, 1.5 s despues de estar listo, se saca y se vuelve a crear solo, en el mismo lugar y con lo mismo.
+static bool s_firstMade = false;
 Pj s_pj[kMax];
 std::mutex s_mx;
 std::atomic<int> s_sel{-1};
@@ -404,7 +410,7 @@ void DestroyAll(const char* why) {
     { std::lock_guard<std::mutex> lk(s_mx); for (int i = 0; i < kMax; i++) if (s_pj[i].state) s_pj[i].state = 0; }
     s_sel.store(-1);
     for (int i = 0; i < kClipMax; i++) if (s_ce[i].st) ClipDrop(s_ce[i]);
-    s_pumpSaid = false;
+    s_pumpSaid = false; s_firstMade = false;
     if (n) Log("motor (jugadores propios): %d sacados (%s)", n, why);
 }
 
@@ -444,6 +450,7 @@ void MotorPjTick(bool on, uintptr_t impl) {
             if (want[i].kind == 2 && !vok) { Msg("no pude leer el jugador del visor del Editar"); std::lock_guard<std::mutex> lk(s_mx); p.state = 4; continue; }
             p.kind = want[i].kind; p.id = want[i].id; memcpy(p.name, want[i].name, sizeof p.name);
             p.seed = (uint32_t)(i + 1) * 2654435761u; p.clipA = -2; p.clipFail = -2; p.restartA = want[i].restart;
+            if (!s_firstMade) { s_firstMade = true; p.reload = true; p.reloadAt = 0; }
             if (!Create(p, i, vok ? vl : nullptr)) { Msg("el juego no pudo crear al jugador %d", i + 1); std::lock_guard<std::mutex> lk(s_mx); p.state = 4; continue; }
             char hex[0x20 * 3 + 1] = {}; for (int b = 0; b < 0x20; b++) snprintf(hex + b * 3, 4, "%02x ", p.lid[b]);
             Log("motor (jugadores propios): creando el jugador %d: %s (%s, id %llu = 0x%llx); LoadId: %s ... +0x4c %02x %02x %02x %02x, +0x94 %02x %02x %02x %02x",
@@ -462,6 +469,13 @@ void MotorPjTick(bool on, uintptr_t impl) {
             void* h = nullptr; memcpy(&h, p.fd + 0x48, 8); float hc = 0.0f; if (h) memcpy(&hc, (const uint8_t*)h + 0x10, 4);
             Log("motor (jugadores propios): jugador %d listo en %.1f s (modelo %p, estatura del modelo %.1f cm)", i + 1, now - p.tLoad, h, hc);
             { std::lock_guard<std::mutex> lk(s_mx); p.state = 3; snprintf(s_msg, sizeof s_msg, "%s", ""); }
+            if (p.reload) p.reloadAt = now + 1.5;
+            any = true; continue;
+        }
+        if (st == 3 && p.fd && p.reload && p.reloadAt > 0.0 && now >= p.reloadAt) {      // (17:22) el primero se vuelve a crear para que salga vestido
+            const bool ok = Destroy(p); p.reload = false; p.reloadAt = 0; p.posCtl = nullptr; p.faceTried = false;
+            { std::lock_guard<std::mutex> lk(s_mx); p.state = ok ? 1 : 4; }
+            Log("motor (jugadores propios): jugador %d se vuelve a crear una vez (el primero de la apertura sale sin ropa)%s", i + 1, ok ? "" : ": no se pudo sacar");
             any = true; continue;
         }
         if (st == 3 && p.fd) {

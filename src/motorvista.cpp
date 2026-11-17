@@ -47,6 +47,7 @@ static inline bool PtrOk(uintptr_t a) { return a >= 0x10000ull && a < 0x7fffffff
 static bool MoveObjs(uintptr_t ctx, uintptr_t scene, int* n) {
     __try {
         uintptr_t* b = *(uintptr_t**)(ctx + 0x08); uintptr_t* e = *(uintptr_t**)(ctx + 0x10); int k = 0;
+        if (!b && !e) { if (n) *n = 0; return true; }      // (17/11 17:22) visor sin el jugador del Editar: lista vacia (el registro: "objetos -1"), igual se prende la vista principal
         if (!PtrOk((uintptr_t)b) || !PtrOk((uintptr_t)e) || e < b || e - b > 4096) return false;
         for (uintptr_t* p = b; p != e; ++p) { const uintptr_t o = *p; if (PtrOk(o)) { *(uintptr_t*)(o + 0x20) = scene; k++; } }
         if (n) *n = k; return true;

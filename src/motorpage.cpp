@@ -403,7 +403,8 @@ static void UiTick(void* win) {
     // jugadores propios no pasan a la vista principal (en el registro no sale "jugador a la escena principal"). Con algun jugador propio
     // pedido se carga tambien el del visor, como en 5F08210D. Esconderlo sin perder la vista principal queda para despues.
     bool anyPj = false; for (int i = 0; i < 32 && !anyPj; i++) { float p3[3], y = 0, sc = 1; anyPj = MotorPjGet(i, p3, &y, &sc); }
-    const bool wantPlayer = s_uiPlayer.load(std::memory_order_relaxed) || anyPj;
+    // (17:22) con el jugador del Editar oculto ya no hace falta cargarlo: el visor corre su cuadro con la lista vacia (motorvista.cpp)
+    const bool wantPlayer = s_uiPlayer.load(std::memory_order_relaxed) || (anyPj && !MotorVistaEditorHidden());
     if (wantPlayer != s_uiPlayerShown) {
         static double askT = -1.0;
         if (wantPlayer) {
