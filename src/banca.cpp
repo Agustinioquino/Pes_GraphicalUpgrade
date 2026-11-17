@@ -40,6 +40,7 @@
 #include <cstdarg>
 #include <cctype>
 #include <cmath>
+#include <intrin.h>
 
 namespace fx {
 
@@ -882,11 +883,18 @@ void __fastcall hk_Fdh(void* fd, void* res, uint32_t a3, uint8_t a4, uint64_t a5
 //     47 a 55 cm, asi que el asiento se le da directo al jugador. Se piden como los pide la cinematica (FUN_141b079e0 /
 //     FUN_141eb16e0) y, para que ninguna cinematica los descargue mientras estan en uso, se frena su descarga (FUN_141b08080).
 //  5) Cada suplente es un FixDemoHuman del juego (el jugador suelto de las cinematicas): FUN_141f85e40, LoadId con
-//     FUN_141f61520 (pechera de suplente = 2 en el ultimo argumento), FUN_141f86c30 y sondeo FUN_141f87230. De a uno por vez.
+//     FUN_141f61520 (pechera de suplente = 2 en el ultimo argumento), FUN_141f86c30 y sondeo FUN_141f87230. (2b) Hasta 8 cargando
+//     a la vez, cada uno arranca en un punto al azar de su clip.
 //     Cuando cargo: posicion y giro en fd+8 / +0x14, FUN_141afa060 (numero del clip en el recurso "fixdemo") y vf1.
 //  6) Cada cuadro: vf4 (avanza el clip) y FUN_141f86d40 (manda la pose), como el reproductor de cinematicas.
 //  7) Se sueltan todos (vf0 con el heap 0x19) antes de que el juego borre a sus jugadores (gancho en el destructor de
 //     match::Human, FUN_1408be4f0), al apagar la opcion o si cambia el partido. El que entra a la cancha deja el banco.
+//  8) (2b) Pedido de Agustin (16/11 23:26): que esten sentados al empezar el partido aunque la carga tarde mas. Reloj = actualizar el
+//     modo partido (FUN_141fc70d0, corre en la carga, el partido y las cinematicas; el de los jugadores queda de respaldo). La lista
+//     se arma cuando match::Match empieza a crear a los jugadores (estado 6) y, sin entrada (paso 0x0f), match::Match::vf1 no se
+//     llama en el estado 0x1c (jugadores esperando su carga) mientras falten suplentes: la pantalla de carga sigue hasta que estan
+//     todos (tope 45 s, o 15 s sin avance). Con la entrada (paso 0x0e) la carga cierra antes y no se frena. En la carga el
+//     destructor de match::Human no los suelta (el juego puede borrar jugadores al armar el suyo).
 // Detalle y C reconstruido: /mnt/project-files/banca_suplentes/20261116_como_arma_el_banco.cpp.md, secciones 26 a 28.
 const int kRow2 = 517;   // x suplentes reales, y % con pechera, z altura del asiento (cm), w adelante / atras (cm)
 float Live2(int k, float def) { return (!g_cfg.info[kRow2][k].defined && g_cfg.live[kRow2][k] == 0.0f) ? def : g_cfg.live[kRow2][k]; }
@@ -916,6 +924,41 @@ const uintptr_t kClipLen = 0x141af8be0ull, kClipTime = 0x141af8910ull, kClipSeek
 // (FUN_141f45950). Sin esto el suplente carga y se mueve pero no se dibuja (prueba 2a-2: 24 sentados, ninguno visible).
 const uintptr_t kHumanShow = 0x141ec8320ull;
 typedef void(__fastcall* HumanShowFn)(void*, uint8_t);
+// (2c) cara y manos. El cuerpo sale de vf1 / vf4 / FUN_141f86d40, pero los huesos de la cara y de los dedos son otro esqueleto
+// (rig de cara y de manos) que recibe su pose aparte: draw::util::Human no la arma solo. Sin ella quedan sin pose y la piel de la
+// cara y las manos se estira hacia cualquier lado (prueba 2a-3: caras y manos estiradas; parpados -87 grados contra -2..-10).
+//  - La cinematica, despues de vf1, llama FixDemoHuman::vf3 (0x141f882b0, vtable + 0x18): crea en fd+0x58 el controlador de cara y
+//    manos (0x418 B en el heap 0x19, FUN_141ebf3c0(c, 2): [0] cara, [1] [2] manos) y pone fd+0x6a (usar) / fd+0x6c (clip de cara).
+//    vf2 (la llama vf1) lo borra, por eso va despues. El destructor de FixDemoHuman (FUN_141f86290) lo suelta.
+//  - Los jugadores del partido, cada cuadro, en match::Player::vf10 (0x140922b40) y el arbitro en Referee::vf10 (0x140a36fa0):
+//    FUN_141ec7b10(humano, controlador, 0) -> FUN_141ec1240 -> FUN_141ec4970(c, modelo, 1, 0): cara y manos en la pose neutra de
+//    las tablas del juego (DAT_142b74020 / 74220 cara, 74420 / 746a0 y 74920 / 74a60 manos) y se mandan al modelo (orden 0x514 y
+//    las de las manos).
+//  Aca: el controlador se crea con vf3(fd, 0, 0) (fd+0x6a = 0: la cinematica no le pone clip de cara) y cada cuadro se manda la
+//  pose neutra como los jugadores del partido.
+const uintptr_t kFdVf3 = 0x141f882b0ull, kFaceNeutral = 0x141ec7b10ull;
+const uintptr_t kFaceResPtr = 0x143802ff8ull, kHandResPtr = 0x143803000ull;   // recursos que usa FUN_141ebf3c0 (cara 9 capas, manos)
+typedef void(__fastcall* FdVf3Fn)(void*, uint8_t, uint32_t, uint64_t);
+typedef void(__fastcall* FaceNeutralFn)(void*, void*, uint8_t);
+std::atomic<unsigned> s_faceMade{0}, s_faceFail{0};
+// (2b) crearlos en la pantalla de carga y que el partido arranque con todos sentados:
+// FUN_141fc70d0 = actualizar el modo partido (mensaje 2 de game_mode::MatchListener::vf2 0x141fc7e90): corre en la carga, en el
+// partido y en las cinematicas, y es el reloj de los suplentes. mov rax,rsp; push rdi; push r14; push r15; sub rsp,60h; mov [rax-58h],-2; mov [rax+8],rbx
+const uintptr_t kModeUpd = 0x141fc70d0ull;
+const unsigned char kModeUpdSig[24] = { 0x48,0x8b,0xc4,0x57,0x41,0x56,0x41,0x57,0x48,0x83,0xec,0x60,0x48,0xc7,0x40,0xa8,0xfe,0xff,0xff,0xff,0x48,0x89,0x58,0x08 };
+// match::Match::vf1 (0x14041b380, vtable 0x14259fea8): estado en this+8; 6..0x1b crea a los 22 jugadores, 0x1c espera que carguen,
+// 0x1d listo. El paso 0x0f de FUN_141fde040 la llama cada cuadro (vuelve a 0x141fde4c8) y recien con 0x1d cierra la pantalla de carga
+// (FUN_140e4cb70) y arranca el partido. Para frenar el arranque no se la llama mientras esta en 0x1c y faltan suplentes (con tope).
+// push rbp; push rsi; push rdi; sub rsp,70h; mov [rsp+38h],-2; mov [rsp+0a0h],rbx
+const uintptr_t kMatchVf1 = 0x14041b380ull;
+const unsigned char kMatchVf1Sig[25] = { 0x40,0x55,0x56,0x57,0x48,0x83,0xec,0x70,0x48,0xc7,0x44,0x24,0x38,0xfe,0xff,0xff,0xff,0x48,0x89,0x9c,0x24,0xa0,0x00,0x00,0x00 };
+const uintptr_t kMatchVf1RetStep0f = 0x141fde4c8ull;   // despues del call [rax+8] de 0x141fde4c5 (paso 0x0f, sin entrada)
+const int kParallel = 8;                                 // suplentes cargando a la vez
+const double kHoldMax = 45.0;                            // tope de espera de la carga (s)
+typedef void(__fastcall* ModeUpdFn)(void*, void*, void*);
+typedef void(__fastcall* MatchVf1Fn)(void*, void*);
+ModeUpdFn o_modeUpd = nullptr; MatchVf1Fn o_matchVf1 = nullptr;
+bool s_okLoad = false;
 typedef void*(__fastcall* AllocFn)(uint32_t*, size_t, size_t);
 typedef uint32_t*(__fastcall* HeapPushFn)(uint32_t*, uint32_t*);
 typedef void(__fastcall* HeapPopFn)(uint32_t*);
@@ -976,12 +1019,12 @@ bool BudgetOk(char* why, size_t n) {
 struct LiveSub {
     void* fd = nullptr; int side = 0, order = 0, place = 0, clip = 0, state = 0;   // 0 falta, 1 cargando, 2 sentado, 3 fallo / salio
     uint32_t teamIdx = 0; uint64_t id = 0; char name[40] = {}; Spot spot{}; bool bib = false, gk = false;
-    float t0 = 0, start = 0, tCreateT = 0; double tCreate = 0; int endTicks = 0; uint8_t player[0xF0] = {};
+    float t0 = 0, start = 0, tCreateT = 0, phase0 = 0; double tCreate = 0; int endTicks = 0; bool faceTried = false; uint8_t player[0xF0] = {};
 };
 enum { kIdle = 0, kWait, kClips, kRun, kOff };
 struct Subs {
     int phase = kIdle; uintptr_t match = 0, team[2] = {}; LiveSub s[48]; int n = 0, cur = 0;
-    float T = 0; double tPhase = 0, lastTick = 0, lastCheck = 0, tSpawn = 0, tRetry = 0; bool pumpOwn = false, seekSaid = false, sheetSaid = false;
+    float T = 0; double tPhase = 0, lastTick = 0, lastCheck = 0, tSpawn = 0, tRetry = 0, tProgress = 0; bool pumpOwn = false, seekSaid = false, sheetSaid = false, doneSaid = false, resSaid = false;
 };
 Subs s_subs;                                           // solo el hilo del juego (y el destructor, con s_subMx)
 std::recursive_mutex s_subMx;
@@ -990,6 +1033,13 @@ std::atomic<bool> s_subsDead{false};                   // hubo un error dentro d
 std::atomic<unsigned long> s_implThread{0}, s_pushThread{0}, s_srcThread{0};
 std::atomic<int> s_src{0};                             // 0 sin decidir, 1 match::Human vf19, 2 escena del estadio
 std::atomic<ULONGLONG> s_matchEnd{0};
+// (2b) s_live: este partido ya arranco (match::Match llego a 0x1d o los jugadores se dibujan): recien ahi el destructor de un jugador
+// es el fin del partido. s_ended: termino el partido y todavia no empezo a cargar otro (no se arma la lista de nuevo).
+std::atomic<bool> s_live{false}, s_ended{false};
+std::atomic<int> s_prepWhy{-1}, s_matchState{-1};
+std::atomic<double> s_modeT{0.0};
+std::atomic<unsigned> s_modeCalls{0};
+std::atomic<unsigned long> s_modeThread{0};
 
 uint64_t s_rng = 0;
 uint32_t Rnd() { if (!s_rng) { LARGE_INTEGER c; QueryPerformanceCounter(&c); s_rng = (uint64_t)c.QuadPart | 1; } s_rng ^= s_rng << 13; s_rng ^= s_rng >> 7; s_rng ^= s_rng << 17; return (uint32_t)(s_rng >> 16); }
@@ -1068,6 +1118,30 @@ __declspec(noinline) int SubPoll(LiveSub& u) {
         return (r & 0xff) ? 1 : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) { s_subsDead.store(true); return -1; }
 }
+// (2c) crea (una vez) el controlador de cara y manos del suplente con FixDemoHuman::vf3, como la cinematica. Devuelve fd+0x58.
+// Si los recursos de cara / manos del juego todavia no estan (carga), no lo crea y se reintenta el cuadro siguiente.
+// Se llama dentro de un __try (SubStart / SubUpdate).
+void* FaceEnsure(LiveSub& u) {
+    uint8_t* fd = (uint8_t*)u.fd; if (!fd) return nullptr;
+    void* face = nullptr; memcpy(&face, fd + 0x58, 8);
+    if (face || u.faceTried) return face;
+    uintptr_t fr = 0, hr = 0;
+    if (!Rd(kFaceResPtr, fr) || !fr || !Rd(kHandResPtr, hr) || !hr) return nullptr;
+    u.faceTried = true;
+    uintptr_t vt = 0, f3 = 0;
+    if (!Rd((uintptr_t)fd, vt) || !Rd(vt + 0x18, f3) || f3 != kFdVf3) {
+        s_faceFail.fetch_add(1);
+        static int said = 0; if (said++ < 2) Log("banca: suplentes reales: FixDemoHuman::vf3 no esta donde se esperaba (%p): sin cara ni manos", (void*)f3);
+        return nullptr;
+    }
+    uint32_t saved = 0, id = 0x19;
+    ((HeapPushFn)kHeapPush)(&saved, &id);
+    ((FdVf3Fn)f3)(fd, 0, 0, 0);
+    ((HeapPopFn)kHeapPop)(&saved);
+    memcpy(&face, fd + 0x58, 8);
+    if (face) s_faceMade.fetch_add(1); else s_faceFail.fetch_add(1);
+    return face;
+}
 __declspec(noinline) bool SubStart(LiveSub& u, void* res, float T) {
     __try {
         uint8_t* fd = (uint8_t*)u.fd;
@@ -1079,10 +1153,19 @@ __declspec(noinline) bool SubStart(LiveSub& u, void* res, float T) {
         uint32_t bits = 0; memcpy(&bits, &u.start, 4);
         (o_fdh ? o_fdh : (FdhVf1)kFdhVf1)(fd, res, idx, 0, (uint64_t)bits, nullptr);
         ((HeapPopFn)kHeapPop)(&saved);
-        u.t0 = T; u.endTicks = 0;
+        // (2c) ropa: lo mismo que la cinematica al activar a un jugador (FUN_141f45950: fd+0x43e = 3): en los 3 cuadros siguientes
+        // FUN_141f86d40 reinicia la tela dos veces (FUN_141ec80e0, orden 0x51b 0 -> 1) y la prende (FUN_141ec8700(h, 1, 1.0)).
+        // Sin esto la tela (pechera) arranca donde se creo el modelo y no donde se sienta.
+        fd[0x43e] = 3;
+        FaceEnsure(u);                                    // (2c) cara y manos (despues de vf1: vf2 borra fd+0x58)
+        void* ctl = nullptr; memcpy(&ctl, fd + 0x50, 8);
+        // (2b) cada uno arranca en otro punto del clip (se crean varios a la vez): vf4 recibe el tiempo desde el principio y la primera
+        // vez que pasa de 0,05 s salta ahi (FUN_141afa7b0), asi que alcanza con correr el origen del reloj
+        if (ctl) { const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1); u.phase0 = len > 1.5f ? fmodf(u.phase0, len - 0.5f) : 0.0f; }
+        else u.phase0 = 0.0f;
+        u.t0 = T - u.phase0; u.endTicks = 0;
         void* h = nullptr; memcpy(&h, fd + 0x48, 8);
         if (h) ((HumanShowFn)kHumanShow)(h, 1);
-        void* ctl = nullptr; memcpy(&ctl, fd + 0x50, 8);
         return ctl != nullptr;
     } __except (EXCEPTION_EXECUTE_HANDLER) { s_subsDead.store(true); return false; }
 }
@@ -1093,6 +1176,8 @@ __declspec(noinline) int SubUpdate(LiveSub& u, float T) {
         ((FdVf4Fn)kFdVf4)(fd, T - u.t0);
         ((FdPushFn)kFdPush)(fd);
         void* h = nullptr; memcpy(&h, fd + 0x48, 8);
+        void* face = FaceEnsure(u);                       // (2c) cara y manos en pose neutra, como match::Player::vf10
+        if (h && face) ((FaceNeutralFn)kFaceNeutral)(h, face, 0);
         if (h && *((const uint8_t*)h + 0x5a) == 0) ((HumanShowFn)kHumanShow)(h, 1);   // si algo lo escondio, se vuelve a mostrar
         void* ctl = nullptr; memcpy(&ctl, fd + 0x50, 8);
         if (ctl) {
@@ -1122,7 +1207,7 @@ int SubsPrepare() {
     uintptr_t team[2] = {}; uint8_t conv[2] = {};
     for (int sd = 0; sd < 2; sd++)
         if (!Rd(m + 0x1978 + (uintptr_t)sd * 0x28, team[sd]) || !Heap(team[sd]) || !Rd(team[sd] + 0x2eec, conv[sd]) || conv[sd] < 11 || conv[sd] > 40) return 5;
-    S.n = 0; S.cur = 0; S.match = m; S.team[0] = team[0]; S.team[1] = team[1];
+    S.n = 0; S.cur = 0; S.match = m; S.team[0] = team[0]; S.team[1] = team[1]; S.doneSaid = false; S.resSaid = false;
     const int cap = (int)(Live(3, 0.0f) + 0.5f);
     const float pct = std::min(100.0f, std::max(0.0f, Live2(1, 50.0f))), up = Live2(2, 0.0f), fwd = Live2(3, 0.0f);
     for (int sd = 0; sd < 2; sd++) {
@@ -1145,12 +1230,12 @@ int SubsPrepare() {
         const int nb = std::min(got, (int)(got * pct / 100.0f + 0.5f));
         int ord[40]; for (int k = 0; k < got; k++) ord[k] = k;
         for (int k = 0; k < nb; k++) { const int j = k + (int)(Rnd() % (uint32_t)(got - k)); std::swap(ord[k], ord[j]); tmp[ord[k]].bib = true; }
-        // clips: una vuelta mezclada de los 7, asi dos vecinos nunca comparten clip. Todos arrancan en 0 (camino simple de
-        // vf4); como se crean de a uno, los que repiten clip quedan desfasados varios segundos.
+        // clips: una vuelta mezclada de los 7, asi dos vecinos nunca comparten clip; (2b) cada uno arranca en un punto al azar del clip
+        // (phase0, se acota al largo real en SubStart), asi los que repiten clip no se mueven juntos.
         int perm[kNumClips]; for (int k = 0; k < kNumClips; k++) perm[k] = k;
         for (int k = 0; k < kNumClips - 1; k++) std::swap(perm[k], perm[k + (int)(Rnd() % (uint32_t)(kNumClips - k))]);
         for (int k = 0; k < got && S.n < 48; k++) {
-            LiveSub& u = tmp[k]; u.spot = sp[k]; u.order = S.n; u.clip = perm[k % kNumClips]; u.start = 0.0f;
+            LiveSub& u = tmp[k]; u.spot = sp[k]; u.order = S.n; u.clip = perm[k % kNumClips]; u.start = 0.0f; u.phase0 = (float)(Rnd() % 9000u) / 1000.0f;
             S.s[S.n++] = u;
         }
         Log("banca: %s: %d convocados, %d suplentes, %d asientos en %d fila(s) (%s); se sientan %d, %d con pechera (%.0f %%)", sd ? "visitante" : "local", (int)conv[sd], ns,
@@ -1202,10 +1287,14 @@ void SubsTick(void* host) {
     if (S.phase != kIdle && m != S.match) { SubsDestroyAll("cambio el partido"); return; }
     switch (S.phase) {
     case kIdle:
+        if (s_ended.load()) return;                                     // (2b) termino el partido: hasta que cargue otro no se arma la lista
+        // (2b) en la carga, recien cuando match::Match empieza a crear a los jugadores (estado 6): el estadio ya esta
+        if (s_okLoad && !s_live.load() && s_matchState.load() < 6) return;
         if (now < S.tRetry) return;
-        S.tRetry = now + 2.0;
+        S.tRetry = now + 0.25;
         {
             static int lastWhy = -1; const int why = SubsPrepare();
+            s_prepWhy.store(why);
             if (why != lastWhy) { lastWhy = why; if (why) Log("banca: suplentes reales: todavia no (%s)", kPrepWhy[why]); }
             if (why) return;
         }
@@ -1213,9 +1302,14 @@ void SubsTick(void* host) {
         S.phase = kWait; S.tPhase = now; S.T = 0;
         return;
     case kWait: {
-        if (now - S.tPhase < 4.0) return;
+        if (now - S.tPhase < 0.5) return;
         uintptr_t sheet = 0;
-        if (!Rd(kSheetPtr, sheet) || !Heap(sheet)) { if (!S.sheetSaid) { S.sheetSaid = true; Log("banca: suplentes reales: esperando la ficha de las cinematicas"); } return; }
+        // (2c) en la pantalla de carga la ficha de las cinematicas puede no estar todavia. Solo se usa para estacion / clima del
+        // LoadId (FUN_141f61520 la pide con FUN_141f58cb0, que la crea si falta) y eso se pisa con lo de la cancha; lo que hace
+        // falta de verdad es el recurso de clips "fixdemo". Se sigue con cualquiera de los dos.
+        const bool haveSheet = Rd(kSheetPtr, sheet) && Heap(sheet), haveRes = !haveSheet && FixdemoRes() != nullptr;
+        if (!haveSheet && !haveRes) { if (!S.sheetSaid) { S.sheetSaid = true; Log("banca: suplentes reales: esperando la ficha de las cinematicas o el recurso \"fixdemo\""); } return; }
+        if (haveRes) Log("banca: suplentes reales: sin ficha de las cinematicas todavia, pero esta el recurso \"fixdemo\": se sigue");
         int ready = 0;
         for (int i = 0; i < kNumClips; i++) {
             sprintf_s(s_clip[i].path, "cpk_dat/common/demo/anime/FoxAnim/FixDemo/Animations/dml_md_lockerSpeech_001_sit_%03d.gani", kClipNo[i]);
@@ -1240,22 +1334,32 @@ void SubsTick(void* host) {
         if (ready < kNumClips && w < 20.0) return;
         if (!ready) { S.phase = kOff; Log("banca: suplentes reales: ningun clip de sentado cargo en 20 s: no se sienta a nadie en este partido"); return; }
         if (ready < kNumClips) for (int k = 0; k < S.n; k++) { int c = S.s[k].clip; for (int t = 0; t < kNumClips && !s_clip[c].ok; t++) c = (c + 1) % kNumClips; S.s[k].clip = c; }
-        if (!FixdemoRes()) { S.phase = kOff; Log("banca: suplentes reales: no esta el recurso de clips \"fixdemo\": no se sienta a nadie"); return; }
-        Log("banca: suplentes reales: %d clips listos en %.1f s%s; se crean %d suplentes de a uno", ready, w, S.pumpOwn ? " (con la bomba propia)" : "", S.n);
-        S.phase = kRun; S.tPhase = now; S.tSpawn = now; S.lastCheck = now;
+        if (!FixdemoRes()) {                                            // (2b) en la carga puede faltar todavia: se espera
+            if (!S.resSaid) { S.resSaid = true; Log("banca: suplentes reales: esperando el recurso de clips \"fixdemo\""); }
+            if (w < 60.0) return;
+            S.phase = kOff; Log("banca: suplentes reales: no esta el recurso de clips \"fixdemo\" en 60 s: no se sienta a nadie"); return;
+        }
+        Log("banca: suplentes reales: %d clips listos en %.1f s%s; se crean %d suplentes, hasta %d a la vez", ready, w, S.pumpOwn ? " (con la bomba propia)" : "", S.n, kParallel);
+        S.phase = kRun; S.tPhase = now; S.tSpawn = now; S.lastCheck = now; S.tProgress = now;
         return; }
     case kRun: break;
     default: return;
     }
-    // crear de a uno
-    if (S.cur < S.n) {
-        LiveSub& u = S.s[S.cur];
-        if (u.state == 0 && now - S.tSpawn >= 0.10) {
+    // (2b) crear: hasta kParallel cargando a la vez (uno nuevo por cuadro, en el orden de la lista)
+    {
+        int loading = 0, pending = 0, next = -1;
+        for (int k = 0; k < S.n; k++) {
+            const int st = S.s[k].state;
+            if (st == 1) loading++;
+            if (st == 0 || st == 1) pending++;
+            if (st == 0 && next < 0) next = k;
+        }
+        if (next >= 0 && loading < kParallel && now - S.tSpawn >= 0.03) {
+            LiveSub& u = S.s[next];
             char why[96] = {};
             if (!BudgetOk(why, sizeof why)) {
-                Log("banca: suplentes reales: no se crean mas (%s); quedaron %d de %d", why, s_subActive.load(), S.n);
-                for (int k = S.cur; k < S.n; k++) S.s[k].state = 3;
-                S.cur = S.n;
+                int left = 0; for (int k = next; k < S.n; k++) if (S.s[k].state == 0) { S.s[k].state = 3; left++; }
+                Log("banca: suplentes reales: no se crean mas (%s); quedan %d sin crear de %d", why, left, S.n);
             } else {
                 bool haveSW = false; uint8_t season = 0, weather = 0;
                 if (host) {                                               // manga / clima como los de la cancha
@@ -1266,34 +1370,42 @@ void SubsTick(void* host) {
                     uintptr_t sheet = 0; uint8_t a = 0xff, b = 0xff; if (Rd(kSheetPtr, sheet) && Heap(sheet)) { Rd(sheet + 0x5c, a); Rd(sheet + 0x58, b); }
                     Log("banca: suplentes reales: LoadId +0x4f / +0x50 de la cancha %s %u / %u; de la ficha de cinematicas %u / %u", haveSW ? "" : "(no leido)", season, weather, a, b);
                 }
+                S.cur++;                                                  // creados (con o sin exito)
                 int c0 = 0, c1 = 0; BudgetRead(0, c0, c1);
-                Log("banca: creando suplente %d de %d: %s %llu %s (lugar %d%s%s) en x %.2f y %.2f z %.2f, clip %d; texturas usadas %d de %d", S.cur + 1, S.n,
-                    u.side ? "visitante" : "local", (unsigned long long)u.id, u.name, u.place, u.gk ? ", arquero" : "", u.bib ? ", pechera" : "", u.spot.x, u.spot.y, u.spot.z,
-                    kClipNo[u.clip], c1, c0);
-                if (SubCreate(u, haveSW, season, weather)) { u.state = 1; u.tCreate = now; u.tCreateT = S.T; }
+                Log("banca: creando suplente %d de %d: %s %llu %s (lugar %d%s%s) en x %.2f y %.2f z %.2f, clip %d desde %.1f s; texturas usadas %d de %d; %d cargando",
+                    next + 1, S.n, u.side ? "visitante" : "local", (unsigned long long)u.id, u.name, u.place, u.gk ? ", arquero" : "", u.bib ? ", pechera" : "",
+                    u.spot.x, u.spot.y, u.spot.z, kClipNo[u.clip], u.phase0, c1, c0, loading);
+                S.tSpawn = now;
+                if (SubCreate(u, haveSW, season, weather)) { u.state = 1; u.tCreate = now; u.tCreateT = S.T; S.tProgress = now; }
                 else if (s_subsDead.load()) { Log("banca: suplentes reales: ERROR dentro del juego al crear: no se toca nada mas en esta sesion"); return; }
-                else { u.state = 3; S.cur++; S.tSpawn = now; Log("banca: suplentes reales: sin memoria para el suplente %d", S.cur); }
+                else { u.state = 3; Log("banca: suplentes reales: sin memoria para el suplente %d", next + 1); }
             }
-        } else if (u.state == 1) {
+        }
+        for (int k = 0; k < S.n; k++) {
+            LiveSub& u = S.s[k]; if (u.state != 1) continue;
             const int r = SubPoll(u);
             if (r < 0) { u.state = 5; Log("banca: suplentes reales: ERROR dentro del juego al cargar a %s: no se toca nada mas en esta sesion", u.name); return; }
             if (r == 1) {
                 void* res = FixdemoRes();
                 if (res && SubStart(u, res, S.T)) {
-                    u.state = 2; s_subActive.fetch_add(1);
-                    Log("banca: suplente %d sentado: %s (cargo en %.1f s)", S.cur + 1, u.name, now - u.tCreate);
+                    u.state = 2; s_subActive.fetch_add(1); S.tProgress = now;
+                    void* face = nullptr; memcpy(&face, (uint8_t*)u.fd + 0x58, 8);
+                    Log("banca: suplente %d sentado: %s (cargo en %.1f s; cara y manos %s)", k + 1, u.name, now - u.tCreate,
+                        face ? "con controlador" : u.faceTried ? "SIN controlador (fallo vf3)" : "esperando los recursos del juego");
                 } else {
                     if (s_subsDead.load()) { Log("banca: suplentes reales: ERROR dentro del juego al dar el clip a %s: no se toca nada mas en esta sesion", u.name); return; }
                     Log("banca: suplentes reales: %s cargo pero no tomo el clip: se saca", u.name);
                     FdDestroy(u.fd); u.fd = nullptr; u.state = 3;
                 }
-                S.cur++; S.tSpawn = now;
-            } else if (S.T - u.tCreateT > 30.0f) {   // 30 s de partido corriendo (en pausa no hay reloj y la carga sigue)
+            } else if (S.T - u.tCreateT > 30.0f) {   // 30 s de reloj de suplentes (en la carga tambien corre)
                 Log("banca: suplentes reales: %s no cargo en 30 s: se saca", u.name);
-                FdDestroy(u.fd); u.fd = nullptr; u.state = 3; S.cur++; S.tSpawn = now;
+                FdDestroy(u.fd); u.fd = nullptr; u.state = 3;
             }
         }
-        if (S.cur >= S.n) Log("banca: suplentes reales: listo, %d sentados de %d", s_subActive.load(), S.n);
+        if (pending && !S.doneSaid) {
+            bool any = false; for (int k = 0; k < S.n && !any; k++) any = S.s[k].state == 0 || S.s[k].state == 1;
+            if (!any) { S.doneSaid = true; Log("banca: suplentes reales: listo, %d sentados de %d en %.1f s", s_subActive.load(), S.n, now - S.tPhase); }
+        }
     }
     // mover a los sentados
     for (int k = 0; k < S.n; k++) {
@@ -1343,7 +1455,11 @@ bool TickGate(uint32_t idx) {
 void __fastcall hk_HumanPush(void* self) {
     if (s_okSubs && self) {
         const uint32_t idx = *(const uint32_t*)((const uint8_t*)self + 0x18);
-        if (idx < 22 && TickGate(idx)) {
+        s_live.store(true, std::memory_order_relaxed);               // los jugadores se dibujan: el partido esta en juego
+        if (!s_okLoad) s_ended.store(false, std::memory_order_relaxed);   // sin los ganchos de la carga, como en 2a
+        // (2b) el reloj es el del modo partido; este (hilos de trabajo) queda de respaldo si aquel no corre
+        const bool modeFresh = s_okLoad && Now() - s_modeT.load(std::memory_order_relaxed) < 0.25;
+        if (!modeFresh && idx < 22 && TickGate(idx)) {
             std::lock_guard<std::recursive_mutex> lk(s_subMx);
             SubsTick(self);
         }
@@ -1351,13 +1467,88 @@ void __fastcall hk_HumanPush(void* self) {
     o_humanPush(self);
 }
 // el juego borra a un jugador del partido: antes se sueltan los nuestros (la escena se va detras)
+// (2b) en la carga (antes de que arranque el partido) no: los suplentes ya se crean ahi y el juego puede borrar jugadores al armar el suyo
 void __fastcall hk_HumanDtor(void* self, void* a2, void* a3, void* a4) {
     if (s_okSubs) {
         std::lock_guard<std::recursive_mutex> lk(s_subMx);
-        if (s_subs.phase != kIdle) SubsDestroyAll("termino el partido");
-    }
-    s_matchEnd.store(GetTickCount64());
+        if (s_live.load() || !s_okLoad) {
+            if (s_subs.phase != kIdle) SubsDestroyAll("termino el partido");
+            s_live.store(false); s_ended.store(true);
+            s_matchEnd.store(GetTickCount64());
+        } else if (s_subs.phase != kIdle) {
+            static unsigned said = 0;
+            if (said++ < 3) Log("banca: el juego borro un jugador del partido durante la carga: los suplentes reales siguen (fase %d)", s_subs.phase);
+        }
+    } else s_matchEnd.store(GetTickCount64());
     o_humanDtor(self, a2, a3, a4);
+}
+
+// (2b) reloj: actualizar el modo partido (carga, partido, cinematicas, repeticiones), una vez por cuadro en el hilo del juego
+void __fastcall hk_ModeUpd(void* self, void* p2, void* p3) {
+    if (s_okSubs && s_okLoad) {
+        s_modeCalls.fetch_add(1, std::memory_order_relaxed);
+        const unsigned long tid = GetCurrentThreadId(), prev = s_modeThread.exchange(tid, std::memory_order_relaxed);
+        if (prev != tid) { static std::atomic<unsigned> n{0}; if (n.fetch_add(1) < 4) Log("banca: reloj de los suplentes = actualizar el modo partido, hilo %lu%s", tid, prev ? " (cambio de hilo)" : ""); }
+        s_modeT.store(Now(), std::memory_order_relaxed);
+        std::lock_guard<std::recursive_mutex> lk(s_subMx);
+        SubsTick(nullptr);
+    }
+    o_modeUpd(self, p2, p3);
+}
+
+// (2b) espera de la carga. Se espera mientras se pueda llegar: lista por armar (estadio o equipos sin listos), clips cargando,
+// suplentes por crear o cargando; nunca mas de kHoldMax, ni 15 s sin que se siente nadie. Dentro de s_subMx.
+struct Hold { uintptr_t mobj = 0; double t0 = 0; bool on = false, done = false; };
+Hold s_hold;
+bool HoldWanted(double now, char* why, size_t n) {
+    Subs& S = s_subs;
+    if (s_subsDead.load()) { strcpy_s(why, n, "error dentro del juego, suplentes apagados"); return false; }
+    if (!(Live(0, 0.0f) > 0.5f && Live(1, 1.0f) > 0.5f && Live2(0, 1.0f) > 0.5f)) { strcpy_s(why, n, "opcion apagada"); return false; }
+    const double w = now - s_hold.t0;
+    if (w > kHoldMax) { sprintf_s(why, n, "tope de %.0f s", kHoldMax); return false; }
+    switch (S.phase) {
+    case kIdle: {
+        const int r = s_prepWhy.load();
+        if (r == -1 || r == 3 || r == 5) { if (w < 12.0) return true; sprintf_s(why, n, "no se armo la lista en 12 s: %s", r < 0 ? "sin probar" : kPrepWhy[r]); return false; }
+        sprintf_s(why, n, "%s", r > 0 && r < 6 ? kPrepWhy[r] : "sin lista"); return false; }
+    case kWait: case kClips:
+        if (w < 25.0) return true;
+        strcpy_s(why, n, "los clips de sentado no estuvieron en 25 s"); return false;
+    case kRun: {
+        int pend = 0; for (int k = 0; k < S.n; k++) if (S.s[k].state == 0 || S.s[k].state == 1) pend++;
+        if (!pend) { strcpy_s(why, n, "todos listos"); return false; }
+        if (now - S.tProgress > 15.0) { sprintf_s(why, n, "15 s sin avance, faltan %d", pend); return false; }
+        return true; }
+    default: strcpy_s(why, n, "no hay a quien sentar"); return false;
+    }
+}
+void __fastcall hk_MatchVf1(void* self, void* p2) {
+    if (s_okSubs && s_okLoad && self) {
+        int st = -1; Rd((uintptr_t)self + 8, st);
+        s_matchState.store(st, std::memory_order_relaxed);
+        if (st >= 0 && st < 0x1c) {                                   // un partido cargando: lo de antes ya termino
+            std::lock_guard<std::recursive_mutex> lk(s_subMx);
+            s_ended.store(false); s_live.store(false);
+            if (s_hold.mobj != (uintptr_t)self || s_hold.done || s_hold.on) s_hold = Hold{};
+        }
+        if (st == 0x1c && _ReturnAddress() == (void*)kMatchVf1RetStep0f) {
+            std::lock_guard<std::recursive_mutex> lk(s_subMx);
+            const double now = Now();
+            if (s_hold.mobj != (uintptr_t)self) { s_hold = Hold{}; s_hold.mobj = (uintptr_t)self; s_hold.t0 = now; }
+            if (!s_hold.done) {
+                SubsTick(nullptr);                                     // por si el reloj del modo partido no corre
+                char why[128] = {};
+                if (HoldWanted(now, why, sizeof why)) {
+                    if (!s_hold.on) { s_hold.on = true; Log("banca: la carga espera a los suplentes reales (fase %d, %d en la lista)", s_subs.phase, s_subs.n); }
+                    return;                                            // match::Match sigue en 0x1c: la pantalla de carga sigue
+                }
+                s_hold.done = true;
+                Log("banca: la carga espero %.1f s a los suplentes reales: %d sentados de %d (%s)", s_hold.on ? now - s_hold.t0 : 0.0, s_subActive.load(), s_subs.n, why);
+            }
+        }
+    }
+    o_matchVf1(self, p2);
+    if (s_okSubs && s_okLoad && self) { int st = 0; if (Rd((uintptr_t)self + 8, st) && st >= 0x1d) s_live.store(true, std::memory_order_relaxed); }
 }
 void SubsTickFromScene() {}   // (2a-2) la escena del estadio corre en hilos de trabajo distintos: ya no se usa de reloj
 
@@ -1399,6 +1590,15 @@ void Install() {
         }
         Log("banca: suplentes reales sentados (paso 2a, fila 517) %s", s_okSubs ? "enganchado" : "NO");
     }
+    if (s_okSubs) {   // 16/11 paso 2b: crearlos en la pantalla de carga y arrancar con todos sentados
+        const bool a = SigAt(kModeUpd, kModeUpdSig, sizeof kModeUpdSig), b = SigAt(kMatchVf1, kMatchVf1Sig, sizeof kMatchVf1Sig);
+        if (!a || !b) Log("banca: firmas de 0x141fc70d0 / 0x14041b380 distintas (%d %d): los suplentes se crean en el partido, como en 2a", a, b);
+        else if (MH_CreateHook((void*)kMatchVf1, (void*)&hk_MatchVf1, (void**)&o_matchVf1) == MH_OK && MH_EnableHook((void*)kMatchVf1) == MH_OK) {
+            if (MH_CreateHook((void*)kModeUpd, (void*)&hk_ModeUpd, (void**)&o_modeUpd) == MH_OK && MH_EnableHook((void*)kModeUpd) == MH_OK) s_okLoad = true;
+            else { MH_DisableHook((void*)kMatchVf1); MH_RemoveHook((void*)kMatchVf1); o_matchVf1 = nullptr; }
+        }
+        Log("banca: suplentes reales en la pantalla de carga (paso 2b) %s", s_okLoad ? "enganchado" : "NO (se crean en el partido)");
+    }
     Log("banca: escondido por la escena del estadio (cada cuadro) %s", s_okImpl ? "enganchado" : "NO");
     Log("banca: reloj %s, sonda de cinematicas %s, esconder el banco %s (fila 516: x %.0f)", s_okTick ? "enganchado" : "NO", s_okProbe ? "enganchada" : "NO",
         !s_okHide ? "NO (firma de 0x1419055f0 distinta)" : s_okVisHook ? (s_okApply ? "listo (SetVisible y al aplicar)" : "solo por SetVisible") : "solo en cinematicas (gancho de SetVisible fallo)", Live(0, 0.0f));
@@ -1438,10 +1638,12 @@ void BancaPresent() {
         if (s_okSubs) {   // paso 2a
             static unsigned lastSub = 0; const unsigned st = s_subTicks.load(std::memory_order_relaxed);
             LogRealSubs();
-            Log("banca: suplentes reales %s: %d sentados, reloj %.1f por segundo (hilo %lu, %u cambios de hilo, %u llamadas de jugadores en total), %u descargas de clips frenadas%s",
-                Live2(0, 1.0f) > 0.5f ? "prendido" : "apagado", s_subActive.load(), nextT > 0 ? (st - lastSub) / 10.0 : 0.0, s_srcThread.load(), s_threadChanges.load(),
-                s_pushCalls.load(), s_unloadBlocked.load(), s_subsDead.load() ? "; APAGADO por un error dentro del juego" : "");
-            lastSub = st;
+            static unsigned lastMode = 0; const unsigned md = s_modeCalls.load(std::memory_order_relaxed);
+            Log("banca: suplentes reales %s: %d sentados, reloj %.1f por segundo (modo partido %.1f por segundo hilo %lu, estado del partido %d; jugadores hilo %lu, %u cambios de hilo, %u llamadas en total), %u descargas de clips frenadas; cara y manos: %u creados, %u fallos%s",
+                Live2(0, 1.0f) > 0.5f ? "prendido" : "apagado", s_subActive.load(), nextT > 0 ? (st - lastSub) / 10.0 : 0.0, nextT > 0 ? (md - lastMode) / 10.0 : 0.0,
+                s_modeThread.load(), s_matchState.load(), s_srcThread.load(), s_threadChanges.load(), s_pushCalls.load(), s_unloadBlocked.load(),
+                s_faceMade.load(), s_faceFail.load(), s_subsDead.load() ? "; APAGADO por un error dentro del juego" : "");
+            lastSub = st; lastMode = md;
         }
         lastTicks = tk; nextT = t + 10.0;
     }
