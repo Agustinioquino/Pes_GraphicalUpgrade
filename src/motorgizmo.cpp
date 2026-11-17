@@ -168,7 +168,7 @@ static double s_tipT = 0.0; static int s_tipId = -1; static ImVec2 s_tipA, s_tip
 // clic en el campo y escribir (las letras llegan por WM_CHAR, overlay.cpp MotorUiChar); Esc o la X lo borra. Con texto, la lista muestra
 // los clips de TODOS los grupos cuyo archivo contiene lo escrito (sin distinguir mayusculas).
 static std::mutex s_srMx; static char s_sr[48] = ""; static std::atomic<int> s_srOn{0};   // 0 nada, 1 clips, 2 gestos
-static int s_srTop = 0, s_srFTop = 0; static std::atomic<bool> s_srEsc{false};
+static int s_poseBone = 0; static int s_srTop = 0, s_srFTop = 0; static std::atomic<bool> s_srEsc{false};
 struct PjClip { bool ok; float pos[3], yaw, scale, speed, faceW; int clip, face; bool paused, blink; }; static PjClip s_pjCb{};   // (07:23) copiar / pegar entre jugadores
 static bool SrMatch(const char* f, const char* q) { if (!q[0]) return true; for (; *f; f++) { const char* a = f; const char* b = q; while (*a && *b && tolower((unsigned char)*a) == tolower((unsigned char)*b)) { a++; b++; } if (!*b) return true; } return false; }
 bool MotorUiChar(unsigned c) {
@@ -764,7 +764,7 @@ static void ToolbarDraw() {
         if (lEdge0 && !hitOff && inside(p0, p1)) { s_pressId = id; s_pressVal = v; }
         // (07:23) clic derecho = valor de fabrica (los del jugador, la velocidad, la intensidad y cerca / lejos de la camara)
         { float d = 0.0f; bool has = true;
-          switch (id) { case 2100: case 2101: case 2102: case 2103: d = 0.0f; break; case 2104: case 2120: case 2121: d = 100.0f; break; case 2014: d = 0.05f; break; case 2015: d = 1000.0f; break; default: has = false; }
+          switch (id) { case 2100: case 2101: case 2102: case 2103: case 2130: case 2131: case 2132: d = 0.0f; break; case 2104: case 2120: case 2121: d = 100.0f; break; case 2014: d = 0.05f; break; case 2015: d = 1000.0f; break; default: has = false; }
           if (has && rEdge && !hitOff && inside(p0, p1) && s_editId != id && v != d) { UndoBegin(); s_ubEndPending = true; v = std::clamp(d, lo, hi); ch = true; Note("Valor de f\xC3\xA1" "brica"); }
           if (inside(p0, p1) && !hitOff) { if (s_hovId != id) { s_hovId = id; s_hovT = Now(); }
             else if (Now() - s_hovT > 0.7 && s_dragId != id && s_editId != id) {      // (07:23) ayuda al pasar el mouse
@@ -1309,6 +1309,23 @@ static void ToolbarDraw() {
                   button(3343, "Cara neutra");
                   button(3342, "Este gesto a todos");
                   text(lx, y + 9.0f * k, dim, "El gesto sigue el reloj de la animaci\xC3\xB3n del jugador.", fsS); y += 26.0f * k;
+              }
+              // (17/11 18:23, Agustin: "avanzar en el sistema avanzado") POSAR: girar huesos encima de la animacion (motorpj.cpp PoseApply).
+              // El hueso elegido se marca en la vista con un aro naranja.
+              if (label("POSAR (PRIMERA PARTE)")) { char b1[96], bn[64]; float e[3]; int nB = 0, nP = 0; float bw[3];
+                  const bool hasW = MotorPjPoseGet(qs, s_poseBone, e, &nB, &nP, bn, sizeof bn, bw);
+                  if (nB <= 0) { text(lx, y + 9.0f * k, dim, "Esperando el esqueleto del jugador...", fsS); y += 26.0f * k; }
+                  else { s_poseBone = std::clamp(s_poseBone, 0, nB - 1);
+                      snprintf(b1, sizeof b1, "%d / %d  \xC2\xB7  %s", s_poseBone, nB - 1, bn); arrowRow(3700, 3701, "Hueso", b1, true);
+                      bool ch = false; ch |= fld(2130, "Girar en X", e[0], 0.5f, -180.0f, 180.0f, "%.1f", "\xC2\xB0"); ch |= fld(2131, "Girar en Y", e[1], 0.5f, -180.0f, 180.0f, "%.1f", "\xC2\xB0"); ch |= fld(2132, "Girar en Z", e[2], 0.5f, -180.0f, 180.0f, "%.1f", "\xC2\xB0");
+                      if (ch) MotorPjPoseSet(qs, s_poseBone, e);
+                      y += 6.0f * k; snprintf(b1, sizeof b1, nP == 1 ? "1 hueso girado" : "%d huesos girados", nP); text(lx, y + 9.0f * k, dim, b1, fsS); y += 22.0f * k;
+                      button(3702, "Este hueso sin giro"); button(3703, "Sacar toda la pose");
+                      text(lx, y + 9.0f * k, dim, "Flechas del hueso: May\xC3\xBAs = de a 10. Lo que cuelga del hueso gira con \xC3\xA9l.", fsS); y += 26.0f * k;
+                      if (hasW) { float u, v; if (MotorGridProject(bw, &u, &v)) { ImDrawList* fg = ImGui::GetForegroundDrawList(); const ImVec2 c(u * ds.x, v * ds.y);
+                          fg->AddCircle(c, 9.0f * k, IM_COL32(0, 0, 0, 160), 20, 4.0f * k); fg->AddCircle(c, 9.0f * k, acc, 20, 2.2f * k); fg->AddCircleFilled(c, 2.5f * k, acc, 10);
+                          const ImVec2 ts = font->CalcTextSizeA(fsS, FLT_MAX, 0.0f, bn); fg->AddRectFilled(ImVec2(c.x + 12.0f * k, c.y - ts.y * 0.5f - 3.0f * k), ImVec2(c.x + 20.0f * k + ts.x, c.y + ts.y * 0.5f + 3.0f * k), IM_COL32(18, 18, 20, 220), 3.0f * k);
+                          fg->AddText(font, fsS, ImVec2(c.x + 16.0f * k, c.y - ts.y * 0.5f), IM_COL32(240, 240, 240, 255), bn); } } }
               }
           }
       } else if (s_sel >= 4) {
@@ -1898,6 +1915,9 @@ static void ToolbarDraw() {
             else if (id == 3342) { MotorPjFaceSet(-1, PI.face[q], PI.faceW[q], PI.blink[q]); Note("Gesto puesto a todos"); }
             else if (id == 3343) MotorPjFaceSet(q, -1, PI.faceW[q], PI.blink[q]);
         }
+        else if (id >= 3700 && id <= 3703) { const int q = MotorPjSel(); const int stp = (GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 10 : 1;
+            if (id == 3700) s_poseBone = std::max(0, s_poseBone - stp); else if (id == 3701) s_poseBone += stp;
+            else if (q >= 0 && id == 3702) MotorPjPoseSet(q, s_poseBone, nullptr); else if (q >= 0 && id == 3703) { MotorPjPoseSet(q, -1, nullptr); Note("Pose sacada"); } }
         else if (id >= 3600 && id <= 3604) { MotorLightSetReq(id - 3600); static const char* const nn[5] = { "Luces del Editar", "Luces: Default", "Luces: EditFace", "Luces: EditSpike", "Luces: MatchMenu" }; Note("%s", TRS(nn[id - 3600])); }
         else if ((id >= 3380 && id <= 3388)) {      // (18:01) pestanas de la lista, modo al terminar y desfase
             static MotorPjInfo PI; MotorPjInfoGet(&PI); const int q = MotorPjSel();

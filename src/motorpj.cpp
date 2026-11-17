@@ -114,6 +114,7 @@ typedef char(__fastcall* HumanOkFn)(void*);
 struct GStr { union { char buf[16]; char* ptr; }; size_t size, cap; };
 
 const int kMax = kMotorPjMax;
+constexpr int kPoseMax = 24;
 struct Pj {
     // lo escribe la interfaz (con s_mx)
     int state = 0;                  // 0 libre, 1 pedido, 2 cargando, 3 listo, 4 fallo, 5 sacar
@@ -128,6 +129,8 @@ struct Pj {
     bool hidden = false;
     int mode = 0;                   // (17/11 18:01) 0 en bucle, 1 una vez (queda en el final), 2 ida y vuelta
     bool back = false;              // ida y vuelta: yendo para atras (solo el hilo del juego)
+    struct PoseK { int bone; float e[3]; }; PoseK pose[kPoseMax] = {}; int nPose = 0;   // (17/11 18:23) posar: giro por hueso sobre la animacion (grados)
+    float boneW[3] = {}; bool boneWOk = false; int boneQ = -1;                          // lugar en el mundo del hueso que mira la interfaz (lo escribe el juego)
     // solo el hilo del juego
     uint8_t* fd = nullptr; double tLoad = 0, tLast = 0, tPlay = 0; bool faceTried = false;
     float scW = 1.0f; void* scCtl = nullptr; float scBase = 0.0f;   // (17/11 tarde) tamano por root_main como FUN_141f87eb0
@@ -420,6 +423,75 @@ static void StoreWorld(Pj& p, const float* w) { std::lock_guard<std::mutex> lk(s
 // controlador, fila de la posicion en [ctl+0x188] + 0xd0, la que escribe FUN_141afd060). Se lee cada cuadro despues de vf4 para dibujarlos ahi.
 static bool ReadRootPos(void* ctl, float* o) { const uintptr_t R = *(const uintptr_t*)((uintptr_t)ctl + 0x188); if (!PtrOk(R)) return false;
     const float* v = (const float*)(R + 0xd0); for (int k = 0; k < 3; k++) { if (!(v[k] == v[k]) || fabsf(v[k]) > 500.0f) return false; o[k] = v[k]; } return true; }
+// ---- (17/11 18:23, Agustin: "animaciones tenemos que avanzar en el sistema avanzado") POSAR, base del sistema avanzado.
+// Leido en el C (draw::ModelViewBoneUpdator::vf2 0x1423f2ca0, que manda manos y cara hueso por hueso): despues de evaluar, el
+// controlador del clip tiene por hueso la ROTACION en [ctl+0x20] + i*0x10 (cuaternion, FUN_141b063e0) y el LUGAR en
+// [[ctl+0x88]+0x50] + i*0x10 (FUN_141b06390), los dos en el espacio del modelo; cantidad = [[ctl+0x100]+0x20]+0xf8 (FUN_141b04910).
+// FUN_141f86d40 (despues de vf4) manda esa pose. Aca, entre los dos, se gira cada hueso pedido y todos los que cuelgan de el alrededor
+// de su lugar. Los padres y los nombres no estan leidos: se buscan en la descripcion del esqueleto ([[ctl+0x100]+0x20]) una tabla de
+// padres (cada uno menor que su hueso, el 0 sin padre) y una de hashes de nombre (contra src/skbonenames.inc). INFERIDO: si no aparece
+// la de padres, se gira solo ese hueso (se anota en el registro).
+#include "skbonenames.inc"
+static const char* SkName(uint32_t h) { for (const auto& e : kSkNames) if (e.h == h) return e.n; return nullptr; }
+struct SkDesc { uintptr_t desc = 0; int n = 0; int par[400]; bool parOk = false; uint32_t hash[400]; bool hashOk = false; };
+static SkDesc s_sk[kMax];
+static void SkScan(int slot, void* ctl) {
+    SkDesc& d = s_sk[slot];
+    __try {
+        const uintptr_t a = *(const uintptr_t*)((uintptr_t)ctl + 0x100); if (!PtrOk(a)) return;
+        const uintptr_t desc = *(const uintptr_t*)(a + 0x20); if (!PtrOk(desc)) return;
+        const int n = *(const int*)(desc + 0xf8); if (d.desc == desc && d.n == n) return;
+        d = SkDesc{}; d.desc = desc; d.n = n; if (n < 2 || n > 400) { Log("motor (posar): jugador %d: %d huesos en el controlador: no se posa", slot + 1, n); return; }
+        int parOff = -1, parW = 0, hashOff = -1;
+        for (int off = 0; off <= 0x1f0 && (parOff < 0 || hashOff < 0); off += 8) {
+            const uintptr_t q = *(const uintptr_t*)(desc + off); if (!PtrOk(q)) continue;
+            MEMORY_BASIC_INFORMATION mi{}; if (!VirtualQuery((void*)q, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) || q + (size_t)n * 4 > (uintptr_t)mi.BaseAddress + mi.RegionSize) continue;
+            for (int wdt = 1; wdt <= 4 && parOff < 0; wdt *= 2) {      // padres de 1, 2 o 4 bytes
+                bool okp = true; int roots = 0;
+                for (int i = 0; i < n && okp; i++) { int v = wdt == 1 ? (int)*(const uint8_t*)(q + i) : wdt == 2 ? (int)*(const uint16_t*)(q + 2 * i) : *(const int*)(q + 4 * i);
+                    const int none = wdt == 1 ? 0xff : wdt == 2 ? 0xffff : -1;
+                    if (v == none) { roots++; continue; } if (v < 0 || v >= i) okp = false; }
+                if (okp && roots >= 1 && roots <= 2) { parOff = off; parW = wdt;
+                    for (int i = 0; i < n; i++) { int v = wdt == 1 ? (int)*(const uint8_t*)(q + i) : wdt == 2 ? (int)*(const uint16_t*)(q + 2 * i) : *(const int*)(q + 4 * i);
+                        d.par[i] = (v == (wdt == 1 ? 0xff : wdt == 2 ? 0xffff : -1)) ? -1 : v; } d.parOk = true; }
+            }
+            if (hashOff < 0) { int hit = 0; for (int i = 0; i < n; i++) if (SkName(*(const uint32_t*)(q + 4 * i))) hit++;
+                if (hit * 3 >= n) { hashOff = off; for (int i = 0; i < n; i++) d.hash[i] = *(const uint32_t*)(q + 4 * i); d.hashOk = true; } }
+        }
+        Log("motor (posar): jugador %d: esqueleto %p con %d huesos; padres %s (+0x%x, %d bytes); nombres %s (+0x%x)", slot + 1, (void*)desc, n,
+            d.parOk ? "encontrados" : "NO encontrados (se gira solo el hueso)", parOff, parW, d.hashOk ? "encontrados" : "NO encontrados", hashOff);
+    } __except (1) { d = SkDesc{}; }
+}
+static inline void QMul(const float* a, const float* b, float* o) {      // o = a * b (x, y, z, w)
+    const float x = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1], y = a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0];
+    const float z = a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3], w = a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]; o[0] = x; o[1] = y; o[2] = z; o[3] = w; }
+static inline void QRot(const float* q, const float* v, float* o) { const float cx = 2.0f * (q[1] * v[2] - q[2] * v[1]), cy = 2.0f * (q[2] * v[0] - q[0] * v[2]), cz = 2.0f * (q[0] * v[1] - q[1] * v[0]);
+    o[0] = v[0] + q[3] * cx + (q[1] * cz - q[2] * cy); o[1] = v[1] + q[3] * cy + (q[2] * cx - q[0] * cz); o[2] = v[2] + q[3] * cz + (q[0] * cy - q[1] * cx); }
+static void StoreBone(Pj& p, const float* bw, bool ok) { std::lock_guard<std::mutex> lk(s_mx); memcpy(p.boneW, bw, 12); p.boneWOk = ok; }   // fuera del __try (C2712)
+static void PoseApply(Pj& p, void* ctl, const Pj& w) {
+    const int slot = (int)(&p - s_pj);
+    SkScan(slot, ctl); const SkDesc& d = s_sk[slot];
+    bool wok = false; float bw[3] = {};
+    __try {
+        const uintptr_t qa = *(const uintptr_t*)((uintptr_t)ctl + 0x20); const uintptr_t r = *(const uintptr_t*)((uintptr_t)ctl + 0x88); if (!PtrOk(qa) || !PtrOk(r)) return;
+        const uintptr_t pa = *(const uintptr_t*)(r + 0x50); if (!PtrOk(pa) || d.n < 2) return;
+        float* Q = (float*)qa; float* P = (float*)pa; const int n = d.n;
+        static bool inSub[400];
+        for (int k = 0; k < w.nPose && k < kPoseMax; k++) { const int b = w.pose[k].bone; if (b < 0 || b >= n) continue;
+            const float* e = w.pose[k].e; if (fabsf(e[0]) + fabsf(e[1]) + fabsf(e[2]) < 1e-3f) continue;
+            float qx[4] = { sinf(e[0] * 0.00872665f), 0, 0, cosf(e[0] * 0.00872665f) }, qy[4] = { 0, sinf(e[1] * 0.00872665f), 0, cosf(e[1] * 0.00872665f) }, qz[4] = { 0, 0, sinf(e[2] * 0.00872665f), cosf(e[2] * 0.00872665f) }, t[4], R[4];
+            QMul(qy, qx, t); QMul(t, qz, R);      // giro en los ejes del modelo: primero Z, despues X, despues Y
+            const float pv[3] = { P[b * 4], P[b * 4 + 1], P[b * 4 + 2] };
+            for (int i = 0; i < n; i++) { bool in = i == b; if (!in && d.parOk) { int j = d.par[i]; for (int g = 0; g < 64 && j >= 0; g++) { if (j == b) { in = true; break; } j = d.par[j]; } } inSub[i] = in; }
+            for (int i = 0; i < n; i++) { if (!inSub[i]) continue; float o[4]; QMul(R, Q + i * 4, o); memcpy(Q + i * 4, o, 16);
+                if (i != b) { const float v[3] = { P[i * 4] - pv[0], P[i * 4 + 1] - pv[1], P[i * 4 + 2] - pv[2] }; float rv[3]; QRot(R, v, rv); for (int c = 0; c < 3; c++) P[i * 4 + c] = pv[c] + rv[c]; } }
+        }
+        if (w.boneQ >= 0 && w.boneQ < n) { const float* m = P + w.boneQ * 4; float rt[3];      // lugar del hueso en el mundo (para marcarlo en la vista)
+            if (ReadRootPos(ctl, rt)) { const uintptr_t R0 = *(const uintptr_t*)((uintptr_t)ctl + 0x188); const float* M = (const float*)(R0 + 0xa0);
+                for (int c = 0; c < 3; c++) bw[c] = rt[c] + M[c] * m[0] + M[4 + c] * m[1] + M[8 + c] * m[2]; wok = true; } }
+    } __except (1) { return; }
+    StoreBone(p, bw, wok);
+}
 static void StoreTimes(Pj& p, float len, float cur) { std::lock_guard<std::mutex> lk(s_mx); p.lenT = len; p.curT = cur; }   // fuera del __try (C2712)
 int Update(Pj& p, const Pj& w, double now) {
     __try {
@@ -447,6 +519,7 @@ int Update(Pj& p, const Pj& w, double now) {
         ((FdVf4Fn)kFdVf4)(p.fd, (float)p.tPlay);
         if (gs) GraphScale(ctl, 1.0f);
         memcpy(&ctl, p.fd + 0x50, 8);
+        if (ctl) PoseApply(p, ctl, w);
         if (ctl && !w.paused && w.mode == 0) {      // si el clip no da la vuelta solo (como la banca): 6 cuadros quieto en el final -> al principio
             const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1), cur = ((ClipTimeFn)kClipTime)(ctl, 0, 1);
             if (len > 0.2f && cur >= len - 0.003f) { if (++p.endTicks >= 6) { ((ClipSeekFn)kClipSeek)(ctl, 0, 0, 0.0f, 1, 1); p.endTicks = 0; } } else p.endTicks = 0;
@@ -525,7 +598,7 @@ void MotorPjTick(bool on, uintptr_t impl) {
     static Pj want[kMax];
     { std::lock_guard<std::mutex> lk(s_mx); for (int i = 0; i < kMax; i++) { const Pj& q = s_pj[i]; Pj& w = want[i];
         w.state = q.state; w.kind = q.kind; w.id = q.id; memcpy(w.name, q.name, sizeof w.name); memcpy(w.pos, q.pos, 12); w.yaw = q.yaw; w.scale = q.scale;
-        w.clip = q.clip; w.speed = q.speed; w.paused = q.paused; w.restart = q.restart; w.seek = q.seek; w.seekN = q.seekN; w.face = q.face; w.faceW = q.faceW; w.blink = q.blink; w.hidden = q.hidden; w.mode = q.mode; } }
+        w.clip = q.clip; w.speed = q.speed; w.paused = q.paused; w.restart = q.restart; w.seek = q.seek; w.seekN = q.seekN; w.face = q.face; w.faceW = q.faceW; w.blink = q.blink; w.hidden = q.hidden; w.mode = q.mode; memcpy(w.pose, q.pose, sizeof w.pose); w.nPose = q.nPose; w.boneQ = q.boneQ; } }
     bool any = false;
     for (int i = 0; i < kMax; i++) {
         Pj& p = s_pj[i]; const int st = want[i].state;
@@ -658,6 +731,19 @@ const char* MotorClipGroupKey(int g) { return g >= 0 && g < kGroupN ? kClipGroup
 int MotorClipIdle() { return kIdleClip; }
 int MotorFaceCount() { return kFaceN; }
 const char* MotorFaceName(int i) { return i >= 0 && i < kFaceN ? kFaceBase[i] : ""; }
+void MotorPjPoseSet(int i, int bone, const float* e) { if (i < 0 || i >= kMax) return; std::lock_guard<std::mutex> lk(s_mx); Pj& p = s_pj[i];
+    if (bone < 0) { p.nPose = 0; return; }
+    for (int k = 0; k < p.nPose; k++) if (p.pose[k].bone == bone) { if (e) memcpy(p.pose[k].e, e, 12); else { for (int q = k; q + 1 < p.nPose; q++) p.pose[q] = p.pose[q + 1]; p.nPose--; } return; }
+    if (!e || p.nPose >= kPoseMax) return;
+    int at = p.nPose; while (at > 0 && p.pose[at - 1].bone > bone) { p.pose[at] = p.pose[at - 1]; at--; }      // de padre a hijo (los padres tienen numero menor)
+    p.pose[at].bone = bone; memcpy(p.pose[at].e, e, 12); p.nPose++; }
+bool MotorPjPoseGet(int i, int bone, float* e, int* nBones, int* nPosed, char* name, size_t nn, float* world) {
+    if (i < 0 || i >= kMax) return false; std::lock_guard<std::mutex> lk(s_mx); Pj& p = s_pj[i]; const SkDesc& d = s_sk[i];
+    p.boneQ = bone; if (nBones) *nBones = d.n; if (nPosed) *nPosed = p.nPose;
+    if (e) { e[0] = e[1] = e[2] = 0.0f; for (int k = 0; k < p.nPose; k++) if (p.pose[k].bone == bone) memcpy(e, p.pose[k].e, 12); }
+    if (name && nn) { const char* s0 = d.hashOk && bone >= 0 && bone < d.n ? SkName(d.hash[bone]) : nullptr; if (s0) snprintf(name, nn, "%s", s0); else snprintf(name, nn, "hueso %d", bone); }
+    if (world) memcpy(world, p.boneW, 12);
+    return p.boneWOk && bone >= 0 && bone < d.n; }
 void MotorPjInfoGet(MotorPjInfo* o) {
     memset(o, 0, sizeof *o); o->sel = s_sel.load();
     const double lt = s_lastTick.load(); o->ticking = lt > 0.0 && Now() - lt < 1.5;
