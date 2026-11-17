@@ -2184,7 +2184,7 @@ static void ToolbarDraw() {
         case 3602: tp = "EditFace.xml: las del Editar en la cara."; break;
         case 3603: tp = "EditSpike.xml: las del Editar en los botines."; break;
         case 3604: tp = "MatchMenu.xml: las del men\xC3\xBA del partido."; break;
-        case 3307: tp = "La c\xC3\xA1mara acompa\xC3\xB1a al jugador mientras camina y mira su cara."; break;
+        case 3307: tp = "La c\xC3\xA1mara acompa\xC3\xB1" "a al jugador mientras camina y mira su cara."; break;
         case 3510: tp = "Diez veces m\xC3\xA1s lento."; break;
         case 3511: tp = "Cuatro veces m\xC3\xA1s lento."; break;
         case 3512: tp = "A la mitad de la velocidad."; break;
