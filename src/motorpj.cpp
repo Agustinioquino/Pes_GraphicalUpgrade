@@ -441,7 +441,15 @@ static void SkScan(int slot, void* ctl) {
         const uintptr_t a = *(const uintptr_t*)((uintptr_t)ctl + 0x100); if (!PtrOk(a)) return;
         const uintptr_t desc = *(const uintptr_t*)(a + 0x20); if (!PtrOk(desc)) return;
         const int n = *(const int*)(desc + 0xf8); if (d.desc == desc && d.n == n) return;
-        d = SkDesc{}; d.desc = desc; d.n = n; if (n < 2 || n > 400) { Log("motor (posar): jugador %d: %d huesos en el controlador: no se posa", slot + 1, n); return; }
+        d = SkDesc{}; d.desc = desc; d.n = n;
+        if (n < 2 || n > 400) { d.n = 0;
+            // (17/11 15:48 PC: "749176384 huesos") +0xf8 de [[ctl+0x100]+0x20] no es la cantidad en el controlador del FixDemoHuman: se
+            // anota el controlador para encontrarla (una vez por jugador): qwords de ctl, de [ctl+0x100] y de la descripcion
+            static bool said[kMax]; if (!said[slot]) { said[slot] = true; char hx[1100]; int o;
+                auto dump = [&](const char* nm, uintptr_t base, int len) { o = 0; for (int q = 0; q < len; q += 8) o += snprintf(hx + o, sizeof hx - o, "%s%llx", q ? " " : "", (unsigned long long)*(const uint64_t*)(base + q)); Log("motor (posar): %s %p: %s", nm, (void*)base, hx); };
+                dump("ctl", (uintptr_t)ctl, 0x140); dump("ctl+0x140", (uintptr_t)ctl + 0x140, 0x100); dump("[ctl+0x100]", a, 0x80); dump("desc", desc, 0x100); dump("desc+0x100", desc + 0x100, 0x60);
+                const uintptr_t r = *(const uintptr_t*)((uintptr_t)ctl + 0x88); if (PtrOk(r)) dump("[ctl+0x88]", r, 0x80); }
+            return; }
         int parOff = -1, parW = 0, hashOff = -1;
         for (int off = 0; off <= 0x1f0 && (parOff < 0 || hashOff < 0); off += 8) {
             const uintptr_t q = *(const uintptr_t*)(desc + off); if (!PtrOk(q)) continue;
@@ -710,7 +718,12 @@ int MotorPjDup(int i) {
     if (slot >= 0) Log("motor (jugadores propios): jugador %d duplicado en el lugar %d", i + 1, slot + 1);
     return slot;
 }
+// (17/11 15:54 PC, cierre del juego: PES2021.exe+0x23c2dfe escribe en 0x14 justo despues de poner dml_prop_circleflag_uefa_cl_01_anm.gani
+// a un jugador) los clips del grupo "prop" son de OBJETOS (banderines, copas, compu): no van en un jugador.
+static bool ClipIsProp(int c) { if (c < 0 || c >= kClipN) return false; const int g = kClipRows[c].group; return g >= 0 && g < (int)(sizeof kClipGroupKey / sizeof kClipGroupKey[0]) && strcmp(kClipGroupKey[g], "prop") == 0; }
+bool MotorClipIsProp(int c) { return ClipIsProp(c); }
 void MotorPjAnimSet(int i, int clip, float speed, bool paused) {
+    if (ClipIsProp(clip)) { Log("motor (jugadores propios): %s es de un objeto, no de un jugador: no se pone", kClipRows[clip].file); return; }
     std::lock_guard<std::mutex> lk(s_mx);
     for (int q = (i < 0 ? 0 : i); q < (i < 0 ? kMax : std::min(i + 1, kMax)); q++) { Pj& p = s_pj[q]; if (p.state < 1 || p.state > 3) continue;
         p.clip = clip >= -1 && clip < kClipN ? clip : -1; p.speed = std::clamp(speed, 0.0f, 4.0f); p.paused = paused; }

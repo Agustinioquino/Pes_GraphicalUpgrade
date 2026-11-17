@@ -1931,6 +1931,7 @@ static void ToolbarDraw() {
                 else { for (int j = 0; j < n; j++) { const int i = js[j]; MotorPjSeek(i, std::min(PI.lenT[i] * (float)j / (float)n, PI.lenT[i] - 0.001f)); }
                        Note("%d jugadores desfasados", n); } }
         }
+        else if (id >= 3400 && id < 3408 && MotorClipIsProp(s_pjRowClip[id - 3400])) Note("Es la animaci\xC3\xB3n de un objeto (banderines, copas): no va en un jugador");
         else if (id >= 3400 && id < 3408) { const int q = MotorPjSel(); const int c = s_pjRowClip[id - 3400]; if (q >= 0 && c >= 0) { static MotorPjInfo PI; MotorPjInfoGet(&PI); MotorPjAnimSet(q, c, PI.speed[q], false); RecPush(c); } }
         else if (id >= 3410 && id < 3416) { const int q = MotorPjSel(); const int f = s_pjRowFace[id - 3410]; if (q >= 0 && f >= 0) { static MotorPjInfo PI; MotorPjInfoGet(&PI); MotorPjFaceSet(q, f, PI.faceW[q], PI.blink[q]); } }
         else if (id >= 1480 && id <= 1482) { if (MotorPjAdd(id - 1480, (uint32_t)(s_pjIdF + 0.5f)) >= 0) Note(id == 1480 ? "Cargando jugador por id" : id == 1481 ? "Cargando el jugador base" : "Cargando igual al del Editar"); }

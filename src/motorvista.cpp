@@ -71,6 +71,7 @@ static bool RW64(uintptr_t a, uint64_t* old, uint64_t v) { __try { if (old) *old
 static bool R64(uintptr_t a, uint64_t* v) { __try { *v = *(uint64_t*)a; return true; } __except (1) { return false; } }
 
 static void VisMask(uintptr_t view, bool hide) {
+    if (hide && s_visMasked && view && view != s_visView) { RW64(s_visView + 0x458 + 8, nullptr, s_visOld); s_visMasked = false; Log("motor (escena): el visor cambio de vista (%p -> %p): se pasa la mascara", (void*)s_visView, (void*)view); }   // (15:48 PC) la vista del visor cambia al pasar a 1920x1080
     if (hide && !s_visMasked && view) { if (RW64(view + 0x458 + 8, &s_visOld, 0ull)) { s_visMasked = true; s_visView = view; Log("motor (escena): vista del visor %p sin modelos (jugador del Editar oculto), mascara tipo 1 %016llx -> 0", (void*)view, (unsigned long long)s_visOld); } }
     else if (hide && s_visMasked) { uint64_t m = 0; if (R64(s_visView + 0x458 + 8, &m) && m != 0) RW64(s_visView + 0x458 + 8, nullptr, 0ull); }
     else if (!hide && s_visMasked) { RW64(s_visView + 0x458 + 8, nullptr, s_visOld); s_visMasked = false; Log("motor (escena): vista del visor %p con modelos otra vez (%016llx)", (void*)s_visView, (unsigned long long)s_visOld); s_visView = 0; }
