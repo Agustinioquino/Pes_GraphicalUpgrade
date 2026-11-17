@@ -1063,6 +1063,8 @@ static void ToolbarDraw() {
               y += 6.0f * k;
               text(lx, y + rowH * 0.5f, dim, "Id del jugador", fsS + 1.0f * k);
               numField(2110, ImVec2(x0 + rightW * 0.42f, y + 3.0f * k), ImVec2(fx1, y + rowH - 3.0f * k), s_pjIdF, 1.0f, 1.0f, 9999999.0f, "%.0f", ""); y += rowH;
+              { const char* const nms[2] = { "Oculto", "A la vista" }; text(lx, y + rowH * 0.5f, dim, "Jugador del Editar", fsS + 1.0f * k);      // (07:47)
+                seg(3370, ImVec2(x0 + rightW * 0.42f, y), ImVec2(fx1, y + rowH), 2, MotorVistaEditorHidden() ? 0 : 1, nms); y += rowH + 6.0f * k; }
               button(1480, "Agregar por id");
               button(1481, "Agregar el jugador base");
               button(1482, "Agregar igual al del Editar");
@@ -1734,6 +1736,7 @@ static void ToolbarDraw() {
                 if (c.ok) Note("Copiado: lugar, giro, tama\xC3\xB1o, animaci\xC3\xB3n y gesto del jugador %d", q + 1); }
             else if (q >= 0 && s_pjCb.ok) { const PjClip& c = s_pjCb; UndoBegin(); MotorPjSet(q, c.pos, c.yaw, c.scale); UndoEnd(); MotorPjAnimSet(q, c.clip, c.speed, c.paused); MotorPjFaceSet(q, c.face, c.faceW, c.blink); Note("Pegado en el jugador %d", q + 1); }
             else if (q >= 0) Note("Primero copi\xC3\xA1 un jugador (Ctrl + C)"); }
+        else if (id == 3370 || id == 3371) { MotorVistaHideEditor(id == 3370); Note(id == 3370 ? "Jugador del Editar oculto" : "Jugador del Editar a la vista"); }
         else if (id == 3350) { s_srOn.store(1); }
             else if (id == 3351) { std::lock_guard<std::mutex> lk(s_srMx); s_sr[0] = 0; s_srOn.store(0); s_srTop = 0; }
             else if (id == 3352 || id == 3353) s_srTop += id == 3353 ? 6 : -6;

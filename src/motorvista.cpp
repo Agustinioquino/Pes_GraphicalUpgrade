@@ -36,6 +36,11 @@ static bool s_tried = false, s_ok = false;
 // estado guardado (solo se toca en el hilo que corre el cuadro del visor)
 static uintptr_t s_ctx = 0, s_main = 0, s_oldCam = 0; static uint64_t s_oldMask1 = 0; static bool s_moved = false;
 static int s_nObjs = 0;
+// (17/11 07:47, Agustin: "como podemos arreglar eso sin necesitar del jugador del editar?") el jugador del visor del Editar se carga igual
+// (sin el, el visor no corre su cuadro y no hay de donde sacar la vista principal ni su camara), pero con "oculto" sus objetos NO pasan
+// a la escena principal: se quedan en la escena propia del visor, que ya no se ve. La vista principal se prende y toma la camara igual,
+// y los jugadores propios (que viven en la escena principal) se ven solos. INFERIDO: que la imagen del visor no aparezca en el menu.
+static std::atomic<bool> s_hideEd{true};
 
 static inline bool PtrOk(uintptr_t a) { return a >= 0x10000ull && a < 0x7ffffffff000ull && (a & 7) == 0; }
 
@@ -85,7 +90,7 @@ static void __fastcall hk_CtxFrame(uintptr_t ctx) {
     if (!PtrOk(scene)) { o_ctxFrame(ctx); return; }
     if (s_moved && ctx != s_ctx) { o_ctxFrame(ctx); return; }   // otro visor: no se toca
     int n = 0;
-    if (MoveObjs(ctx, scene, &n)) {
+    if (MoveObjs(ctx, s_hideEd.load(std::memory_order_relaxed) ? own : scene, &n)) {
         if (!s_moved) {
             uint64_t oc = 0; R64(main + 0x4a0, &oc);
             if (RW64(main + 0x458 + 8, &s_oldMask1, ~0ull) && SetCam(main, cam)) {
@@ -127,6 +132,8 @@ void MotorVistaPresent() {
     s_want.store(s_ok && motor && g_cfg.motorScene != 0, std::memory_order_relaxed);
 }
 // glass.cpp: con el jugador en la escena principal el fondo del menu no se dibuja (taparia la vista principal)
+void MotorVistaHideEditor(bool on) { s_hideEd.store(on); Log("motor (escena): jugador del Editar %s", on ? "oculto (queda en la escena del visor)" : "a la vista (pasa a la escena principal)"); }
+bool MotorVistaEditorHidden() { return s_hideEd.load(); }
 bool MotorVistaLive() { return s_live.load(std::memory_order_relaxed) && s_want.load(std::memory_order_relaxed); }
 
 } // namespace fx
