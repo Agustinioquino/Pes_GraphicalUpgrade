@@ -403,8 +403,11 @@ def pie_en(keys, f, Ay, Q0, lado=1.0):
 # (20:44, Agustin: "respetar los principios de la animacion, inercia") resorte por hueso, (canal, frecuencia por cuadro, amortiguacion):
 # menos amortiguado y mas lento cuanto mas lejos del cuerpo = el brazo sigue, la mano llega despues y se pasa un poco (seguimiento y
 # accion superpuesta); la columna arrastra al cuello y a la cabeza. ANTICIPACION: antes de un movimiento grande el hueso va un poco al reves.
-RESORTES = ((13, 0.36, 0.85), (14, 0.30, 0.75), (15, 0.25, 0.65), (16, 0.21, 0.58), (17, 0.30, 0.75), (22, 0.30, 0.75),
-            (19, 0.27, 0.62), (20, 0.23, 0.55), (21, 0.18, 0.50), (24, 0.27, 0.62), (25, 0.23, 0.55), (26, 0.18, 0.50))
+# (20:51, Agustin: "a los brazos les falta un movimiento mas de pendulo, asi como el cuello y la cabeza"): menos amortiguados y mas lentos;
+# el cuello y la cabeza siguen sueltos tambien en el abrazo (SIEMPRE_LIBRE: no tocan nada del otro)
+RESORTES = ((13, 0.34, 0.80), (14, 0.28, 0.70), (15, 0.20, 0.48), (16, 0.16, 0.42), (17, 0.28, 0.65), (22, 0.28, 0.65),
+            (19, 0.22, 0.45), (20, 0.19, 0.42), (21, 0.15, 0.40), (24, 0.22, 0.45), (25, 0.19, 0.42), (26, 0.15, 0.40))
+SIEMPRE_LIBRE = (15, 16)
 ANTICIPA = {19: 0.22, 24: 0.22, 14: 0.15, 20: 0.12, 25: 0.12}
 def filtrar(salida, J, chs=RESORTES):
     """PESO: resorte (amortiguado justo) por canal del brazo: el brazo llega un poco despues y la mano despues del antebrazo.
@@ -428,7 +431,7 @@ def filtrar(salida, J, chs=RESORTES):
             if k: y = qn(add(y, mul(sub(y, src[min(n, f + L)]), k * libre(min(n, f + L)))))   # se carga al reves de lo que viene
             if dot(x, y) < 0: y = tuple(-c for c in y)
             a = add(mul(sub(y, x), w * w), mul(v, -2.0 * z * w)); v = add(v, a); x = add(x, v)
-            m = libre(f); out = qn(lerp(src[f], qn(x), m))
+            m = max(0.45, libre(f)) if ch in SIEMPRE_LIBRE else libre(f); out = qn(lerp(src[f], qn(x), m))
             if m < 1.0: x = lerp(x, src[f], 1.0 - m); v = mul(v, m)
             salida[f][ch] = out
 
@@ -516,8 +519,15 @@ def coreografia(D, quien, pie0):
     A = quien == 'A'; o = 0 if A else 3; sgn = 1.0 if A else -1.0
     fwd = (0, 0, 1); cm = 0.5 * D; C = CHOQUE; C2 = CHOQUE2
     (lx, lz), (rx, rz) = pie0['A'], pie0['B']
-    def L_(dz, x=None, yaw=0.0): return (lx if x is None else x, lz + dz, yaw)
-    def R_(dz, x=None, yaw=0.0): return (rx if x is None else x, rz + dz, yaw)
+    # (20:52, Agustin: "camina con las piernas muy separadas, los pies deberian apuntar con cierto angulo, cada uno distinto"; "parecen dos
+    # viejos caminando") caminando los pies van cerca de la linea del medio (como walk02: 13-20 cm entre tobillos, no los 31 del parado) y
+    # cada pie apunta un poco afuera, distinto en cada uno; parado vuelven al ancho del clip del juego
+    TL, TR = (7.0, -4.5) if A else (4.0, -8.0)
+    NW = 0.075
+    def L_(dz, x=None, yaw=None): return (lx if x is None else x, lz + dz, TL if yaw is None else yaw)
+    def R_(dz, x=None, yaw=None): return (rx if x is None else x, rz + dz, TR if yaw is None else yaw)
+    def Lw(dz): return L_(dz, 0.5 * (lx + rx) + NW)
+    def Rw(dz): return R_(dz, 0.5 * (lx + rx) - NW)
     # ------- huellas (17/11 19:45, Agustin: "ya existen en el juego animaciones de walk, tomalas de referencia"): el paso sigue la curva
     # del juego (PASO_REF) con su ritmo (un pie cada 22 cuadros, ventana de 26) y una zancada algo mas corta (0.96 m, charlando).
     # Arrancan ya caminando, frenan en los dos ultimos pasos; paso del abrazo, paso atras, media vuelta a la derecha y se van.
@@ -539,20 +549,22 @@ def coreografia(D, quien, pie0):
     # se dan la mano y giran hacia el mismo lado: A a su izquierda, B a su derecha (en el mundo los dos van hacia +x de A), uno al lado
     # del otro a 0.66 m, B 6 cuadros atrasado. Pie de adelante en el giro: A el izquierdo, B el derecho.
     WB = WALK + 0.10; cz = WB + 0.5 * (lz + rz); t = 0 if A else 6; s_ = 1.0 if A else -1.0
-    def lado_(d, cerca, yaw=90.0): return (cx + s_ * d, cz - hw if cerca else cz + hw, s_ * yaw)
-    sal = [(342, 360, lado_(0.18, True, 55.0)), (358, 384, lado_(0.60, False)), (380, 406, lado_(1.08, True)), (402, 428, lado_(1.56, False)),
+    def lado_(d, cerca, yaw=90.0, ancho=NW):
+        pie_izq = cerca if A else not cerca         # A va a su izquierda (cerca = su pie izquierdo); B a su derecha
+        return (cx + s_ * d, cz - ancho if cerca else cz + ancho, s_ * yaw + (TL if pie_izq else TR))
+    sal = [(342, 360, lado_(0.18, True, 55.0, hw)), (358, 384, lado_(0.60, False)), (380, 406, lado_(1.08, True)), (402, 428, lado_(1.56, False)),
            (424, 450, lado_(2.04, True)), (446, 472, lado_(2.52, False)), (468, 494, lado_(3.00, True)), (490, 516, lado_(3.48, False)),
            (512, 538, lado_(3.96, True)), (534, 560, lado_(4.44, False))]
     sal = [(a + t, b + t, v) for a, b, v in sal]
     guia = [x for k, x in enumerate(sal) if k % 2 == 0]; otro_ = [x for k, x in enumerate(sal) if k % 2 == 1]
-    pL = pasos(L_(WALK - 2.66), [(0 + ow, 26 + ow, L_(WALK - 1.70)), (44 + ow, 70 + ow, L_(WALK - 0.74)), (88 + ow, 114 + ow, L_(WALK)),
+    pL = pasos(Lw(WALK - 2.66), [(0 + ow, 26 + ow, Lw(WALK - 1.70)), (44 + ow, 70 + ow, Lw(WALK - 0.74)), (88 + ow, 114 + ow, L_(WALK)),
                                   (158, 180, L_(WALK + PASO)), (276, 300, L_(WB))] + (guia if A else otro_))
-    pR = pasos(R_(WALK - 3.14), [(-22 + ow, 4 + ow, R_(WALK - 2.18)), (22 + ow, 48 + ow, R_(WALK - 1.22)), (66 + ow, 92 + ow, R_(WALK - 0.32)),
+    pR = pasos(Rw(WALK - 3.14), [(-22 + ow, 4 + ow, Rw(WALK - 2.18)), (22 + ow, 48 + ow, Rw(WALK - 1.22)), (66 + ow, 92 + ow, Rw(WALK - 0.32)),
                                   (114 + ow, 134 + ow, R_(WALK)), (170, 192, R_(WALK + PASO)), (284, 308, R_(WB))] + (otro_ if A else guia))
     pies = {'A': pL, 'B': pR}
     FZ = fases(pL, pR, N); MAMP = 0.85        # zancada 0.96 contra 1.19 del juego: un poco menos de vaiven
     ox, oz = 0.5 * (lx + rx), 0.5 * (lz + rz)
-    def yaw_de(f): return 0.5 * (huella(pL, f)[2] + huella(pR, f)[2])
+    def yaw_de(f): return 0.5 * (huella(pL, f)[2] + huella(pR, f)[2]) - 0.5 * (TL + TR)   # sin la apertura de los pies
     def frente(f): y = math.radians(yaw_de(f)); return (math.sin(y), 0.0, math.cos(y))
     def adelanto(f, a, b):     # cuanto adelante esta el pie a del pie b, en la direccion en que mira
         pa = huella(a, f); pb = huella(b, f); return dot((pa[0] - pb[0], 0.0, pa[1] - pb[1]), frente(f))
@@ -563,11 +575,18 @@ def coreografia(D, quien, pie0):
         x = sum(xs) / len(xs) - ox; z = sum(zs) / len(zs) - oz
         ph, a = FZ[0][f], FZ[1][f] * MAMP      # subida / bajada y vaiven de la cadera de la caminata del juego (el peso pasa al pie de apoyo)
         sp = abs(adelanto(f, pL, pR))          # cadera mas baja con los pies abiertos (para que la pierna llegue)
-        y = -(0.008 + 0.030 * min(1.0, sp / 0.5)) + 0.6 * marcha_en('y', ph) * a
+        y = -(0.006 + 0.022 * min(1.0, sp / 0.5)) + 0.6 * marcha_en('y', ph) * a
         lat = 0.4 * marcha_en('x', ph) * a; yw = math.radians(yaw_de(f))
         return (x + lat * math.cos(yw), y, z - lat * math.sin(yw))
     def giros_fn(f):          # media vuelta (raiz); cadera que gira con el paso (juego: +-8 grados) y el pecho la sigue casi entera
-        return {0: (0.0, yaw_de(f), 0.0)}      # (20:44) cadera / pecho / cabeza del paso: capa de la caminata del juego (cuerpo())
+        r = {0: (0.0, yaw_de(f), 0.0)}      # (20:44) cadera / pecho / cabeza del paso: capa de la caminata del juego (cuerpo())
+        if 190 < f < 274:   # (20:51, "el abrazo se ve poco real") se mecen juntos de lado a lado y se aprietan al principio
+            env = smooth((f - 190) / 16.0) * smooth((274 - f) / 16.0); u = 2 * math.pi * (f - 190) / 62.0
+            sq = smooth((f - 192) / 10.0) * smooth((236 - f) / 14.0) if f < 236 else 0.0
+            r[2] = (0.0, 1.5 * math.sin(u) * env, 2.0 * sgn * math.sin(u) * env)
+            r[13] = (1.5 * sq, 2.0 * math.sin(u - 0.5) * env, 3.0 * sgn * math.sin(u - 0.4) * env)
+            r[14] = (2.5 * sq, 2.5 * math.sin(u - 0.9) * env, 2.0 * sgn * math.sin(u - 0.8) * env)
+        return r
     # ------- columna / cabeza / claviculas (grados: x adelante, y gira a la izquierda, z inclina a la derecha)
     inc = 9.0 if A else 8.0
     def asiente(f0, f1, amp=3.5, cada=20):   # cabeceos al hablar, con los golpes
@@ -605,7 +624,7 @@ def coreografia(D, quien, pie0):
         sg = ARM[lado][4]; mio, opu = (pR, pL) if lado == 'R' else (pL, pR)
         def fn(f, P, Po):
             d = max(-1.0, min(1.0, adelanto(f, opu, mio) / 0.48))
-            return en_raiz(P, (sg * 0.25, 0.92 + 0.05 * max(0.0, d), 0.08 + 0.20 * d), (sg * 0.3, 0, -1), (0, -1, 0.15 + 0.5 * d), (-sg, 0, 0.2))
+            return en_raiz(P, (sg * 0.25, 0.92 + 0.07 * max(0.0, d), 0.06 + 0.28 * d), (sg * 0.3, 0, -1), (0, -1, 0.15 + 0.5 * d), (-sg, 0, 0.2))
         return fn
     def charla(lado, f0, puntos, cada=20):   # mano adelante, palma arriba y adentro, de golpe en golpe
         sg = ARM[lado][4]
