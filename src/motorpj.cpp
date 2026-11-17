@@ -126,6 +126,8 @@ struct Pj {
     float curT = 0.0f, lenT = 0.0f;                             // lo escribe el hilo del juego (con s_mx): tiempo del clip y su largo
     int face = -1; float faceW = 1.0f; bool blink = true;       // gesto (lista de 166); -1 = cara neutra del juego
     bool hidden = false;
+    int mode = 0;                   // (17/11 18:01) 0 en bucle, 1 una vez (queda en el final), 2 ida y vuelta
+    bool back = false;              // ida y vuelta: yendo para atras (solo el hilo del juego)
     // solo el hilo del juego
     uint8_t* fd = nullptr; double tLoad = 0, tLast = 0, tPlay = 0; bool faceTried = false;
     float scW = 1.0f; void* scCtl = nullptr; float scBase = 0.0f;   // (17/11 tarde) tamano por root_main como FUN_141f87eb0
@@ -431,13 +433,21 @@ int Update(Pj& p, const Pj& w, double now) {
             p.seekA = w.seekN;                     // para ir a cualquier punto se mueve el clip (FUN_141afa7b0) y el reloj al mismo segundo
             const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1); const float t = std::clamp(w.seek, 0.0f, std::max(0.0f, len - 0.001f));
             ((ClipSeekFn)kClipSeek)(ctl, 0, 0, t, 1, 1); p.tPlay = t; p.endTicks = 0; }
-        else if (!w.paused) p.tPlay += dt * (double)std::clamp(w.speed, 0.0f, 4.0f);
+        else if (!w.paused) {
+            const double st = dt * (double)std::clamp(w.speed, 0.0f, 4.0f); const double L = (double)p.lenT;
+            // (17/11 18:01, Agustin: "un menu mas accesible con mas opciones") modo de reproduccion. vf4 solo va para adelante: para ir
+            // para atras se mueve el clip a ese segundo (FUN_141afa7b0) antes de cada vf4.
+            if (w.mode == 2 && L > 0.2) {
+                if (!p.back) { p.tPlay += st; if (p.tPlay >= L - 0.002) { p.tPlay = L - 0.002; p.back = true; } }
+                else { p.tPlay -= st; if (p.tPlay <= 0.0) { p.tPlay = 0.0; p.back = false; } if (ctl) ((ClipSeekFn)kClipSeek)(ctl, 0, 0, (float)p.tPlay, 1, 1); }
+            } else { p.back = false; p.tPlay += st; if (w.mode == 1 && L > 0.2 && p.tPlay > L - 0.002) p.tPlay = L - 0.002; }
+        }
         bool gs = false; if (ctl && p.scW > 0.0f && fabsf(p.scW - 1.0f) > 1e-4f) gs = GraphScale(ctl, p.scW);      // (17:54) tamano en el grafo, solo durante vf4
         { static int nl = 0; if (gs && nl++ < 3) Log("motor (jugadores propios): tamano %.3f en el grafo de la animacion", p.scW); }
         ((FdVf4Fn)kFdVf4)(p.fd, (float)p.tPlay);
         if (gs) GraphScale(ctl, 1.0f);
         memcpy(&ctl, p.fd + 0x50, 8);
-        if (ctl && !w.paused) {      // si el clip no da la vuelta solo (como la banca): 6 cuadros quieto en el final -> al principio
+        if (ctl && !w.paused && w.mode == 0) {      // si el clip no da la vuelta solo (como la banca): 6 cuadros quieto en el final -> al principio
             const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1), cur = ((ClipTimeFn)kClipTime)(ctl, 0, 1);
             if (len > 0.2f && cur >= len - 0.003f) { if (++p.endTicks >= 6) { ((ClipSeekFn)kClipSeek)(ctl, 0, 0, 0.0f, 1, 1); p.endTicks = 0; } } else p.endTicks = 0;
         }
@@ -479,7 +489,7 @@ void MotorPjTick(bool on, uintptr_t impl) {
     static Pj want[kMax];
     { std::lock_guard<std::mutex> lk(s_mx); for (int i = 0; i < kMax; i++) { const Pj& q = s_pj[i]; Pj& w = want[i];
         w.state = q.state; w.kind = q.kind; w.id = q.id; memcpy(w.name, q.name, sizeof w.name); memcpy(w.pos, q.pos, 12); w.yaw = q.yaw; w.scale = q.scale;
-        w.clip = q.clip; w.speed = q.speed; w.paused = q.paused; w.restart = q.restart; w.seek = q.seek; w.seekN = q.seekN; w.face = q.face; w.faceW = q.faceW; w.blink = q.blink; w.hidden = q.hidden; } }
+        w.clip = q.clip; w.speed = q.speed; w.paused = q.paused; w.restart = q.restart; w.seek = q.seek; w.seekN = q.seekN; w.face = q.face; w.faceW = q.faceW; w.blink = q.blink; w.hidden = q.hidden; w.mode = q.mode; } }
     bool any = false;
     for (int i = 0; i < kMax; i++) {
         Pj& p = s_pj[i]; const int st = want[i].state;
@@ -596,6 +606,7 @@ void MotorPjAnimSet(int i, int clip, float speed, bool paused) {
     for (int q = (i < 0 ? 0 : i); q < (i < 0 ? kMax : std::min(i + 1, kMax)); q++) { Pj& p = s_pj[q]; if (p.state < 1 || p.state > 3) continue;
         p.clip = clip >= -1 && clip < kClipN ? clip : -1; p.speed = std::clamp(speed, 0.0f, 4.0f); p.paused = paused; }
 }
+void MotorPjModeSet(int i, int mode) { std::lock_guard<std::mutex> lk(s_mx); for (int q = (i < 0 ? 0 : i); q < (i < 0 ? kMax : std::min(i + 1, kMax)); q++) s_pj[q].mode = std::clamp(mode, 0, 2); }
 void MotorPjSeek(int i, float t) { if (i < 0 || i >= kMax) return; std::lock_guard<std::mutex> lk(s_mx); s_pj[i].seek = t; s_pj[i].seekN++; }
 void MotorPjRestart(int i) { std::lock_guard<std::mutex> lk(s_mx); for (int q = (i < 0 ? 0 : i); q < (i < 0 ? kMax : std::min(i + 1, kMax)); q++) s_pj[q].restart++; }
 void MotorPjFaceSet(int i, int face, float w, bool blink) {
@@ -617,7 +628,7 @@ void MotorPjInfoGet(MotorPjInfo* o) {
     std::lock_guard<std::mutex> lk(s_mx);
     for (int i = 0; i < kMax; i++) { const Pj& p = s_pj[i]; o->st[i] = p.state; o->hidden[i] = p.hidden; o->id[i] = p.id; o->kind[i] = p.kind; memcpy(o->name[i], p.name, sizeof o->name[i]);
         o->curT[i] = p.curT; o->lenT[i] = p.lenT;
-        o->clip[i] = p.clip; o->speed[i] = p.speed; o->paused[i] = p.paused; o->face[i] = p.face; o->faceW[i] = p.faceW; o->blink[i] = p.blink;
+        o->clip[i] = p.clip; o->speed[i] = p.speed; o->paused[i] = p.paused; o->face[i] = p.face; o->faceW[i] = p.faceW; o->blink[i] = p.blink; o->mode[i] = p.mode;
         o->clipOn[i] = p.fd && p.clipA == ((p.clip >= 0 && p.clip < kClipN) ? p.clip : kIdleClip); o->clipBad[i] = p.clipFail >= 0 && p.clipFail == ((p.clip >= 0 && p.clip < kClipN) ? p.clip : kIdleClip); }
     memcpy(o->msg, s_msg, sizeof o->msg); o->dead = s_dead.load();
 }

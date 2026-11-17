@@ -25,6 +25,7 @@
 #include <atomic>
 #include <cmath>
 #include <algorithm>
+#include <vector>
 
 namespace fx {
 
@@ -159,6 +160,10 @@ static bool s_pjSnap = false, s_camFollow = false;   // s_camFollow (07:16): la 
         // ajustar a la grilla (lugar a la celda, giro de a 15 grados) al arrastrar
 static int s_pjListTop = -1;         // primera fila de la lista de clips del Inspector
 static int s_pjRowClip[8] = {}, s_pjRowFace[6] = {}, s_pjFaceScroll = 0;
+// (17/11 18:01-18:02, Agustin: "un menu mas accesible con mas opciones, mas descripcion", "opciones de bajar con la rueda del mouse en esta
+// seccion") listas de clips y gestos: la rueda encima las recorre (rectangulo del cuadro anterior); pestanas Grupo / Favoritos / Recientes
+static float s_clR[4] = { 0, 0, -1, -1 }, s_fcR[4] = { 0, 0, -1, -1 }; static int s_clWheel = 0, s_pjTab = 0, s_flTop = 0;
+static double s_tipT = 0.0; static int s_tipId = -1; static ImVec2 s_tipA, s_tipB;
 // (17/11 07:27, Agustin: "la lectura del clip del juego deberia tener nombres de los archivos y un buscador") buscador de clips y gestos:
 // clic en el campo y escribir (las letras llegan por WM_CHAR, overlay.cpp MotorUiChar); Esc o la X lo borra. Con texto, la lista muestra
 // los clips de TODOS los grupos cuyo archivo contiene lo escrito (sin distinguir mayusculas).
@@ -183,6 +188,27 @@ static const char* GroupLabel(int g) {
         { "pk", "Penales" }, { "prop", "Utiler\xC3\xAD" "a" }, { "tu", "Otros (tu)" }, { "idle", "Parado" }, { "match", "Partido" }, { "uniselect", "Elegir uniforme" } };
     const char* k = MotorClipGroupKey(g); for (const auto& e : kG) if (!strcmp(e.key, k)) return e.es; return k; }
 static void ClipLabel(int c, char* out, size_t n) { snprintf(out, n, "%s", MotorClipFile(c)); }   // (07:27) el nombre del archivo entero
+// (17/11 18:01, Agustin: "mas descripcion") descripcion en castellano armada con las partes del nombre del archivo (motorclipdesc.inc):
+// dml_foul_beJudged02.gani -> "Falta Â· lo sancionan 02"; lo que no esta en la tabla queda como viene
+#include "motorclipdesc.inc"
+static void ClipDesc(int c, char* out, size_t n) {
+    const char* f = MotorClipFile(c); char b[192]; snprintf(b, sizeof b, "%s", f);
+    { char* q = strstr(b, ".gani"); if (q) *q = 0; q = strstr(b, "__"); if (q) *q = 0; }
+    char* s0 = b; if (!strncmp(s0, "dml_", 4)) s0 += 4;
+    std::string o; char* ctx = nullptr;
+    for (char* t = strtok_s(s0, "_", &ctx); t; t = strtok_s(nullptr, "_", &ctx)) {
+        const size_t L = strlen(t); size_t d = L; while (d > 0 && isdigit((unsigned char)t[d - 1])) d--;
+        char key[64]; const size_t kl = std::min(d, sizeof key - 1); memcpy(key, t, kl); key[kl] = 0; const char* dig = t + d;
+        const char* w = key; bool found = false;
+        if (kl) for (const auto& e : kClipWords) if (!strcmp(e.k, key)) { w = e.es; found = true; break; }
+        if (kl && found && !*w && !*dig) continue;
+        if (!o.empty()) o += kl ? " \xC2\xB7 " : " ";
+        if (kl && *w) o += w;
+        if (*dig) { if (kl && *w) o += " "; o += dig; }
+    }
+    if (!o.empty() && o[0] >= 'a' && o[0] <= 'z') o[0] = (char)(o[0] - 32);
+    snprintf(out, n, "%s", o.empty() ? f : o.c_str());
+}
 static void FaceLabel(int i, char* out, size_t n) {
     static const struct { const char* pre; const char* es; } kF[] = { { "angr", "Enojo" }, { "base", "Base" }, { "bitter", "Amargo" }, { "dml", "Cinem\xC3\xA1tica" }, { "gk", "Arquero" },
         { "head", "Cabezazo" }, { "loss", "Tristeza" }, { "neut", "Neutro" }, { "pain", "Dolor" }, { "pow", "Fuerza" }, { "smil", "Sonrisa" }, { "smug", "Canchero" },
@@ -252,7 +278,25 @@ static const std::wstring& SceneDir() {
     Log("motor (escenas): carpeta %ls", s_scDir.empty() ? L"(no se pudo crear)" : s_scDir.c_str());
     return s_scDir;
 }
+// (17/11 18:01) favoritos (content\motor-tiempo-real\clips_favoritos.txt, un archivo de clip por linea) y recientes (los ultimos 10, sin guardar)
+static std::vector<int> s_fav, s_rec; static bool s_favLoaded = false;
+static int ClipByFile(const char* f) { const int n = MotorClipCount(); for (int i = 0; i < n; i++) if (!strcmp(MotorClipFile(i), f)) return i; return -1; }
+static void FavLoad();
+static void FavSave();
+static bool FavHas(int c) { FavLoad(); return std::find(s_fav.begin(), s_fav.end(), c) != s_fav.end(); }
+static void FavToggle(int c) { FavLoad(); auto it = std::find(s_fav.begin(), s_fav.end(), c); if (it != s_fav.end()) s_fav.erase(it); else s_fav.push_back(c); FavSave(); }
+static void RecPush(int c) { if (c < 0) return; auto it = std::find(s_rec.begin(), s_rec.end(), c); if (it != s_rec.end()) s_rec.erase(it); s_rec.insert(s_rec.begin(), c); if (s_rec.size() > 10) s_rec.resize(10); }
 static std::wstring ScenePath(const char* name) { std::wstring f = SceneDir(); for (const char* c = name; *c; c++) f += (wchar_t)(unsigned char)*c; return f; }
+static void FavLoad() {
+    if (s_favLoaded) return; s_favLoaded = true; const std::wstring& d = SceneDir(); if (d.empty()) return;
+    FILE* fp = nullptr; if (_wfopen_s(&fp, (d + L"clips_favoritos.txt").c_str(), L"rb") || !fp) return;
+    char ln[200]; while (fgets(ln, sizeof ln, fp)) { size_t l = strlen(ln); while (l && (ln[l - 1] == '\n' || ln[l - 1] == '\r' || ln[l - 1] == ' ')) ln[--l] = 0;
+        const int c = ClipByFile(ln); if (c >= 0 && std::find(s_fav.begin(), s_fav.end(), c) == s_fav.end()) s_fav.push_back(c); }
+    fclose(fp); }
+static void FavSave() {
+    const std::wstring& d = SceneDir(); if (d.empty()) return;
+    FILE* fp = nullptr; if (_wfopen_s(&fp, (d + L"clips_favoritos.txt").c_str(), L"wb") || !fp) return;
+    for (int c : s_fav) fprintf(fp, "%s\n", MotorClipFile(c)); fclose(fp); }
 static void SceneLabel(const char* nm, char* out, size_t cap) {
     int Y, M, D, h, m, s;
     if (strcmp(nm, "escena_autoguardado.txt") == 0) { snprintf(out, cap, "%s", TRS("Autoguardado")); return; }
@@ -686,7 +730,7 @@ static void ToolbarDraw() {
     int hot = -1; const int hp = s_hotPrev;
     bool hitOff = false;      // (15/11 o) panel abriendo / cerrando: sus botones no se pueden tocar
     float hitY0 = -1.0e9f, hitY1 = 1.0e9f;      // (07:50) parte visible del Inspector corrido: lo tapado no se toca
-    auto hit = [&](int id, const ImVec2& a, const ImVec2& b) { if (!hitOff && mx >= a.x && mx <= b.x && my >= a.y && my <= b.y && my >= hitY0 && my <= hitY1) hot = id; return hp == id && !hitOff; };
+    auto hit = [&](int id, const ImVec2& a, const ImVec2& b) { if (!hitOff && mx >= a.x && mx <= b.x && my >= a.y && my <= b.y && my >= hitY0 && my <= hitY1) { hot = id; s_tipA = a; s_tipB = b; } return hp == id && !hitOff; };
     auto text = [&](float x, float yc, ImU32 c, const char* t, float size) { t = TRS(t); const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t); dl->AddText(font, size, ImVec2(x, yc - ts.y * 0.5f), c, t); return ts.x; };
     auto textC = [&](const ImVec2& a, const ImVec2& b, ImU32 c, const char* t, float size) { t = TRS(t); const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t); dl->AddText(font, size, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), c, t); };
     int nz = 0;
@@ -982,7 +1026,11 @@ static void ToolbarDraw() {
       // (07:50) contenido corrible: rueda encima del Inspector, barra a la derecha (arrastrable o clic en el riel)
       const float yC = y, viewH = std::max(10.0f, y1 - yC);
       if (s_sel != s_inSelWas) { s_inSelWas = s_sel; s_inScroll = 0.0f; }
-      { const int wd = s_inWheel.exchange(0); if (wd != 0) s_inScroll -= (float)wd / 120.0f * 60.0f * k; }
+      { const int wd = s_inWheel.exchange(0);      // (18:02) rueda sobre la lista de clips o de gestos: recorre esa lista; en el resto, el Inspector
+        auto in4 = [&](const float* r) { return r[2] > r[0] && mx >= r[0] && mx <= r[2] && my >= r[1] && my <= r[3]; };
+        if (wd != 0) { const int rows = (wd > 0 ? -2 : 2) * std::max(1, abs(wd) / 120);
+          if (in4(s_clR)) s_clWheel += rows; else if (in4(s_fcR)) s_pjFaceScroll += rows; else s_inScroll -= (float)wd / 120.0f * 60.0f * k; }
+        s_clR[2] = s_fcR[2] = -1.0f; }
       s_inScroll = std::clamp(s_inScroll, 0.0f, s_inMax);
       clipPush(ImVec2(x0, yC), b); hitY0 = yC; hitY1 = y1;
       y += 8.0f * k - s_inScroll; const float yTop = y;
@@ -1081,6 +1129,10 @@ static void ToolbarDraw() {
               y += rowH; };
           auto listRow = [&](int id, const char* t, bool cur) {
               const ImVec2 r0(fx0, y + 1.0f * k), r1(fx1, y + rowH * 0.86f); const bool hv = hit(id, r0, r1);
+              if (id >= 3400 && id < 3408) { const int c = s_pjRowClip[id - 3400];      // (18:01) clic derecho = favorito; marca naranja a la derecha
+                  if (c >= 0 && rEdge && !hitOff && inside(r0, r1)) { FavToggle(c); Note(FavHas(c) ? "Agregado a Favoritos" : "Sacado de Favoritos"); }
+                  if (c >= 0 && FavHas(c)) { const ImVec2 sc(r1.x - 9.0f * k, (r0.y + r1.y) * 0.5f); const float rr = 4.5f * k;
+                      dl->AddQuadFilled(ImVec2(sc.x, sc.y - rr), ImVec2(sc.x + rr, sc.y), ImVec2(sc.x, sc.y + rr), ImVec2(sc.x - rr, sc.y), acc); } }
               if (cur) dl->AddRectFilled(r0, r1, IM_COL32(64, 52, 40, 255), 3.0f * k); else if (hv) dl->AddRectFilled(r0, r1, IM_COL32(255, 255, 255, 18), 3.0f * k);
               if (cur) dl->AddRectFilled(r0, ImVec2(r0.x + 3.0f * k, r1.y), acc);
               dl->PushClipRect(r0, r1, true); text(r0.x + 10.0f * k, (r0.y + r1.y) * 0.5f, cur ? ink : dim, t, fsS); dl->PopClipRect();
@@ -1152,17 +1204,15 @@ static void ToolbarDraw() {
                   text(lx, y + 9.0f * k, dim, "+ / -: tama\xC3\xB1o.  May\xC3\xBAs: m\xC3\xA1s r\xC3\xA1pido.  Supr: sacarlo.", fsS); y += 20.0f * k;
                   text(lx, y + 9.0f * k, dim, "Espacio: reproducir / pausa.  Coma / punto: un cuadro.", fsS); y += 26.0f * k;
               }
-              if (label("ANIMACI\xC3\x93N")) {
+              if (label("ANIMACI\xC3\x93N")) {      // (17/11 18:01, Agustin: "un menu mas accesible con mas opciones, mas descripcion" y rueda del mouse en esta seccion)
                   const int nC = MotorClipCount(), cur = PI.clip[qs] >= 0 && PI.clip[qs] < nC ? PI.clip[qs] : MotorClipIdle();
                   static int s_lastSel = -2; if (s_lastSel != qs || s_pjGroup < 0) { s_lastSel = qs; s_pjGroup = MotorClipGroup(cur); s_pjListTop = -1; }
-                  char b1[96];
-                  if (PI.clip[qs] < 0) snprintf(b1, sizeof b1, "%s", TRS("Parado (el de siempre)")); else ClipLabel(cur, b1, sizeof b1);
+                  static int s_clHov = -1; const int cw = s_clWheel; s_clWheel = 0;
+                  char b1[160];
+                  if (PI.clip[qs] < 0) snprintf(b1, sizeof b1, "%s", TRS("Parado (el de siempre)")); else ClipDesc(cur, b1, sizeof b1);
                   value("Ahora", b1);
                   { const char* stt = PI.clipBad[qs] ? "El juego no carg\xC3\xB3 esta animaci\xC3\xB3n." : !PI.clipOn[qs] ? "Cargando la animaci\xC3\xB3n..." : nullptr;
                     if (stt) { text(lx, y + 9.0f * k, PI.clipBad[qs] ? IM_COL32(255, 150, 120, 255) : dim, stt, fsS); y += 20.0f * k; } }
-                  { const int g = std::clamp(s_pjGroup, 0, MotorClipGroupCount() - 1); int n = 0; for (int i = 0; i < nC; i++) if (MotorClipGroup(i) == g) n++;
-                    snprintf(b1, sizeof b1, "%s  (%d)", TRS(GroupLabel(g)), n); arrowRow(3310, 3311, "Grupo", b1, true); }
-                  ClipLabel(cur, b1, sizeof b1); arrowRow(3312, 3313, "Animaci\xC3\xB3n", b1, true);
                   char sq[48]; { std::lock_guard<std::mutex> lk(s_srMx); memcpy(sq, s_sr, sizeof sq); }
                   auto searchRow = [&](int idF, int idX, int mode) {      // campo del buscador
                       const ImVec2 p0(fx0, y + 3.0f * k), p1(fx1 - 26.0f * k, y + rowH - 3.0f * k), x0b(fx1 - 22.0f * k, y + 3.0f * k), x1b(fx1, y + rowH - 3.0f * k);
@@ -1173,37 +1223,64 @@ static void ToolbarDraw() {
                       dl->PushClipRect(p0, p1, true); text(p0.x + 8.0f * k, (p0.y + p1.y) * 0.5f, sq[0] || on ? ink : IM_COL32(120, 120, 126, 255), t, fsS); dl->PopClipRect();
                       dl->AddRectFilled(x0b, x1b, hx ? IM_COL32(86, 86, 92, 255) : IM_COL32(56, 56, 60, 255), 3.0f * k); textC(x0b, x1b, ink, "x", fsS);
                       y += rowH + 2.0f * k; };
+                  auto moreRow = [&](int idU, int idD) {      // "Mas arriba / Mas abajo" debajo de una lista
+                      const ImVec2 u0(fx0, y + 2.0f * k), u1((fx0 + fx1) * 0.5f - 2.0f * k, y + rowH - 4.0f * k), d0((fx0 + fx1) * 0.5f + 2.0f * k, y + 2.0f * k), d1(fx1, y + rowH - 4.0f * k);
+                      const bool hu = hit(idU, u0, u1), hd = hit(idD, d0, d1);
+                      dl->AddRectFilled(u0, u1, hu ? IM_COL32(86, 86, 92, 255) : IM_COL32(56, 56, 60, 255), 3.0f * k); dl->AddRectFilled(d0, d1, hd ? IM_COL32(86, 86, 92, 255) : IM_COL32(56, 56, 60, 255), 3.0f * k);
+                      textC(u0, u1, ink, "M\xC3\xA1s arriba", fsS); textC(d0, d1, ink, "M\xC3\xA1s abajo", fsS); y += rowH + 4.0f * k; };
+                  const int nRowsL = 8; float lt = -1.0f, lb = -1.0f;
                   searchRow(3350, 3351, 1);
                   if (sq[0]) {      // resultados del buscador: todos los grupos
                       static int s_hits[4096]; int nh = 0; for (int i = 0; i < nC && nh < 4096; i++) if (SrMatch(MotorClipFile(i), sq)) s_hits[nh++] = i;
                       snprintf(b1, sizeof b1, "%d %s", nh, TRS(nh == 1 ? "clip encontrado" : "clips encontrados")); text(lx, y + 9.0f * k, dim, b1, fsS); y += 20.0f * k;
-                      const int nRowsL = 8; s_srTop = std::clamp(s_srTop, 0, std::max(0, nh - nRowsL));
+                      s_srTop = std::clamp(s_srTop + cw, 0, std::max(0, nh - nRowsL)); lt = y;
                       for (int r = 0; r < nRowsL; r++) { const int h = s_srTop + r; s_pjRowClip[r] = h < nh ? s_hits[h] : -1; if (h >= nh) continue; ClipLabel(s_hits[h], b1, sizeof b1); listRow(3400 + r, b1, s_hits[h] == cur && PI.clip[qs] >= 0); }
-                      if (nh > nRowsL) { const ImVec2 u0(fx0, y + 2.0f * k), u1((fx0 + fx1) * 0.5f - 2.0f * k, y + rowH - 4.0f * k), d0((fx0 + fx1) * 0.5f + 2.0f * k, y + 2.0f * k), d1(fx1, y + rowH - 4.0f * k);
-                        const bool hu = hit(3352, u0, u1), hd = hit(3353, d0, d1);
-                        dl->AddRectFilled(u0, u1, hu ? IM_COL32(86, 86, 92, 255) : IM_COL32(56, 56, 60, 255), 3.0f * k); dl->AddRectFilled(d0, d1, hd ? IM_COL32(86, 86, 92, 255) : IM_COL32(56, 56, 60, 255), 3.0f * k);
-                        textC(u0, u1, ink, "M\xC3\xA1s arriba", fsS); textC(d0, d1, ink, "M\xC3\xA1s abajo", fsS); y += rowH + 4.0f * k; }
-                  } else
-                  {   // lista del grupo a la vista (clic = ponerla); rueda o flechas para recorrer
-                      int g0 = -1, g1 = -1; for (int i = 0; i < nC; i++) if (MotorClipGroup(i) == s_pjGroup) { if (g0 < 0) g0 = i; g1 = i; }
-                      const int nRowsL = 8;
-                      if (g0 >= 0) {
-                          if (s_pjListTop < g0 || s_pjListTop > g1) s_pjListTop = (cur >= g0 && cur <= g1) ? std::max(g0, cur - 3) : g0;
-                          s_pjListTop = std::clamp(s_pjListTop, g0, std::max(g0, g1 - nRowsL + 1));
-                          for (int r = 0; r < nRowsL; r++) { const int c = s_pjListTop + r; s_pjRowClip[r] = c <= g1 ? c : -1; if (c > g1) continue; ClipLabel(c, b1, sizeof b1); listRow(3400 + r, b1, c == cur && PI.clip[qs] >= 0); }
-                          { const ImVec2 u0(fx0, y + 2.0f * k), u1((fx0 + fx1) * 0.5f - 2.0f * k, y + rowH - 4.0f * k), d0((fx0 + fx1) * 0.5f + 2.0f * k, y + 2.0f * k), d1(fx1, y + rowH - 4.0f * k);
-                            const bool hu = hit(3314, u0, u1), hd = hit(3315, d0, d1);
-                            dl->AddRectFilled(u0, u1, hu ? IM_COL32(86, 86, 92, 255) : IM_COL32(56, 56, 60, 255), 3.0f * k); dl->AddRectFilled(d0, d1, hd ? IM_COL32(86, 86, 92, 255) : IM_COL32(56, 56, 60, 255), 3.0f * k);
-                            textC(u0, u1, ink, "M\xC3\xA1s arriba", fsS); textC(d0, d1, ink, "M\xC3\xA1s abajo", fsS); y += rowH + 4.0f * k; }
+                      lb = y; if (nh > nRowsL) moreRow(3352, 3353);
+                  } else {
+                      { FavLoad(); char t0[40], t1[40]; snprintf(t0, sizeof t0, "%s (%d)", TRS("Favoritos"), (int)s_fav.size()); snprintf(t1, sizeof t1, "%s (%d)", TRS("Recientes"), (int)s_rec.size());
+                        const char* const tb[3] = { "Por grupo", t0, t1 }; seg(3380, ImVec2(fx0, y + 2.0f * k), ImVec2(fx1, y + rowH), 3, std::clamp(s_pjTab, 0, 2), tb); y += rowH + 6.0f * k; }
+                      if (s_pjTab == 0) {   // lista del grupo a la vista (clic = ponerla); rueda o flechas para recorrer
+                          { const int g = std::clamp(s_pjGroup, 0, MotorClipGroupCount() - 1); int n = 0; for (int i = 0; i < nC; i++) if (MotorClipGroup(i) == g) n++;
+                            snprintf(b1, sizeof b1, "%s  (%d)", TRS(GroupLabel(g)), n); arrowRow(3310, 3311, "Grupo", b1, true); }
+                          int g0 = -1, g1 = -1; for (int i = 0; i < nC; i++) if (MotorClipGroup(i) == s_pjGroup) { if (g0 < 0) g0 = i; g1 = i; }
+                          if (g0 >= 0) {
+                              if (s_pjListTop < g0 || s_pjListTop > g1) s_pjListTop = (cur >= g0 && cur <= g1) ? std::max(g0, cur - 3) : g0;
+                              s_pjListTop = std::clamp(s_pjListTop + cw, g0, std::max(g0, g1 - nRowsL + 1)); lt = y;
+                              for (int r = 0; r < nRowsL; r++) { const int c = s_pjListTop + r; s_pjRowClip[r] = c <= g1 ? c : -1; if (c > g1) continue; ClipLabel(c, b1, sizeof b1); listRow(3400 + r, b1, c == cur && PI.clip[qs] >= 0); }
+                              lb = y; moreRow(3314, 3315);
+                          }
+                      } else {      // favoritos (se guardan) o recientes (los ultimos 10 que pusiste)
+                          const std::vector<int>& L = s_pjTab == 1 ? s_fav : s_rec; const int nl = (int)L.size();
+                          if (nl == 0) { for (int r = 0; r < nRowsL; r++) s_pjRowClip[r] = -1;
+                              text(lx, y + 9.0f * k, dim, s_pjTab == 1 ? "Clic derecho en un clip de la lista para sumarlo ac\xC3\xA1." : "Ac\xC3\xA1 aparecen las \xC3\xBAltimas animaciones que pusiste.", fsS); y += 26.0f * k; }
+                          else { s_flTop = std::clamp(s_flTop + cw, 0, std::max(0, nl - nRowsL)); lt = y;
+                              for (int r = 0; r < nRowsL; r++) { const int h = s_flTop + r; s_pjRowClip[r] = h < nl ? L[h] : -1; if (h >= nl) continue; ClipLabel(L[h], b1, sizeof b1); listRow(3400 + r, b1, L[h] == cur && PI.clip[qs] >= 0); }
+                              lb = y; if (nl > nRowsL) moreRow(3387, 3388); }
                       }
                   }
+                  if (lt >= 0.0f) { s_clR[0] = fx0; s_clR[1] = lt; s_clR[2] = fx1; s_clR[3] = lb; }
+                  // ficha del clip: el que esta bajo el mouse en la lista o, si no, el que tiene puesto
+                  s_clHov = hot >= 3400 && hot < 3408 ? s_pjRowClip[hot - 3400] : -1;
+                  { const int fc = s_clHov >= 0 ? s_clHov : PI.clip[qs] >= 0 ? cur : -1;
+                    if (fc >= 0) { const ImVec2 c0(fx0, y + 2.0f * k), c1(fx1, y + 2.0f * k + 58.0f * k);
+                      dl->AddRectFilled(c0, c1, IM_COL32(38, 38, 41, 255), 4.0f * k); dl->AddRect(c0, c1, fc == cur && s_clHov < 0 ? acc : cLine, 4.0f * k);
+                      dl->PushClipRect(c0, c1, true);
+                      ClipDesc(fc, b1, sizeof b1); text(c0.x + 8.0f * k, c0.y + 11.0f * k, ink, b1, fsS + 0.5f * k);
+                      ClipLabel(fc, b1, sizeof b1); text(c0.x + 8.0f * k, c0.y + 28.0f * k, IM_COL32(130, 130, 136, 255), b1, fsS - 1.0f * k);
+                      if (fc == cur && PI.lenT[qs] > 0.0f) snprintf(b1, sizeof b1, TRS("Duraci\xC3\xB3n %.2f s  \xC2\xB7  %d cuadros  \xC2\xB7  cuadro %d"), PI.lenT[qs], (int)(PI.lenT[qs] * 30.0f + 0.5f), (int)(PI.curT[qs] * 30.0f) + 1);
+                      else snprintf(b1, sizeof b1, "%s%s", TRS("Clic: ponerla.  Clic derecho: "), TRS(FavHas(fc) ? "sacar de Favoritos." : "a Favoritos."));
+                      text(c0.x + 8.0f * k, c0.y + 45.0f * k, dim, b1, fsS - 1.0f * k);
+                      dl->PopClipRect(); y += 64.0f * k; } }
                   { float sp = PI.speed[qs] * 100.0f; text(lx, y + rowH * 0.5f, dim, "Velocidad", fsS + 1.0f * k);
                     if (numField(2120, ImVec2(x0 + rightW * 0.42f, y + 3.0f * k), ImVec2(fx1, y + rowH - 3.0f * k), sp, 1.0f, 0.0f, 400.0f, "%.0f", " %")) MotorPjAnimSet(qs, PI.clip[qs], sp / 100.0f, PI.paused[qs]);
                     y += rowH + 4.0f * k; }
-                  { const char* const nms[2] = { "Reproducir", "Pausa" }; seg(3320, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, PI.paused[qs] ? 1 : 0, nms); y += rowH + 8.0f * k; }
+                  { const char* const nms[2] = { "Reproducir", "Pausa" }; seg(3320, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, PI.paused[qs] ? 1 : 0, nms); y += rowH + 6.0f * k; }
+                  text(lx, y + 9.0f * k, dim, "Al llegar al final:", fsS); y += 20.0f * k;
+                  { const char* const md[3] = { "En bucle", "Una vez", "Ida y vuelta" }; seg(3383, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 3, std::clamp(PI.mode[qs], 0, 2), md); y += rowH + 8.0f * k; }
                   button(3322, "Desde el principio");
                   button(3323, "Parado (el de siempre)");
                   button(3324, "Esta animaci\xC3\xB3n a todos");
+                  button(3386, "Desfasar a los que tienen esta animaci\xC3\xB3n");
               }
               if (label("GESTO DE LA CARA")) {
                   const int nF = MotorFaceCount(), fc = PI.face[qs]; char b1[96];
@@ -1211,7 +1288,9 @@ static void ToolbarDraw() {
                   arrowRow(3330, 3331, "Gesto", b1, true);
                   { const int nRowsF = 6; static int s_fTop = 0; if (fc >= 0 && (fc < s_fTop || fc >= s_fTop + nRowsF)) s_fTop = std::max(0, fc - 2); s_fTop = std::clamp(s_fTop, 0, std::max(0, nF - nRowsF));
                     if (s_pjFaceScroll) { s_fTop = std::clamp(s_fTop + s_pjFaceScroll, 0, std::max(0, nF - nRowsF)); s_pjFaceScroll = 0; }
-                    for (int r = 0; r < nRowsF; r++) { const int f = s_fTop + r; s_pjRowFace[r] = f < nF ? f : -1; if (f >= nF) continue; FaceLabel(f, b1, sizeof b1); listRow(3410 + r, b1, f == fc); }
+                    { const float ft = y;
+                      for (int r = 0; r < nRowsF; r++) { const int f = s_fTop + r; s_pjRowFace[r] = f < nF ? f : -1; if (f >= nF) continue; FaceLabel(f, b1, sizeof b1); listRow(3410 + r, b1, f == fc); }
+                      s_fcR[0] = fx0; s_fcR[1] = ft; s_fcR[2] = fx1; s_fcR[3] = y; }
                     { const ImVec2 u0(fx0, y + 2.0f * k), u1((fx0 + fx1) * 0.5f - 2.0f * k, y + rowH - 4.0f * k), d0((fx0 + fx1) * 0.5f + 2.0f * k, y + 2.0f * k), d1(fx1, y + rowH - 4.0f * k);
                       const bool hu = hit(3332, u0, u1), hd = hit(3333, d0, d1);
                       dl->AddRectFilled(u0, u1, hu ? IM_COL32(86, 86, 92, 255) : IM_COL32(56, 56, 60, 255), 3.0f * k); dl->AddRectFilled(d0, d1, hd ? IM_COL32(86, 86, 92, 255) : IM_COL32(56, 56, 60, 255), 3.0f * k);
@@ -1812,7 +1891,19 @@ static void ToolbarDraw() {
             else if (id == 3342) { MotorPjFaceSet(-1, PI.face[q], PI.faceW[q], PI.blink[q]); Note("Gesto puesto a todos"); }
             else if (id == 3343) MotorPjFaceSet(q, -1, PI.faceW[q], PI.blink[q]);
         }
-        else if (id >= 3400 && id < 3408) { const int q = MotorPjSel(); const int c = s_pjRowClip[id - 3400]; if (q >= 0 && c >= 0) { static MotorPjInfo PI; MotorPjInfoGet(&PI); MotorPjAnimSet(q, c, PI.speed[q], false); } }
+        else if ((id >= 3380 && id <= 3388)) {      // (18:01) pestanas de la lista, modo al terminar y desfase
+            static MotorPjInfo PI; MotorPjInfoGet(&PI); const int q = MotorPjSel();
+            if (id <= 3382) { s_pjTab = id - 3380; s_flTop = 0; }
+            else if (id == 3387 || id == 3388) s_flTop += id == 3388 ? 6 : -6;
+            else if (id <= 3385 && q >= 0) { const int m = id - 3383; MotorPjModeSet(q, m);
+                for (int i = 0; i < kMotorPjMax; i++) { float p[3], yw, sc; if (((s_pjMulti >> i) & 1u) && i != q && MotorPjGet(i, p, &yw, &sc)) MotorPjModeSet(i, m); } }
+            else if (id == 3386 && q >= 0) { int js[kMotorPjMax], n = 0; const int c = PI.clip[q];
+                for (int i = 0; i < kMotorPjMax; i++) if (PI.st[i] == 3 && PI.clip[i] == c && PI.clipOn[i] && PI.lenT[i] > 0.0f) js[n++] = i;
+                if (n < 2) Note("PonÃ© primero esta animaciÃ³n a varios jugadores");
+                else { for (int j = 0; j < n; j++) { const int i = js[j]; MotorPjSeek(i, std::min(PI.lenT[i] * (float)j / (float)n, PI.lenT[i] - 0.001f)); }
+                       Note("%d jugadores desfasados", n); } }
+        }
+        else if (id >= 3400 && id < 3408) { const int q = MotorPjSel(); const int c = s_pjRowClip[id - 3400]; if (q >= 0 && c >= 0) { static MotorPjInfo PI; MotorPjInfoGet(&PI); MotorPjAnimSet(q, c, PI.speed[q], false); RecPush(c); } }
         else if (id >= 3410 && id < 3416) { const int q = MotorPjSel(); const int f = s_pjRowFace[id - 3410]; if (q >= 0 && f >= 0) { static MotorPjInfo PI; MotorPjInfoGet(&PI); MotorPjFaceSet(q, f, PI.faceW[q], PI.blink[q]); } }
         else if (id >= 1480 && id <= 1482) { if (MotorPjAdd(id - 1480, (uint32_t)(s_pjIdF + 0.5f)) >= 0) Note(id == 1480 ? "Cargando jugador por id" : id == 1481 ? "Cargando el jugador base" : "Cargando igual al del Editar"); }
         else if (id == 1430 || id == 1431) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[519][0] = (float)(id - 1430); if (id == 1431 && g_cfg.live[519][1] < 0.5f) g_cfg.live[519][1] = 2.0f; }
@@ -2034,6 +2125,40 @@ static void ToolbarDraw() {
         else if (now - s_autoT > 60.0 * (double)std::clamp(g_cfg.motorAutoSaveMin, 1, 60)) { s_autoT = now;
             if (s_actCount != s_autoMark && SceneWrite(kAutoName)) { s_autoMark = s_actCount; SYSTEMTIME t; GetLocalTime(&t); Note("Autoguardado a las %02d:%02d", (int)t.wHour, (int)t.wMinute); } } }
     s_curKind.store((s_pDrag != 0 || hot == 990 || hot == 991 || s_rsz != 0 || hot == 987 || hot == 988) ? 3 : (s_spl || hot == 989) ? 4 : 0, std::memory_order_relaxed);
+    // (18:01) ayuda al pasar el mouse por los botones del Motor (0,7 s quieto encima); en las filas de clips: archivo y descripcion
+    { const char* tp = nullptr; static char tb[256];
+      switch (hot) {
+        case 3380: tp = "Las animaciones del juego ordenadas por grupo (festejos, entradas, banco...)."; break;
+        case 3381: tp = "Tus favoritas: clic derecho en un clip de cualquier lista para sumarlo o sacarlo."; break;
+        case 3382: tp = "Las \xC3\xBAltimas 10 animaciones que pusiste."; break;
+        case 3383: tp = "Al terminar vuelve a empezar."; break;
+        case 3384: tp = "Se reproduce una vez y queda quieta en el \xC3\xBAltimo cuadro."; break;
+        case 3385: tp = "Va hasta el final y vuelve para atr\xC3\xA1s, sin salto."; break;
+        case 3386: tp = "Los jugadores con esta misma animaci\xC3\xB3n arrancan en momentos distintos, para que no se muevan todos igual."; break;
+        case 3320: tp = "Reproducir (Espacio)."; break;
+        case 3321: tp = "Pausa (Espacio). Coma / punto: un cuadro para atr\xC3\xA1s / adelante."; break;
+        case 3322: tp = "Vuelve al primer cuadro de la animaci\xC3\xB3n."; break;
+        case 3323: tp = "Saca la animaci\xC3\xB3n: queda la postura de siempre del juego."; break;
+        case 3324: tp = "Pone esta animaci\xC3\xB3n a todos los jugadores del Motor."; break;
+        case 3310: case 3311: tp = "Cambiar de grupo de animaciones."; break;
+        case 3312: case 3313: tp = "Animaci\xC3\xB3n anterior / siguiente del grupo."; break;
+        case 3350: tp = "Escrib\xC3\xAD parte del nombre del archivo (por ejemplo: goal, idle, bench)."; break;
+        case 3351: tp = "Borrar la b\xC3\xBAsqueda."; break;
+        case 3362: tp = "Ocultar o mostrar (H). May\xC3\xBAs + H: mostrar todos."; break;
+        case 3510: tp = "Diez veces m\xC3\xA1s lento."; break;
+        case 3511: tp = "Cuatro veces m\xC3\xA1s lento."; break;
+        case 3512: tp = "A la mitad de la velocidad."; break;
+        case 3513: tp = "Velocidad normal."; break;
+        default:
+          if (hot >= 3400 && hot < 3408 && s_pjRowClip[hot - 3400] >= 0) { char d[160]; ClipDesc(s_pjRowClip[hot - 3400], d, sizeof d);
+              snprintf(tb, sizeof tb, "%s\n%s", d, MotorClipFile(s_pjRowClip[hot - 3400])); tp = tb; } }
+      if (hot != s_tipId) { s_tipId = hot; s_tipT = Now(); }
+      else if (tp && !lDown && Now() - s_tipT > 0.7) {
+          const char* ht = TRS(tp); const float hs = fsS - 0.5f * k; const ImVec2 hz = font->CalcTextSizeA(hs, 360.0f * k, 360.0f * k, ht);
+          ImDrawList* fg = ImGui::GetForegroundDrawList(); const float hx = std::clamp(s_tipA.x, 4.0f, std::max(4.0f, ds.x - hz.x - 16.0f * k));
+          float hy = s_tipA.y - hz.y - 10.0f * k; if (hy < 4.0f) hy = s_tipB.y + 6.0f * k;
+          fg->AddRectFilled(ImVec2(hx, hy), ImVec2(hx + hz.x + 12.0f * k, hy + hz.y + 6.0f * k), IM_COL32(18, 18, 20, 240), 4.0f * k); fg->AddRect(ImVec2(hx, hy), ImVec2(hx + hz.x + 12.0f * k, hy + hz.y + 6.0f * k), IM_COL32(90, 90, 96, 255), 4.0f * k);
+          fg->AddText(font, hs, ImVec2(hx + 6.0f * k, hy + 3.0f * k), IM_COL32(225, 225, 228, 255), ht, nullptr, 360.0f * k); } }
     s_hotPrev = hot; s_escOpen.store(s_menuOpen >= 0 || s_modal != 0 || s_editId >= 0, std::memory_order_relaxed);
 }
 
