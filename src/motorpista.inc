@@ -41,3 +41,6 @@ static const OwnTrack kOwnTracks[] = {
     { "zfx_saludo_abrazo_a.gani", kOwn_A, (int)(sizeof kOwn_A / sizeof kOwn_A[0]) },
     { "zfx_saludo_abrazo_b.gani", kOwn_B, (int)(sizeof kOwn_B / sizeof kOwn_B[0]) },
 };
+// pareja: B empieza a D metros delante de A, mirandolo (girado 180); los dos clips van al mismo tiempo
+struct OwnPair { const char* a; const char* b; float dist; };
+static const OwnPair kOwnPairs[] = { { "zfx_saludo_abrazo_a.gani", "zfx_saludo_abrazo_b.gani", 5.74f } };

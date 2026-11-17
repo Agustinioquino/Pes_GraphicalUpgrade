@@ -133,6 +133,7 @@ struct Pj {
     float boneW[3] = {}; bool boneWOk = false; int boneQ = -1;                          // lugar en el mundo del hueso que mira la interfaz (lo escribe el juego)
     // solo el hilo del juego
     uint8_t* fd = nullptr; double tLoad = 0, tLast = 0, tPlay = 0; bool faceTried = false; bool ownSaid = false;
+    float syncT = -1.0f; bool pairB = false;   // (17/11 20:45) pareja de clips propios: B va al segundo de A (syncT) y en el lugar que le da A
     float scW = 1.0f; void* scCtl = nullptr; float scBase = 0.0f;   // (17/11 tarde) tamano por root_main como FUN_141f87eb0
     float lastPos[3] = {}, lastYaw = 0.0f; void* posCtl = nullptr; int nMoved = 0;
     int clipA = -2, clipFail = -2, restartA = 0, seekA = 0, endTicks = 0; uint32_t seed = 0;   // clipA: el clip puesto
@@ -390,7 +391,11 @@ int HandIndexOf(const char* n) {
             const uint32_t cnt = PtrOk(set) ? *(const uint32_t*)(set + 0x50) : 0;
             int ok = 0;
             for (int i = 0; i < kHandN; i++) { const uintptr_t a = *(const uintptr_t*)(kHandList + 8ull * i); s_handName[i] = PtrOk(a) ? (const char*)a : nullptr; ok += s_handName[i] ? 1 : 0; }
-            if (cnt == (uint32_t)kHandN && ok == kHandN) s_handSt = 1;
+            // (20:42, prueba de Agustin: 254 poses) FUN_141ec1330 agrega la lista del exe en orden al armar el juego de manos, y despues el
+            // juego suma otras al final: con 162 o mas, las primeras 162 son las de la lista (INFERIDO; el volcado de abajo lo confirma)
+            if (cnt >= (uint32_t)kHandN && ok == kHandN) s_handSt = 1;
+            if (PtrOk(set)) { const uintptr_t arr = *(const uintptr_t*)(set + 0x58); if (PtrOk(arr)) { const uint64_t* e = (const uint64_t*)arr;
+                Log("motor (manos): entradas 0 %016llx %016llx, 1 %016llx %016llx, 161 %016llx %016llx, 162 %016llx %016llx", e[0], e[1], e[2], e[3], e[322], e[323], e[324], e[325]); } }
             Log("motor (manos): el juego tiene %u poses de mano; lista del exe %s (0 = %s, 161 = %s)", cnt, s_handSt == 1 ? "usada" : "NO usada (manos neutras)",
                 s_handName[0] ? s_handName[0] : "?", s_handName[kHandN - 1] ? s_handName[kHandN - 1] : "?");
         }
@@ -592,6 +597,21 @@ static void PoseApply(Pj& p, void* ctl, const Pj& w) {
     } __except (1) { return; }
     StoreBone(p, bw, wok);
 }
+// (17/11 20:45, Agustin: "la animacion no vuelve hacia atras", "no respetan sus posiciones") vf4 solo va para adelante y el recorrido
+// de la raiz se va sumando al lugar del jugador: al mover el clip con FUN_141afa7b0 el lugar queda donde estaba. En los clips propios
+// (que caminan) se vuelve la raiz al lugar puesto, el clip a 0 y se repasa con vf4 hasta el segundo pedido (como si hubiera corrido).
+static void Replay(Pj& p, void* ctl, float t) {
+    ((RootPosFn)kRootPos)(ctl, p.lastPos[0], p.lastPos[1], p.lastPos[2], 1);
+    ((RootYawFn)kRootYaw)(ctl, p.lastYaw * 0.017453292f, 0);
+    ((ClipSeekFn)kClipSeek)(ctl, 0, 0, 0.0f, 1, 1);
+    const bool gs = p.scW > 0.0f && fabsf(p.scW - 1.0f) > 1e-4f && GraphScale(ctl, p.scW);   // el mismo tamano que en Update
+    ((FdVf4Fn)kFdVf4)(p.fd, 0.0f);
+    const float step = std::max(1.0f / 30.0f, t / 120.0f);     // hasta 120 pasos por salto
+    for (float tt = step; tt < t - 1e-4f; tt += step) ((FdVf4Fn)kFdVf4)(p.fd, tt);
+    if (gs) GraphScale(ctl, 1.0f);
+    p.endTicks = 0;
+    static int nl = 0; if (nl++ < 6) Log("motor (clip propio): jugador repasado hasta %.2f s desde su lugar (%.2f, %.2f, %.2f)", t, p.lastPos[0], p.lastPos[1], p.lastPos[2]);
+}
 static void StoreTimes(Pj& p, float len, float cur) { std::lock_guard<std::mutex> lk(s_mx); p.lenT = len; p.curT = cur; }   // fuera del __try (C2712)
 int Update(Pj& p, const Pj& w, double now) {
     __try {
@@ -600,18 +620,26 @@ int Update(Pj& p, const Pj& w, double now) {
         // reloj propio: velocidad y pausa del Inspector; "desde el principio" vuelve el clip a 0
         const double dt = std::clamp(now - p.tLast, 0.0, 0.1); p.tLast = now;
         void* ctl = nullptr; memcpy(&ctl, p.fd + 0x50, 8);
-        if (w.restart != p.restartA) { p.restartA = w.restart; p.tPlay = 0.0; p.endTicks = 0; if (ctl) ((ClipSeekFn)kClipSeek)(ctl, 0, 0, 0.0f, 1, 1); }
+        const bool walk = OwnTrackOf(p.clipA) != nullptr;     // clip propio: el recorrido se repasa desde el lugar puesto (Replay)
+        if (p.syncT >= 0.0f && ctl) {                          // pareja: B al segundo de A
+            const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1); const float t = std::clamp(p.syncT, 0.0f, std::max(0.0f, len - 0.001f));
+            p.syncT = -1.0f; p.restartA = w.restart; p.seekA = w.seekN; p.back = false;
+            if (walk) Replay(p, ctl, t); else ((ClipSeekFn)kClipSeek)(ctl, 0, 0, t, 1, 1);
+            p.tPlay = t; p.endTicks = 0; }
+        else if (w.restart != p.restartA) { p.restartA = w.restart; p.tPlay = 0.0; p.endTicks = 0; if (ctl) { if (walk) Replay(p, ctl, 0.0f); else ((ClipSeekFn)kClipSeek)(ctl, 0, 0, 0.0f, 1, 1); } }
         else if (w.seekN != p.seekA && ctl) {      // (06:52) linea de tiempo: vf4 lleva el clip al tiempo que recibe (solo para adelante), asi que
             p.seekA = w.seekN;                     // para ir a cualquier punto se mueve el clip (FUN_141afa7b0) y el reloj al mismo segundo
             const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1); const float t = std::clamp(w.seek, 0.0f, std::max(0.0f, len - 0.001f));
-            ((ClipSeekFn)kClipSeek)(ctl, 0, 0, t, 1, 1); p.tPlay = t; p.endTicks = 0; }
+            if (walk) Replay(p, ctl, t); else ((ClipSeekFn)kClipSeek)(ctl, 0, 0, t, 1, 1);
+            p.tPlay = t; p.endTicks = 0; }
         else if (!w.paused) {
             const double st = dt * (double)std::clamp(w.speed, 0.0f, 4.0f); const double L = (double)p.lenT;
             // (17/11 18:01, Agustin: "un menu mas accesible con mas opciones") modo de reproduccion. vf4 solo va para adelante: para ir
             // para atras se mueve el clip a ese segundo (FUN_141afa7b0) antes de cada vf4.
             if (w.mode == 2 && L > 0.2) {
                 if (!p.back) { p.tPlay += st; if (p.tPlay >= L - 0.002) { p.tPlay = L - 0.002; p.back = true; } }
-                else { p.tPlay -= st; if (p.tPlay <= 0.0) { p.tPlay = 0.0; p.back = false; } if (ctl) ((ClipSeekFn)kClipSeek)(ctl, 0, 0, (float)p.tPlay, 1, 1); }
+                else { p.tPlay -= st; if (p.tPlay <= 0.0) { p.tPlay = 0.0; p.back = false; }
+                    if (ctl) { if (walk) Replay(p, ctl, (float)p.tPlay); else ((ClipSeekFn)kClipSeek)(ctl, 0, 0, (float)p.tPlay, 1, 1); } }
             } else { p.back = false; p.tPlay += st; if (w.mode == 1 && L > 0.2 && p.tPlay > L - 0.002) p.tPlay = L - 0.002; }
         }
         bool gs = false; if (ctl && p.scW > 0.0f && fabsf(p.scW - 1.0f) > 1e-4f) gs = GraphScale(ctl, p.scW);      // (17:54) tamano en el grafo, solo durante vf4
@@ -622,7 +650,7 @@ int Update(Pj& p, const Pj& w, double now) {
         if (ctl) PoseApply(p, ctl, w);
         if (ctl && !w.paused && w.mode == 0) {      // si el clip no da la vuelta solo (como la banca): 6 cuadros quieto en el final -> al principio
             const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1), cur = ((ClipTimeFn)kClipTime)(ctl, 0, 1);
-            if (len > 0.2f && cur >= len - 0.003f) { if (++p.endTicks >= 6) { ((ClipSeekFn)kClipSeek)(ctl, 0, 0, 0.0f, 1, 1); p.endTicks = 0; } } else p.endTicks = 0;
+            if (len > 0.2f && cur >= len - 0.003f) { if (++p.endTicks >= 6) { if (walk) { Replay(p, ctl, 0.0f); p.tPlay = 0.0; } else ((ClipSeekFn)kClipSeek)(ctl, 0, 0, 0.0f, 1, 1); p.endTicks = 0; } } else p.endTicks = 0;
         }
         if (ctl) StoreTimes(p, ((ClipTimeFn)kClipLen)(ctl, 0, 1), ((ClipTimeFn)kClipTime)(ctl, 0, 1));
         RootMainScale(p, scale);
@@ -703,6 +731,39 @@ void MotorPjTick(bool on, uintptr_t impl) {
     { std::lock_guard<std::mutex> lk(s_mx); for (int i = 0; i < kMax; i++) { const Pj& q = s_pj[i]; Pj& w = want[i];
         w.state = q.state; w.kind = q.kind; w.id = q.id; memcpy(w.name, q.name, sizeof w.name); memcpy(w.pos, q.pos, 12); w.yaw = q.yaw; w.scale = q.scale;
         w.clip = q.clip; w.speed = q.speed; w.paused = q.paused; w.restart = q.restart; w.seek = q.seek; w.seekN = q.seekN; w.face = q.face; w.faceW = q.faceW; w.blink = q.blink; w.hidden = q.hidden; w.mode = q.mode; memcpy(w.pose, q.pose, sizeof w.pose); w.nPose = q.nPose; w.boneQ = q.boneQ; } }
+    // (17/11 20:45, Agustin: "no respetan sus posiciones", "a la hora de chocar las manos las alturas no coinciden") pareja de clips
+    // propios (kOwnPairs): con A en un jugador y B en otro, B se pone a la distancia del clip delante de A, mirandolo, y los dos van al
+    // mismo segundo (al formarse la pareja arrancan juntos desde 0; despues B sigue el reloj, la velocidad, la pausa y el modo de A).
+    {
+        static int s_pa = -1, s_pb = -1; int ia = -1, ib = -1; const OwnPair* pr = nullptr;
+        for (const OwnPair& q : kOwnPairs) {
+            ia = ib = -1;
+            for (int i = 0; i < kMax; i++) {
+                if (want[i].state != 3 || !s_pj[i].fd || want[i].clip < 0 || want[i].clip >= kClipN) continue;
+                const char* f = kClipRows[want[i].clip].file;
+                if (ia < 0 && !strcmp(f, q.a)) ia = i; else if (ib < 0 && !strcmp(f, q.b)) ib = i;
+            }
+            if (ia >= 0 && ib >= 0) { pr = &q; break; }
+        }
+        for (int i = 0; i < kMax; i++) s_pj[i].pairB = false;
+        if (pr) {
+            Pj& A = s_pj[ia]; Pj& B = s_pj[ib];
+            const float sc = 0.5f * ((A.scW > 0.0f ? A.scW : 1.0f) + (B.scW > 0.0f ? B.scW : 1.0f));
+            const float y = want[ia].yaw * 0.017453292f, d = pr->dist * sc;     // adelante = (sen giro, 0, cos giro), como RootYaw
+            const float bp[3] = { want[ia].pos[0] + d * sinf(y), want[ia].pos[1], want[ia].pos[2] + d * cosf(y) };
+            float by = want[ia].yaw + 180.0f; if (by >= 360.0f) by -= 360.0f;
+            memcpy(want[ib].pos, bp, 12); want[ib].yaw = by;
+            want[ib].speed = want[ia].speed; want[ib].paused = want[ia].paused; want[ib].mode = want[ia].mode;
+            { std::lock_guard<std::mutex> lk(s_mx); memcpy(s_pj[ib].pos, bp, 12); s_pj[ib].yaw = by; s_pj[ib].speed = want[ia].speed; s_pj[ib].paused = want[ia].paused; s_pj[ib].mode = want[ia].mode; }
+            B.pairB = true;
+            if (A.clipA == want[ia].clip && B.clipA == want[ib].clip) {
+                if (ia != s_pa || ib != s_pb) {
+                    A.syncT = 0.0f; B.syncT = 0.0f; s_pa = ia; s_pb = ib;
+                    Log("motor (clip propio): pareja %s (jugador %d) y %s (jugador %d) a %.2f m, desde 0 juntos", pr->a, ia + 1, pr->b, ib + 1, d);
+                } else if (A.syncT < 0.0f && fabs(B.tPlay - A.tPlay) > 0.05) B.syncT = (float)A.tPlay;
+            }
+        } else s_pa = s_pb = -1;
+    }
     bool any = false;
     for (int i = 0; i < kMax; i++) {
         Pj& p = s_pj[i]; const int st = want[i].state;

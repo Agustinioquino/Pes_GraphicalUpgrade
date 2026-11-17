@@ -646,7 +646,7 @@ def revisar(info, D):
                 if a_[1] < 0.085 and b_[1] < 0.085: pat = max(pat, norm(sub(a_, b_)))
         print('jugador %s: tobillos de %.3f a %.3f m de alto; lo maximo que se mueve un pie apoyado en un cuadro = %.1f mm' % ('AB'[i], min(ys), max(ys), pat * 1000))
 
-def pista_inc(Js, nombres):
+def pista_inc(Js, nombres, D):
     """src/motorpista.inc: la cara y las manos de cada clip propio (las pone el Motor mientras corre el clip)"""
     o = ['// generado por tools/gani_cuerpo.py (no editar a mano): cara y manos de los clips propios, por cuadro (30 por segundo)',
          'struct OwnKey { int frame; const char* face; float faceW; const char* handL; const char* handR; };']
@@ -658,6 +658,9 @@ def pista_inc(Js, nombres):
     o.append('static const OwnTrack kOwnTracks[] = {')
     for J, nm in zip(Js, nombres): o.append('    { "%s", kOwn_%s, (int)(sizeof kOwn_%s / sizeof kOwn_%s[0]) },' % (nm, J.nombre, J.nombre, J.nombre))
     o.append('};')
+    o.append('// pareja: B empieza a D metros delante de A, mirandolo (girado 180); los dos clips van al mismo tiempo')
+    o.append('struct OwnPair { const char* a; const char* b; float dist; };')
+    o.append('static const OwnPair kOwnPairs[] = { { "%s", "%s", %.2ff } };' % (nombres[0], nombres[1], D))
     return '\n'.join(o) + '\n'
 
 def main():
@@ -678,7 +681,7 @@ def main():
         fn = os.path.join(a[1], nm); open(fn, 'wb').write(b)
         G = GC.leer_gani(b)
         print('%s: %d B, %d cuadros, %d canales' % (fn, len(b), G['cuadros'], G['ncanales']))
-    if '--inc' in a: open(a[a.index('--inc') + 1], 'w', newline='\n').write(pista_inc(Js, nombres))
+    if '--inc' in a: open(a[a.index('--inc') + 1], 'w', newline='\n').write(pista_inc(Js, nombres, D))
     return 0, D
 
 if __name__ == "__main__": r = main(); sys.exit(r[0] if isinstance(r, tuple) else r)
