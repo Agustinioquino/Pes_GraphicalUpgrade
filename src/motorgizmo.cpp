@@ -14,6 +14,7 @@
 #include <imgui.h>
 #include <WICTextureLoader.h>
 #include <string>
+#include <mutex>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -158,6 +159,19 @@ static bool s_pjSnap = false, s_camFollow = false;   // s_camFollow (07:16): la 
         // ajustar a la grilla (lugar a la celda, giro de a 15 grados) al arrastrar
 static int s_pjListTop = -1;         // primera fila de la lista de clips del Inspector
 static int s_pjRowClip[8] = {}, s_pjRowFace[6] = {}, s_pjFaceScroll = 0;
+// (17/11 07:27, Agustin: "la lectura del clip del juego deberia tener nombres de los archivos y un buscador") buscador de clips y gestos:
+// clic en el campo y escribir (las letras llegan por WM_CHAR, overlay.cpp MotorUiChar); Esc o la X lo borra. Con texto, la lista muestra
+// los clips de TODOS los grupos cuyo archivo contiene lo escrito (sin distinguir mayusculas).
+static std::mutex s_srMx; static char s_sr[48] = ""; static std::atomic<int> s_srOn{0};   // 0 nada, 1 clips, 2 gestos
+static int s_srTop = 0, s_srFTop = 0; static std::atomic<bool> s_srEsc{false};
+static bool SrMatch(const char* f, const char* q) { if (!q[0]) return true; for (; *f; f++) { const char* a = f; const char* b = q; while (*a && *b && tolower((unsigned char)*a) == tolower((unsigned char)*b)) { a++; b++; } if (!*b) return true; } return false; }
+bool MotorUiChar(unsigned c) {
+    if (!s_srOn.load()) return false;
+    std::lock_guard<std::mutex> lk(s_srMx); size_t l = strlen(s_sr);
+    if (c == 8) { if (l) s_sr[l - 1] = 0; }
+    else if (c == 27 || c == 13) { s_srOn.store(0); if (c == 27) s_srEsc.store(true); }
+    else if (c >= 32 && c < 127 && l + 1 < sizeof s_sr) { s_sr[l] = (char)c; s_sr[l + 1] = 0; s_srTop = 0; s_srFTop = 0; }
+    return true; }
 static int s_tlMode = 0;             // (06:52) linea de tiempo abajo: 0 automatica (con jugadores), 1 siempre, 2 oculta; s_tlAll: los botones mueven a todos
 static bool s_tlAll = false; static int s_tlScroll = 0;   // lo que hay en cada fila de las listas (para el clic)
 // nombres para la interfaz: grupo de clips (clave del catalogo de cinematicas), clip sin "dml_" ni ".gani", gesto con su familia
@@ -167,10 +181,7 @@ static const char* GroupLabel(int g) {
         { "injury", "Lesiones" }, { "md", "Durante el partido (md)" }, { "menu", "Men\xC3\xBAs" }, { "mobH", "Gente alrededor (mobH)" }, { "offsideGoal", "Gol en offside" },
         { "pk", "Penales" }, { "prop", "Utiler\xC3\xAD" "a" }, { "tu", "Otros (tu)" }, { "idle", "Parado" }, { "match", "Partido" }, { "uniselect", "Elegir uniforme" } };
     const char* k = MotorClipGroupKey(g); for (const auto& e : kG) if (!strcmp(e.key, k)) return e.es; return k; }
-static void ClipLabel(int c, char* out, size_t n) {
-    const char* f = MotorClipFile(c); if (!strncmp(f, "dml_", 4)) f += 4;
-    size_t l = strlen(f); if (l > 5 && !strcmp(f + l - 5, ".gani")) l -= 5;
-    snprintf(out, n, "%.*s", (int)std::min<size_t>(l, n - 1), f); }
+static void ClipLabel(int c, char* out, size_t n) { snprintf(out, n, "%s", MotorClipFile(c)); }   // (07:27) el nombre del archivo entero
 static void FaceLabel(int i, char* out, size_t n) {
     static const struct { const char* pre; const char* es; } kF[] = { { "angr", "Enojo" }, { "base", "Base" }, { "bitter", "Amargo" }, { "dml", "Cinem\xC3\xA1tica" }, { "gk", "Arquero" },
         { "head", "Cabezazo" }, { "loss", "Tristeza" }, { "neut", "Neutro" }, { "pain", "Dolor" }, { "pow", "Fuerza" }, { "smil", "Sonrisa" }, { "smug", "Canchero" },
@@ -1081,6 +1092,27 @@ static void ToolbarDraw() {
                   { const int g = std::clamp(s_pjGroup, 0, MotorClipGroupCount() - 1); int n = 0; for (int i = 0; i < nC; i++) if (MotorClipGroup(i) == g) n++;
                     snprintf(b1, sizeof b1, "%s  (%d)", TRS(GroupLabel(g)), n); arrowRow(3310, 3311, "Grupo", b1, true); }
                   ClipLabel(cur, b1, sizeof b1); arrowRow(3312, 3313, "Animaci\xC3\xB3n", b1, true);
+                  char sq[48]; { std::lock_guard<std::mutex> lk(s_srMx); memcpy(sq, s_sr, sizeof sq); }
+                  auto searchRow = [&](int idF, int idX, int mode) {      // campo del buscador
+                      const ImVec2 p0(fx0, y + 3.0f * k), p1(fx1 - 26.0f * k, y + rowH - 3.0f * k), x0b(fx1 - 22.0f * k, y + 3.0f * k), x1b(fx1, y + rowH - 3.0f * k);
+                      const bool on = s_srOn.load() == mode, hv = hit(idF, p0, p1), hx = hit(idX, x0b, x1b);
+                      dl->AddRectFilled(p0, p1, cField, 3.0f * k); dl->AddRect(p0, p1, on ? acc : hv ? IM_COL32(120, 120, 126, 255) : cLine, 3.0f * k, 0, on ? 1.5f : 1.0f);
+                      char t[64]; const bool blink = fmod(ImGui::GetTime(), 1.0) < 0.55;
+                      if (sq[0] || on) snprintf(t, sizeof t, "%s%s", sq, on && blink ? "|" : ""); else snprintf(t, sizeof t, "%s", TRS("Buscar por nombre de archivo..."));
+                      dl->PushClipRect(p0, p1, true); text(p0.x + 8.0f * k, (p0.y + p1.y) * 0.5f, sq[0] || on ? ink : IM_COL32(120, 120, 126, 255), t, fsS); dl->PopClipRect();
+                      dl->AddRectFilled(x0b, x1b, hx ? IM_COL32(86, 86, 92, 255) : IM_COL32(56, 56, 60, 255), 3.0f * k); textC(x0b, x1b, ink, "x", fsS);
+                      y += rowH + 2.0f * k; };
+                  searchRow(3350, 3351, 1);
+                  if (sq[0]) {      // resultados del buscador: todos los grupos
+                      static int s_hits[4096]; int nh = 0; for (int i = 0; i < nC && nh < 4096; i++) if (SrMatch(MotorClipFile(i), sq)) s_hits[nh++] = i;
+                      snprintf(b1, sizeof b1, "%d %s", nh, TRS(nh == 1 ? "clip encontrado" : "clips encontrados")); text(lx, y + 9.0f * k, dim, b1, fsS); y += 20.0f * k;
+                      const int nRowsL = 8; s_srTop = std::clamp(s_srTop, 0, std::max(0, nh - nRowsL));
+                      for (int r = 0; r < nRowsL; r++) { const int h = s_srTop + r; s_pjRowClip[r] = h < nh ? s_hits[h] : -1; if (h >= nh) continue; ClipLabel(s_hits[h], b1, sizeof b1); listRow(3400 + r, b1, s_hits[h] == cur && PI.clip[qs] >= 0); }
+                      if (nh > nRowsL) { const ImVec2 u0(fx0, y + 2.0f * k), u1((fx0 + fx1) * 0.5f - 2.0f * k, y + rowH - 4.0f * k), d0((fx0 + fx1) * 0.5f + 2.0f * k, y + 2.0f * k), d1(fx1, y + rowH - 4.0f * k);
+                        const bool hu = hit(3352, u0, u1), hd = hit(3353, d0, d1);
+                        dl->AddRectFilled(u0, u1, hu ? IM_COL32(86, 86, 92, 255) : IM_COL32(56, 56, 60, 255), 3.0f * k); dl->AddRectFilled(d0, d1, hd ? IM_COL32(86, 86, 92, 255) : IM_COL32(56, 56, 60, 255), 3.0f * k);
+                        textC(u0, u1, ink, "M\xC3\xA1s arriba", fsS); textC(d0, d1, ink, "M\xC3\xA1s abajo", fsS); y += rowH + 4.0f * k; }
+                  } else
                   {   // lista del grupo a la vista (clic = ponerla); rueda o flechas para recorrer
                       int g0 = -1, g1 = -1; for (int i = 0; i < nC; i++) if (MotorClipGroup(i) == s_pjGroup) { if (g0 < 0) g0 = i; g1 = i; }
                       const int nRowsL = 8;
@@ -1628,6 +1660,7 @@ static void ToolbarDraw() {
         if (say) { if (mode == 0) Note("%d luces apagadas", n); else if (mode == 1) Note("%d luces prendidas", n); else Note("%d luces vueltas a como estaban", n); } };
     auto panelSet = [&](int sd, int on) { int& v = sd == 0 ? g_cfg.motorPanelLOn : g_cfg.motorPanelROn; v = on ? 1 : 0; SaveOption(sd == 0 ? "motor_panel_izq_abierto" : "motor_panel_der_abierto", on ? "1" : "0"); };
     auto act0 = [&](int id) {
+        if (id != 3350 && id != 3351 && id != 3360 && id != 3361) s_srOn.store(0);      // (07:27) clic en otra cosa: deja de escribir en el buscador
         if (id == 0) { if (s_exitT < 0.0) { s_exitT = Now(); s_exitSent = false; MotorGlitchSound(1); } }      // salir: primero el fundido (abajo)
         else if (id == 1 || id == 20) g_cfg.motorGrid = grid ? 0 : 1;
         else if (id == 1400) { MotorJugReset(); Note("Jugador al centro"); }
@@ -1674,6 +1707,9 @@ static void ToolbarDraw() {
             else if (id == 3310 || id == 3311) { s_pjGroup = ((s_pjGroup < 0 ? MotorClipGroup(cur) : s_pjGroup) + (id == 3311 ? 1 : nG - 1)) % nG; s_pjListTop = -1; }
             else if (id == 3312 || id == 3313) { const int c = (cur + (id == 3313 ? 1 : nC - 1)) % std::max(1, nC); MotorPjAnimSet(q, c, PI.speed[q], PI.paused[q]); s_pjGroup = MotorClipGroup(c); }
             else if (id == 3314 || id == 3315) s_pjListTop += id == 3315 ? 6 : -6;
+            else if (id == 3350) { s_srOn.store(1); }
+            else if (id == 3351) { std::lock_guard<std::mutex> lk(s_srMx); s_sr[0] = 0; s_srOn.store(0); s_srTop = 0; }
+            else if (id == 3352 || id == 3353) s_srTop += id == 3353 ? 6 : -6;
             else if (id == 3320 || id == 3321) MotorPjAnimSet(q, PI.clip[q], PI.speed[q], id == 3321);
             else if (id == 3322) MotorPjRestart(q);
             else if (id == 3323) { MotorPjAnimSet(q, -1, PI.speed[q], false); s_pjGroup = MotorClipGroup(MotorClipIdle()); }
@@ -1785,7 +1821,7 @@ static void ToolbarDraw() {
           for (const auto& e : kN) if (e.id == id) KbLabel(e.t);
           act(id); };
       auto kundo = [&](bool redo) { KbLabel(redo ? "Rehacer" : "Deshacer"); UndoStep(redo); };
-      const bool kb = front && !g_menuOpen.load(std::memory_order_relaxed) && !g_menuTyping.load(std::memory_order_relaxed) && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) == 0;
+      const bool kb = front && !g_menuOpen.load(std::memory_order_relaxed) && !g_menuTyping.load(std::memory_order_relaxed) && !s_srOn.load(std::memory_order_relaxed) && !s_srEsc.exchange(false) && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) == 0;
       const bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0, shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0, alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
       if (fabsf(mx - s_mLastX) + fabsf(my - s_mLastY) > 2.0f) { s_mLastX = mx; s_mLastY = my; s_menuKb = -1; }      // el mouse se movio: manda el mouse
       if (!kb) {}

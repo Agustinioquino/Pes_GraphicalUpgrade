@@ -233,6 +233,7 @@ void OverlayResize() { if (s_rtv) { s_rtv->Release(); s_rtv = nullptr; } }
 static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     // (1/11) rueda del mouse para el zoom de la camara libre (mensaje normal o raw input, por si el juego pide NOLEGACY)
     // (11/11) sin camara libre la rueda va a los menus nativos del juego (menumouse.cpp: arriba / abajo)
+    if (!g_menuOpen && m == WM_CHAR && MotorUiChar((unsigned)w)) return 0;      // (17/11 07:27) buscador de clips del Motor
     if (!g_menuOpen) {
         int wd = 0;
         if (m == WM_MOUSEWHEEL) wd = (int)GET_WHEEL_DELTA_WPARAM(w);

@@ -817,6 +817,7 @@ extern std::atomic<bool> g_menuOpen;
 extern std::atomic<bool> g_blockGamePad;    // (14/11) keyblock.cpp: el juego no ve el mando (XInput / DirectInput) mientras esta prendido
 extern std::atomic<bool> g_shareMask;       // (14/11 n) keyblock.cpp: en la repeticion el juego no ve SHARE mantenido (es de la camara libre); el toque corto le llega igual
 extern std::atomic<bool> g_blockGameKeys;   // (31/10) keyblock.cpp: el juego no ve el teclado mientras esta prendido
+bool MotorUiChar(unsigned c);      // (17/11) motorgizmo.cpp: letras para el buscador de clips del Motor (true = las tomo)
 extern std::atomic<bool> g_menuTyping;      // (31/10) overlay.cpp: hay un campo de texto del menu activo (la camara libre no lee W A S D)
 void KeyBlockInstall();
 // (11/11 3icxbh) mouse en los menus nativos del juego (menumouse.cpp): ganchos en el primer Present; la rueda llega por la ventana; cursor para overlay.cpp
