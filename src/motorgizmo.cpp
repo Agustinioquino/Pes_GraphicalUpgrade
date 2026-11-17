@@ -168,7 +168,8 @@ static double s_tipT = 0.0; static int s_tipId = -1; static ImVec2 s_tipA, s_tip
 // clic en el campo y escribir (las letras llegan por WM_CHAR, overlay.cpp MotorUiChar); Esc o la X lo borra. Con texto, la lista muestra
 // los clips de TODOS los grupos cuyo archivo contiene lo escrito (sin distinguir mayusculas).
 static std::mutex s_srMx; static char s_sr[48] = ""; static std::atomic<int> s_srOn{0};   // 0 nada, 1 clips, 2 gestos
-static int s_poseBone = 0; static bool s_edPts = true;   // (23:08) editor: puntos de los huesos en la vista static int s_srTop = 0, s_srFTop = 0; static std::atomic<bool> s_srEsc{false};
+static bool BoneGizmoBusy(); static int s_poseBone = 0; static bool s_edPts = true;   // (23:08) editor: puntos de los huesos en la vista
+static int s_srTop = 0, s_srFTop = 0; static std::atomic<bool> s_srEsc{false};
 struct PjClip { bool ok; float pos[3], yaw, scale, speed, faceW; int clip, face; bool paused, blink; }; static PjClip s_pjCb{};   // (07:23) copiar / pegar entre jugadores
 static bool SrMatch(const char* f, const char* q) { if (!q[0]) return true; for (; *f; f++) { const char* a = f; const char* b = q; while (*a && *b && tolower((unsigned char)*a) == tolower((unsigned char)*b)) { a++; b++; } if (!*b) return true; } return false; }
 bool MotorUiChar(unsigned c) {
@@ -2283,7 +2284,7 @@ static void JugFloorGizmo() {
     static bool s_was = false; static float s_m0[2], s_p0[3], s_yaw0, s_sc0, s_hit0[3], s_ang0; static ImVec2 s_upDir;
     const bool lNow = front && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, lEdge = lNow && !s_was; s_was = lNow;
     int drag = s_fDrag.load(), hot = -1;
-    if (drag < 0 && front && !overUi && s_dragId < 0 && !s_dragging.load()) { static const int kOrd[6] = { 5, 4, 3, 1, 2, 0 }; for (int q = 0; q < 6 && hot < 0; q++) { const int i = kOrd[q]; if (!ok[i]) continue; const float ex = mx - S[i].x, ey = my - S[i].y; if (ex * ex + ey * ey <= hr * hr * 1.5f) hot = i; } }
+    if (drag < 0 && front && !overUi && s_dragId < 0 && !s_dragging.load() && !BoneGizmoBusy()) { static const int kOrd[6] = { 5, 4, 3, 1, 2, 0 }; for (int q = 0; q < 6 && hot < 0; q++) { const int i = kOrd[q]; if (!ok[i]) continue; const float ex = mx - S[i].x, ey = my - S[i].y; if (ex * ex + ey * ey <= hr * hr * 1.5f) hot = i; } }
     auto hit = [&](float* out) { float o[3], d[3]; if (!MotorGridRay(mx / ds.x, my / ds.y, o, d) || fabsf(d[1]) < 1e-4f) return false; const float t = (s_p0[1] - o[1]) / d[1]; if (t <= 0.0f || t > 2000.0f) return false; for (int i = 0; i < 3; i++) out[i] = o[i] + d[i] * t; return true; };
     if (lEdge && hot >= 0) {
         memcpy(s_p0, J.pos, sizeof s_p0); s_yaw0 = J.yawDeg; s_sc0 = J.scale; s_m0[0] = mx; s_m0[1] = my; s_upDir = ImVec2(c1.x - c0.x, c1.y - c0.y);
@@ -2413,7 +2414,7 @@ static void JugPick() {
     static bool s_was = false; static float s_hit0[3], s_p0[3], s_y0; const bool lNow = front && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, lEdge = lNow && !s_was; s_was = lNow;
     auto floorHit = [&](float yPlane, float* out) { float o[3], d[3]; if (!MotorGridRay(mx / ds.x, my / ds.y, o, d) || fabsf(d[1]) < 1e-4f) return false; const float t = (yPlane - o[1]) / d[1]; if (t <= 0.0f || t > 2000.0f) return false; for (int i = 0; i < 3; i++) out[i] = o[i] + d[i] * t; return true; };
     int drag = s_pickDrag.load();
-    if (drag < 0 && lEdge && best >= 0 && !overUi && s_fDrag.load() < 0 && s_dragId < 0 && !s_dragging.load()) {
+    if (drag < 0 && lEdge && best >= 0 && !overUi && s_fDrag.load() < 0 && s_dragId < 0 && !s_dragging.load() && !BoneGizmoBusy()) {
         float p[3], yw, sc; if (MotorPjGet(best, p, &yw, &sc) && floorHit(p[1], s_hit0)) {
             const bool add = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0; if (!add && ((s_pjMulti >> best) & 1u) && PjMultiCount() > 1) MotorPjSelect(best); else PjPick(best, add);
             s_sel = 3; s_selObj = 0; s_pjGroup = -1; memcpy(s_p0, p, sizeof s_p0); s_y0 = p[1]; drag = best; s_pickDrag.store(best); UndoBegin(); }
@@ -2433,9 +2434,91 @@ static void JugPick() {
             dl->AddText(font, fs, tp, drag >= 0 ? IM_COL32(20, 20, 20, 255) : IM_COL32(236, 239, 244, 255), t); } } }
 }
 
+// (17/11 23:08, Agustin: "darme opciones a mi para editar las animaciones gani en tiempo real, mover huesos" / 23:10 "una vista mas
+// intuitiva ... cuando se carga una animacion deberia ser mas responsivo") EDITOR EN LA VISTA del jugador elegido: un punto por hueso con
+// nombre (con el nombre al pasar el mouse), clic = elegirlo (el panel EDITAR ANIMACION lo muestra); tres anillos de giro alrededor del
+// hueso elegido (rojo X adelante / atras, verde Y girar, azul Z al costado: los mismos tres campos del panel); manos y pies con un
+// cuadrado: arrastrarlo lleva la mano / el pie al mouse (IK de dos huesos en el hilo del juego) y el giro queda en la clave.
+static std::atomic<bool> s_bgBusy{false}; static std::atomic<int> s_bgDrag{-1};
+static bool BoneGizmoBusy() { return s_bgBusy.load(std::memory_order_relaxed) || s_bgDrag.load(std::memory_order_relaxed) >= 0; }
+static void BoneEditGizmo() {
+    s_bgBusy.store(false, std::memory_order_relaxed);
+    const int q = MotorPjSel(); static MotorEdInfo E;
+    if (q < 0 || !s_edPts || !MotorVistaLive() || g_menuOpen.load(std::memory_order_relaxed) || !MotorEdInfoGet(q, &E) || E.n < 2) {
+        if (s_bgDrag.load() >= 0 && q >= 0) MotorEdGrab(q, -1, nullptr); s_bgDrag.store(-1); return; }
+    const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    auto proj = [&](const float* w, ImVec2& o) { float u, v; if (!MotorGridProject(w, &u, &v)) return false; o = ImVec2(u * ds.x, v * ds.y); return fabsf(u) < 4.0f && fabsf(v) < 4.0f; };
+    float mx = -1.0e6f, my = -1.0e6f; bool front = false, overUi = false;
+    { HWND h = OverlayHwnd(); POINT p{}; RECT rc{};
+      if (h && GetForegroundWindow() == h && GetCursorPos(&p) && ScreenToClient(h, &p) && GetClientRect(h, &rc) && rc.right > rc.left && rc.bottom > rc.top) {
+          const float sx = (float)(rc.right - rc.left) / ds.x, sy = (float)(rc.bottom - rc.top) / ds.y; mx = (float)p.x / sx; my = (float)p.y / sy; front = true;
+          if (MotorUiOn()) { const int n = s_hrN.load(); for (int i = 0; i < n && i < 16; i++) if ((float)p.x >= s_hr[i][0].load() && (float)p.x <= s_hr[i][2].load() && (float)p.y >= s_hr[i][1].load() && (float)p.y <= s_hr[i][3].load()) overUi = true; }
+      } }
+    ImVec2 S[32]; bool ok[32];
+    for (int b = 0; b < E.n && b < 32; b++) ok[b] = proj(E.pos[b], S[b]);
+    // huesos: lineas al padre (solo los que tienen nombre o llevan a uno)
+    for (int b = 0; b < E.n && b < 32; b++) { const int pa = E.par[b]; if (pa < 0 || pa >= E.n || !ok[b] || !ok[pa] || (!E.lab[b] && !E.lab[pa])) continue;
+        dl->AddLine(S[pa], S[b], IM_COL32(255, 255, 255, 120), 2.0f * k); }
+    auto limbOf = [](int lab) { return lab == 10 ? 0 : lab == 14 ? 1 : lab == 17 ? 2 : lab == 20 ? 3 : -1; };      // mano izq / der, pie izq / der (como MotorEdGrab)
+    const int sel = (s_poseBone >= 0 && s_poseBone < E.n && E.lab[s_poseBone]) ? s_poseBone : -1;
+    // anillos de giro del elegido: plano perpendicular a cada eje del modelo, 0.16 m x tamano
+    const float R = 0.16f * std::clamp(E.sc, 0.2f, 5.0f);
+    const float det = E.ax[0][0] * (E.ax[1][1] * E.ax[2][2] - E.ax[1][2] * E.ax[2][1]) - E.ax[0][1] * (E.ax[1][0] * E.ax[2][2] - E.ax[1][2] * E.ax[2][0]) + E.ax[0][2] * (E.ax[1][0] * E.ax[2][1] - E.ax[1][1] * E.ax[2][0]);
+    const float hand = det < 0.0f ? -1.0f : 1.0f;      // ejes espejados: el giro va al reves
+    auto basis = [&](int a, float* u, float* v) { const float* A = E.ax[a]; const float* U = E.ax[(a + 1) % 3]; for (int i = 0; i < 3; i++) u[i] = U[i];
+        v[0] = A[1] * u[2] - A[2] * u[1]; v[1] = A[2] * u[0] - A[0] * u[2]; v[2] = A[0] * u[1] - A[1] * u[0]; };
+    ImVec2 ring[3][49]; bool rok[3] = { false, false, false };
+    if (sel >= 0 && ok[sel]) for (int a = 0; a < 3; a++) { float u[3], v[3]; basis(a, u, v); rok[a] = true;
+        for (int s = 0; s <= 48; s++) { const float t = (float)s * 6.2831853f / 48.0f, c = cosf(t) * R, sn = sinf(t) * R; const float w[3] = { E.pos[sel][0] + u[0] * c + v[0] * sn, E.pos[sel][1] + u[1] * c + v[1] * sn, E.pos[sel][2] + u[2] * c + v[2] * sn };
+            if (!proj(w, ring[a][s])) { rok[a] = false; break; } } }
+    // lo que esta bajo el mouse: punto (gana) o anillo
+    int drag = s_bgDrag.load(), hotB = -1, hotR = -1;
+    if (drag < 0 && front && !overUi && s_dragId < 0 && !s_dragging.load() && s_fDrag.load() < 0 && s_pickDrag.load() < 0) {
+        float bd = (9.0f * k) * (9.0f * k);
+        for (int b = 0; b < E.n && b < 32; b++) { if (!E.lab[b] || !ok[b]) continue; const float ex = mx - S[b].x, ey = my - S[b].y, d2 = ex * ex + ey * ey; if (d2 < bd) { bd = d2; hotB = b; } }
+        if (hotB < 0) { float rd = (6.0f * k) * (6.0f * k); for (int a = 0; a < 3; a++) if (rok[a]) for (int s = 0; s < 48; s++) { const float d2 = PtSegD2(mx, my, ring[a][s], ring[a][s + 1]); if (d2 < rd) { rd = d2; hotR = a; } } }
+    }
+    s_bgBusy.store(drag >= 0 || hotB >= 0 || hotR >= 0, std::memory_order_relaxed);
+    static bool s_was = false; const bool lNow = front && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, lEdge = lNow && !s_was; s_was = lNow;
+    static float s_n[3], s_c[3], s_ang0 = 0.0f, s_e0[3]; static int s_axis = -1, s_limb = -1;
+    auto rayPlane = [&](const float* c, const float* n, float* out) { float o[3], d[3]; if (!MotorGridRay(mx / ds.x, my / ds.y, o, d)) return false;
+        const float dn = d[0] * n[0] + d[1] * n[1] + d[2] * n[2]; if (fabsf(dn) < 1e-4f) return false; const float t = ((c[0] - o[0]) * n[0] + (c[1] - o[1]) * n[1] + (c[2] - o[2]) * n[2]) / dn;
+        if (t <= 0.0f || t > 2000.0f) return false; for (int i = 0; i < 3; i++) out[i] = o[i] + d[i] * t; return true; };
+    auto angOn = [&](int a, const float* h) { float u[3], v[3]; basis(a, u, v); const float r[3] = { h[0] - s_c[0], h[1] - s_c[1], h[2] - s_c[2] };
+        return atan2f(r[0] * v[0] + r[1] * v[1] + r[2] * v[2], r[0] * u[0] + r[1] * u[1] + r[2] * u[2]); };
+    if (lEdge && hotB >= 0) {
+        s_poseBone = hotB; const int lb = limbOf(E.lab[hotB]);
+        if (lb >= 0) { float o[3], d[3]; if (MotorGridRay(mx / ds.x, my / ds.y, o, d)) { memcpy(s_n, d, 12); memcpy(s_c, E.pos[hotB], 12); s_limb = lb; s_axis = -1; drag = hotB; s_bgDrag.store(drag); MotorEdGrab(q, lb, s_c); } }
+    } else if (lEdge && hotR >= 0 && sel >= 0) {
+        memcpy(s_c, E.pos[sel], 12); memcpy(s_n, E.ax[hotR], 12); float h[3];
+        if (rayPlane(s_c, s_n, h) && MotorEdGet(q, sel, s_e0)) { s_ang0 = angOn(hotR, h); s_axis = hotR; s_limb = -1; drag = sel; s_bgDrag.store(drag); }
+    }
+    if (drag >= 0 && !lNow) { if (s_limb >= 0) MotorEdGrab(q, -1, nullptr); drag = -1; s_bgDrag.store(-1); s_axis = -1; s_limb = -1; }
+    if (drag >= 0) { float h[3];
+        if (s_limb >= 0) { if (rayPlane(s_c, s_n, h)) MotorEdGrab(q, s_limb, h); }
+        else if (s_axis >= 0 && rayPlane(s_c, s_n, h)) {
+            float da = angOn(s_axis, h) - s_ang0; while (da > 3.14159265f) da -= 6.2831853f; while (da < -3.14159265f) da += 6.2831853f;
+            float e[3] = { s_e0[0], s_e0[1], s_e0[2] }; e[s_axis] += hand * da * 57.29578f; while (e[s_axis] > 180.0f) e[s_axis] -= 360.0f; while (e[s_axis] < -180.0f) e[s_axis] += 360.0f;
+            MotorEdSet(q, drag, e); } }
+    // dibujo: anillos, puntos (manos y pies cuadrados), nombre
+    static const ImU32 kAx[3] = { IM_COL32(236, 76, 70, 255), IM_COL32(110, 210, 90, 255), IM_COL32(70, 140, 245, 255) };
+    for (int a = 0; a < 3; a++) if (rok[a]) { const bool on = (drag >= 0 && s_axis == a) || hotR == a; dl->AddPolyline(ring[a], 49, on ? IM_COL32(255, 214, 80, 255) : kAx[a], 0, (on ? 3.2f : 2.0f) * k); }
+    for (int b = 0; b < E.n && b < 32; b++) { if (!E.lab[b] || !ok[b]) continue; const bool s = b == sel, hv = b == hotB || b == drag; const float r = (s ? 6.5f : 5.0f) * k;
+        const ImU32 col = hv ? IM_COL32(255, 214, 80, 255) : s ? IM_COL32(240, 138, 36, 255) : IM_COL32(245, 247, 250, 235);
+        if (limbOf(E.lab[b]) >= 0) { dl->AddRectFilled(ImVec2(S[b].x - r, S[b].y - r), ImVec2(S[b].x + r, S[b].y + r), col, 1.5f * k); dl->AddRect(ImVec2(S[b].x - r, S[b].y - r), ImVec2(S[b].x + r, S[b].y + r), IM_COL32(20, 20, 24, 220), 1.5f * k, 0, 1.2f * k); }
+        else { dl->AddCircleFilled(S[b], r, col, 16); dl->AddCircle(S[b], r, IM_COL32(20, 20, 24, 220), 16, 1.2f * k); } }
+    const int tb = hotB >= 0 ? hotB : drag >= 0 ? drag : -1;
+    if (tb >= 0 && ok[tb]) { const char* nm = TRS(MotorBoneLabel(E.lab[tb])); ImFont* font = MotorFont(0); const float fs = 13.0f * k; const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, nm);
+        const ImVec2 tp(S[tb].x + 12.0f * k, S[tb].y - ts.y - 8.0f * k);
+        dl->AddRectFilled(ImVec2(tp.x - 6.0f * k, tp.y - 3.0f * k), ImVec2(tp.x + ts.x + 6.0f * k, tp.y + ts.y + 3.0f * k), IM_COL32(18, 21, 27, 225), 4.0f * k);
+        dl->AddText(font, fs, tp, IM_COL32(236, 239, 244, 255), nm); }
+}
+
 bool MotorGizmoOver(float px, float py) {
     if (Now() - s_drawT.load(std::memory_order_relaxed) > 0.3) return false;
     if (s_dragging.load(std::memory_order_relaxed) || s_fDrag.load(std::memory_order_relaxed) >= 0 || s_pickDrag.load(std::memory_order_relaxed) >= 0) return true;
+    if (s_bgBusy.load(std::memory_order_relaxed) || s_bgDrag.load(std::memory_order_relaxed) >= 0) return true;      // (23:08) puntos / anillos del editor de huesos
     { const int n = s_phN.load(std::memory_order_relaxed); const float r = 14.0f;      // (06:36) un jugador propio bajo el mouse: el clic es para elegirlo
       for (int i = 0; i < n && i < kMotorPjMax; i++) if (PtSegD2(px, py, ImVec2(s_ph[i][0].load(), s_ph[i][1].load()), ImVec2(s_ph[i][2].load(), s_ph[i][3].load())) <= r * r) return true; }
     { const int n = s_fhN.load(std::memory_order_relaxed); for (int i = 0; i < n && i < 6; i++) { const float ex = px - s_fh[i][0].load(), ey = py - s_fh[i][1].load(), er = s_fh[i][2].load(); if (ex * ex + ey * ey <= er * er) return true; } }      // (17/11 b) iconos del piso del jugador
@@ -2497,7 +2580,7 @@ void MotorGizmoDraw() {
                     if (fabsf(d[0]) + fabsf(d[1]) + fabsf(d[2]) > 1e-4f || s_camFollow == 2) FreeCamSetPose(cp, cy, cpt); } }
             s_fq = q; memcpy(s_fp, p, sizeof s_fp);
         } else s_fq = -1; }
-    if (MotorPageActive()) { JugFloorGizmo(); JugPick(); } else { s_fhN.store(0); s_fDrag.store(-1); s_phN.store(0); s_pickDrag.store(-1); }
+    if (MotorPageActive()) { JugFloorGizmo(); JugPick(); BoneEditGizmo(); } else { s_fhN.store(0); s_fDrag.store(-1); s_phN.store(0); s_pickDrag.store(-1); s_bgBusy.store(false); s_bgDrag.store(-1); }
     if (MotorUiOn()) ToolbarDraw();
     if (g_cfg.motorGizmo == 0) { s_drawT.store(Now()); return; }
     ImDrawList* dl = MotorDL(); const ImVec2 ds = ImGui::GetIO().DisplaySize;

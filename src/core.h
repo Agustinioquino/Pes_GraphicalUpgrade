@@ -476,6 +476,7 @@ void SolLibreFrame(float (*p)[4], double t);
 bool SolLibreRealSun(float& azDeg, float& elDeg);   // (14/11) sol del partido para el menu (con g_cfgMutex tomado)   // UpdateTimeParams
 void SudorFrame(float (*p)[4], double t);      // (13/11) sudor 2 por jugador (sudor.cpp): filas 460..492; UpdateTimeParams
 float SudorMedio();                            // sudor medio 0..1 de los personajes (tela mojada)
+void SolEditorMotorScene(void* mainScene);   // (17/11 23:25) sol propio en la escena principal mientras el Motor la usa; nullptr = apagarlo
 void* SolEditorBody();   // cuerpo validado por vtable; nullptr si no hay sol en el editor o se destruyo
 bool SolEditorSet(const float dirHaciaSol[3], const float rgb[3], float kelvin, float lux, bool on);   // se aplica desde el hilo del motor
 // (09/11 c) hora del motor y atmosfera (TimeOfDaySettings del EditFace con TppAtmosphere del estadio):

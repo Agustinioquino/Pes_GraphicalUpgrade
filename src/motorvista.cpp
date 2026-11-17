@@ -85,6 +85,7 @@ static void Undo(const char* why) {
     if (s_main) { RW64(s_main + 0x458 + 8, nullptr, s_oldMask1); if (s_oldCam) SetCam(s_main, s_oldCam); }
     Log("motor (escena): el jugador vuelve a la escena del visor (%s): %d objetos, mascara tipo 1 de la vista principal = %016llx", why, n, (unsigned long long)s_oldMask1);
     s_moved = false; s_live.store(false); s_ctx = 0; s_main = 0; s_oldCam = 0;
+    SolEditorMotorScene(nullptr);      // (23:25) el sol propio de la escena principal se apaga
 }
 
 static void __fastcall hk_CtxFrame(uintptr_t ctx) {
@@ -125,7 +126,7 @@ static void __fastcall hk_CtxFrame(uintptr_t ctx) {
             uint64_t oc = 0; if (R64(main + 0x4a0, &oc) && (uintptr_t)oc != cam) SetCam(main, cam);
         }
         s_nObjs = n;
-        if (s_moved && ctx == s_ctx) VisMask(view, s_hideEd.load(std::memory_order_relaxed));
+        if (s_moved && ctx == s_ctx) { VisMask(view, s_hideEd.load(std::memory_order_relaxed)); SolEditorMotorScene((void*)scene); }      // (23:25) sol propio en la escena principal
     }
     o_ctxFrame(ctx);
 }
