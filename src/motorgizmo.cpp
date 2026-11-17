@@ -1592,6 +1592,10 @@ static void ToolbarDraw() {
                     { char cn[96]; if (TI.clip[i] < 0) snprintf(cn, sizeof cn, "%s", TRS("Parado (el de siempre)")); else ClipLabel(TI.clip[i], cn, sizeof cn);
                       dl->PushClipRect(t0, t1, true); text(t0.x + 8.0f * k, tyc, IM_COL32(230, 230, 232, 220), cn, fsS - 1.0f * k); dl->PopClipRect(); }
                     if (slider(2600 + i, t0, t1, v, 0.0f, len, IM_COL32(0, 0, 0, 0))) { MotorPjSeek(i, v); if (!TI.paused[i]) MotorPjAnimSet(i, TI.clip[i], TI.speed[i], true); MotorPjSelect(i); s_sel = 3; }
+                    { static MotorEdInfo KE; MotorEdInfoGet(i, &KE); for (int kk = 0; kk < KE.nKeys && kk < 96; kk++) {      // (23:08) las claves del editor: rombos en la fila
+                        const float x = t0.x + (t1.x - t0.x) * std::clamp(KE.keyT[kk] / len, 0.0f, 1.0f), r = 4.5f * k, yc = tyc;
+                        dl->AddQuadFilled(ImVec2(x, yc - r), ImVec2(x + r, yc), ImVec2(x, yc + r), ImVec2(x - r, yc), IM_COL32(255, 214, 80, 255));
+                        dl->AddQuad(ImVec2(x, yc - r), ImVec2(x + r, yc), ImVec2(x, yc + r), ImVec2(x - r, yc), IM_COL32(20, 20, 24, 230), 1.2f * k); } }
                     dl->AddRect(t0, t1, sel ? acc : cLine, 3.0f * k, 0, sel ? 1.5f * k : 1.0f);
                 }
                 if (nT > maxRows) { char t[48]; snprintf(t, sizeof t, TRS("%d-%d de %d  (rueda)"), s_tlScroll + 1, s_tlScroll + nVis, nT); text(a.x + 16.0f * k, b.y - 9.0f * k, dim, t, fsS - 1.0f * k);
@@ -2403,6 +2407,7 @@ static void JugPick() {
     int best = -1; float bestD = 1.0e30f; int n = 0;
     for (int i = 0; i < kMotorPjMax; i++) {
         if (PI.st[i] != 3 || PI.hidden[i]) continue; float p[3], yw, sc; if (!MotorPjGet(i, p, &yw, &sc)) continue;
+        { float wr[3]; if (MotorPjWorld(i, wr)) { const float dx = wr[0] - p[0], dz = wr[2] - p[2]; if (dx * dx + dz * dz < 2500.0f) { p[0] = wr[0]; p[2] = wr[2]; } } }      // (23:20) la franja sigue al cuerpo animado
         const float hd[3] = { p[0], p[1] + 1.78f * sc, p[2] }, sd[3] = { p[0] + 0.25f * sc, p[1], p[2] }; ImVec2 a, b, c;
         if (!proj(p, a) || !proj(hd, b) || !proj(sd, c)) continue;
         const float r = std::max(10.0f * k, sqrtf((c.x - a.x) * (c.x - a.x) + (c.y - a.y) * (c.y - a.y)));      // medio ancho del cuerpo en pantalla
