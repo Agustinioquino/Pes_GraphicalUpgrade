@@ -2235,36 +2235,60 @@ static void JugFloorGizmo() {
     // (17/11 d, Agustin 04:30: "asi esta bien los iconos con un poco menos de opacidad") todo al 70 %; el icono bajo el mouse o arrastrado, entero
     auto fade = [&](ImU32 c, int i) { if (act == i) return c; const ImU32 al = (c >> 24) & 0xffu; return (c & 0x00ffffffu) | ((ImU32)(al * 70 / 100) << 24); };
     const ImU32 sh = IM_COL32(0, 0, 0, 105), dark = IM_COL32(20, 24, 30, 180);
+    // (17/11 18:15, Agustin: "el jugador debe verse arriba de la rueda de rota") los iconos se dibujan encima de la imagen, sin profundidad:
+    // lo que queda en el piso DETRAS del jugador (mas lejos de la camara que sus pies) y cae sobre su figura en pantalla no se dibuja.
+    // Figura = dos capsulas en pantalla segun el tamano: piernas (0 a 0.9 m, radio 0.17 m) y torso / cabeza (0.9 a 1.8 m, radio 0.26 m).
+    float camO[3] = {}, camD[3] = { 0, 0, 1 }; const bool hasCam = MotorGridRay(c0.x / ds.x, c0.y / ds.y, camO, camD);
+    auto depth = [&](const float* w) { return (w[0] - camO[0]) * camD[0] + (w[1] - camO[1]) * camD[1] + (w[2] - camO[2]) * camD[2]; };
+    const float dP = depth(P), scJ = std::clamp(J.scale, 0.1f, 5.0f);
+    ImVec2 bA, bB, bC; const float wA[3] = { P[0], P[1] + 0.05f * scJ, P[2] }, wB[3] = { P[0], P[1] + 0.9f * scJ, P[2] }, wC[3] = { P[0], P[1] + 1.8f * scJ, P[2] };
+    const bool body = hasCam && proj(wA, bA) && proj(wB, bB) && proj(wC, bC);
+    const float rL = 0.17f * scJ * ppm, rT = 0.26f * scJ * ppm;
+    auto hidden = [&](const float* w, const ImVec2& q) { if (!body || depth(w) <= dP) return false;
+        return PtSegD2(q.x, q.y, bA, bB) <= rL * rL || PtSegD2(q.x, q.y, bB, bC) <= rT * rT; };
     {   // plato de vidrio: disco oscuro translucido, borde amarillo, marcas cada 15 grados (mas largas cada 90) y arco del giro hecho
-        ImVec2 ring[96]; bool all = true;
-        for (int i = 0; i < 96; i++) { const float t = (float)i / 96.0f * 6.2831853f; const float w[3] = { P[0] + Rd * sinf(t), P[1], P[2] + Rd * cosf(t) }; if (!proj(w, ring[i])) all = false; }
+        enum { NS = 96, NB = 5 }; static ImVec2 g[NB + 1][NS]; static float gw[NB + 1][NS][3]; bool all = true;
+        for (int b = 0; b <= NB; b++) for (int i = 0; i < NS; i++) { const float t = (float)i / NS * 6.2831853f, r = Rd * (float)b / NB;
+            float* w = gw[b][i]; w[0] = P[0] + r * sinf(t); w[1] = P[1]; w[2] = P[2] + r * cosf(t); if (!proj(w, g[b][i])) all = false; }
         if (all) {
-            dl->AddConvexPolyFilled(ring, 96, IM_COL32(20, 24, 32, 80));
-            dl->AddPolyline(ring, 96, IM_COL32(250, 196, 40, act == 4 ? 230 : 105), ImDrawFlags_Closed, 2.2f * k);
+            for (int b = 0; b < NB; b++) for (int i = 0; i < NS; i++) { const int j = (i + 1) % NS;      // disco en trozos: los de atras del jugador no
+                const float wm[3] = { (gw[b][i][0] + gw[b + 1][j][0]) * 0.5f, P[1], (gw[b][i][2] + gw[b + 1][j][2]) * 0.5f };
+                const ImVec2 qm((g[b][i].x + g[b + 1][j].x) * 0.5f, (g[b][i].y + g[b + 1][j].y) * 0.5f);
+                if (!hidden(wm, qm)) dl->AddQuadFilled(g[b][i], g[b][j], g[b + 1][j], g[b + 1][i], IM_COL32(20, 24, 32, 80)); }
+            for (int i = 0; i < NS; i++) { const int j = (i + 1) % NS; const float wm[3] = { (gw[NB][i][0] + gw[NB][j][0]) * 0.5f, P[1], (gw[NB][i][2] + gw[NB][j][2]) * 0.5f };
+                const ImVec2 qm((g[NB][i].x + g[NB][j].x) * 0.5f, (g[NB][i].y + g[NB][j].y) * 0.5f);
+                if (!hidden(wm, qm)) dl->AddLine(g[NB][i], g[NB][j], IM_COL32(250, 196, 40, act == 4 ? 230 : 105), 2.2f * k); }
             for (int t = 0; t < 24; t++) { const float an = (float)t / 24.0f * 6.2831853f, l = (t % 6 ? 0.06f : 0.13f) * Rd;
                 const float w0[3] = { P[0] + (Rd - l) * sinf(an), P[1], P[2] + (Rd - l) * cosf(an) }, w1[3] = { P[0] + Rd * sinf(an), P[1], P[2] + Rd * cosf(an) }; ImVec2 q0, q1;
-                if (proj(w0, q0) && proj(w1, q1)) dl->AddLine(q0, q1, IM_COL32(255, 255, 255, t % 6 ? 80 : 170), 1.3f * k); }
-            if (fabsf(a) > 0.002f) { ImVec2 arc[64]; int n = 0; const int m = std::clamp((int)(fabsf(a) / 6.2831853f * 96.0f) + 2, 2, 64);
-                for (int i = 0; i < m; i++) { const float t = a * (float)i / (float)(m - 1); const float w[3] = { P[0] + Rd * sinf(t), P[1], P[2] + Rd * cosf(t) }; if (proj(w, arc[n])) n++; }
-                if (n > 1) dl->AddPolyline(arc, n, fade(kC[4], 4), 0, 4.5f * k); }
+                if (proj(w0, q0) && proj(w1, q1) && !hidden(w1, q1)) dl->AddLine(q0, q1, IM_COL32(255, 255, 255, t % 6 ? 80 : 170), 1.3f * k); }
+            if (fabsf(a) > 0.002f) { const int m = std::clamp((int)(fabsf(a) / 6.2831853f * 96.0f) + 2, 2, 64); ImVec2 qp; bool hp = false; float wp[3] = {};
+                for (int i = 0; i < m; i++) { const float t = a * (float)i / (float)(m - 1); const float w[3] = { P[0] + Rd * sinf(t), P[1], P[2] + Rd * cosf(t) }; ImVec2 q; const bool okp = proj(w, q);
+                    if (okp && hp) { const float wm[3] = { (w[0] + wp[0]) * 0.5f, P[1], (w[2] + wp[2]) * 0.5f }; if (!hidden(wm, ImVec2((q.x + qp.x) * 0.5f, (q.y + qp.y) * 0.5f))) dl->AddLine(qp, q, fade(kC[4], 4), 4.5f * k); }
+                    qp = q; hp = okp; memcpy(wp, w, sizeof wp); } }
         }
     }
     {   // rombo para mover libre sobre el piso
         const float r0 = L * 0.30f, r1 = L * 0.46f; const float wq[4][3] = { { P[0] + r0, P[1], P[2] + r0 }, { P[0] + r1, P[1], P[2] + r0 }, { P[0] + r1, P[1], P[2] + r1 }, { P[0] + r0, P[1], P[2] + r1 } };
         ImVec2 q[4]; bool okq = true; for (int i = 0; i < 4; i++) okq &= proj(wq[i], q[i]);
-        if (okq) { dl->AddConvexPolyFilled(q, 4, IM_COL32(255, 255, 255, act == 0 ? 120 : 38)); dl->AddPolyline(q, 4, IM_COL32(255, 255, 255, act == 0 ? 255 : 140), ImDrawFlags_Closed, (act == 0 ? 2.0f : 1.3f) * k); }
+        const float wc[3] = { P[0] + (r0 + r1) * 0.5f, P[1], P[2] + (r0 + r1) * 0.5f };
+        if (okq && !hidden(wc, ImVec2((q[0].x + q[2].x) * 0.5f, (q[0].y + q[2].y) * 0.5f))) { dl->AddConvexPolyFilled(q, 4, IM_COL32(255, 255, 255, act == 0 ? 120 : 38)); dl->AddPolyline(q, 4, IM_COL32(255, 255, 255, act == 0 ? 255 : 140), ImDrawFlags_Closed, (act == 0 ? 2.0f : 1.3f) * k); }
     }
     auto arrow = [&](int i) { if (!ok[i]) return; const ImU32 c = fade(kC[i], i); const float w = (act == i ? 4.2f : 3.2f) * k;
         float dx = S[i].x - c0.x, dy = S[i].y - c0.y; const float l = sqrtf(dx * dx + dy * dy); if (l < 1.0f) return; dx /= l; dy /= l; const float hs = 16.0f * k;
         const ImVec2 tip(S[i].x + dx * hs, S[i].y + dy * hs), b1(S[i].x - dy * hs * 0.45f, S[i].y + dx * hs * 0.45f), b2(S[i].x + dy * hs * 0.45f, S[i].y - dx * hs * 0.45f);
-        dl->AddLine(c0, S[i], sh, w + 2.0f * k); dl->AddTriangleFilled(ImVec2(tip.x + dx, tip.y + dy), ImVec2(b1.x - dy, b1.y + dx), ImVec2(b2.x + dy, b2.y - dx), sh);
-        dl->AddLine(c0, S[i], c, w); dl->AddTriangleFilled(tip, b1, b2, c);
+        if (i == 3) { dl->AddLine(c0, S[i], sh, w + 2.0f * k); dl->AddLine(c0, S[i], c, w); }      // la de altura se ve siempre (es la manija)
+        else for (int sgi = 0; sgi < 10; sgi++) { const float f0 = sgi / 10.0f, f1 = (sgi + 1) / 10.0f, fm = (f0 + f1) * 0.5f;      // las del piso: en trozos, como el plato
+            const float wm[3] = { P[0] + (W[i][0] - P[0]) * fm, P[1], P[2] + (W[i][2] - P[2]) * fm };
+            const ImVec2 q0(c0.x + (S[i].x - c0.x) * f0, c0.y + (S[i].y - c0.y) * f0), q1(c0.x + (S[i].x - c0.x) * f1, c0.y + (S[i].y - c0.y) * f1);
+            if (hidden(wm, ImVec2((q0.x + q1.x) * 0.5f, (q0.y + q1.y) * 0.5f))) continue; dl->AddLine(q0, q1, sh, w + 2.0f * k); dl->AddLine(q0, q1, c, w); }
+        if (i != 3 && hidden(W[i], S[i]) && act != i) return;
+        dl->AddTriangleFilled(ImVec2(tip.x + dx, tip.y + dy), ImVec2(b1.x - dy, b1.y + dx), ImVec2(b2.x + dy, b2.y - dx), sh); dl->AddTriangleFilled(tip, b1, b2, c);
         if (act == i) dl->AddTriangle(tip, b1, b2, IM_COL32(255, 255, 255, 230), 1.6f * k); };
     arrow(1); arrow(2); arrow(3);
-    if (ok[5]) { const float q = 7.0f * k; dl->AddRectFilled(ImVec2(S[5].x - q - 1.5f * k, S[5].y - q - 1.5f * k), ImVec2(S[5].x + q + 1.5f * k, S[5].y + q + 1.5f * k), dark, 3.0f * k);
+    if (ok[5] && (act == 5 || !hidden(W[5], S[5]))) { const float q = 7.0f * k; dl->AddRectFilled(ImVec2(S[5].x - q - 1.5f * k, S[5].y - q - 1.5f * k), ImVec2(S[5].x + q + 1.5f * k, S[5].y + q + 1.5f * k), dark, 3.0f * k);
         dl->AddRectFilled(ImVec2(S[5].x - q, S[5].y - q), ImVec2(S[5].x + q, S[5].y + q), fade(kC[5], 5), 2.0f * k);
         if (act == 5) dl->AddRect(ImVec2(S[5].x - q - 4.0f * k, S[5].y - q - 4.0f * k), ImVec2(S[5].x + q + 4.0f * k, S[5].y + q + 4.0f * k), IM_COL32(255, 255, 255, 230), 3.0f * k, 0, 1.6f * k); }
-    if (ok[4]) { dl->AddCircleFilled(S[4], 10.5f * k, sh, 24); dl->AddCircleFilled(S[4], 9.0f * k, fade(kC[4], 4), 24); dl->AddCircle(S[4], 9.0f * k, fade(IM_COL32(255, 255, 255, 255), 4), 24, 2.0f * k);
+    if (ok[4] && (act == 4 || !hidden(W[4], S[4]))) { dl->AddCircleFilled(S[4], 10.5f * k, sh, 24); dl->AddCircleFilled(S[4], 9.0f * k, fade(kC[4], 4), 24); dl->AddCircle(S[4], 9.0f * k, fade(IM_COL32(255, 255, 255, 255), 4), 24, 2.0f * k);
         if (act == 4) dl->AddCircle(S[4], 14.0f * k, IM_COL32(255, 255, 255, 220), 24, 1.6f * k); }
     dl->AddCircleFilled(c0, 8.0f * k, dark, 20); dl->AddCircleFilled(c0, 6.8f * k, fade(kC[0], 0), 20);
     if (act >= 0) {

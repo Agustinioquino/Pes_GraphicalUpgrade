@@ -347,6 +347,13 @@ static ID3D11ShaderResourceView* GridSRV(ID3D11DeviceContext* ctx) {
                     static int nl = 0; if (nl++ < 3) Log("motor (grilla): con la camara del visor: campo de vision %.4f, aspecto %.3f (pantalla %u x %u)", wf, s_asp, g_bbW, g_bbH);
                 } } } }
     if (s_ovl) { Cam cs = c; float as = s_asp;     // jugadores en la escena principal: la camara con la que el juego dibujo esta escena
+        // (17/11 18:17, Agustin: "los huesos siguen desplazados"; orto sin efecto en los jugadores) la camara de SceneCB contra la que se
+        // le mando al visor: si el campo o el lugar no coinciden, el SceneCB leido es de otra pasada (el visor) o la vista principal no
+        // toma el campo de vision de la camara libre. Cada 4 s, 30 veces.
+        { static double t = 0.0; static int nl = 0; Cam dc = c; float da = s_asp; float wp[3], wt[3], wu[3], wf = 0.0f, wa = 0.0f;
+          if (Now() - t > 4.0 && nl < 30 && CamFromScene(dc, da)) { t = Now(); nl++; const bool wok = FreeCamWrittenCam(wp, wt, wu, &wf, &wa);
+            Log("motor (grilla): SceneCB lugar (%.2f, %.2f, %.2f) campo %.4f aspecto %.3f | mandada al visor %s lugar (%.2f, %.2f, %.2f) campo %.4f aspecto %.3f | orto %d",
+                dc.pos[0], dc.pos[1], dc.pos[2], 2.0f * atanf(dc.th), da, wok ? "si" : "no", wp[0], wp[1], wp[2], wf, wa, FreeCamOrtho() ? 1 : 0); } }
         if (CamFromScene(cs, as)) { c = cs; s_asp = as; yaw = atan2f(c.f[0], c.f[2]); pitch = asinf(std::clamp(c.f[1], -1.0f, 1.0f));
             static int nl = 0; if (nl++ < 3) Log("motor (grilla): camara sacada de la escena del juego: (%.2f, %.2f, %.2f) campo %.4f aspecto %.3f", c.pos[0], c.pos[1], c.pos[2], 2.0f * atanf(c.th), s_asp); }
         else { static int nl = 0; if (nl++ < 3) Log("motor (grilla): no pude sacar la camara de SceneCB: queda la del visor"); } }

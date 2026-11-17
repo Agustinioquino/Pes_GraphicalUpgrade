@@ -41,6 +41,11 @@ static int s_nObjs = 0;
 // a la escena principal: se quedan en la escena propia del visor, que ya no se ve. La vista principal se prende y toma la camara igual,
 // y los jugadores propios (que viven en la escena principal) se ven solos. INFERIDO: que la imagen del visor no aparezca en el menu.
 static std::atomic<bool> s_hideEd{true};
+// (17/11 18:16, Agustin: "el jugador de editar el que se renderiza primero sigue viendose") desde 9e6228d el jugador del Editar se carga
+// siempre (los propios toman la ropa de el) y aunque quede en la escena del visor, el visor lo dibuja en su imagen. Con "Oculto" la vista
+// del visor (ctx+0x60) no dibuja ningun plugin tipo 1 (mascara +0x458+8 = 0, lo mismo que hace el juego con la vista principal en el
+// Editar); al mostrarlo o al salir vuelve la mascara que tenia.
+static uintptr_t s_visView = 0; static uint64_t s_visOld = 0; static bool s_visMasked = false;
 
 static inline bool PtrOk(uintptr_t a) { return a >= 0x10000ull && a < 0x7ffffffff000ull && (a & 7) == 0; }
 
@@ -65,11 +70,17 @@ static bool SetCam(uintptr_t view, uintptr_t cam) { __try { ((PFN_SetCam)kViewSe
 static bool RW64(uintptr_t a, uint64_t* old, uint64_t v) { __try { if (old) *old = *(uint64_t*)a; *(uint64_t*)a = v; return true; } __except (1) { return false; } }
 static bool R64(uintptr_t a, uint64_t* v) { __try { *v = *(uint64_t*)a; return true; } __except (1) { return false; } }
 
+static void VisMask(uintptr_t view, bool hide) {
+    if (hide && !s_visMasked && view) { if (RW64(view + 0x458 + 8, &s_visOld, 0ull)) { s_visMasked = true; s_visView = view; Log("motor (escena): vista del visor %p sin modelos (jugador del Editar oculto), mascara tipo 1 %016llx -> 0", (void*)view, (unsigned long long)s_visOld); } }
+    else if (hide && s_visMasked) { uint64_t m = 0; if (R64(s_visView + 0x458 + 8, &m) && m != 0) RW64(s_visView + 0x458 + 8, nullptr, 0ull); }
+    else if (!hide && s_visMasked) { RW64(s_visView + 0x458 + 8, nullptr, s_visOld); s_visMasked = false; Log("motor (escena): vista del visor %p con modelos otra vez (%016llx)", (void*)s_visView, (unsigned long long)s_visOld); s_visView = 0; }
+}
 // vuelve todo como estaba (objetos a la escena del visor, mascara y camara de MainViewport)
 static void Undo(const char* why) {
     if (!s_moved) return;
     uintptr_t own = 0, cam = 0, view = 0, main = 0; unsigned w = 0, h = 0; bool closed = false; int n = 0;
     if (s_ctx && ReadCtx(s_ctx, &own, &cam, &view, &main, &w, &h, &closed)) MoveObjs(s_ctx, own, &n);
+    VisMask(0, false);
     if (s_main) { RW64(s_main + 0x458 + 8, nullptr, s_oldMask1); if (s_oldCam) SetCam(s_main, s_oldCam); }
     Log("motor (escena): el jugador vuelve a la escena del visor (%s): %d objetos, mascara tipo 1 de la vista principal = %016llx", why, n, (unsigned long long)s_oldMask1);
     s_moved = false; s_live.store(false); s_ctx = 0; s_main = 0; s_oldCam = 0;
@@ -113,6 +124,7 @@ static void __fastcall hk_CtxFrame(uintptr_t ctx) {
             uint64_t oc = 0; if (R64(main + 0x4a0, &oc) && (uintptr_t)oc != cam) SetCam(main, cam);
         }
         s_nObjs = n;
+        if (s_moved && ctx == s_ctx) VisMask(view, s_hideEd.load(std::memory_order_relaxed));
     }
     o_ctxFrame(ctx);
 }
