@@ -117,6 +117,7 @@ static MotorLight s_lights[64]; static int s_nLights = 0; static MotorSceneInfo 
 static int s_sel = 0, s_hotPrev = -1;                // fila marcada del arbol (0 render, 1 camara, 2 grilla, 3 jugador)
 // (15/11 o, Agustin 05:13 / 05:15: "los botones para abrir o cerrar la seccion de luces no funciona la flecha", "la flecha de escena
 // tampoco") secciones del arbol que se pliegan con su flecha (y la de luces tambien con un clic en su fila); la flecha gira animada
+static int s_jKind = 0, s_jN[2] = { 44, 1 }, s_jSent = -1; static bool s_jMirror = false;      // (17/11) Inspector del jugador: animacion elegida (pose 1..45, festejo 1..162); s_jSent < 0 = todavia no se pidio ninguna
 static bool s_foldStudio = false, s_foldLights = false; static float s_foldA[2] = { 1.0f, 1.0f };
 // (15/11 o, Agustin 05:12: "opciones para mover las pestanas de la izquierda y derecha asi como opciones para cerrarlas y abrirlas, para
 // mover o reescalar el tamano, algo asi como funciona blender") paneles: el borde de adentro se arrastra (ancho), la X del titulo lo
@@ -858,6 +859,16 @@ static void ToolbarDraw() {
           for (int r = 1; r <= 2; r++) { if (!label(r == 1 ? "ALAMBRE" : "PANTALLA PARTIDA")) continue; const int m = std::min(4, MotorViewCount(r)); const char* nms[4] = { "", "", "", "" }; for (int i = 0; i < m; i++) nms[i] = ViewTr(r, i);
               if (r == 1 && m == 3) nms[2] = "Con teselaci\xC3\xB3n";
               seg(100 + r * 16, ImVec2(fx0, y), ImVec2(fx1, y + rowH), m, MotorViewGet(r), nms); y += rowH + 12.0f * k; }
+          // (17/11, Agustin 03:11: "vistas debugs para probar los torsos, partes de cuerpos") las vistas de diagnostico del cuerpo que ya
+          // tiene el mod (fila 519, pes_debug_cuerpo.hlsli) y el esqueleto (fila 426), a mano desde el Motor
+          if (label("CUERPO (PRUEBAS)")) {
+              const int tz = (int)(g_cfg.live[519][2] + 0.5f);
+              text(lx, y + rowH * 0.5f, dim, "Torso a trav\xC3\xA9s de la ropa", fsS); y += rowH - 4.0f * k;
+              { const char* const nms[2] = { "No", "S\xC3\xAD" }; seg(1430, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, g_cfg.live[519][0] > 0.5f ? 1 : 0, nms); y += rowH + 6.0f * k; }
+              text(lx, y + rowH * 0.5f, dim, "Piezas de colores y costuras", fsS); y += rowH - 4.0f * k;
+              { const char* const nms[3] = { "No", "Piezas", "Solo textura" }; seg(1434, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 3, std::clamp(tz, 0, 2), nms); y += rowH + 6.0f * k; }
+              text(lx, y + rowH * 0.5f, dim, "Esqueleto (huesos)", fsS); y += rowH - 4.0f * k;
+              { const char* const nms[2] = { "No", "S\xC3\xAD" }; seg(1440, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, g_cfg.live[426][0] > 0.5f ? 1 : 0, nms); y += rowH + 12.0f * k; } }
           if (label("ESCENA GR\xC3\x81" "FICA DEL MOTOR")) { char b1[32];      // lo que el motor tiene cargado ahora (leido de sus listas)
               snprintf(b1, sizeof b1, "%d", s_info.scenes); value("Escenas", b1); snprintf(b1, sizeof b1, "%d", s_info.objects); value("Objetos", b1);
               snprintf(b1, sizeof b1, "%d", s_info.models); value("Modelos", b1); snprintf(b1, sizeof b1, "%d", s_info.lights); value("Luces", b1); }
@@ -890,6 +901,39 @@ static void ToolbarDraw() {
               if (ch) { g_cfg.motorGridAlpha = (int)(v + 0.5f); s_gridDirty = true; } y += rowH + 12.0f * k; }
           if (label("EJES (X ROJO, Z AZUL)")) { const char* const nms[2] = { "Se ven", "Ocultos" }; seg(792, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, g_cfg.motorGridAxes ? 0 : 1, nms); y += rowH + 12.0f * k; }
           button(799, "Grilla como vino");
+      } else if (s_sel == 3) {
+          // (17/11, Agustin 03:00 / 03:06: "que pueda mover el jugador con opciones", "opciones de mover rotar", "escalar", "la pestana
+          // de animaciones") motorjug.cpp: lugar, giro y tamano del jugador y sus animaciones (poses y festejos del juego)
+          MotorJugState J; MotorJugGet(&J);
+          if (!J.hooked) text(lx, y + 10.0f * k, dim, "Mover al jugador no est\xC3\xA1 disponible en este juego.", fsS + 1.0f * k);
+          else if (!player) text(lx, y + 10.0f * k, dim, "El jugador est\xC3\xA1 oculto.", fsS + 1.0f * k);
+          else {
+              float v[5] = { J.pos[0], J.pos[1], J.pos[2], J.yawDeg, J.scale * 100.0f }; bool ch = false;
+              auto fld = [&](int id, const char* nmv, float& val, float step, float lo, float hi, const char* fmt, const char* unit) { text(lx, y + rowH * 0.5f, dim, nmv, fsS + 1.0f * k);
+                  const bool c2 = numField(id, ImVec2(x0 + rightW * 0.42f, y + 3.0f * k), ImVec2(fx1, y + rowH - 3.0f * k), val, step, lo, hi, fmt, unit); y += rowH; return c2; };
+              if (label("POSICI\xC3\x93N")) { ch |= fld(2100, "X (costado)", v[0], 0.01f, -100.0f, 100.0f, "%.2f", " m"); ch |= fld(2101, "Y (altura)", v[1], 0.01f, -20.0f, 50.0f, "%.2f", " m"); ch |= fld(2102, "Z (fondo)", v[2], 0.01f, -100.0f, 100.0f, "%.2f", " m"); y += 6.0f * k; }
+              if (label("GIRO")) { ch |= fld(2103, "Sobre el piso", v[3], 0.5f, -720.0f, 720.0f, "%.1f", "\xC2\xB0"); y += 6.0f * k; }
+              if (label("TAMA\xC3\x91O")) { ch |= fld(2104, "Escala", v[4], 0.5f, 10.0f, 500.0f, "%.0f", " %"); y += 6.0f * k; }
+              if (ch) MotorJugSet(v, v[3], v[4] / 100.0f);
+              if (label("CUANDO SE ANIMA")) { const char* const nms[2] = { "Fijo en su lugar", "Lo lleva el clip" }; seg(1404, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, J.fix ? 0 : 1, nms); y += rowH + 8.0f * k; }
+              button(1400, "Volver al centro");
+              if (label("ANIMACI\xC3\x93N")) {
+                  if (J.animSt < 0) { text(lx, y + rowH * 0.5f, dim, "No disponible en este juego.", fsS + 1.0f * k); y += rowH; }
+                  else {
+                      { const char* const nms[2] = { "Poses", "Festejos" }; seg(1410, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, s_jKind, nms); y += rowH + 6.0f * k; }
+                      const int nMax = s_jKind == 1 ? 162 : 45; float fn = (float)std::clamp(s_jN[s_jKind], 1, nMax);
+                      if (fld(2105, s_jKind == 1 ? "Festejo" : "Pose", fn, 0.08f, 1.0f, (float)nMax, "%.0f", s_jKind == 1 ? " de 162" : " de 45")) s_jN[s_jKind] = std::clamp((int)(fn + 0.5f), 1, nMax);
+                      { const char* const nms[2] = { "Anterior", "Siguiente" }; seg(1414, ImVec2(fx0, y + 4.0f * k), ImVec2(fx1, y + rowH + 4.0f * k), 2, -1, nms); y += rowH + 10.0f * k; }
+                      { const char* const nms[2] = { "En movimiento", "Quieto" }; seg(1418, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, J.pause ? 1 : 0, nms); y += rowH + 6.0f * k; }
+                      { const char* const nms[2] = { "Normal", "Espejo" }; seg(1422, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, s_jMirror ? 1 : 0, nms); y += rowH + 6.0f * k; }
+                      // se pide al soltar (arrastrando el numero no se carga un clip por cada paso)
+                      const int want = (s_jKind << 12) | (s_jN[s_jKind] << 1) | (s_jMirror ? 1 : 0);
+                      if (s_jSent >= 0 && want != s_jSent && s_dragId != 2105 && s_editId != 2105) { s_jSent = want; MotorJugAnim(s_jKind, s_jKind == 1 ? 0x2b + s_jN[1] : s_jN[0] - 1, s_jMirror); }
+                      const char* const stt[4] = { "Eleg\xC3\xAD una pose o un festejo.", "Pidiendo la animaci\xC3\xB3n al juego...", "Animaci\xC3\xB3n puesta.", "El juego no acept\xC3\xB3 esa animaci\xC3\xB3n." };
+                      text(lx, y + 9.0f * k, J.animSt == 3 ? IM_COL32(255, 150, 120, 255) : dim, stt[std::clamp(J.animSt, 0, 3)], fsS);
+                  }
+              }
+          }
       } else if (s_sel >= 4) {
           if (s_sel - 4 < s_nLights) { MotorLight& L = s_lights[s_sel - 4]; char b1[96];
               float i0 = 1.0f; for (int q = 0; q < s_origN; q++) if (s_orig[q].obj == L.obj) i0 = s_orig[q].i0;
@@ -1257,6 +1301,15 @@ static void ToolbarDraw() {
     auto act0 = [&](int id) {
         if (id == 0) { if (s_exitT < 0.0) { s_exitT = Now(); s_exitSent = false; MotorGlitchSound(1); } }      // salir: primero el fundido (abajo)
         else if (id == 1 || id == 20) g_cfg.motorGrid = grid ? 0 : 1;
+        else if (id == 1400) { MotorJugReset(); Note("Jugador al centro"); }
+        else if (id == 1430 || id == 1431) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[519][0] = (float)(id - 1430); if (id == 1431 && g_cfg.live[519][1] < 0.5f) g_cfg.live[519][1] = 2.0f; }
+        else if (id >= 1434 && id <= 1436) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[519][2] = (float)(id - 1434); }
+        else if (id == 1440 || id == 1441) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[426][0] = (float)(id - 1440); }
+        else if (id == 1404 || id == 1405) MotorJugSetFix(id == 1404);
+        else if (id == 1410 || id == 1411) { s_jKind = id - 1410; if (s_jSent < 0) s_jSent = -2; }
+        else if (id == 1414 || id == 1415) { const int nMax = s_jKind == 1 ? 162 : 45; int& n = s_jN[s_jKind]; n += id == 1414 ? -1 : 1; if (n < 1) n = nMax; if (n > nMax) n = 1; if (s_jSent < 0) s_jSent = -2; }
+        else if (id == 1418 || id == 1419) MotorJugPause(id == 1419);
+        else if (id == 1422 || id == 1423) { s_jMirror = id == 1423; if (s_jSent < 0) s_jSent = -2; }
         else if (id == 2 || id == 21 || id == 220) MotorUiTogglePlayer();
         else if (id == 3) SetCam(!camFree);
         else if (id >= 10 && id < 14) { s_sel = id - 10; s_selObj = 0; }
@@ -1471,6 +1524,8 @@ static void SetCam(bool on) {
 }
 
 void MotorGizmoDraw() {
+    // (17/11) con el jugador en la escena principal la grilla del piso se dibuja encima de la vista principal (motorgrid.cpp), debajo de los paneles
+    if (MotorPageActive() && MotorVistaLive() && g_dev.imm) { if (ID3D11ShaderResourceView* g = MotorGridOverlay(g_dev.imm)) ImGui::GetBackgroundDrawList()->AddImage((ImTextureID)(uintptr_t)g, ImVec2(0, 0), ImGui::GetIO().DisplaySize); }
     if (MotorUiOn()) ToolbarDraw();
     if (g_cfg.motorGizmo == 0) { s_drawT.store(Now()); return; }
     ImDrawList* dl = MotorDL(); const ImVec2 ds = ImGui::GetIO().DisplaySize;

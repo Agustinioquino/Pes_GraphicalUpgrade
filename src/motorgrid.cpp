@@ -42,14 +42,26 @@ static void MotorFeetPoll(void*) {}
 void MotorGridPresent() { s_fresh.store(false, std::memory_order_relaxed);
 #ifndef MOTORGRID_TEST
     MotorVistaPresent();
+    MotorJugPresent();
     MotorDepthDiagTick();
 #endif
 }
 
+// (17/11) con el jugador en la escena principal (motorvista.cpp) no hay fondo del menu donde poner la grilla: se pinta la misma grilla
+// sobre fondo TRANSPARENTE y el editor la dibuja encima de la vista principal (MotorGridOverlay). s_ovl = ese modo.
+static bool s_ovl = false;
 static inline void Plot(int x, int y, uint32_t rgb, float a) {
     if ((unsigned)x >= (unsigned)kW || (unsigned)y >= (unsigned)kH || a <= 0.0f) return;
     uint32_t& d = s_px[(size_t)y * kW + x]; if (a > 1.0f) a = 1.0f;
     const int ia = (int)(a * 256.0f);
+    if (s_ovl) {      // transparente: color sin mezclar con el fondo, la opacidad se acumula
+        const int oa = (int)(d >> 24); const int na = std::min(255, oa + (((255 - oa) * ia) >> 8));
+        if (oa == 0) { d = ((uint32_t)na << 24) | (rgb & 0xffffffu); return; }
+        const int w = na > 0 ? std::min(256, (ia * 255) / std::max(1, na)) : 256;
+        const int r0 = (int)(d & 255), g0 = (int)((d >> 8) & 255), b0 = (int)((d >> 16) & 255);
+        const int r1 = r0 + ((((int)(rgb & 255)) - r0) * w >> 8), g1 = g0 + ((((int)((rgb >> 8) & 255)) - g0) * w >> 8), b1 = b0 + ((((int)((rgb >> 16) & 255)) - b0) * w >> 8);
+        d = ((uint32_t)na << 24) | (uint32_t)r1 | ((uint32_t)g1 << 8) | ((uint32_t)b1 << 16); return;
+    }
     const int r = (int)(d & 255), g = (int)((d >> 8) & 255), b = (int)((d >> 16) & 255);
     const int nr = r + ((((int)(rgb & 255)) - r) * ia >> 8), ng = g + ((((int)((rgb >> 8) & 255)) - g) * ia >> 8), nb = b + ((((int)((rgb >> 16) & 255)) - b) * ia >> 8);
     d = 0xff000000u | (uint32_t)nr | ((uint32_t)ng << 8) | ((uint32_t)nb << 16);
@@ -104,7 +116,7 @@ static void GridPaint(const Cam& c) {
     // --- fondo: gris oscuro con un degrade suave hacia arriba ---
     for (int y = 0; y < kH; y++) {
         const float t = (float)y / (float)(kH - 1); const int v = (int)(30.0f + 14.0f * (1.0f - t));
-        const uint32_t col = 0xff000000u | (uint32_t)v | ((uint32_t)v << 8) | ((uint32_t)(v + 3) << 16);
+        const uint32_t col = s_ovl ? 0u : (0xff000000u | (uint32_t)v | ((uint32_t)v << 8) | ((uint32_t)(v + 3) << 16));
         uint32_t* row = &s_px[(size_t)y * kW]; for (int x = 0; x < kW; x++) row[x] = col;
     }
     // --- grilla (15/11 o, Agustin 05:14: "al desactivar la grilla del piso todo se pone negro, la grilla a cierta distancia pierde la
@@ -190,7 +202,7 @@ static void GridPaint(const Cam& c) {
     // visor del Editar en su propia imagen y se pega encima de este fondo, sin tocar el piso. Una mancha oscura suave en el piso
     // (y = 0) alrededor de los pies (el jugador del visor esta en el origen) lo apoya. Por pixel: rayo de la camara contra el piso.
     {   const float R = 0.75f; const float asp = s_asp, hx = 0.5f * kW, hy = 0.5f * kH;
-        if (c.pos[1] > 0.05f) {
+        if (c.pos[1] > 0.05f && !s_ovl) {
             float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f; bool any = false;
             for (int q = 0; q < 16; q++) { const float an = (float)q * 0.3926991f; const float w[3] = { s_shX + cosf(an) * R, 0.0f, s_shZ + sinf(an) * R };
                 const float d[3] = { w[0] - c.pos[0], w[1] - c.pos[1], w[2] - c.pos[2] };
@@ -211,7 +223,17 @@ static void GridPaint(const Cam& c) {
 
 #ifndef MOTORGRID_TEST
 // fondo del estudio del Motor para este cuadro (nullptr = no se pudo: va el negro)
-ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx) {
+static ID3D11ShaderResourceView* GridSRV(ID3D11DeviceContext* ctx);
+ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx) { s_ovl = false; return GridSRV(ctx); }
+// (17/11) la grilla sola, transparente, para dibujarla encima de la vista principal (jugador en la escena principal). Sin grilla
+// (motor_grilla = 0) no hay nada que dibujar.
+ID3D11ShaderResourceView* MotorGridOverlay(ID3D11DeviceContext* ctx) {
+    if (g_cfg.motorGrid == 0) return nullptr;
+    s_ovl = true; ID3D11ShaderResourceView* v = GridSRV(ctx);
+    static int nl = 0; if (v && nl++ == 0) Log("motor (grilla): jugador en la escena principal: la grilla se dibuja encima de la vista principal");
+    return v;
+}
+static ID3D11ShaderResourceView* GridSRV(ID3D11DeviceContext* ctx) {
     if (!g_dev.dev || !ctx) return nullptr;
     if (!s_tried) {
         s_tried = true;
@@ -249,8 +271,8 @@ ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx) {
                     yaw = atan2f(f[0], f[2]); pitch = asinf(std::clamp(f[1], -1.0f, 1.0f));
                     static int nl = 0; if (nl++ < 3) Log("motor (grilla): con la camara del visor: campo de vision %.4f, aspecto %.3f (pantalla %u x %u)", wf, s_asp, g_bbW, g_bbH);
                 } } } }
-    MotorFeetPoll(ctx);
-    if (s_feetU >= 0.0f) {   // pies en la imagen -> rayo de la camara -> piso (y = 0)
+    if (!s_ovl) MotorFeetPoll(ctx);
+    if (!s_ovl && s_feetU >= 0.0f) {   // pies en la imagen -> rayo de la camara -> piso (y = 0)
         const float a = (s_feetU * 2.0f - 1.0f) * c.th * s_asp, b = (1.0f - s_feetV * 2.0f) * c.th;
         const float dir[3] = { c.f[0] + c.r[0] * a + c.u[0] * b, c.f[1] + c.r[1] * a + c.u[1] * b, c.f[2] + c.r[2] * a + c.u[2] * b };
         if (dir[1] < -1e-4f && c.pos[1] > 0.0f) { const float t = -c.pos[1] / dir[1]; const float gx = c.pos[0] + dir[0] * t, gz = c.pos[2] + dir[2] * t;
@@ -258,9 +280,9 @@ ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx) {
                 if (!s_shOk || fabsf(gx - s_shX) + fabsf(gz - s_shZ) > 0.01f) { static int nl = 0; if (nl++ < 6) Log("motor (sombra): pies del jugador en la imagen (%.3f, %.3f) -> piso (%.2f, %.2f) m", s_feetU, s_feetV, gx, gz); }
                 s_shX = gx; s_shZ = gz; s_shOk = true; } } }
     // (15/11 o) si la camara y las opciones no cambiaron desde el ultimo dibujo, la textura ya esta bien: no se rehace
-    {   struct Key { float p[3], yaw, pitch, th, cell, asp, u[3], sh[2]; int on, size, alpha, major, axes; };
+    {   struct Key { float p[3], yaw, pitch, th, cell, asp, u[3], sh[2]; int on, size, alpha, major, axes, ovl; };
         static Key s_last{}; static bool s_have = false; Key kk{}; memcpy(kk.p, c.pos, sizeof kk.p); kk.yaw = yaw; kk.pitch = pitch; kk.th = c.th; kk.cell = g_cfg.motorGridCell; kk.asp = s_asp; memcpy(kk.u, c.u, sizeof kk.u); kk.sh[0] = s_shX; kk.sh[1] = s_shZ;
-        kk.on = g_cfg.motorGrid; kk.size = g_cfg.motorGridSize; kk.alpha = g_cfg.motorGridAlpha; kk.major = g_cfg.motorGridMajor; kk.axes = g_cfg.motorGridAxes;
+        kk.on = g_cfg.motorGrid; kk.size = g_cfg.motorGridSize; kk.alpha = g_cfg.motorGridAlpha; kk.major = g_cfg.motorGridMajor; kk.axes = g_cfg.motorGridAxes; kk.ovl = s_ovl ? 1 : 0;
         if (s_have && memcmp(&kk, &s_last, sizeof kk) == 0) return s_srv;
         s_last = kk; s_have = true; }
     GridPaint(c);
