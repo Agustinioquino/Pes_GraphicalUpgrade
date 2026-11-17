@@ -112,6 +112,25 @@ static void Seg(const Cam& c, const float* a, const float* b, uint32_t rgb, floa
 }
 
 // pinta el fondo y la grilla en s_px con la camara c
+static void Blob(const Cam& c, float cxw, float czw, float R, float str) {
+    const float asp = s_asp, hx = 0.5f * kW, hy = 0.5f * kH;
+    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+    for (int q = 0; q < 16; q++) { const float an = (float)q * 0.3926991f; const float w[3] = { cxw + cosf(an) * R, 0.0f, czw + sinf(an) * R };
+        const float d[3] = { w[0] - c.pos[0], w[1] - c.pos[1], w[2] - c.pos[2] };
+        const float z = d[0] * c.f[0] + d[1] * c.f[1] + d[2] * c.f[2]; if (z < 0.05f) { x0 = 0; y0 = 0; x1 = (float)kW; y1 = (float)kH; break; }
+        const float sx = hx + (d[0] * c.r[0] + d[1] * c.r[1] + d[2] * c.r[2]) / (z * c.th * asp) * hx, sy = hy - (d[0] * c.u[0] + d[1] * c.u[1] + d[2] * c.u[2]) / (z * c.th) * hy;
+        x0 = std::min(x0, sx); x1 = std::max(x1, sx); y0 = std::min(y0, sy); y1 = std::max(y1, sy); }
+    const int ix0 = std::max(0, (int)x0 - 2), ix1 = std::min(kW - 1, (int)x1 + 2), iy0 = std::max(0, (int)y0 - 2), iy1 = std::min(kH - 1, (int)y1 + 2);
+    for (int y = iy0; y <= iy1; y++) { const float b = (hy - (float)y) / hy * c.th;
+        for (int x = ix0; x <= ix1; x++) { const float a = ((float)x - hx) / hx * c.th * asp;
+            const float dir[3] = { c.f[0] + c.r[0] * a + c.u[0] * b, c.f[1] + c.r[1] * a + c.u[1] * b, c.f[2] + c.r[2] * a + c.u[2] * b };
+            if (dir[1] > -1e-5f) continue; const float t = -c.pos[1] / dir[1]; const float gx = c.pos[0] + dir[0] * t, gz = c.pos[2] + dir[2] * t;
+            const float dd = sqrtf((gx - cxw) * (gx - cxw) + (gz - czw) * (gz - czw)) / R; if (dd >= 1.0f) continue;
+            const float k = (1.0f - dd) * (1.0f - dd) * str;      // mas oscura al centro, se desvanece hacia el borde
+            uint32_t& px = s_px[(size_t)y * kW + x]; const int m = (int)((1.0f - k) * 256.0f);
+            const uint32_t al = s_ovl ? std::max<uint32_t>(px >> 24, (uint32_t)(k * 255.0f)) : 255u;
+            px = (al << 24) | (uint32_t)(((px & 255) * m) >> 8) | ((uint32_t)((((px >> 8) & 255) * m) >> 8) << 8) | ((uint32_t)((((px >> 16) & 255) * m) >> 8) << 16); } }
+}
 static void GridPaint(const Cam& c) {
     // --- fondo: gris oscuro con un degrade suave hacia arriba ---
     for (int y = 0; y < kH; y++) {
@@ -201,24 +220,14 @@ static void GridPaint(const Cam& c) {
     // --- (15/11 r, Agustin 19:22: "pq el jugador parece un png") sombra de contacto del jugador sobre el piso: el jugador lo dibuja el
     // visor del Editar en su propia imagen y se pega encima de este fondo, sin tocar el piso. Una mancha oscura suave en el piso
     // (y = 0) alrededor de los pies (el jugador del visor esta en el origen) lo apoya. Por pixel: rayo de la camara contra el piso.
-    {   const float R = 0.75f; const float asp = s_asp, hx = 0.5f * kW, hy = 0.5f * kH;
-        if (c.pos[1] > 0.05f && !s_ovl) {
-            float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f; bool any = false;
-            for (int q = 0; q < 16; q++) { const float an = (float)q * 0.3926991f; const float w[3] = { s_shX + cosf(an) * R, 0.0f, s_shZ + sinf(an) * R };
-                const float d[3] = { w[0] - c.pos[0], w[1] - c.pos[1], w[2] - c.pos[2] };
-                const float z = d[0] * c.f[0] + d[1] * c.f[1] + d[2] * c.f[2]; if (z < 0.05f) { any = false; x0 = 0; y0 = 0; x1 = (float)kW; y1 = (float)kH; break; }
-                const float sx = hx + (d[0] * c.r[0] + d[1] * c.r[1] + d[2] * c.r[2]) / (z * c.th * asp) * hx, sy = hy - (d[0] * c.u[0] + d[1] * c.u[1] + d[2] * c.u[2]) / (z * c.th) * hy;
-                x0 = std::min(x0, sx); x1 = std::max(x1, sx); y0 = std::min(y0, sy); y1 = std::max(y1, sy); any = true; }
-            (void)any;
-            const int ix0 = std::max(0, (int)x0 - 2), ix1 = std::min(kW - 1, (int)x1 + 2), iy0 = std::max(0, (int)y0 - 2), iy1 = std::min(kH - 1, (int)y1 + 2);
-            for (int y = iy0; y <= iy1; y++) { const float b = (hy - (float)y) / hy * c.th;
-                for (int x = ix0; x <= ix1; x++) { const float a = ((float)x - hx) / hx * c.th * asp;
-                    const float dir[3] = { c.f[0] + c.r[0] * a + c.u[0] * b, c.f[1] + c.r[1] * a + c.u[1] * b, c.f[2] + c.r[2] * a + c.u[2] * b };
-                    if (dir[1] > -1e-5f) continue; const float t = -c.pos[1] / dir[1]; const float gx = c.pos[0] + dir[0] * t, gz = c.pos[2] + dir[2] * t;
-                    const float dd = sqrtf((gx - s_shX) * (gx - s_shX) + (gz - s_shZ) * (gz - s_shZ)) / R; if (dd >= 1.0f) continue;
-                    const float k = (1.0f - dd) * (1.0f - dd) * 0.55f;      // mas oscura al centro, se desvanece hacia el borde
-                    uint32_t& px = s_px[(size_t)y * kW + x]; const int m = (int)((1.0f - k) * 256.0f);
-                    px = 0xff000000u | (uint32_t)(((px & 255) * m) >> 8) | ((uint32_t)((((px >> 8) & 255) * m) >> 8) << 8) | ((uint32_t)((((px >> 16) & 255) * m) >> 8) << 16); } } } }
+    // (17/11 07:13, Agustin: "los jugadores no parecen estar arriba de una grilla") con la grilla encima (jugadores propios en la escena
+    // principal) va una mancha por cada jugador propio, oscura y transparente; con la grilla en la composicion queda debajo de ellos.
+    if (c.pos[1] > 0.05f) {
+        if (!s_ovl) Blob(c, s_shX, s_shZ, 0.75f, 0.55f);
+#ifndef MOTORGRID_TEST
+        else for (int i = 0; i < kMotorPjMax; i++) { float p[3], yw, sc; if (MotorPjGet(i, p, &yw, &sc) && fabsf(p[1]) < 0.3f) Blob(c, p[0], p[2], 0.55f * std::clamp(sc, 0.3f, 3.0f), 0.6f); }
+#endif
+    }
 }
 
 #ifndef MOTORGRID_TEST
@@ -267,6 +276,38 @@ bool MotorGridRay(float u, float v, float* o, float* dir) {
     return true;
 }
 
+// (17/11 07:13, Agustin con video: "al mover el jugador los iconos de abajo se sienten desconectados", "los jugadores no parecen estar
+// arriba de una grilla", "la vista ortografica y perspectiva no afecta a los jugadores") con los jugadores en la escena principal la
+// grilla y los iconos se proyectaban con la camara que se le manda al visor, pero los jugadores los dibuja la vista principal con SU
+// proyeccion: dos camaras distintas, por eso no coincidian. Ahora la camara de la grilla sale de la matriz con la que el juego dibujo la
+// escena (SceneCB m_projectionView, la misma con la que la vista de huesos cae justo sobre los jugadores): centro = M^-1 (0, 0, 1, 0),
+// adelante / derecha / arriba y campo de vision desproyectando puntos de la pantalla.
+static bool Inv4(const double* m, double* o) {
+    double a[4][8]; for (int r = 0; r < 4; r++) for (int c = 0; c < 8; c++) a[r][c] = c < 4 ? m[r * 4 + c] : (c - 4 == r ? 1.0 : 0.0);
+    for (int c = 0; c < 4; c++) { int pv = c; for (int r = c + 1; r < 4; r++) if (fabs(a[r][c]) > fabs(a[pv][c])) pv = r;
+        if (fabs(a[pv][c]) < 1e-12) return false; if (pv != c) for (int k = 0; k < 8; k++) std::swap(a[pv][k], a[c][k]);
+        const double d = a[c][c]; for (int k = 0; k < 8; k++) a[c][k] /= d;
+        for (int r = 0; r < 4; r++) if (r != c) { const double f = a[r][c]; if (f != 0.0) for (int k = 0; k < 8; k++) a[r][k] -= f * a[c][k]; } }
+    for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++) o[r * 4 + c] = a[r][c + 4]; return true;
+}
+static bool CamFromScene(Cam& c, float& asp) {
+    std::vector<float> S; if (!NamedCBRead("SceneCB", S) || S.size() < 16) return false;
+    double M[16], I[16]; for (int i = 0; i < 16; i++) M[i] = S[i];
+    if (!Inv4(M, I)) return false;
+    auto un = [&](double x, double y, double z, double w, double* o) { double h[4]; for (int r = 0; r < 4; r++) h[r] = I[r * 4] * x + I[r * 4 + 1] * y + I[r * 4 + 2] * z + I[r * 4 + 3] * w;
+        if (w == 0.0) { if (fabs(h[3]) < 1e-12) return false; } else if (fabs(h[3]) < 1e-12) return false; for (int k = 0; k < 3; k++) o[k] = h[k] / h[3]; return true; };
+    double C[3], p0[3], pr[3], pu[3];
+    if (!un(0, 0, 1, 0, C) || !un(0, 0, 0.5, 1, p0) || !un(1, 0, 0.5, 1, pr) || !un(0, 1, 0.5, 1, pu)) return false;
+    double f[3] = { p0[0] - C[0], p0[1] - C[1], p0[2] - C[2] }; const double lf = sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]); if (lf < 1e-6 || lf > 1e6) return false;
+    for (double& v : f) v /= lf;
+    double vr[3] = { pr[0] - C[0], pr[1] - C[1], pr[2] - C[2] }, vu[3] = { pu[0] - C[0], pu[1] - C[1], pu[2] - C[2] };
+    const double fr = vr[0] * f[0] + vr[1] * f[1] + vr[2] * f[2], fu = vu[0] * f[0] + vu[1] * f[1] + vu[2] * f[2]; if (fr <= 1e-6 || fu <= 1e-6) return false;
+    double r[3], u[3]; for (int k = 0; k < 3; k++) { r[k] = vr[k] / fr - f[k]; u[k] = vu[k] / fu - f[k]; }     // en el plano a distancia 1
+    const double tx = sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]), ty = sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]); if (tx < 1e-5 || ty < 1e-5 || ty > 50.0) return false;
+    for (int k = 0; k < 3; k++) { c.pos[k] = (float)C[k]; c.f[k] = (float)f[k]; c.r[k] = (float)(r[k] / tx); c.u[k] = (float)(u[k] / ty); }
+    c.th = (float)ty; asp = (float)(tx / ty);
+    return asp > 0.3f && asp < 6.0f;
+}
 static ID3D11ShaderResourceView* GridSRV(ID3D11DeviceContext* ctx) {
     if (!g_dev.dev || !ctx) return nullptr;
     if (!s_tried) {
@@ -305,6 +346,10 @@ static ID3D11ShaderResourceView* GridSRV(ID3D11DeviceContext* ctx) {
                     yaw = atan2f(f[0], f[2]); pitch = asinf(std::clamp(f[1], -1.0f, 1.0f));
                     static int nl = 0; if (nl++ < 3) Log("motor (grilla): con la camara del visor: campo de vision %.4f, aspecto %.3f (pantalla %u x %u)", wf, s_asp, g_bbW, g_bbH);
                 } } } }
+    if (s_ovl) { Cam cs = c; float as = s_asp;     // jugadores en la escena principal: la camara con la que el juego dibujo esta escena
+        if (CamFromScene(cs, as)) { c = cs; s_asp = as; yaw = atan2f(c.f[0], c.f[2]); pitch = asinf(std::clamp(c.f[1], -1.0f, 1.0f));
+            static int nl = 0; if (nl++ < 3) Log("motor (grilla): camara sacada de la escena del juego: (%.2f, %.2f, %.2f) campo %.4f aspecto %.3f", c.pos[0], c.pos[1], c.pos[2], 2.0f * atanf(c.th), s_asp); }
+        else { static int nl = 0; if (nl++ < 3) Log("motor (grilla): no pude sacar la camara de SceneCB: queda la del visor"); } }
     { std::lock_guard<std::mutex> lk(s_camMx); s_camLast = c; s_camAsp = s_asp; s_camT = Now(); }
     if (!s_ovl) MotorFeetPoll(ctx);
     if (!s_ovl && s_feetU >= 0.0f) {   // pies en la imagen -> rayo de la camara -> piso (y = 0)
@@ -315,8 +360,9 @@ static ID3D11ShaderResourceView* GridSRV(ID3D11DeviceContext* ctx) {
                 if (!s_shOk || fabsf(gx - s_shX) + fabsf(gz - s_shZ) > 0.01f) { static int nl = 0; if (nl++ < 6) Log("motor (sombra): pies del jugador en la imagen (%.3f, %.3f) -> piso (%.2f, %.2f) m", s_feetU, s_feetV, gx, gz); }
                 s_shX = gx; s_shZ = gz; s_shOk = true; } } }
     // (15/11 o) si la camara y las opciones no cambiaron desde el ultimo dibujo, la textura ya esta bien: no se rehace
-    {   struct Key { float p[3], yaw, pitch, th, cell, asp, u[3], sh[2]; int on, size, alpha, major, axes, ovl; };
+    {   struct Key { float p[3], yaw, pitch, th, cell, asp, u[3], sh[2], pj; int on, size, alpha, major, axes, ovl; };
         static Key s_last{}; static bool s_have = false; Key kk{}; memcpy(kk.p, c.pos, sizeof kk.p); kk.yaw = yaw; kk.pitch = pitch; kk.th = c.th; kk.cell = g_cfg.motorGridCell; kk.asp = s_asp; memcpy(kk.u, c.u, sizeof kk.u); kk.sh[0] = s_shX; kk.sh[1] = s_shZ;
+        if (s_ovl) for (int i = 0; i < kMotorPjMax; i++) { float p[3], yw, sc; if (MotorPjGet(i, p, &yw, &sc)) kk.pj += (p[0] * 1.37f + p[1] * 2.11f + p[2] * 3.07f + sc) * (float)(i + 1); }   // las sombras siguen a los jugadores
         kk.on = g_cfg.motorGrid; kk.size = g_cfg.motorGridSize; kk.alpha = g_cfg.motorGridAlpha; kk.major = g_cfg.motorGridMajor; kk.axes = g_cfg.motorGridAxes; kk.ovl = s_ovl ? 1 : 0;
         if (s_have && memcmp(&kk, &s_last, sizeof kk) == 0) return s_srv;
         s_last = kk; s_have = true; }
