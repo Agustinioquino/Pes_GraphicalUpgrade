@@ -181,6 +181,35 @@ def marcha_cargar(carpeta):
     for l, r in ((17, 22), (19, 24), (20, 25), (21, 26)):
         MARCHA[r] = [(q[0], -q[1], -q[2], q[3]) for q in (MARCHA[l][(i + NB // 2) % NB] for i in range(NB))]
     MARCHA['y'] = [sum(v) / len(v) for v in py]; MARCHA['x'] = [sum(v) / len(v) for v in px]
+    abrazo_cargar(carpeta)
+
+# (21:01, Agustin: "le falta ese toque de captura de movimiento"; subio dml_end_timeup01_win_hug01 + _sub01, abrazo de pareja del juego)
+# el cuerpo durante nuestro abrazo (cuadros 186-276) toma lo que hacen cadera, columna, pecho, cuello, cabeza y claviculas en el abrazo
+# del juego (cuadros 160-250), como diferencia contra su promedio: se mecen, respiran y se acomodan como en la captura. A = el que
+# abraza por arriba (_sub01), B = el de abajo (hug01). Los brazos siguen por IK (las manos tienen que quedar en la espalda del otro).
+ABRAZO = {}
+AB_JUEGO = (160, 250); AB_NUESTRO = (186, 276)
+TOPE_AB = {2: 5.0, 13: 6.0, 14: 6.0, 15: 7.0, 16: 8.0, 17: 6.0, 22: 6.0}   # grados maximos de cada hueso
+def abrazo_cargar(carpeta):
+    for quien, nm in (('A', 'dml_end_timeup01_win_hug01_sub01.gani'), ('B', 'dml_end_timeup01_win_hug01.gani')):
+        fn = os.path.join(carpeta, nm)
+        if not os.path.exists(fn): continue
+        b = Base(open(fn, 'rb').read()); g0, g1 = AB_JUEGO; d = {}
+        for ch in (2, 13, 14, 15, 16, 17, 22):
+            qs = [b.rot[f][ch] for f in range(g0, g1 + 1)]; r = qs[0]; acc = (0.0, 0.0, 0.0, 0.0)
+            for q in qs: acc = add(acc, q if dot(q, r) >= 0 else mul(q, -1.0))
+            mq = qi(qn(acc)); dev = [qm(mq, q) for q in qs]
+            mx = max(qangle(q) for q in dev); k = min(1.0, TOPE_AB.get(ch, 8.0) / max(mx, 1e-3))   # el giro que trae se acota (la
+            d[ch] = [qslerp((0.0, 0.0, 0.0, 1.0), q, k) for q in dev]                                # captura gira toda la pareja)
+        ABRAZO[quien] = d
+
+def abrazo_en(quien, f):
+    if quien not in ABRAZO: return None
+    a0, a1 = AB_NUESTRO
+    if not (a0 < f < a1): return None
+    env = smooth((f - a0) / 14.0) * smooth((a1 - f) / 14.0)
+    i = int(round((f - a0) * (AB_JUEGO[1] - AB_JUEGO[0]) / float(a1 - a0)))
+    return env, {ch: v[min(i, len(v) - 1)] for ch, v in ABRAZO[quien].items()}
 
 def marcha_en(clave, fase):
     t = (fase % 1.0) * NB; i = int(t) % NB; j = (i + 1) % NB; u = t - int(t); a = MARCHA[clave][i]; c = MARCHA[clave][j]
@@ -218,6 +247,10 @@ def cuerpo(base, J, f):
             ph2 = fz[0][max(0, f - 3)]
             for ch, k in ((2, 0.45), (13, 0.75), (14, 0.75), (15, 0.6), (16, 0.55)):
                 rot[ch] = qm(rot[ch], qslerp((0.0, 0.0, 0.0, 1.0), marcha_en(ch, ph if ch == 2 else ph2), a * k))
+    ab = abrazo_en(J.nombre, f)
+    if ab:
+        env, d = ab
+        for ch, q in d.items(): rot[ch] = qm(rot[ch], qslerp((0.0, 0.0, 0.0, 1.0), q, env * 0.85))
     for ch, keys in J.giros.items(): rot[ch] = qm(rot[ch], qeuler(pista(keys, f)))
     fn = getattr(J, 'giros_fn', None)
     if fn:
@@ -620,12 +653,16 @@ def coreografia(D, quien, pie0):
         return (x + lat * math.cos(yw), y, z - lat * math.sin(yw))
     def giros_fn(f):          # media vuelta (raiz); cadera que gira con el paso (juego: +-8 grados) y el pecho la sigue casi entera
         r = {0: (0.0, yaw_de(f), 0.0)}      # (20:44) cadera / pecho / cabeza del paso: capa de la caminata del juego (cuerpo())
-        if 190 < f < 274:   # (20:51, "el abrazo se ve poco real") se mecen juntos de lado a lado y se aprietan al principio
-            env = smooth((f - 190) / 16.0) * smooth((274 - f) / 16.0); u = 2 * math.pi * (f - 190) / 62.0
-            sq = smooth((f - 192) / 10.0) * smooth((236 - f) / 14.0) if f < 236 else 0.0
-            r[2] = (0.0, 1.5 * math.sin(u) * env, 2.0 * sgn * math.sin(u) * env)
-            r[13] = (1.5 * sq, 2.0 * math.sin(u - 0.5) * env, 3.0 * sgn * math.sin(u - 0.4) * env)
-            r[14] = (2.5 * sq, 2.5 * math.sin(u - 0.9) * env, 2.0 * sgn * math.sin(u - 0.8) * env)
+        if 190 < f < 236:   # (20:51) se aprietan al principio (el vaiven del abrazo sale de la captura del juego: abrazo_en)
+            sq = smooth((f - 192) / 10.0) * smooth((236 - f) / 14.0)
+            r[13] = (1.5 * sq, 0.0, 0.0); r[14] = (2.5 * sq, 0.0, 0.0)
+        # (20:53, Agustin: "al handshake y al chocar le falta impacto, igual al abrazo") golpe: el cuerpo recibe el contacto y rebota
+        # (oscilacion que se apaga): choque arriba = pecho y cabeza para atras; abrazo = el pecho se cierra al encontrarse; apreton = sacudida
+        for f0, ch_amp in ((C, {13: -2.5, 14: -3.5, 15: -3.0, 16: -4.0}), (188, {13: 2.0, 14: 3.0, 16: 3.5}), (C2, {14: 1.5, 16: 2.0})):
+            if f0 <= f < f0 + 24:
+                k = math.exp(-(f - f0) / 5.0) * math.sin((f - f0) * 0.55 + 0.6) / math.sin(0.6)
+                for ch, amp in ch_amp.items():
+                    v = r.get(ch, (0.0, 0.0, 0.0)); r[ch] = (v[0] + amp * k, v[1], v[2])
         return r
     # ------- columna / cabeza / claviculas (grados: x adelante, y gira a la izquierda, z inclina a la derecha)
     inc = 9.0 if A else 8.0
