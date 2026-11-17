@@ -1076,6 +1076,13 @@ static void ToolbarDraw() {
           if (label("ESCENA GR\xC3\x81" "FICA DEL MOTOR")) { char b1[32];      // lo que el motor tiene cargado ahora (leido de sus listas)
               snprintf(b1, sizeof b1, "%d", s_info.scenes); value("Escenas", b1); snprintf(b1, sizeof b1, "%d", s_info.objects); value("Objetos", b1);
               snprintf(b1, sizeof b1, "%d", s_info.models); value("Modelos", b1); snprintf(b1, sizeof b1, "%d", s_info.lights); value("Luces", b1); }
+          // (17/11 18:20, Agustin: "permitir cargar luces") juego de luces del juego (cpk_dat/common/render/model/light/*.xml): el juego
+          // tiene uno activo a la vez (una pila: el nuevo tapa al del Editar y al sacarlo vuelve el de antes). motorpj.cpp MotorLightSetReq
+          if (label("JUEGO DE LUCES")) { int st = 0; const int w = MotorLightSetGet(&st);
+              const char* const ln[5] = { "Editar", "Default", "Cara", "Botines", "MenÃº" }; seg(3600, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 5, w, ln); y += rowH + 6.0f * k;
+              const char* stt = w == 0 ? "Las luces de siempre del Editar." : st == 2 ? "Activo." : st == 3 ? "El juego no lo cargÃ³ (mirÃ¡ el registro)." : "Cargando...";
+              text(lx, y + 9.0f * k, st == 3 ? IM_COL32(255, 150, 120, 255) : dim, stt, fsS); y += 20.0f * k;
+              text(lx, y + 9.0f * k, dim, "Archivos del juego: Default, EditFace, EditSpike, MatchMenu.", fsS); y += 26.0f * k; }
       } else if (s_sel == 1) {
           if (label("MODO")) { const char* const nms[2] = { "Libre", "Del juego" }; seg(200, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, camFree ? 0 : 1, nms); y += rowH + 12.0f * k; }
           float pos[3] = {}, yaw = 0, pitch = 0; char b1[48];
@@ -1891,6 +1898,7 @@ static void ToolbarDraw() {
             else if (id == 3342) { MotorPjFaceSet(-1, PI.face[q], PI.faceW[q], PI.blink[q]); Note("Gesto puesto a todos"); }
             else if (id == 3343) MotorPjFaceSet(q, -1, PI.faceW[q], PI.blink[q]);
         }
+        else if (id >= 3600 && id <= 3604) { MotorLightSetReq(id - 3600); static const char* const nn[5] = { "Luces del Editar", "Luces: Default", "Luces: EditFace", "Luces: EditSpike", "Luces: MatchMenu" }; Note("%s", TRS(nn[id - 3600])); }
         else if ((id >= 3380 && id <= 3388)) {      // (18:01) pestanas de la lista, modo al terminar y desfase
             static MotorPjInfo PI; MotorPjInfoGet(&PI); const int q = MotorPjSel();
             if (id <= 3382) { s_pjTab = id - 3380; s_flTop = 0; }
@@ -2145,6 +2153,11 @@ static void ToolbarDraw() {
         case 3350: tp = "Escrib\xC3\xAD parte del nombre del archivo (por ejemplo: goal, idle, bench)."; break;
         case 3351: tp = "Borrar la b\xC3\xBAsqueda."; break;
         case 3362: tp = "Ocultar o mostrar (H). May\xC3\xBAs + H: mostrar todos."; break;
+        case 3600: tp = "Las luces de siempre del Editar."; break;
+        case 3601: tp = "Default.xml: las luces de fabrica del juego."; break;
+        case 3602: tp = "EditFace.xml: las del Editar en la cara."; break;
+        case 3603: tp = "EditSpike.xml: las del Editar en los botines."; break;
+        case 3604: tp = "MatchMenu.xml: las del men\xC3\xBA del partido."; break;
         case 3510: tp = "Diez veces m\xC3\xA1s lento."; break;
         case 3511: tp = "Cuatro veces m\xC3\xA1s lento."; break;
         case 3512: tp = "A la mitad de la velocidad."; break;

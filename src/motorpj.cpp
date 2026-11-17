@@ -477,7 +477,43 @@ void DestroyAll(const char* why) {
 } // namespace
 
 // hilo del juego: tick del visor (motorjug.cpp hk_Tick), siempre (con el Motor abierto o no)
+// (17/11 18:20, Agustin: "permitir cargar luces") JUEGO DE LUCES del juego en el Motor, en el hilo del juego (aca, como los jugadores).
+// Leido en el C: draw::Light (0x58 B, ctor 0x141edb8f0); 0x141edbc20(arma, n) arma la ruta cpk_dat/common/render/model/light/
+// {Default, EditFace, EditSpike, MatchMenu}.xml con el string del juego; 0x141edbcf0(luz, arma) la carga (y libera el string);
+// 0x141edc0b0(luz, 1) la pone activa cuando esta lista (pila del sistema 0x143802cc0: tapa a la de abajo; con 0 la saca y vuelve la de
+// abajo); 0x141edc000(luz) la descarga. Estado: 0 nada, 1 cargando, 2 activa, 3 no cargo.
+const uintptr_t kLtCtor = 0x141edb8f0ull, kLtPath = 0x141edbc20ull, kLtLoad = 0x141edbcf0ull, kLtAct = 0x141edc0b0ull, kLtUnload = 0x141edc000ull;
+typedef void*(__fastcall* LtCtorFn)(void*); typedef void*(__fastcall* LtPathFn)(void*, int, uint64_t, uint64_t); typedef void(__fastcall* LtLoadFn)(void*, void*);
+typedef void(__fastcall* LtActFn)(void*, char); typedef void(__fastcall* LtUnloadFn)(void*);
+static std::atomic<int> s_ltWant{0}, s_ltState{0}; static int s_ltHave = 0; static uint8_t* s_lt = nullptr; static bool s_ltPushed = false; static double s_ltT = 0.0;
+void MotorLightSetReq(int which) { s_ltWant.store(std::clamp(which, 0, 4)); }
+int MotorLightSetGet(int* state) { if (state) *state = s_ltState.load(); return s_ltWant.load(); }
+static void LightSetTick(bool on) {
+    const int w = on ? s_ltWant.load() : 0;
+    if (w == s_ltHave && (w == 0 || s_ltPushed || s_ltState.load() == 3)) return;
+    uint32_t saved = 0, id = 0x19, heap = 0x19; bool pushed = false;
+    __try {
+        ((HeapPushFn)kHeapPush)(&saved, &id); pushed = true;
+        if (w != s_ltHave) {
+            if (s_lt) { if (s_ltPushed) ((LtActFn)kLtAct)(s_lt, 0); ((LtUnloadFn)kLtUnload)(s_lt); if (s_ltHave) Log("motor (luces): juego de luces %d sacado%s", s_ltHave, s_ltPushed ? " (vuelve el de antes)" : ""); }
+            s_ltPushed = false; s_ltHave = w; s_ltState.store(w ? 1 : 0);
+            if (w > 0) {
+                if (!s_lt) { void* mem = ((AllocFn)kAlloc)(&heap, 0x58, 0x10); s_lt = mem ? (uint8_t*)((LtCtorFn)kLtCtor)(mem) : nullptr; }
+                if (!s_lt) { s_ltState.store(3); Log("motor (luces): no se pudo crear el draw::Light"); }
+                else { alignas(16) uint8_t arg[0x40] = {}; ((LtPathFn)kLtPath)(arg, w - 1, 0, 0); ((LtLoadFn)kLtLoad)(s_lt, arg); s_ltT = Now();
+                    Log("motor (luces): cargando juego de luces %d (id %d)", w, *(int*)(s_lt + 0xc)); if (*(int*)(s_lt + 0xc) == -1) s_ltState.store(3); }
+            }
+        }
+        if (w > 0 && s_lt && !s_ltPushed && s_ltState.load() == 1) {
+            ((LtActFn)kLtAct)(s_lt, 1);
+            if (s_lt[0x10]) { s_ltPushed = true; s_ltState.store(2); Log("motor (luces): juego de luces %d activo (%.1f s)", w, Now() - s_ltT); }
+            else if (Now() - s_ltT > 20.0) { s_ltState.store(3); Log("motor (luces): el juego de luces %d no quedo listo en 20 s", w); }
+        }
+    } __except (1) { s_ltState.store(3); s_ltWant.store(0); s_ltHave = 0; s_ltPushed = false; Log("motor (luces): error dentro del juego al cambiar el juego de luces: se deja"); }
+    if (pushed) { __try { ((HeapPopFn)kHeapPop)(&saved); } __except (1) {} }
+}
 void MotorPjTick(bool on, uintptr_t impl) {
+    LightSetTick(on);
     const double now = Now(); s_lastTick.store(now);
     static bool s_had = false;
     if (!on || s_dead.load()) {
