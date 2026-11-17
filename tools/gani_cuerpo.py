@@ -495,6 +495,22 @@ def puntas(i, f):
     for a, b in ((CHOQUE - 16, CHOQUE + 12), (176, 280)): w = max(w, smooth((f - a) / 10.0) * smooth((b - f) / 12.0))
     return h * w
 
+# (21:07, Agustin: "evita que se vea vibracion en el abrazo") del abrazo al apreton cada hueso de la mitad de arriba se promedia con sus
+# 3 cuadros vecinos de cada lado (pesos 1 2 3 4 3 2 1): saca los tirones de cuadro a cuadro del IK y de la captura sin mover las manos
+# mas de un par de milimetros (las metas cambian despacio); con entrada y salida suaves
+def suavizar(salida, a, b, chs=tuple(range(13, 27)), w=(1, 2, 3, 4, 3, 2, 1)):
+    n = len(salida) - 1; h = len(w) // 2
+    src = {ch: [salida[f][ch] for f in range(n + 1)] for ch in chs if ch in salida[0]}
+    for ch, q in src.items():
+        for f in range(1, n + 1):
+            if dot(q[f - 1], q[f]) < 0: q[f] = mul(q[f], -1.0)
+    for f in range(max(h, a - 8), min(n - h, b + 8) + 1):
+        m = smooth((f - (a - 8)) / 8.0) * smooth(((b + 8) - f) / 8.0)
+        for ch, q in src.items():
+            acc = (0.0, 0.0, 0.0, 0.0)
+            for k, wk in enumerate(w): acc = add(acc, mul(q[f + k - h], wk))
+            salida[f][ch] = qn(lerp(q[f], qn(acc), m))
+
 # ---------------------------------------------------------------- armado de los dos clips
 def armar(base, Js, D):
     n = base.n; salida = [dict() for _ in Js]; info = []; prev = {}; raices = [[] for _ in Js]; self_estira = [0.0]
@@ -541,6 +557,7 @@ def armar(base, Js, D):
     print('piernas: lo que le falto a la pierna mas estirada para llegar al tobillo = %.1f mm' % (self_estira[0] * 1000))
     for i, J in enumerate(Js):
         if getattr(J, 'contacto', None) is not None: filtrar([salida[i][f] for f in range(n + 1)], J)
+        suavizar([salida[i][f] for f in range(n + 1)], 176, 306)
     info = [[fk(salida[i][f], raices[i][f], base.hips[f]) for i in range(len(Js))] for f in range(n + 1)]
     return salida, info
 
@@ -747,7 +764,7 @@ def coreografia(D, quien, pie0):
         kR = [(0, balanceo('R')), (66, balanceo('R')), (78, charla('R', 72, gB)), (112, charla('R', 72, gB)), (122, balanceo('R')), (C - 16, balanceo('R'))]
     kR += [(C - 7 + ow // 8, prepara('R')), (C, contacto('R')), (C + 7, rebote('R')), (172, sobre_hombro), (190, espalda_alta)]
     pats = [212, 228, 244] if A else [220, 238]
-    for p in pats: kR += [(p - 1, espalda_alta), (p + 4, palmada(1)), (p + 9, espalda_alta)]
+    for p in pats: kR += [(p - 2, espalda_alta), (p + 5, palmada(1)), (p + 12, espalda_alta)]
     # (20:59, Agustin: "la transicion entre el abrazo y el apreton de mano no me gusta") al soltarse las manos se deslizan de la espalda a
     # los hombros del otro y se quedan ahi mientras dan el paso atras (se miran a un brazo de distancia); despues la derecha baja, se
     # carga un poco atras y va al apreton
