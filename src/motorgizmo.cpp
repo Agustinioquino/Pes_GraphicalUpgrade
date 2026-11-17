@@ -163,7 +163,8 @@ static int s_pjRowClip[8] = {}, s_pjRowFace[6] = {}, s_pjFaceScroll = 0;
 // clic en el campo y escribir (las letras llegan por WM_CHAR, overlay.cpp MotorUiChar); Esc o la X lo borra. Con texto, la lista muestra
 // los clips de TODOS los grupos cuyo archivo contiene lo escrito (sin distinguir mayusculas).
 static std::mutex s_srMx; static char s_sr[48] = ""; static std::atomic<int> s_srOn{0};   // 0 nada, 1 clips, 2 gestos
-static int s_srTop = 0, s_srFTop = 0; static std::atomic<bool> s_srEsc{false};
+static int s_srTop = 0, s_srFTop = 0;
+struct PjClip { bool ok; float pos[3], yaw, scale, speed, faceW; int clip, face; bool paused, blink; }; static PjClip s_pjCb{};   // (07:23) copiar / pegar entre jugadores static std::atomic<bool> s_srEsc{false};
 static bool SrMatch(const char* f, const char* q) { if (!q[0]) return true; for (; *f; f++) { const char* a = f; const char* b = q; while (*a && *b && tolower((unsigned char)*a) == tolower((unsigned char)*b)) { a++; b++; } if (!*b) return true; } return false; }
 bool MotorUiChar(unsigned c) {
     if (!s_srOn.load()) return false;
@@ -1090,11 +1091,17 @@ static void ToolbarDraw() {
                     seg(3305, ImVec2(x0 + rightW * 0.42f, y), ImVec2(fx1, y + rowH), 2, s_camFollow ? 1 : 0, nms); y += rowH + 8.0f * k; }
                   button(1400, "Volver al centro");
                   button(3300, "Duplicar (mismo jugador al lado)");
+                  {   // (07:23) copiar / pegar entre jugadores, dos botones en una fila
+                      const float mxp = (fx0 + fx1) * 0.5f; const ImVec2 a0(fx0, y + 4.0f * k), a1(mxp - 3.0f * k, y + rowH + 6.0f * k), b0(mxp + 3.0f * k, y + 4.0f * k), b1(fx1, y + rowH + 6.0f * k);
+                      const bool ha = hit(3360, a0, a1), hb = hit(3361, b0, b1);
+                      dl->AddRectFilled(a0, a1, ha ? IM_COL32(86, 86, 92, 255) : IM_COL32(66, 66, 70, 255), 3.0f * k); dl->AddRectFilled(b0, b1, hb ? IM_COL32(86, 86, 92, 255) : s_pjCb.ok ? IM_COL32(66, 66, 70, 255) : IM_COL32(52, 52, 55, 255), 3.0f * k);
+                      textC(a0, a1, ink, "Copiar (Ctrl+C)", fsS); textC(b0, b1, s_pjCb.ok ? ink : dim, "Pegar (Ctrl+V)", fsS); y += rowH + 10.0f * k; }
                   button(3301, "Mirar a la c\xC3\xA1mara");
                   button(3302, "Poner a todos en fila");
                   text(lx, y + 9.0f * k, dim, "Clic en un jugador de la vista: elegirlo y arrastrarlo.", fsS); y += 20.0f * k;
                   text(lx, y + 9.0f * k, dim, "Flechas: mover.  Q / E: girar.  R / F: altura.", fsS); y += 20.0f * k;
-                  text(lx, y + 9.0f * k, dim, "+ / -: tama\xC3\xB1o.  May\xC3\xBAs: m\xC3\xA1s r\xC3\xA1pido.  Supr: sacarlo.", fsS); y += 26.0f * k;
+                  text(lx, y + 9.0f * k, dim, "+ / -: tama\xC3\xB1o.  May\xC3\xBAs: m\xC3\xA1s r\xC3\xA1pido.  Supr: sacarlo.", fsS); y += 20.0f * k;
+                  text(lx, y + 9.0f * k, dim, "Espacio: reproducir / pausa.  Coma / punto: un cuadro.", fsS); y += 26.0f * k;
               }
               if (label("ANIMACI\xC3\x93N")) {
                   const int nC = MotorClipCount(), cur = PI.clip[qs] >= 0 && PI.clip[qs] < nC ? PI.clip[qs] : MotorClipIdle();
@@ -1722,7 +1729,12 @@ static void ToolbarDraw() {
             else if (id == 3310 || id == 3311) { s_pjGroup = ((s_pjGroup < 0 ? MotorClipGroup(cur) : s_pjGroup) + (id == 3311 ? 1 : nG - 1)) % nG; s_pjListTop = -1; }
             else if (id == 3312 || id == 3313) { const int c = (cur + (id == 3313 ? 1 : nC - 1)) % std::max(1, nC); MotorPjAnimSet(q, c, PI.speed[q], PI.paused[q]); s_pjGroup = MotorClipGroup(c); }
             else if (id == 3314 || id == 3315) s_pjListTop += id == 3315 ? 6 : -6;
-            else if (id == 3350) { s_srOn.store(1); }
+            else if (id == 3360 || id == 3361) { const int q = MotorPjSel(); static MotorPjInfo PI; MotorPjInfoGet(&PI);
+            if (q >= 0 && id == 3360) { PjClip& c = s_pjCb; c.ok = MotorPjGet(q, c.pos, &c.yaw, &c.scale); c.clip = PI.clip[q]; c.speed = PI.speed[q]; c.paused = PI.paused[q]; c.face = PI.face[q]; c.faceW = PI.faceW[q]; c.blink = PI.blink[q];
+                if (c.ok) Note("Copiado: lugar, giro, tama\xC3\xB1o, animaci\xC3\xB3n y gesto del jugador %d", q + 1); }
+            else if (q >= 0 && s_pjCb.ok) { const PjClip& c = s_pjCb; UndoBegin(); MotorPjSet(q, c.pos, c.yaw, c.scale); UndoEnd(); MotorPjAnimSet(q, c.clip, c.speed, c.paused); MotorPjFaceSet(q, c.face, c.faceW, c.blink); Note("Pegado en el jugador %d", q + 1); }
+            else if (q >= 0) Note("Primero copi\xC3\xA1 un jugador (Ctrl + C)"); }
+        else if (id == 3350) { s_srOn.store(1); }
             else if (id == 3351) { std::lock_guard<std::mutex> lk(s_srMx); s_sr[0] = 0; s_srOn.store(0); s_srTop = 0; }
             else if (id == 3352 || id == 3353) s_srTop += id == 3353 ? 6 : -6;
             else if (id == 3320 || id == 3321) MotorPjAnimSet(q, PI.clip[q], PI.speed[q], id == 3321);
@@ -1821,7 +1833,7 @@ static void ToolbarDraw() {
                  tN = tap('N'), tO = tap('O'), tS = tap('S'), tG = tap('G'), tJ = tap('J'), tC = tap('C'), tV = tap('V'), tZ = tap('Z'), tY = tap('Y'), tL = tap('L'),
                  t0 = tap(VK_NUMPAD0), t1 = tap(VK_NUMPAD1), t3 = tap(VK_NUMPAD3), t5 = tap(VK_NUMPAD5), t7 = tap(VK_NUMPAD7),
                  tPa = tap(VK_OEM_PLUS), tPb = tap(VK_ADD), tMa = tap(VK_OEM_MINUS), tMb = tap(VK_SUBTRACT), tPl = tPa || tPb, tMi = tMa || tMb,
-                 tT = tap('T'), tX = tap('X'), tCm = tap(VK_OEM_COMMA), tDot = tap(VK_OEM_PERIOD), tDec = tap(VK_DECIMAL), tBk = tap(VK_BACK);
+                 tT = tap('T'), tX = tap('X'), tCm = tap(VK_OEM_COMMA), tDot = tap(VK_OEM_PERIOD), tDec = tap(VK_DECIMAL), tBk = tap(VK_BACK), tSpc = tap(VK_SPACE);
       // (15/11 o) numeros para escribir en un campo: los de arriba y los del teclado numerico (los de este ya se miraron arriba)
       int dig = -1; for (int d = 0; d <= 9; d++) if (tap('0' + d)) dig = d;
       { const bool np[10] = { t0, t1, tap(VK_NUMPAD2), t3, tap(VK_NUMPAD4), t5, tap(VK_NUMPAD6), t7, tap(VK_NUMPAD8), tap(VK_NUMPAD9) }; for (int d = 0; d <= 9; d++) if (np[d]) dig = d; }
@@ -1856,9 +1868,11 @@ static void ToolbarDraw() {
       } else if (tF2) { s_menuOpen = 0; s_menuA = 0.0f; s_menuKb = -1; KbLabel("Barra de men\xC3\xBAs"); }
       else if (tF1 && !(GetAsyncKeyState(VK_MENU) & 0x8000)) kact(730);     // (17/11 06:57) Alt + F1 = captura de NVIDIA App: no abrir la ayuda
       else if (tEsc) { kact(0); s_escT.store(Now()); }
+      else if (ctrl && !alt && s_sel == 3 && MotorPjSel() >= 0 && (tC || tV)) kact(tC ? 3360 : 3361);      // (07:23) copiar / pegar lugar, giro, tamano, animacion y gesto
       else if (ctrl && !alt) { if (tZ) kundo(shift); else if (tY) kundo(true); else if (tCm) kact(722); else if (tN) kact(710); else if (tO) kact(711); else if (tS) kact(shift ? 713 : 712); else if (tPl) kact(760); else if (tMi) kact(761); else if (t1) kact(235); else if (t3) kact(233); else if (t7) kact(234); }
       else if (!alt) {
-          if (tG) kact(1); else if (tJ) kact(2); else if (tC) kact(3); else if (tV) kact(shift ? 741 : 740); else if (tZ) kact(742);
+          if (tSpc) kact(3502); else if (tCm) kact(3501); else if (tDot) kact(3503);      // (07:23) Espacio = reproducir / pausa, coma / punto = un cuadro atras / adelante
+          else if (tG) kact(1); else if (tJ) kact(2); else if (tC) kact(3); else if (tV) kact(shift ? 741 : 740); else if (tZ) kact(742);
           else if (tT) kact(794); else if (tN) kact(795); else if (tX) kact(968);
           else if (tDel && s_sel == 3 && MotorPjSel() >= 0) { MotorPjRemove(MotorPjSel()); Note("Jugador sacado (Supr)"); }
           else if (tL) { bool any = false; for (int i = 0; i < s_nLights; i++) if (s_lights[i].on) any = true; kact(shift ? 702 : any ? 701 : 700); }
