@@ -917,6 +917,9 @@ static void ToolbarDraw() {
               if (ch) MotorJugSet(v, v[3], v[4] / 100.0f);
               if (label("CUANDO SE ANIMA")) { const char* const nms[2] = { "Fijo en su lugar", "Lo lleva el clip" }; seg(1404, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, J.fix ? 0 : 1, nms); y += rowH + 8.0f * k; }
               button(1400, "Volver al centro");
+              text(lx, y + 9.0f * k, dim, "Flechas: mover.  Q / E: girar.  R / F: altura.", fsS); y += 20.0f * k;
+              text(lx, y + 9.0f * k, dim, "+ / -: tama\xC3\xB1o.  May\xC3\xBAs: m\xC3\xA1s r\xC3\xA1pido.", fsS); y += 20.0f * k;
+              text(lx, y + 9.0f * k, dim, "Tambi\xC3\xA9n con los iconos del piso.", fsS); y += 26.0f * k;
               if (label("ANIMACI\xC3\x93N")) {
                   if (J.animSt < 0) { text(lx, y + rowH * 0.5f, dim, "No disponible en este juego.", fsS + 1.0f * k); y += rowH; }
                   else {
@@ -925,7 +928,9 @@ static void ToolbarDraw() {
                       if (fld(2105, s_jKind == 1 ? "Festejo" : "Pose", fn, 0.08f, 1.0f, (float)nMax, "%.0f", s_jKind == 1 ? " de 162" : " de 45")) { s_jN[s_jKind] = std::clamp((int)(fn + 0.5f), 1, nMax); s_jTouched = true; }
                       { const char* const nms[2] = { "Anterior", "Siguiente" }; seg(1414, ImVec2(fx0, y + 4.0f * k), ImVec2(fx1, y + rowH + 4.0f * k), 2, -1, nms); y += rowH + 10.0f * k; }
                       { const char* const nms[2] = { "En movimiento", "Quieto" }; seg(1418, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, J.pause ? 1 : 0, nms); y += rowH + 6.0f * k; }
-                      { const char* const nms[2] = { "Normal", "Espejo" }; seg(1422, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, s_jMirror ? 1 : 0, nms); y += rowH + 6.0f * k; }
+                      // (17/11 b, Agustin 03:49: "la opcion de espejo de las poses si que no funciona") leido en el C: en el visor el espejo
+                      // (upd+0xd2) solo da vuelta el desplazamiento del clip (FUN_1423f3430), no la pose. Se saca hasta los jugadores propios
+                      // del Motor, donde el clip si recibe el espejo (argumento de FixDemoHuman vf1).
                       // se pide al soltar (arrastrando el numero no se carga un clip por cada paso)
                       const int want = (s_jKind << 12) | (s_jN[s_jKind] << 1) | (s_jMirror ? 1 : 0);
                       if (s_jTouched && want != s_jSent && s_dragId != 2105 && s_editId != 2105) { s_jSent = want; MotorJugAnim(s_jKind, s_jKind == 1 ? 0x2b + s_jN[1] : s_jN[0] - 1, s_jMirror); }
@@ -1424,6 +1429,24 @@ static void ToolbarDraw() {
           else if (tT) kact(794); else if (tN) kact(795); else if (tX) kact(968);
           else if (tL) { bool any = false; for (int i = 0; i < s_nLights; i++) if (s_lights[i].on) any = true; kact(shift ? 702 : any ? 701 : 700); }
           else if (t1) kact(232); else if (t3) kact(230); else if (t7) kact(231); else if (t0) kact(202); else if (t5) kact(236); }
+      // (17/11 b, Agustin 03:46: "asi como con teclas del teclado") el jugador con el teclado, mientras se mantiene la tecla: flechas =
+      // mover sobre el piso (segun se ve en pantalla), R / F = subir / bajar, Q / E = girar, + / - = tamano; Mayus = cuatro veces mas rapido.
+      // Sin el boton derecho (volando, las letras son de la camara), sin menu abierto y sin estar escribiendo un numero.
+      {   MotorJugState J; MotorJugGet(&J);
+          if (kb && !ctrl && !alt && J.hooked && J.seen && !(s_editId >= 0 && !s_editDone) && s_modal == 0 && s_menuOpen < 0) {
+              auto held = [](int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0 ? 1.0f : 0.0f; };
+              const float mvR = held(VK_RIGHT) - held(VK_LEFT), mvF = held(VK_UP) - held(VK_DOWN), mvY = held('R') - held('F'), rot = held('E') - held('Q');
+              const float scl = std::max(held(VK_OEM_PLUS), held(VK_ADD)) - std::max(held(VK_OEM_MINUS), held(VK_SUBTRACT));
+              if (mvR != 0.0f || mvF != 0.0f || mvY != 0.0f || rot != 0.0f || scl != 0.0f) {
+                  const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.001f, 0.1f) * (shift ? 4.0f : 1.0f);
+                  float fx = 0.0f, fz = 1.0f, rx = 1.0f, rz = 0.0f;      // adelante y derecha de la pantalla, sobre el piso
+                  { float o[3], d0[3], d1[3], d2[3]; if (MotorGridRay(0.5f, 0.5f, o, d0) && MotorGridRay(0.0f, 0.5f, o, d1) && MotorGridRay(1.0f, 0.5f, o, d2)) {
+                        const float lr = sqrtf((d2[0] - d1[0]) * (d2[0] - d1[0]) + (d2[2] - d1[2]) * (d2[2] - d1[2]));
+                        if (lr > 1e-5f) { rx = (d2[0] - d1[0]) / lr; rz = (d2[2] - d1[2]) / lr; const float lf = sqrtf(d0[0] * d0[0] + d0[2] * d0[2]); if (lf > 0.05f) { fx = d0[0] / lf; fz = d0[2] / lf; } else { fx = -rz; fz = rx; if (fx * d0[0] + fz * d0[2] < 0.0f) { fx = -fx; fz = -fz; } } } } }
+                  float np[3] = { J.pos[0] + (rx * mvR + fx * mvF) * dt, J.pos[1] + mvY * 0.5f * dt, J.pos[2] + (rz * mvR + fz * mvF) * dt };
+                  MotorJugSet(np, J.yawDeg + rot * 90.0f * dt, std::clamp(J.scale * expf(scl * 0.6f * dt), 0.1f, 5.0f));
+                  KbLabel(rot != 0.0f ? "Girar al jugador" : scl != 0.0f ? "Tama\xC3\xB1o del jugador" : "Mover al jugador");
+              } } }
     }
     // ---------------- clic (al soltar, sobre lo mismo que se apreto) ----------------
     const bool lNow = lDown; const bool lEdge = lEdge0, lUp = !lNow && s_tlWas; s_tlWas = lNow;
@@ -1500,9 +1523,94 @@ static void ToolbarDraw() {
 }
 
 // (px, py) en pixeles de la ventana del juego
+// (17/11 b, Agustin 03:46: "deberia ser capaz de hacer estas acciones con iconos sobre el piso del jugador asi como con teclas del
+// teclado") ICONOS DEL PISO: a los pies del jugador, con la misma camara de la grilla (motorgrid.cpp MotorGridProject / MotorGridRay):
+// disco del centro = mover libre sobre el piso; flecha roja X y azul Z = mover por ese eje; flecha verde = altura; aro amarillo con
+// perilla = girar; cuadrado blanco = tamano. Se arrastran con el boton izquierdo. Tamano en pantalla constante.
+static std::atomic<float> s_fh[6][3]; static std::atomic<int> s_fhN{0}, s_fDrag{-1}; static float s_wY = 0.0f, s_cen[2] = {};
+static void JugFloorGizmo() {
+    s_fhN.store(0, std::memory_order_relaxed);
+    MotorJugState J; MotorJugGet(&J);
+    if (!J.hooked || !J.seen || !MotorVistaLive() || g_menuOpen.load(std::memory_order_relaxed)) { s_fDrag.store(-1); return; }
+    const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    const float P[3] = { J.wpos[0], J.wpos[1], J.wpos[2] };
+    auto proj = [&](const float* w, ImVec2& o) { float u, v; if (!MotorGridProject(w, &u, &v)) return false; o = ImVec2(u * ds.x, v * ds.y); return fabsf(u) < 4.0f && fabsf(v) < 4.0f; };
+    ImVec2 c0, c1; const float Pu[3] = { P[0], P[1] + 1.0f, P[2] };
+    if (!proj(P, c0) || !proj(Pu, c1)) { s_fDrag.store(-1); return; }
+    const float ppm = std::max(1.0f, sqrtf((c1.x - c0.x) * (c1.x - c0.x) + (c1.y - c0.y) * (c1.y - c0.y)));      // pixeles por metro a los pies
+    const float sz = std::clamp(120.0f * k / ppm, 0.05f, 20.0f), L = sz, Rr = sz * 1.35f;
+    const float a = J.yawDeg * 0.017453292f;
+    const float W[6][3] = { { P[0], P[1], P[2] }, { P[0] + L, P[1], P[2] }, { P[0], P[1], P[2] + L }, { P[0], P[1] + L, P[2] },
+                            { P[0] + Rr * sinf(a), P[1], P[2] + Rr * cosf(a) }, { P[0] + L * 0.62f, P[1], P[2] + L * 0.62f } };
+    ImVec2 S[6]; bool ok[6]; for (int i = 0; i < 6; i++) ok[i] = proj(W[i], S[i]);
+    // mouse
+    float mx = -1.0e6f, my = -1.0e6f, sx = 1.0f, sy = 1.0f; bool front = false, overUi = false;
+    { HWND h = OverlayHwnd(); POINT p{}; RECT rc{};
+      if (h && GetForegroundWindow() == h && GetCursorPos(&p) && ScreenToClient(h, &p) && GetClientRect(h, &rc) && rc.right > rc.left && rc.bottom > rc.top) {
+          sx = (float)(rc.right - rc.left) / ds.x; sy = (float)(rc.bottom - rc.top) / ds.y; mx = (float)p.x / sx; my = (float)p.y / sy; front = true;
+          if (MotorUiOn()) { const int n = s_hrN.load(); for (int i = 0; i < n && i < 10; i++) if ((float)p.x >= s_hr[i][0].load() && (float)p.x <= s_hr[i][2].load() && (float)p.y >= s_hr[i][1].load() && (float)p.y <= s_hr[i][3].load()) overUi = true; }
+      } }
+    const float hr = 13.0f * k;
+    for (int i = 0; i < 6; i++) { s_fh[i][0].store(ok[i] ? S[i].x * sx : -1.0e6f); s_fh[i][1].store(S[i].y * sy); s_fh[i][2].store(hr * 1.25f * sx); }
+    s_fhN.store(6, std::memory_order_relaxed);
+    static bool s_was = false; static float s_m0[2], s_p0[3], s_yaw0, s_sc0, s_hit0[3], s_ang0; static ImVec2 s_upDir;
+    const bool lNow = front && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, lEdge = lNow && !s_was; s_was = lNow;
+    int drag = s_fDrag.load(), hot = -1;
+    if (drag < 0 && front && !overUi && s_dragId < 0 && !s_dragging.load()) { static const int kOrd[6] = { 5, 4, 3, 1, 2, 0 }; for (int q = 0; q < 6 && hot < 0; q++) { const int i = kOrd[q]; if (!ok[i]) continue; const float ex = mx - S[i].x, ey = my - S[i].y; if (ex * ex + ey * ey <= hr * hr * 1.5f) hot = i; } }
+    auto hit = [&](float* out) { float o[3], d[3]; if (!MotorGridRay(mx / ds.x, my / ds.y, o, d) || fabsf(d[1]) < 1e-4f) return false; const float t = (s_p0[1] - o[1]) / d[1]; if (t <= 0.0f || t > 2000.0f) return false; for (int i = 0; i < 3; i++) out[i] = o[i] + d[i] * t; return true; };
+    if (lEdge && hot >= 0) {
+        memcpy(s_p0, J.pos, sizeof s_p0); s_yaw0 = J.yawDeg; s_sc0 = J.scale; s_m0[0] = mx; s_m0[1] = my; s_upDir = ImVec2(c1.x - c0.x, c1.y - c0.y);
+        // el plano del arrastre pasa por los pies: se guarda el punto tocado en el mundo (con la altura del jugador en el mundo)
+        const float keep = s_p0[1]; s_p0[1] = P[1]; float h3[3]; const bool hk = hit(h3); s_p0[1] = keep;
+        if (hk || hot == 3 || hot == 5) { if (hk) { memcpy(s_hit0, h3, sizeof h3); s_ang0 = atan2f(h3[0] - P[0], h3[2] - P[2]); } drag = hot; s_fDrag.store(drag); s_wY = P[1]; s_cen[0] = P[0]; s_cen[1] = P[2]; UndoBegin(); }
+    }
+    if (drag >= 0 && !lNow) { drag = -1; s_fDrag.store(-1); UndoEnd(); }
+    if (drag >= 0) {
+        float np[3] = { s_p0[0], s_p0[1], s_p0[2] }, ny = s_yaw0, ns = s_sc0;
+        const float keep = s_p0[1]; s_p0[1] = s_wY; float h3[3]; const bool hk = hit(h3); s_p0[1] = keep;
+        if (drag == 0 && hk) { np[0] += h3[0] - s_hit0[0]; np[2] += h3[2] - s_hit0[2]; }
+        else if (drag == 1 && hk) np[0] += h3[0] - s_hit0[0];
+        else if (drag == 2 && hk) np[2] += h3[2] - s_hit0[2];
+        else if (drag == 3) { const float l2 = s_upDir.x * s_upDir.x + s_upDir.y * s_upDir.y; if (l2 > 1.0f) np[1] += ((mx - s_m0[0]) * s_upDir.x + (my - s_m0[1]) * s_upDir.y) / l2; }
+        else if (drag == 4 && hk) { float d = atan2f(h3[0] - s_cen[0], h3[2] - s_cen[1]) - s_ang0; while (d > 3.14159265f) d -= 6.2831853f; while (d < -3.14159265f) d += 6.2831853f; ny = s_yaw0 + d * 57.29578f;
+            if (GetAsyncKeyState(VK_SHIFT) & 0x8000) ny = floorf(ny / 15.0f + 0.5f) * 15.0f; }      // Mayus: de a 15 grados
+        else if (drag == 5) ns = std::clamp(s_sc0 * expf(((mx - s_m0[0]) - (my - s_m0[1])) / (220.0f * k)), 0.1f, 5.0f);
+        MotorJugSet(np, ny, ns);
+    }
+    // --- dibujo ---
+    const int act = drag >= 0 ? drag : hot;
+    static const ImU32 kC[6] = { IM_COL32(236, 239, 244, 255), IM_COL32(234, 72, 84, 255), IM_COL32(64, 140, 240, 255), IM_COL32(126, 196, 46, 255), IM_COL32(245, 196, 48, 255), IM_COL32(236, 239, 244, 255) };
+    const ImU32 sh = IM_COL32(0, 0, 0, 150);
+    {   // aro de giro sobre el piso
+        ImVec2 prev; bool pOk = false;
+        for (int i = 0; i <= 64; i++) { const float t = (float)i / 64.0f * 6.2831853f; const float w[3] = { P[0] + Rr * sinf(t), P[1], P[2] + Rr * cosf(t) }; ImVec2 q; const bool qOk = proj(w, q);
+            if (qOk && pOk) { dl->AddLine(prev, q, sh, 4.0f * k); dl->AddLine(prev, q, (kC[4] & 0x00ffffffu) | (act == 4 ? 0xff000000u : 0xa0000000u), 2.0f * k); } prev = q; pOk = qOk; }
+    }
+    auto arrow = [&](int i) { if (!ok[i]) return; const ImU32 c = kC[i]; const float w = (act == i ? 4.0f : 3.0f) * k;
+        dl->AddLine(c0, S[i], sh, w + 2.0f * k); dl->AddLine(c0, S[i], c, w);
+        float dx = S[i].x - c0.x, dy = S[i].y - c0.y; const float l = sqrtf(dx * dx + dy * dy); if (l < 1.0f) return; dx /= l; dy /= l; const float hs = 11.0f * k;
+        dl->AddTriangleFilled(ImVec2(S[i].x + dx * hs, S[i].y + dy * hs), ImVec2(S[i].x - dy * hs * 0.6f, S[i].y + dx * hs * 0.6f), ImVec2(S[i].x + dy * hs * 0.6f, S[i].y - dx * hs * 0.6f), c);
+        if (act == i) dl->AddCircle(S[i], hr, IM_COL32(255, 255, 255, 220), 24, 1.6f * k); };
+    arrow(1); arrow(2); arrow(3);
+    if (ok[5]) { const float q = 8.0f * k; dl->AddRectFilled(ImVec2(S[5].x - q - 1, S[5].y - q - 1), ImVec2(S[5].x + q + 1, S[5].y + q + 1), sh, 3.0f * k); dl->AddRectFilled(ImVec2(S[5].x - q + 1, S[5].y - q + 1), ImVec2(S[5].x + q - 1, S[5].y + q - 1), kC[5], 2.0f * k);
+        dl->AddLine(ImVec2(S[5].x - q * 0.45f, S[5].y + q * 0.45f), ImVec2(S[5].x + q * 0.45f, S[5].y - q * 0.45f), IM_COL32(20, 24, 30, 255), 1.6f * k); if (act == 5) dl->AddRect(ImVec2(S[5].x - q - 3, S[5].y - q - 3), ImVec2(S[5].x + q + 3, S[5].y + q + 3), IM_COL32(255, 255, 255, 230), 3.0f * k, 0, 1.6f * k); }
+    if (ok[4]) { dl->AddCircleFilled(S[4], 9.0f * k, sh, 20); dl->AddCircleFilled(S[4], 7.5f * k, kC[4], 20); if (act == 4) dl->AddCircle(S[4], hr, IM_COL32(255, 255, 255, 220), 24, 1.6f * k); }
+    dl->AddCircleFilled(c0, 9.0f * k, sh, 20); dl->AddCircleFilled(c0, 7.0f * k, kC[0], 20); if (act == 0) dl->AddCircle(c0, hr, IM_COL32(255, 255, 255, 220), 24, 1.6f * k);
+    if (act >= 0) {
+        char t[96]; const char* nm = act == 4 ? "Girar" : act == 5 ? "Tama\xC3\xB1o" : act == 3 ? "Altura" : act == 1 ? "Mover X" : act == 2 ? "Mover Z" : "Mover";
+        if (act == 4) snprintf(t, sizeof t, "%s  %.1f\xC2\xB0", TRS(nm), J.yawDeg); else if (act == 5) snprintf(t, sizeof t, "%s  %.0f %%", TRS(nm), J.scale * 100.0f);
+        else snprintf(t, sizeof t, "%s  %.2f, %.2f, %.2f m", TRS(nm), J.pos[0], J.pos[1], J.pos[2]);
+        ImFont* font = MotorFont(0); const float fs = 15.0f * k; const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, t); const ImVec2 tp(S[act].x + 18.0f * k, S[act].y - ts.y - 10.0f * k);
+        dl->AddRectFilled(ImVec2(tp.x - 7.0f * k, tp.y - 4.0f * k), ImVec2(tp.x + ts.x + 7.0f * k, tp.y + ts.y + 4.0f * k), IM_COL32(18, 21, 27, 225), 5.0f * k);
+        dl->AddText(font, fs, tp, IM_COL32(236, 239, 244, 255), t);
+    }
+}
+
 bool MotorGizmoOver(float px, float py) {
     if (Now() - s_drawT.load(std::memory_order_relaxed) > 0.3) return false;
-    if (s_dragging.load(std::memory_order_relaxed)) return true;
+    if (s_dragging.load(std::memory_order_relaxed) || s_fDrag.load(std::memory_order_relaxed) >= 0) return true;
+    { const int n = s_fhN.load(std::memory_order_relaxed); for (int i = 0; i < n && i < 6; i++) { const float ex = px - s_fh[i][0].load(), ey = py - s_fh[i][1].load(), er = s_fh[i][2].load(); if (ex * ex + ey * ey <= er * er) return true; } }      // (17/11 b) iconos del piso del jugador
     if (MotorUiOn()) { const int n = s_hrN.load(); for (int i = 0; i < n && i < 10; i++) if (px >= s_hr[i][0].load() && px <= s_hr[i][2].load() && py >= s_hr[i][1].load() && py <= s_hr[i][3].load()) return true; }   // menu propio: volver, capsula, tarjeta
     const float dx = px - s_cx.load(), dy = py - s_cy.load(), r = s_rad.load() * 1.22f;
     if (dx * dx + dy * dy <= r * r) return true;
@@ -1526,6 +1634,7 @@ static void SetCam(bool on) {
 void MotorGizmoDraw() {
     // (17/11) con el jugador en la escena principal la grilla del piso se dibuja encima de la vista principal (motorgrid.cpp), debajo de los paneles
     if (MotorPageActive() && MotorVistaLive() && g_dev.imm) { if (ID3D11ShaderResourceView* g = MotorGridOverlay(g_dev.imm)) ImGui::GetBackgroundDrawList()->AddImage((ImTextureID)(uintptr_t)g, ImVec2(0, 0), ImGui::GetIO().DisplaySize); }
+    if (MotorPageActive()) JugFloorGizmo(); else { s_fhN.store(0); s_fDrag.store(-1); }
     if (MotorUiOn()) ToolbarDraw();
     if (g_cfg.motorGizmo == 0) { s_drawT.store(Now()); return; }
     ImDrawList* dl = MotorDL(); const ImVec2 ds = ImGui::GetIO().DisplaySize;

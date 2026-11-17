@@ -2772,6 +2772,12 @@ static void DrawSkeletonView() {
         if (fabsf(nx) > 1.5f || fabsf(ny) > 1.5f) return false;
         o = ImVec2(rx + (nx * 0.5f + 0.5f) * rw, ry + (0.5f - 0.5f * ny) * rh); return true;
     };
+    // (17/11 b, Agustin 03:47 con captura: "la vista de huesos esta bastante desfazada al modelo") en el Motor los huesos salian mas
+    // chicos que el modelo, creciendo el error con la altura (unos 5 % con un jugador de 1,89 m). La estatura va como escala del
+    // hueso raiz en el controlador del clip (motorjug.cpp) y estos huesos se leen sin ella (INFERIDO de la captura): en el Motor se
+    // multiplican por esa escala (estatura x tamano pedido).
+    float mScale = 1.0f; { MotorJugState J; if (MotorPageActive()) { MotorJugGet(&J); if (J.seen && J.rootScale > 0.05f && J.rootScale < 20.0f) mScale = J.rootScale; }
+        static float s_last = 0.0f; if (mScale != s_last) { s_last = mScale; static int nl = 0; if (nl++ < 8) Log("Esqueleto: escala de la raiz en el Motor %.4f", mScale); } }
     static const int kOff[4] = { 0x88, 0x90, 0x98, 0xA0 };
     static const ImU32 kCol[4] = { IM_COL32(255, 255, 255, 220), IM_COL32(90, 210, 255, 220), IM_COL32(90, 210, 255, 220), IM_COL32(255, 210, 60, 230) };
     int drawn = 0, bones = 0;
@@ -2799,6 +2805,7 @@ static void DrawSkeletonView() {
                     const float cx = 2.0f * (qy * v2 - qz * v1), cy = 2.0f * (qz * v0 - qx * v2), cz = 2.0f * (qx * v1 - qy * v0);
                     t[0] = A[8] + v0 + qw * cx + (qy * cz - qz * cy); t[1] = A[9] + v1 + qw * cy + (qz * cx - qx * cz); t[2] = A[10] + v2 + qw * cz + (qx * cy - qy * cx);
                 }
+                t[0] *= mScale; t[1] *= mScale; t[2] *= mScale;
                 float w[3]; for (int k = 0; k < 3; k++) w[k] = W[4 * k] * t[0] + W[4 * k + 1] * t[1] + W[4 * k + 2] * t[2] + W[4 * k + 3];
                 wp[b][0] = t[0]; wp[b][1] = t[1]; wp[b][2] = t[2];
                 ok[b] = toScreen(w, pt[b]);

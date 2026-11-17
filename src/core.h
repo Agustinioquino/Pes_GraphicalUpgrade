@@ -689,11 +689,11 @@ void FreeCamMotorTick(); float FreeCamFovNow();                                 
 // (15/11) motorscene.cpp: luces y conteo de objetos de la escena grafica del motor, para el editor del Motor
 struct MotorLight { uintptr_t obj, data; int kind, scene; bool on, shadow, writable; float color[4], pos[3], range; char name[40]; };   // kind: 0 Luz, 1 Sol, 2 Local, 3 Punto, 4 Foco
 struct MotorSceneInfo { int scenes, objects, models, lights; };
-void MotorVistaPresent(); bool MotorVistaLive(); ID3D11ShaderResourceView* MotorGridOverlay(ID3D11DeviceContext* ctx);
+void MotorVistaPresent(); bool MotorVistaLive(); ID3D11ShaderResourceView* MotorGridOverlay(ID3D11DeviceContext* ctx); bool MotorGridProject(const float* w, float* u, float* v); bool MotorGridRay(float u, float v, float* o, float* dir);
 // (17/11) motorjug.cpp: mover / girar al jugador del Motor y elegirle animacion (poses y festejos del juego)
-struct MotorJugState { bool hooked, seen; float pos[3], yawDeg, scale; int kind, id; bool pause, mirror, fix; int animSt; };   // animSt: 0 nada pedido, 1 pedido, 2 puesto, 3 el juego no lo acepto
+struct MotorJugState { bool hooked, seen; float pos[3], yawDeg, scale; int kind, id; bool pause, mirror, fix; int animSt; float wpos[3], rootScale; };   // animSt: 0 nada pedido, 1 pedido, 2 puesto, 3 el juego no lo acepto
 void MotorJugPresent(); void MotorJugGet(MotorJugState* s); void MotorJugSet(const float* p, float yawDeg, float scale); void MotorJugSetFix(bool on); void MotorJugAnim(int kind, int id, bool mirror); void MotorJugPause(bool on); void MotorJugReset();   // (16/11) motorvista.cpp: el jugador del Motor en la escena principal
-int MotorSceneLights(MotorLight* out, int max, MotorSceneInfo* info); bool MotorLightSetOn(const MotorLight& L, bool on);
+int MotorSceneLights(MotorLight* out, int max, MotorSceneInfo* info); bool MotorLightSetOn(const MotorLight& L, bool on); int MotorLightsRestore();
 bool MotorLightSetColor(const MotorLight& L, const float* rgba); bool MotorLightSetShadow(const MotorLight& L, bool on); bool MotorLightSetRange(const MotorLight& L, float r); bool MotorLightSetPos(const MotorLight& L, const float* xyz); bool MotorLightCan(const MotorLight& L, int what);
 int MotorCursorKind(); const char* MotorKeyLabel(double* t);   // (15/11 p) motorgizmo.cpp: cursor de redimensionar (3 <->, 4 vertical) y nombre del ultimo atajo del Motor (overlay.cpp)   // (15/11 o) motorscene.cpp: inspector editable (what 0 color, 1 sombra, 2 alcance, 3 posicion)
 void MotorErr(const char* fmt, ...);   // (15/11 f) error del Motor: al registro y a un recuadro rojo en pantalla (motorgizmo.cpp)

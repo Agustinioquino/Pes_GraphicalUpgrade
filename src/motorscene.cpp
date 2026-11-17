@@ -72,6 +72,15 @@ int MotorSceneLights(MotorLight* out, int max, MotorSceneInfo* info) {
     return n;
 }
 
+// (17/11 b, Agustin 03:50: "al salir del motor que se quiten las opciones de luces") la primera vez que el Motor toca una luz se
+// guarda como estaba (lo leido de la escena en ese cuadro); al salir del Motor MotorLightsRestore las deja asi de nuevo.
+static MotorLight s_orig[128]; static int s_origN = 0; static bool s_restoring = false;
+static void Remember(const MotorLight& L) {
+    if (s_restoring) return;
+    for (int i = 0; i < s_origN; i++) if (s_orig[i].obj == L.obj && s_orig[i].data == L.data) return;
+    if (s_origN < 128) s_orig[s_origN++] = L;
+}
+
 // prende / apaga una luz ya leida: vuelve a comprobar que sigue siendo la misma antes de escribir el bit
 static bool SetOn(uintptr_t obj, uintptr_t data, int kind, bool on) {
     __try {
@@ -84,6 +93,7 @@ static bool SetOn(uintptr_t obj, uintptr_t data, int kind, bool on) {
 }
 static bool RefreshLight(const MotorLight& L);      // abajo: vuelve a poner su color con el setter del juego (llama a su actualizacion)
 bool MotorLightSetOn(const MotorLight& L, bool on) {
+    Remember(L);
     bool ok = SetOn(L.obj, L.data, L.kind, on);
     // (15/11 r, Agustin 18:48: "los focos los volvi a activar en el motor pero se sigue viendo como si los focos estuvieran apagados")
     // el bit solo no avisa a la luz; al prender se le vuelve a poner su propio color con el setter del juego, que termina en la
@@ -154,6 +164,7 @@ static bool CallF(uintptr_t fn, uintptr_t obj, uintptr_t data, int kind, float v
 static bool ReadF(uintptr_t a, float* out) { __try { if (!Heap(a & ~(uintptr_t)7)) return false; *out = *(const float*)a; return true; } __except (1) { return false; } }
 static bool Finite(float v, float lim) { return v == v && v > -lim && v < lim; }
 bool MotorLightSetColor(const MotorLight& L, const float* c) {
+    Remember(L);
     if (!MotorLightCan(L, 0)) return false;
     for (int i = 0; i < 4; i++) if (!Finite(c[i], 1.0e7f)) return false;
     return CallV4(kFnColor, L.obj, L.data, L.kind, c);
@@ -165,6 +176,7 @@ static bool RefreshLight(const MotorLight& L) {
     return CallV4(kFnColor, L.obj, L.data, L.kind, c);
 }
 bool MotorLightSetShadow(const MotorLight& L, bool on) {
+    Remember(L);
     __try {
         if (!L.writable || !Alive(L.obj, L.data, L.kind)) return false;
         uint32_t* f = (uint32_t*)(L.data + 0x64); const uint32_t v = *f, w = on ? (v | 0x10u) : (v & ~0x10u);
@@ -173,16 +185,37 @@ bool MotorLightSetShadow(const MotorLight& L, bool on) {
     } __except (1) { return false; }
 }
 bool MotorLightSetRange(const MotorLight& L, float r) {
+    Remember(L);
     if (!MotorLightCan(L, 2) || !Finite(r, 100000.0f) || r < 0.01f) return false;
     return CallF(L.kind == 3 ? kFnRangeP : kFnRangeS, L.obj, L.data, L.kind, r);
 }
 bool MotorLightSetPos(const MotorLight& L, const float* p) {
+    Remember(L);
     if (!MotorLightCan(L, 3)) return false;
     for (int i = 0; i < 3; i++) if (!Finite(p[i], 100000.0f)) return false;
     float w = 1.0f; if (!ReadF(L.data + 0x7c, &w)) return false;                       // la cuarta componente queda como estaba
     float v[4] = { p[0], p[1], p[2], w };
     if (L.kind == 1) { const float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (l < 1.0e-4f) return false; v[0] /= l; v[1] /= l; v[2] /= l; }   // sol: direccion unitaria
     return CallV4(L.kind == 3 ? kFnPosP : L.kind == 4 ? kFnPosS : kFnDirSun, L.obj, L.data, L.kind, v);
+}
+
+int MotorLightsRestore() {
+    if (s_origN <= 0) return 0;
+    static MotorLight cur[256]; int n = Walk(cur, 256, nullptr); if (n < 0) n = Walk(cur, 256, nullptr);
+    int done = 0; s_restoring = true;
+    for (int i = 0; i < s_origN && n > 0; i++) {
+        const MotorLight& O = s_orig[i]; const MotorLight* C = nullptr;
+        for (int k = 0; k < n; k++) if (cur[k].obj == O.obj && cur[k].data == O.data && cur[k].kind == O.kind) { C = &cur[k]; break; }
+        if (!C) continue;      // esa luz ya no esta en la escena: nada que devolver
+        if (memcmp(C->color, O.color, sizeof O.color) != 0) MotorLightSetColor(*C, O.color);
+        if (C->range != O.range && O.range > 0.0f) MotorLightSetRange(*C, O.range);
+        if (memcmp(C->pos, O.pos, sizeof O.pos) != 0) MotorLightSetPos(*C, O.pos);
+        if (C->shadow != O.shadow) MotorLightSetShadow(*C, O.shadow);
+        if (C->on != O.on) MotorLightSetOn(*C, O.on);
+        done++;
+    }
+    s_restoring = false; s_origN = 0;
+    return done;
 }
 
 } // namespace fx

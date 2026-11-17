@@ -233,6 +233,23 @@ ID3D11ShaderResourceView* MotorGridOverlay(ID3D11DeviceContext* ctx) {
     static int nl = 0; if (v && nl++ == 0) Log("motor (grilla): jugador en la escena principal: la grilla se dibuja encima de la vista principal");
     return v;
 }
+// (17/11 b) la camara con la que se dibujo la grilla por ultima vez, para poner cosas en el piso con la MISMA proyeccion (los iconos de
+// mover / girar / escalar del jugador, motorgizmo.cpp). u, v = 0..1 de la pantalla.
+static std::mutex s_camMx; static Cam s_camLast{}; static float s_camAsp = 16.0f / 9.0f; static double s_camT = -1.0e9;
+bool MotorGridProject(const float* w, float* u, float* v) {
+    std::lock_guard<std::mutex> lk(s_camMx); if (Now() - s_camT > 0.5) return false; const Cam& c = s_camLast;
+    const float d[3] = { w[0] - c.pos[0], w[1] - c.pos[1], w[2] - c.pos[2] };
+    const float z = d[0] * c.f[0] + d[1] * c.f[1] + d[2] * c.f[2]; if (z < 0.05f || c.th < 1e-5f) return false;
+    const float x = d[0] * c.r[0] + d[1] * c.r[1] + d[2] * c.r[2], y = d[0] * c.u[0] + d[1] * c.u[1] + d[2] * c.u[2];
+    *u = 0.5f + 0.5f * x / (z * c.th * s_camAsp); *v = 0.5f - 0.5f * y / (z * c.th); return true;
+}
+bool MotorGridRay(float u, float v, float* o, float* dir) {
+    std::lock_guard<std::mutex> lk(s_camMx); if (Now() - s_camT > 0.5) return false; const Cam& c = s_camLast;
+    const float a = (u * 2.0f - 1.0f) * c.th * s_camAsp, b = (1.0f - v * 2.0f) * c.th;
+    for (int i = 0; i < 3; i++) { o[i] = c.pos[i]; dir[i] = c.f[i] + c.r[i] * a + c.u[i] * b; }
+    return true;
+}
+
 static ID3D11ShaderResourceView* GridSRV(ID3D11DeviceContext* ctx) {
     if (!g_dev.dev || !ctx) return nullptr;
     if (!s_tried) {
@@ -271,6 +288,7 @@ static ID3D11ShaderResourceView* GridSRV(ID3D11DeviceContext* ctx) {
                     yaw = atan2f(f[0], f[2]); pitch = asinf(std::clamp(f[1], -1.0f, 1.0f));
                     static int nl = 0; if (nl++ < 3) Log("motor (grilla): con la camara del visor: campo de vision %.4f, aspecto %.3f (pantalla %u x %u)", wf, s_asp, g_bbW, g_bbH);
                 } } } }
+    { std::lock_guard<std::mutex> lk(s_camMx); s_camLast = c; s_camAsp = s_asp; s_camT = Now(); }
     if (!s_ovl) MotorFeetPoll(ctx);
     if (!s_ovl && s_feetU >= 0.0f) {   // pies en la imagen -> rayo de la camara -> piso (y = 0)
         const float a = (s_feetU * 2.0f - 1.0f) * c.th * s_asp, b = (1.0f - s_feetV * 2.0f) * c.th;
