@@ -2783,6 +2783,19 @@ static bool SkBoneName(const char* bone, char* out, int n) {
     }
     return false;
 }
+// (17/11 07:55, Agustin: "mejora como se plasman los huesos, los grupos que no se deformen que sean entendibles") el grupo sale del
+// NOMBRE en los cuatro esqueletos (antes solo en el del cuerpo; el de la "cara" trae tambien pecho, cuello y cabeza, y el de las manos el
+// antebrazo): 1 cara (skf_), 2 cuerpo (sk_ / skl_ / root), 4 deformacion (dsk_, ayudas de piel), 3 ropa y el resto. Cada grupo con su color.
+// El mismo hueso en dos esqueletos (el antebrazo esta en el cuerpo y en la mano) se dibuja una sola vez: el doble daba piezas encimadas
+// que parecian deformadas.
+static int SkGroup(const char* nm, bool named) {
+    if (!named) return 2;
+    char lw[8] = {}; for (int q = 0; q < 5 && nm[q]; q++) lw[q] = (char)tolower((unsigned char)nm[q]);
+    if (!strncmp(lw, "skf_", 4)) return 1;
+    if (!strncmp(lw, "dsk_", 4)) return 4;
+    if (!strncmp(lw, "sk_", 3) || !strncmp(lw, "skl_", 4) || !strncmp(lw, "root", 4)) return 2;
+    return 3;
+}
 static void DrawSkeletonView() {
     std::vector<float> S; if (!NamedCBRead("SceneCB", S) || S.size() < 16) return;
     const float* PV = &S[0];   // m_projectionView (mundo -> recorte), como headshadow.cpp
@@ -2808,7 +2821,8 @@ static void DrawSkeletonView() {
     float mScale = 1.0f; { MotorJugState J; if (MotorPageActive()) { MotorJugGet(&J); if (J.seen && J.rootScale > 0.05f && J.rootScale < 20.0f) mScale = J.rootScale; }
         static float s_last = 0.0f; if (mScale != s_last) { s_last = mScale; static int nl = 0; if (nl++ < 8) Log("Esqueleto: escala de la raiz en el Motor %.4f", mScale); } }
     static const int kOff[4] = { 0x88, 0x90, 0x98, 0xA0 };
-    static const ImU32 kCol[4] = { IM_COL32(255, 255, 255, 220), IM_COL32(90, 210, 255, 220), IM_COL32(90, 210, 255, 220), IM_COL32(255, 210, 60, 230) };
+    // color por grupo (indice = SkGroup): cara amarillo, cuerpo blanco, ropa violeta, deformacion celeste
+    static const ImU32 kGCol[5] = { IM_COL32(255, 255, 255, 220), IM_COL32(255, 210, 60, 235), IM_COL32(245, 245, 245, 230), IM_COL32(200, 130, 255, 220), IM_COL32(90, 210, 255, 200) };
     int drawn = 0, bones = 0;
     const int grp = std::clamp((int)(g_cfg.live[426][1] + 0.5f), 0, 3);
     const bool names = g_cfg.live[426][0] > 1.5f; const float kk = std::max(1.0f, vp->Size.y / 1080.0f);
@@ -2817,11 +2831,12 @@ static void DrawSkeletonView() {
     for (int sl = 0; sl < kCharSlots && drawn < 24; sl++) {
         if (!alive[sl] || !ci[sl].node) continue;
         float W[12]; if (!CharNodeMatrix(ci[sl].node, W)) continue;
+        static uint32_t seenH[1600]; int nSeen = 0;      // hashes ya dibujados en este personaje
         for (int r = 0; r < 4; r++) {
             void* rig = nullptr; if (!SkCopy(&rig, (const char*)ci[sl].node + kOff[r], 8) || !rig) continue;
             const char* arr = nullptr; int n = 0;
             if (!SkCopy(&arr, (const char*)rig + 0x28, 8) || !arr || !SkCopy(&n, (const char*)rig + 0x30, 4) || n < 2 || n > 400) continue;
-            static ImVec2 pt[400]; static bool ok[400]; static float wp[400][3];
+            static ImVec2 pt[400]; static bool ok[400], dup[400]; static float wp[400][3]; static signed char gr[400];
             { static int s_dump = 0; if (s_dump < 4 && r == (s_dump % 4)) { s_dump++; for (int b = 0; b < 3 && b < n; b++) { unsigned char by[0x20] = {}, tx[24] = {}; const char* np = nullptr; char nm[48] = "?";
                 SkCopy(by, arr + (size_t)b * 0xc0, sizeof by); SkCopy(&np, arr + (size_t)b * 0xc0 + 0x08, 8); if (np) SkCopy(tx, np, sizeof tx); SkBoneName(arr + (size_t)b * 0xc0, nm, sizeof nm);
                 char hx[200]; int o = 0; for (int q = 0; q < 0x20; q++) o += snprintf(hx + o, sizeof hx - o, "%02x", by[q]); o += snprintf(hx + o, sizeof hx - o, " | "); for (int q = 0; q < 24; q++) o += snprintf(hx + o, sizeof hx - o, "%02x", tx[q]);
@@ -2832,17 +2847,15 @@ static void DrawSkeletonView() {
             float A[12]; bool att = false;
             if (r > 0) { const void* prig = nullptr; const char* ab = nullptr; const void* ax = nullptr;
                 if (SkCopy(&prig, (const char*)rig + 0x120, 8) && prig && SkCopy(&ab, (const char*)rig + 0x128, 8) && ab && SkCopy(&ax, ab + 0x18, 8) && ax && SkCopy(A, ax, sizeof A)) att = true; }
+            const int nSeen0 = nSeen;
             for (int b = 0; b < n; b++) {
-                ok[b] = false;
+                ok[b] = false; dup[b] = false;
                 const char* bone = arr + (size_t)b * 0xc0; const void* cur = nullptr; float x[12];
-                if (grp != 0) {      // (17/11 b) solo un grupo: 1 cara, 2 cuerpo, 3 ropa / ayuda
-                    // (17/11 06:58) cuerpo = sk_ y dsk_ (y los que no tienen nombre legible); cara = skf_ o el esqueleto de la cara;
-                    // ropa = el resto con nombre (huesos de la ropa y ayudas)
-                    int g = r == 3 ? 1 : 2;
-                    if (r == 0) { char n0[48]; if (SkBoneName(bone, n0, sizeof n0)) { char lw[8] = {}; for (int q = 0; q < 5 && n0[q]; q++) lw[q] = (char)tolower((unsigned char)n0[q]);
-                        g = !strncmp(lw, "skf_", 4) ? 1 : (!strncmp(lw, "sk_", 3) || !strncmp(lw, "dsk_", 4) || !strncmp(lw, "skl_", 4) || !strncmp(lw, "root", 4)) ? 2 : 3; } }
-                    if (g != grp) continue;
-                }
+                { char n0[48] = {}; const bool named = SkBoneName(bone, n0, sizeof n0); gr[b] = (signed char)SkGroup(n0, named);
+                  uint32_t h = 0; SkCopy(&h, bone + 0x10, 4);
+                  if (h) { for (int q = 0; q < nSeen0; q++) if (seenH[q] == h) { dup[b] = true; break; } if (!dup[b] && nSeen < 1600) seenH[nSeen++] = h; } }
+                // (17/11 b) solo un grupo: 1 cara, 2 cuerpo, 3 ropa / ayudas (la deformacion va con el cuerpo)
+                if (grp != 0 && (gr[b] == 4 ? 2 : gr[b]) != grp) continue;
                 if (!SkCopy(&cur, bone + 0x18, 8) || !cur || !SkCopy(x, cur, sizeof x)) continue;
                 float t[3] = { x[8], x[9], x[10] }; if (!(fabsf(t[0]) < 3.0f && fabsf(t[1]) < 3.0f && fabsf(t[2]) < 3.0f)) continue;
                 if (att) {   // modelo = enganche.t + rot(enganche.q, enganche.s * t)
@@ -2856,7 +2869,8 @@ static void DrawSkeletonView() {
                 ok[b] = toScreen(w, pt[b]);
             }
             for (int b = 0; b < n; b++) {
-                if (!ok[b]) continue; bones++;
+                if (!ok[b] || dup[b]) continue; bones++;
+                const ImU32 col = kGCol[std::clamp((int)gr[b], 0, 4)]; const bool thin = gr[b] == 1 || gr[b] == 4;
                 const char* bone = arr + (size_t)b * 0xc0; uint64_t pv = 0; int par = -1;
                 if (SkCopy(&pv, bone + 0x20, 8)) {
                     if (pv < (uint64_t)n) par = (int)pv;
@@ -2869,12 +2883,18 @@ static void DrawSkeletonView() {
                     // (17/11 06:58, Agustin: "a los huesos le falta esa forma triangular mostrando a donde apunta") pieza como en
                     // Blender: ancha cerca del padre (al 18 %) y en punta en el hijo; la union lejana sigue como linea tenue
                     const float sx = pt[b].x - pt[par].x, sy = pt[b].y - pt[par].y, L = sqrtf(sx * sx + sy * sy);
-                    if (lejos || L < 6.0f * kk) dl->AddLine(pt[par], pt[b], lejos ? ((kCol[r] & 0x00ffffffu) | 0x30000000u) : kCol[r], r == 3 ? 1.0f : 1.5f);
-                    else { const float w = std::clamp(L * 0.09f, 2.0f * kk, (r == 3 ? 5.0f : 9.0f) * kk), nx = -sy / L * w, ny = sx / L * w;
+                    // (07:55) solo los huesos del cuerpo (sk_) llevan la pieza; cara, deformacion y ropa: linea fina con su color.
+                    // El ancho de la pieza sale del largo del hueso EN EL MUNDO (8 % del largo, proyectado a la distancia del padre), no del
+                    // largo en pantalla: un hueso que apunta a la camara ya no se ve como un rombo aplastado o gigante.
+                    const float L3 = sqrtf(dx * dx + dy * dy + dz * dz);
+                    float wpx = 0.0f; { float wq[3]; for (int k = 0; k < 3; k++) wq[k] = W[4 * k] * wp[par][0] + W[4 * k + 1] * wp[par][1] + W[4 * k + 2] * wp[par][2] + W[4 * k + 3];
+                        const float cw = PV[12] * wq[0] + PV[13] * wq[1] + PV[14] * wq[2] + PV[15]; if (cw > 0.05f) wpx = 0.08f * L3 * PV[5] / cw * 0.5f * rh; }
+                    if (lejos || thin || L < 6.0f * kk || !(wpx > 0.0f)) dl->AddLine(pt[par], pt[b], lejos ? ((col & 0x00ffffffu) | 0x30000000u) : col, thin ? 1.0f : 1.5f);
+                    else { const float w = std::clamp(wpx, 1.5f * kk, 10.0f * kk), nx = -sy / L * w, ny = sx / L * w;
                         const ImVec2 m(pt[par].x + sx * 0.18f, pt[par].y + sy * 0.18f), a(m.x + nx, m.y + ny), c2(m.x - nx, m.y - ny);
-                        dl->AddTriangleFilled(pt[par], a, pt[b], (kCol[r] & 0x00ffffffu) | 0x50000000u); dl->AddTriangleFilled(pt[par], pt[b], c2, (kCol[r] & 0x00ffffffu) | 0x30000000u);
-                        const ImVec2 poly[4] = { pt[par], a, pt[b], c2 }; dl->AddPolyline(poly, 4, kCol[r], ImDrawFlags_Closed, r == 3 ? 1.0f : 1.3f); } }
-                dl->AddCircleFilled(pt[b], r == 3 ? 1.8f : 2.5f, kCol[r], 8);
+                        dl->AddTriangleFilled(pt[par], a, pt[b], (col & 0x00ffffffu) | 0x50000000u); dl->AddTriangleFilled(pt[par], pt[b], c2, (col & 0x00ffffffu) | 0x30000000u);
+                        const ImVec2 poly[4] = { pt[par], a, pt[b], c2 }; dl->AddPolyline(poly, 4, col, ImDrawFlags_Closed, 1.3f); } }
+                dl->AddCircleFilled(pt[b], thin ? 1.6f : 2.5f, col, 8);
                 // (17/11 b, Agustin 04:00: "agregar en la vista de hueso un texto pequeno con el nombre del hueso") nombre del hueso
                 // (hueso + 0x08 = puntero al nombre, como exprbones.cpp): chico al lado de cada punto con x426 = 2, y siempre el del
                 // hueso mas cercano al mouse, mas grande y con fondo
@@ -2884,8 +2904,8 @@ static void DrawSkeletonView() {
                     SkBoneName(bone, nb, sizeof nb);     // sin nombre: '#hash' (sirve igual para buscarlo con tools/foxhash.py)
                     if (nb[0]) {
                         if (names) { const ImVec2 tp2(pt[b].x + 5.0f * kk, pt[b].y - 7.0f * kk); const float fsn = 12.0f * kk;
-                            dl->AddText(nullptr, fsn, ImVec2(tp2.x + 1.0f, tp2.y + 1.0f), IM_COL32(0, 0, 0, 220), nb); dl->AddText(nullptr, fsn, tp2, (kCol[r] & 0x00ffffffu) | 0xf0000000u, nb); }
-                        if (near_) { bestD2 = md2; bestPt = pt[b]; bestCol = kCol[r]; memcpy(bestNm, nb, sizeof bestNm < sizeof nb ? sizeof bestNm : sizeof nb); bestNm[sizeof bestNm - 1] = 0; }
+                            dl->AddText(nullptr, fsn, ImVec2(tp2.x + 1.0f, tp2.y + 1.0f), IM_COL32(0, 0, 0, 220), nb); dl->AddText(nullptr, fsn, tp2, (col & 0x00ffffffu) | 0xf0000000u, nb); }
+                        if (near_) { bestD2 = md2; bestPt = pt[b]; bestCol = col; memcpy(bestNm, nb, sizeof bestNm < sizeof nb ? sizeof bestNm : sizeof nb); bestNm[sizeof bestNm - 1] = 0; }
                     }
                 }
             }
@@ -2896,7 +2916,7 @@ static void DrawSkeletonView() {
         dl->AddCircle(bestPt, 6.0f * kk, IM_COL32(255, 255, 255, 240), 16, 1.6f * kk);
         dl->AddRectFilled(ImVec2(tp.x - 6.0f * kk, tp.y - 3.0f * kk), ImVec2(tp.x + ts.x + 6.0f * kk, tp.y + ts.y + 3.0f * kk), IM_COL32(12, 14, 18, 230), 4.0f * kk);
         dl->AddText(nullptr, fs, tp, bestCol | 0xff000000u, bestNm); }
-    char buf[120]; snprintf(buf, sizeof buf, TRS("Esqueleto: %d personajes, %d huesos (blanco cuerpo, celeste manos, amarillo cara)"), drawn, bones);
+    char buf[120]; snprintf(buf, sizeof buf, TRS("Esqueleto: %d personajes, %d huesos (blanco cuerpo, amarillo cara, celeste deformaci\xC3\xB3n, violeta ropa)"), drawn, bones);
     ImVec2 tp(vp->Pos.x + 16, vp->Pos.y + vp->Size.y - 34);
     ImVec2 ts = ImGui::CalcTextSize(buf);
     dl->AddRectFilled(ImVec2(tp.x - 6, tp.y - 3), ImVec2(tp.x + ts.x + 6, tp.y + ts.y + 3), IM_COL32(0, 0, 0, 150), 4.0f);
