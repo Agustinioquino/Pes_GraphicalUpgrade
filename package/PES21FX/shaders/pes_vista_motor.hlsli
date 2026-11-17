@@ -9,7 +9,7 @@
 //
 // Fila 429 de IniParams (nunca se guarda en el ini):
 //   x429 = vista: 0 imagen normal, 1 luz difusa, 2 luz especular, 3 normales (espacio de vista), 4 normales (mundo),
-//          5 albedo (el color del material, sin luz), 6 profundidad (cerca claro, lejos oscuro, con bandas cada 20 cm),
+//          5 albedo (el color del material, sin luz), 6 profundidad (z buffer en grises: cerca claro, lejos oscuro, escala logaritmica),
 //          7 oclusion ambiente, 8 sombra del sol, 9 solo luz (difusa x oclusion + especular, sin texturas), 10 material
 //   y429 = alambre (no es de este archivo: lo hace la DLL con el estado de raster)
 //   z429 = pantalla partida: 0 = la vista en toda la pantalla; 0.01..0.99 = la vista solo a la IZQUIERDA de esa fraccion
@@ -46,8 +46,12 @@ void PESVistaMotor(inout float4 o0, float2 pix, float escalaZ)
   else if (m == 6) {
     float z = PESLinZ(uv);
     float k = VM.w > 0.0 ? VM.w : escalaZ;
-    float g = (z > 0.0) ? saturate(1.0 - z * k) : 0.0;
-    c = g * (0.6 + 0.4 * frac(z * 5.0));
+    // (17/11 07:06, Agustin: "la vista de profundidad creo que no es correcta, deberia mostrar el z buffer") antes era lineal con
+    // bandas cada 20 cm (parecian rayas sobre el jugador). Ahora es el z buffer en grises, sin bandas: blanco cerca, negro en
+    // 1 / k metros, en escala logaritmica para que de cerca (el jugador a 2-4 m) se vean las diferencias de forma.
+    float zmax = 1.0 / max(k, 1e-4);
+    float g = (z > 0.0) ? saturate(1.0 - log2(1.0 + z) / log2(1.0 + zmax)) : 0.0;
+    c = g.xxx;
   }
   else if (m == 7) c = occ;
   else if (m == 8) c = inShadow.SampleLevel(g_samplerPoint_Clamp_s, uv, 0).x;
