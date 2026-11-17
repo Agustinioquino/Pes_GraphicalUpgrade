@@ -2058,7 +2058,10 @@ static void SetCam(bool on) {
 
 void MotorGizmoDraw() {
     // (17/11) con el jugador en la escena principal la grilla del piso se dibuja encima de la vista principal (motorgrid.cpp), debajo de los paneles
-    if (MotorPageActive() && MotorVistaLive() && g_dev.imm) { if (ID3D11ShaderResourceView* g = MotorGridOverlay(g_dev.imm)) ImGui::GetBackgroundDrawList()->AddImage((ImTextureID)(uintptr_t)g, ImVec2(0, 0), ImGui::GetIO().DisplaySize); }
+    // (17/11 07:08) la grilla va en la composicion con profundidad (motorgrid.cpp MotorGridCompSRV); encima solo si ninguna composicion la tomo
+    if (MotorPageActive() && MotorVistaLive() && g_dev.imm) { ID3D11ShaderResourceView* g = MotorGridOverlay(g_dev.imm); MotorGridOverlayStore(g);
+        if (g && !MotorGridCompBound()) ImGui::GetBackgroundDrawList()->AddImage((ImTextureID)(uintptr_t)g, ImVec2(0, 0), ImGui::GetIO().DisplaySize); }
+    else MotorGridOverlayStore(nullptr);
     if (MotorPageActive()) { JugFloorGizmo(); JugPick(); } else { s_fhN.store(0); s_fDrag.store(-1); s_phN.store(0); s_pickDrag.store(-1); }
     if (MotorUiOn()) ToolbarDraw();
     if (g_cfg.motorGizmo == 0) { s_drawT.store(Now()); return; }

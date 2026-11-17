@@ -1688,6 +1688,9 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (sk >= 8) ShirtPSNoteNew(ps->hash, t_drawVerts);
         TorsoShirtNote(c, (sk & 3) | ((t_drawVerts == 7284 || t_drawVerts == 6006 || t_drawVerts == 7512 || t_drawVerts == 5550) ? 4 : 0) | (int)((t_drawVerts & 0x7fffffu) << 8));   // (16/11) + indices del dibujo en los bits altos (registro)   // (01/11) +4 = camiseta ajustada (indices de [shirt_tight] detect de cloth.ini)   // (31/10 b) camiseta por jugador
     }
+    // (17/11 07:08) grilla del piso del Motor en t49 de la composicion: el shader la mezcla donde el z buffer esta vacio (motorgrid.cpp)
+    if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl)
+        if (ID3D11ShaderResourceView* gv = MotorGridCompSRV()) { Remember(c, d, true, true, 49); c->PSSetShaderResources(49, 1, &gv); gv->Release(); }
     // 19/10: SSS separable en pantalla antes de la composicion: la irradiancia (t9) llega ya difundida sobre la piel
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl) {
         int gz_ = GpuZoneBegin(c, kGzSSSS); ID3D11ShaderResourceView* v0_ = SSSSBeforeComposition(c); GpuZoneEnd(c, gz_);

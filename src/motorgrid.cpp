@@ -233,6 +233,23 @@ ID3D11ShaderResourceView* MotorGridOverlay(ID3D11DeviceContext* ctx) {
     static int nl = 0; if (v && nl++ == 0) Log("motor (grilla): jugador en la escena principal: la grilla se dibuja encima de la vista principal");
     return v;
 }
+// (17/11 07:08, Agustin: "por ese problema con el z buffer puede ser lo de la grilla tambien") la grilla iba ENCIMA de toda la imagen
+// (ImGui), sin profundidad: tapaba a los jugadores. Ahora la misma textura se pone en t49 de la composicion diferida (619b / f807,
+// pes_vista_motor.hlsli PESVistaGrilla) y el shader la mezcla solo donde no hay nada dibujado (z buffer vacio): los jugadores la tapan.
+// Si en 0,3 s ninguna composicion la tomo (shader viejo, "Ver original"), se vuelve a dibujar encima como antes.
+static std::mutex s_ovMx; static ID3D11ShaderResourceView* s_ovSrv = nullptr; static double s_ovT = -1.0e9; static std::atomic<double> s_ovBoundT{ -1.0e9 };
+void MotorGridOverlayStore(ID3D11ShaderResourceView* v) {
+    std::lock_guard<std::mutex> lk(s_ovMx);
+    if (v) v->AddRef(); if (s_ovSrv) s_ovSrv->Release(); s_ovSrv = v; s_ovT = Now();
+}
+ID3D11ShaderResourceView* MotorGridCompSRV() {
+    std::lock_guard<std::mutex> lk(s_ovMx);
+    if (!s_ovSrv || Now() - s_ovT > 0.3) return nullptr;
+    s_ovSrv->AddRef(); s_ovBoundT.store(Now(), std::memory_order_relaxed);
+    static int nl = 0; if (nl++ == 0) Log("motor (grilla): la grilla va en la composicion (t49) con la profundidad: los jugadores la tapan");
+    return s_ovSrv;
+}
+bool MotorGridCompBound() { return Now() - s_ovBoundT.load(std::memory_order_relaxed) < 0.3; }
 // (17/11 b) la camara con la que se dibujo la grilla por ultima vez, para poner cosas en el piso con la MISMA proyeccion (los iconos de
 // mover / girar / escalar del jugador, motorgizmo.cpp). u, v = 0..1 de la pantalla.
 static std::mutex s_camMx; static Cam s_camLast{}; static float s_camAsp = 16.0f / 9.0f; static double s_camT = -1.0e9;
