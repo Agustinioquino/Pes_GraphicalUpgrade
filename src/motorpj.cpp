@@ -649,7 +649,7 @@ static void SkScan(int slot, void* ctl) {
         const uintptr_t desc = *(const uintptr_t*)(a + 0x20); if (!PtrOk(desc)) return;
         int n = *(const int*)(desc + 0xf8);
         if (n < 2 || n > 400) { const int n1 = *(const int*)(desc + 0x18), n2 = *(const int*)((uintptr_t)ctl + 0x18); if (n1 >= 2 && n1 <= 400 && n1 == n2) n = n1; }
-        if (d.desc == desc && d.n == n) return;
+        { static int retry[kMax]; if (d.desc == desc && d.n == n && (d.parOk || ++retry[slot] % 90 != 0 || retry[slot] > 900)) return; }      // (23:50) sin padres: se vuelve a probar cada 90 cuadros (los lugares pueden estar en cero al crear)
         d = SkDesc{}; d.desc = desc; d.n = n;
         if (n < 2 || n > 400) { d.n = 0;
             static bool said[kMax]; if (!said[slot]) { said[slot] = true; char hx[1100]; int o;
@@ -670,8 +670,23 @@ static void SkScan(int slot, void* ctl) {
             MEMORY_BASIC_INFORMATION mi{}; if (!VirtualQuery((void*)q, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) || q + 0x100 > (uintptr_t)mi.BaseAddress + mi.RegionSize) continue;
             for (int o2 = 0; o2 < 0x100 && !d.parOk; o2 += 8) { const uintptr_t q2 = *(const uintptr_t*)(q + o2); if (PtrOk(q2) && SkParTry(d, q2, n)) { parOff = off; parIn = o2; } }
         }
+        // (17/11 23:50, prueba de 9451EC7C: "padres NO encontrados" en los 14 intentos = sin contactos ni editor) si no hay tabla de padres se
+        // arma por cercania con los lugares del modelo ([desc+0x50]): el padre de cada hueso es el hueso anterior mas cercano (los padres van
+        // antes que los hijos; los largos de hueso no cambian con la animacion). INFERIDO; SkRoles despues comprueba los largos de los brazos.
+        // Ademas se vuelcan los tres arreglos de 20 x 16 B (+0x10 / +0x48 / +0x50) una vez por jugador para leer el esqueleto de verdad.
+        { static int dumped[kMax]; if (!d.parOk && dumped[slot] < 2) { dumped[slot]++;
+            for (int off : { 0x10, 0x48, 0x50 }) { const uintptr_t q = *(const uintptr_t*)(desc + off); if (!PtrOk(q)) continue; char b[1800]; int o = 0;
+                for (int i = 0; i < n && i < 24 && o < 1700; i++) { const float* f = (const float*)(q + 16 * i); o += snprintf(b + o, sizeof b - o, "%s%d(%.3f %.3f %.3f %.3f)", i ? " " : "", i, f[0], f[1], f[2], f[3]); }
+                Log("motor (posar): jugador %d: desc+0x%x %p: %s", slot + 1, off, (void*)q, b); } } }
+        bool geo = false;
+        if (!d.parOk && n >= 8 && n <= 64) { const uintptr_t pq = *(const uintptr_t*)(desc + 0x50);
+            if (PtrOk(pq)) { const float* P = (const float*)pq; int pv[64]; pv[0] = -1; bool ok = true;
+                for (int i = 1; i < n && ok; i++) { float best = 1e9f; int bj = -1; for (int j = 0; j < i; j++) { const float dx = P[i * 4] - P[j * 4], dy = P[i * 4 + 1] - P[j * 4 + 1], dz = P[i * 4 + 2] - P[j * 4 + 2], d2 = dx * dx + dy * dy + dz * dz; if (std::isfinite(d2) && d2 < best) { best = d2; bj = j; } }
+                    if (bj < 0 || best > 0.7f * 0.7f) ok = false; else pv[i] = bj; }
+                if (ok) { int kids[64] = {}; for (int i = 1; i < n; i++) kids[pv[i]]++; int leaves = 0; for (int i = 0; i < n; i++) if (!kids[i]) leaves++;
+                    if (leaves >= 4 && leaves <= 7) { for (int i = 0; i < n; i++) d.par[i] = pv[i]; d.parOk = true; geo = true; } } } }
         Log("motor (posar): jugador %d: esqueleto %p con %d huesos; padres %s (+0x%x%s%x); nombres %s (+0x%x)", slot + 1, (void*)desc, n,
-            d.parOk ? "encontrados" : "NO encontrados (se gira solo el hueso)", parOff, parIn >= 0 ? " y adentro +0x" : "", parIn >= 0 ? parIn : 0, d.hashOk ? "encontrados" : "NO encontrados", hashOff);
+            geo ? "armados por cercania (sin tabla del juego)" : d.parOk ? "encontrados" : "NO encontrados (se gira solo el hueso)", parOff, parIn >= 0 ? " y adentro +0x" : "", parIn >= 0 ? parIn : 0, d.hashOk ? "encontrados" : "NO encontrados", hashOff);
         if (d.parOk) { char b[1400]; int o = 0; for (int i = 0; i < n && o < 1300; i++) o += snprintf(b + o, sizeof b - o, "%s%d", i ? " " : "", d.par[i]); Log("motor (posar): padres: %s", b); }
     } __except (1) { d = SkDesc{}; }
 }
@@ -996,7 +1011,11 @@ int Update(Pj& p, const Pj& w, double now) {
         RootMainScale(p, scale);
         // (23:20 Agustin: "asegurate que el cursor siempre este abajo del jugador en las animaciones") el lugar de los iconos del piso es
         // la cadera real en el mundo (x / z) a la altura de la raiz: los clips que caminan llevan el cuerpo y la raiz puede quedar atras
-        { float rw[3]; if (ctl && ReadRootPos(ctl, rw)) { for (int b = 0; b < p.bwN && b < 32; b++) if (p.blab[b] == 2) { rw[0] = p.bw[b][0]; rw[2] = p.bw[b][2]; break; } StoreWorld(p, rw); } }
+        { float rw[3]; if (ctl && ReadRootPos(ctl, rw)) { const float r0[3] = { rw[0], rw[1], rw[2] }; for (int b = 0; b < p.bwN && b < 32; b++) if (p.blab[b] == 2) { rw[0] = p.bw[b][0]; rw[2] = p.bw[b][2]; break; } StoreWorld(p, rw);
+          // (23:50, video 20.46.19: en el abrazo los cuerpos se meten uno en el otro) donde esta cada uno de la pareja en el mundo, cada 0.5 s
+          static double tl[kMax]; static int nl[kMax]; const double now = s_lastTick.load();
+          if (p.partner >= 0 && nl[(int)(&p - s_pj)] < 50 && now - tl[(int)(&p - s_pj)] > 0.5) { const int me = (int)(&p - s_pj); tl[me] = now; nl[me]++;
+              const float t = ((ClipTimeFn)kClipTime)(ctl, 0, 1); Log("motor (pareja): jugador %d t %.2f s: raiz (%.2f, %.2f, %.2f), cadera (%.2f, %.2f), puesto (%.2f, %.2f), estatura %u cm", me + 1, t, r0[0], r0[1], r0[2], rw[0], rw[2], p.pos[0], p.pos[2], (unsigned)p.hcm); } } }
         ((FdPushFn)kFdPush)(p.fd);
         void* h = nullptr; memcpy(&h, p.fd + 0x48, 8);
         void* face = FaceEnsure(p);
