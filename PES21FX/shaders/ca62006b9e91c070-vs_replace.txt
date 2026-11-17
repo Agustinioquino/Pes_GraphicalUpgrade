@@ -1,0 +1,275 @@
+// PES 2021 - tela animada por textura (VAT, tecnica fox3DDF_GGX_TexAnim_NC): vertex shader principal  [hash ca62006b9e91c070]
+// Lo usa la tela del banderin del corner (cf_common_2019E_vatB.fmdl y cf_<estadio>_vat00.fmdl, malla "cloth").
+// Traducido del ensamblador del juego con tools/asm2hlsl.py, instruccion por instruccion (tools/re/banderin/ca62006b9e91c070-vs.asm.txt).
+// Que hace el juego: cuadro = m_timeParam.x * fps + desfase (m_materials[3]), modulo 256; lee la posicion de cada punto de la tela de
+// g_tex_position (columna = BLENDINDICES.x, fila = cuadro; posicion = PositionBase + textura * PositionScale, m_materials[1] / [2]) y
+// el giro de g_tex_rotation (vector eje * angulo -> matriz), mezclando dos cuadros. Con m_timeParam.y arma la posicion del cuadro
+// anterior (o6.zw / o2.w). Siempre el mismo flameo de 8.5 s, haya o no viento.
+// PES21 FX (14/11/2026, sk9ema): si la DLL enlazo la tela simulada (pes_flag, t111; banderin.cpp) y es la tela del banderin, la
+// posicion, el cuadro anterior y el giro salen de ahi (pes_flag.hlsli). Todo lo demas (paso a vista, proyeccion, salidas) es lo mismo.
+// Sin tela simulada: el camino del juego, sin cambios.
+cbuffer cb0 : register(b0) { float4 cb0[5]; }
+cbuffer cb2 : register(b2) { float4 cb2[20]; }
+cbuffer cb4 : register(b4) { float4 cb4[4]; }
+cbuffer cb5 : register(b5) { float4 cb5[9]; }
+SamplerState s10 : register(s10);
+Texture2D<float4> t0 : register(t0);
+Texture2D<float4> t1 : register(t1);
+uint4 PESBfi(uint4 w, uint4 o, uint4 ins, uint4 b) { uint4 m = (w >= 32u) ? 0xffffffffu : (((1u << w) - 1u) << o); return ((ins << o) & m) | (b & ~m); }
+float4 PESResInfo2(Texture2D<float4> t, uint m) { uint w, hh, l; t.GetDimensions(m, w, hh, l); return float4(w, hh, 0, l); }
+Texture1D<float4> IniParams : register(t120);
+#include "pes_flag.hlsli"   // (14/11) tela propia del banderin (t111)
+
+void main(
+  float4 i_position0 : POSITION0,
+  float4 i_normal0 : NORMAL0,
+  float4 i_tangent0 : TANGENT0,
+  uint4 i_blendindices0 : BLENDINDICES0,
+  float4 i_blendweight0 : BLENDWEIGHT0,
+  float2 i_texcoord0 : TEXCOORD0,
+  float2 i_texcoord1 : TEXCOORD1,
+  float2 i_texcoord2 : TEXCOORD2,
+  float2 i_texcoord3 : TEXCOORD3,
+  out float4 o0 : SV_Position0,
+  out float4 o1 : COLOR0,
+  out float2 o2a : TEXCOORD0,   // o2.xy
+  out float2 o2b : TEXCOORD9,   // o2.zw (comparten registro)
+  out float3 o3 : TEXCOORD5,
+  out float3 o4 : TEXCOORD6,
+  out float3 o5 : TEXCOORD7,
+  out float4 o6 : TEXCOORD8)
+{
+  float4 o2 = 0;
+  float4 r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14;
+  // ---- PES21 FX: tela propia del banderin (pes_flag.hlsli). El resto de la funcion es el juego sin cambios
+  if (PESFlagOn(cb4[1], cb4[3], i_blendindices0.x)) {
+    float3 fP, fQ, fX, fY, fZ;
+    PESFlagRead(i_blendindices0.x, fP, fQ, fX, fY, fZ);
+    // tangente y normal de la malla giradas con la tela, a espacio de vista (m_viewWorld = cb5[0..2]) como hace el juego
+    float3 tl = i_tangent0.x * fX + i_tangent0.y * fY + i_tangent0.z * fZ;
+    float3 tv = normalize(float3(dot(tl, cb5[0].xyz), dot(tl, cb5[1].xyz), dot(tl, cb5[2].xyz)));
+    float3 nl = i_normal0.x * fX + i_normal0.y * fY + i_normal0.z * fZ;
+    float3 nv = normalize(float3(dot(nl, cb5[0].xyz), dot(nl, cb5[1].xyz), dot(nl, cb5[2].xyz)));
+    o3 = tv;
+    o4 = normalize(cross(nv, tv)) * i_tangent0.w;
+    o5 = nv;
+    // posicion: modelo -> vista (m_viewWorld) -> pantalla (m_projection = cb2[4..7])
+    float4 lp = float4(fP * i_position0.w, i_position0.w);
+    float4 vp = float4(dot(lp, cb5[0]), dot(lp, cb5[1]), dot(lp, cb5[2]), dot(lp, cb5[3]));
+    float4 cp = float4(dot(vp, cb2[4]), dot(vp, cb2[5]), dot(vp, cb2[6]), dot(vp, cb2[7]));
+    o0 = cp;
+    o1 = float4(1.0, 1.0, 1.0, cb5[8].w);
+    // cuadro anterior: las mismas dos matrices que usa el juego (cb2[12..15] y cb2[16], [17], [19])
+    float4 lq = float4(fQ * i_position0.w, i_position0.w);
+    float4 pq = float4(dot(lq, cb2[12]), dot(lq, cb2[13]), dot(lq, cb2[14]), dot(lq, cb2[15]));
+    o6 = float4(cp.xy, dot(pq, cb2[16]), dot(pq, cb2[17]));
+    o2a = i_texcoord0;
+    o2b = float2(cp.w, dot(pq, cb2[19]));
+    return;
+  }
+  // ---- el juego
+  float4 v0 = 0;
+  v0.xyzw = i_position0;
+  float4 v1 = 0;
+  v1.xyzw = i_normal0;
+  float4 v2 = 0;
+  v2.xyzw = i_tangent0;
+  float4 v3 = 0;
+  v3.xyzw = i_blendindices0;
+  float4 v4 = 0;
+  v4.xyzw = i_blendweight0;
+  float4 v5 = 0;
+  v5.xy = i_texcoord0;
+  float4 v6 = 0;
+  v6.xy = i_texcoord1;
+  float4 v7 = 0;
+  v7.xy = i_texcoord2;
+  float4 v8 = 0;
+  v8.xy = i_texcoord3;
+  r0.xy = ((cb0[4].xyxx * cb4[3].xxxx + cb4[3].zzzz)).xy;
+  r0.zw = ((r0.xxxy + float4(0.000000, 0.000000, 1.000000, 1.000000))).zw;
+  r1.xyzw = ((r0.xzyw * cb4[3].yyyy)).xyzw;
+  r1.xyzw = (((r1.xyzw >= -(r1.xyzw)) ? float4(-1.0, -1.0, -1.0, -1.0) : float4(0.0, 0.0, 0.0, 0.0))).xyzw;
+  r1.xyzw = (((r1.xyzw != 0) ? cb4[3].yyyy : -(cb4[3].yyyy))).xyzw;
+  r2.xyzw = ((float4(1.000000, 1.000000, 1.000000, 1.000000) / r1.xyzw)).xyzw;
+  r0.xyzw = ((r0.xzyw * r2.xyzw)).xyzw;
+  r0.xyzw = (frac(r0.xyzw)).xyzw;
+  r2.xyzw = ((r0.xyzw * r1.xyzw)).xyzw;
+  r0.xy = ((r1.xzxx * r0.xzxx + float4(0.500000, 0.500000, 0.000000, 0.000000))).xy;
+  r1.xy = (float4(uint4(r2.xyxx))).xy;
+  r1.z = (v3.xxxx).z;
+  r1.w = (float4(0.0, 0.0, 0.0, 0.0)).w;
+  r3.xyz = ((t1.Load(int4(r1.zyww).xyz)).xyzw).xyz;
+  r4.xyz = ((t1.Load(int4(r1.zxww).xyz)).xyzw).xyz;
+  r4.xyz = ((r4.yzxy * float4(6.28318548, 6.28318548, 6.28318548, 0.000000) + float4(-3.14159274, -3.14159274, -3.14159274, 0.000000))).xyz;
+  r3.xyz = ((r3.yzxy * float4(6.28318548, 6.28318548, 6.28318548, 0.000000) + float4(-3.14159274, -3.14159274, -3.14159274, 0.000000))).xyz;
+  r0.z = ((dot((r3.xyzx).xyz, (r3.xyzx).xyz)).xxxx).z;
+  r0.z = (sqrt(r0.zzzz)).z;
+  r5.x = (sin(r0.zzzz)).x;
+  r6.x = (cos(r0.zzzz)).x;
+  r0.z = ((r5.xxxx / r0.zzzz)).z;
+  r3.xyz = ((r0.zzzz * r3.xyzx)).xyz;
+  r5.xyz = ((r3.xyzx + r3.xyzx)).xyz;
+  r0.zw = ((-(r3.xxxz) * r5.xxxz + float4(0.000000, 0.000000, 1.000000, 1.000000))).zw;
+  r7.xy = ((-(r3.yyyy) * r5.yyyy + r0.zwzz)).xy;
+  r8.w = ((-(r3.xxxx) * r5.xxxx + r0.wwww)).w;
+  r9.w = (r7.yyyy).w;
+  r0.z = ((dot((r4.xyzx).xyz, (r4.xyzx).xyz)).xxxx).z;
+  r0.z = (sqrt(r0.zzzz)).z;
+  r10.x = (sin(r0.zzzz)).x;
+  r11.x = (cos(r0.zzzz)).x;
+  r0.z = ((r10.xxxx / r0.zzzz)).z;
+  r4.xyz = ((r0.zzzz * r4.xyzx)).xyz;
+  r6.yzw = ((r4.xxyz + r4.xxyz)).yzw;
+  r0.zw = ((-(r4.xxxz) * r6.yyyw + float4(0.000000, 0.000000, 1.000000, 1.000000))).zw;
+  r10.xy = ((-(r4.yyyy) * r6.zzzz + r0.zwzz)).xy;
+  r12.w = ((-(r4.xxxx) * r6.yyyy + r0.wwww)).w;
+  r13.w = (r10.yyyy).w;
+  r11.yzw = ((r5.xxyz * r6.xxxx)).yzw;
+  r9.z = ((r3.xxxx * r5.yyyy + r11.wwww)).z;
+  r14.xyz = ((r6.yzwy * r11.xxxx)).xyz;
+  r13.z = ((r4.xxxx * r6.zzzz + r14.zzzz)).z;
+  r9.xy = ((r3.zzzz * r5.yxyy + -(r11.yzyy))).xy;
+  r13.xy = ((r4.zzzz * r6.zyzz + -(r14.xyxx))).xy;
+  r9.yzw = ((r9.yywz + -(r13.yywz))).yzw;
+  r7.w = (r9.xxxx).w;
+  r0.zw = (frac(r2.xxxz)).zw;
+  r1.xy = (float4(uint4(r2.zwzz))).xy;
+  r2.xyz = ((r0.zzzz * r9.yzwy + r13.ywzy)).xyz;
+  r10.w = (r13.xxxx).w;
+  r9.xyz = ((r2.xyzx * v2.yyyy)).xyz;
+  r8.xy = ((r3.zzzz * r5.xyxx + r11.zyzz)).xy;
+  r8.z = ((r3.xxxx * r5.yyyy + -(r11.wwww))).z;
+  r7.z = (r8.xxxx).z;
+  r12.xy = ((r4.zzzz * r6.yzyy + r14.yxyy)).xy;
+  r12.z = ((r4.xxxx * r6.zzzz + -(r14.zzzz))).z;
+  r10.z = (r12.xxxx).z;
+  r3.xyz = ((r7.xzwx + -(r10.xzwx))).xyz;
+  r3.xyz = ((r0.zzzz * r3.xyzx + r10.xzwx)).xyz;
+  r4.xyz = ((v2.xxxx * r3.xyzx + r9.xyzx)).xyz;
+  r5.xyz = ((r8.yzwy + -(r12.yzwy))).xyz;
+  r5.xyz = ((r0.zzzz * r5.xyzx + r12.yzwy)).xyz;
+  r4.xyz = ((v2.zzzz * r5.xyzx + r4.xyzx)).xyz;
+  r6.x = ((dot((r4.xyzx).xyz, (cb5[0].xyzx).xyz)).xxxx).x;
+  r6.y = ((dot((r4.xyzx).xyz, (cb5[1].xyzx).xyz)).xxxx).y;
+  r6.z = ((dot((r4.xyzx).xyz, (cb5[2].xyzx).xyz)).xxxx).z;
+  r0.z = ((dot((r6.xyzx).xyz, (r6.xyzx).xyz)).xxxx).z;
+  r0.z = (rsqrt(r0.zzzz)).z;
+  r4.xyz = ((r0.zzzz * r6.xyzx)).xyz;
+  o3.xyz = (r4.xyzx).xyz;
+  r6.xyz = ((r2.xyzx * v1.yyyy)).xyz;
+  r6.xyz = ((v1.xxxx * r3.xyzx + r6.xyzx)).xyz;
+  r6.xyz = ((v1.zzzz * r5.xyzx + r6.xyzx)).xyz;
+  r7.x = ((dot((r6.xyzx).xyz, (cb5[0].xyzx).xyz)).xxxx).x;
+  r7.y = ((dot((r6.xyzx).xyz, (cb5[1].xyzx).xyz)).xxxx).y;
+  r7.z = ((dot((r6.xyzx).xyz, (cb5[2].xyzx).xyz)).xxxx).z;
+  r0.z = ((dot((r7.xyzx).xyz, (r7.xyzx).xyz)).xxxx).z;
+  r0.z = (rsqrt(r0.zzzz)).z;
+  r6.xyz = ((r0.zzzz * r7.xyzx)).xyz;
+  r7.xyz = ((r4.yzxy * r6.zxyz)).xyz;
+  r4.xyz = ((r6.yzxy * r4.zxyz + -(r7.xyzx))).xyz;
+  r0.z = ((dot((r4.xyzx).xyz, (r4.xyzx).xyz)).xxxx).z;
+  r0.z = (rsqrt(r0.zzzz)).z;
+  r4.xyz = ((r0.zzzz * r4.xyzx)).xyz;
+  r4.xyz = ((r4.xyzx * v2.wwww)).xyz;
+  o4.xyz = (r4.xyzx).xyz;
+  o5.xyz = (r6.xyzx).xyz;
+  r4.xy = ((PESResInfo2(t0, (uint4(0U, 0U, 0U, 0U)).x)).xyzw).xy;
+  r0.z = (float4((int4(r4.xxxx) + int4(-1, -1, -1, -1)))).z;
+  r4.x = (float4((uint4(int4(v3.xxxx)) / max(uint4(int4(r4.yyyy)), 1u)))).x;
+  r6.x = (float4((uint4(int4(v3.xxxx)) % max(uint4(int4(r4.yyyy)), 1u)))).x;
+  r4.x = (float4((int4(r0.zzzz) + (-int4(r4.xxxx))))).x;
+  r4.y = (r6.xxxx).y;
+  r4.zw = (float4(0.0, 0.0, 0.0, 0.0)).zw;
+  r4.xyz = ((t0.Load(int4(r4.xyzw).xyz)).xyzw).xyz;
+  r4.xyz = ((r4.xyzx * cb4[2].xyzx + cb4[1].xyzx)).xyz;
+  r4.xyz = ((-(r4.xyzx) + v0.xyzx)).xyz;
+  r2.xyz = ((r2.xyzx * r4.yyyy)).xyz;
+  r2.xyz = ((r4.xxxx * r3.xyzx + r2.xyzx)).xyz;
+  r2.xyz = ((r4.zzzz * r5.xyzx + r2.xyzx)).xyz;
+  r3.xy = ((PESResInfo2(t0, (uint4(0U, 0U, 0U, 0U)).x)).xyzw).xy;
+  r0.yz = ((r0.xxyx / r3.yyyy)).yz;
+  r2.w = (float4(int4(v3.xxxx))).w;
+  r2.w = ((r2.wwww + float4(0.500000, 0.500000, 0.500000, 0.500000))).w;
+  r0.x = ((r2.wwww / r3.xxxx)).x;
+  r3.xyz = ((t0.SampleLevel(s10, (r0.xyxx).xy, (float4(0.000000, 0.000000, 0.000000, 0.000000)).x)).xyzw).xyz;
+  r0.xyz = ((t0.SampleLevel(s10, (r0.xzxx).xy, (float4(0.000000, 0.000000, 0.000000, 0.000000)).x)).xyzw).xyz;
+  r0.xyz = ((r0.xyzx * cb4[2].xyzx + cb4[1].xyzx)).xyz;
+  r3.xyz = ((r3.xyzx * cb4[2].xyzx + cb4[1].xyzx)).xyz;
+  r2.xyz = ((v0.wwww * r3.xyzx + r2.xyzx)).xyz;
+  r2.w = (v0.wwww).w;
+  r3.x = ((dot((r2.xyzw).xyzw, (cb5[0].xyzw).xyzw)).xxxx).x;
+  r3.y = ((dot((r2.xyzw).xyzw, (cb5[1].xyzw).xyzw)).xxxx).y;
+  r3.z = ((dot((r2.xyzw).xyzw, (cb5[2].xyzw).xyzw)).xxxx).z;
+  r3.w = ((dot((r2.xyzw).xyzw, (cb5[3].xyzw).xyzw)).xxxx).w;
+  r2.x = ((dot((r3.xyzw).xyzw, (cb2[4].xyzw).xyzw)).xxxx).x;
+  r2.y = ((dot((r3.xyzw).xyzw, (cb2[5].xyzw).xyzw)).xxxx).y;
+  r2.w = ((dot((r3.xyzw).xyzw, (cb2[7].xyzw).xyzw)).xxxx).w;
+  o0.z = ((dot((r3.xyzw).xyzw, (cb2[6].xyzw).xyzw)).xxxx).z;
+  o0.xyw = (r2.xyxw).xyw;
+  o6.xy = (r2.xyxx).xy;
+  o2.z = (r2.wwww).z;
+  o1.xyz = (float4(1.000000, 1.000000, 1.000000, 0.0)).xyz;
+  o1.w = (cb5[8].wwww).w;
+  o2.xy = (v5.xyxx).xy;
+  r2.xyz = ((t1.Load(int4(r1.zyww).xyz)).xyzw).xyz;
+  r1.xyz = ((t1.Load(int4(r1.zxww).xyz)).xyzw).xyz;
+  r1.xyz = ((r1.yzxy * float4(6.28318548, 6.28318548, 6.28318548, 0.000000) + float4(-3.14159274, -3.14159274, -3.14159274, 0.000000))).xyz;
+  r2.xyz = ((r2.yzxy * float4(6.28318548, 6.28318548, 6.28318548, 0.000000) + float4(-3.14159274, -3.14159274, -3.14159274, 0.000000))).xyz;
+  r1.w = ((dot((r2.xyzx).xyz, (r2.xyzx).xyz)).xxxx).w;
+  r1.w = (sqrt(r1.wwww)).w;
+  r3.x = (sin(r1.wwww)).x;
+  r5.x = (cos(r1.wwww)).x;
+  r1.w = ((r3.xxxx / r1.wwww)).w;
+  r2.xyz = ((r1.wwww * r2.xyzx)).xyz;
+  r3.xyz = ((r2.xyzx + r2.xyzx)).xyz;
+  r5.yz = ((-(r2.xxzx) * r3.xxzx + float4(0.000000, 1.000000, 1.000000, 0.000000))).yz;
+  r6.xy = ((-(r2.yyyy) * r3.yyyy + r5.yzyy)).xy;
+  r7.w = ((-(r2.xxxx) * r3.xxxx + r5.zzzz)).w;
+  r8.w = (r6.yyyy).w;
+  r5.xyz = ((r3.xyzx * r5.xxxx)).xyz;
+  r8.z = ((r2.xxxx * r3.yyyy + r5.zzzz)).z;
+  r1.w = ((dot((r1.xyzx).xyz, (r1.xyzx).xyz)).xxxx).w;
+  r1.w = (sqrt(r1.wwww)).w;
+  r9.x = (sin(r1.wwww)).x;
+  r10.x = (cos(r1.wwww)).x;
+  r1.w = ((r9.xxxx / r1.wwww)).w;
+  r1.xyz = ((r1.wwww * r1.xyzx)).xyz;
+  r9.xyz = ((r1.xyzx + r1.xyzx)).xyz;
+  r2.yw = ((-(r1.xxxz) * r9.xxxz + float4(0.000000, 1.000000, 0.000000, 1.000000))).yw;
+  r11.xy = ((-(r1.yyyy) * r9.yyyy + r2.ywyy)).xy;
+  r12.w = ((-(r1.xxxx) * r9.xxxx + r2.wwww)).w;
+  r13.w = (r11.yyyy).w;
+  r10.xyz = ((r9.xyzx * r10.xxxx)).xyz;
+  r13.z = ((r1.xxxx * r9.yyyy + r10.zzzz)).z;
+  r8.xy = ((r2.zzzz * r3.yxyy + -(r5.xyxx))).xy;
+  r13.xy = ((r1.zzzz * r9.yxyy + -(r10.xyxx))).xy;
+  r8.yzw = ((r8.yywz + -(r13.yywz))).yzw;
+  r8.yzw = ((r0.wwww * r8.yyzw + r13.yywz)).yzw;
+  r11.w = (r13.xxxx).w;
+  r8.yzw = ((r4.yyyy * r8.yyzw)).yzw;
+  r6.w = (r8.xxxx).w;
+  r7.xy = ((r2.zzzz * r3.xyxx + r5.yxyy)).xy;
+  r7.z = ((r2.xxxx * r3.yyyy + -(r5.zzzz))).z;
+  r6.z = (r7.xxxx).z;
+  r12.xy = ((r1.zzzz * r9.xyxx + r10.yxyy)).xy;
+  r12.z = ((r1.xxxx * r9.yyyy + -(r10.zzzz))).z;
+  r11.z = (r12.xxxx).z;
+  r1.xyz = ((r6.xzwx + -(r11.xzwx))).xyz;
+  r1.xyz = ((r0.wwww * r1.xyzx + r11.xzwx)).xyz;
+  r1.xyz = ((r4.xxxx * r1.xyzx + r8.yzwy)).xyz;
+  r2.xyz = ((r7.yzwy + -(r12.yzwy))).xyz;
+  r2.xyz = ((r0.wwww * r2.xyzx + r12.yzwy)).xyz;
+  r1.xyz = ((r4.zzzz * r2.xyzx + r1.xyzx)).xyz;
+  r0.xyz = ((v0.wwww * r0.xyzx + r1.xyzx)).xyz;
+  r0.w = (v0.wwww).w;
+  r1.x = ((dot((r0.xyzw).xyzw, (cb2[12].xyzw).xyzw)).xxxx).x;
+  r1.y = ((dot((r0.xyzw).xyzw, (cb2[13].xyzw).xyzw)).xxxx).y;
+  r1.z = ((dot((r0.xyzw).xyzw, (cb2[14].xyzw).xyzw)).xxxx).z;
+  r1.w = ((dot((r0.xyzw).xyzw, (cb2[15].xyzw).xyzw)).xxxx).w;
+  o6.z = ((dot((r1.xyzw).xyzw, (cb2[16].xyzw).xyzw)).xxxx).z;
+  o6.w = ((dot((r1.xyzw).xyzw, (cb2[17].xyzw).xyzw)).xxxx).w;
+  o2.w = ((dot((r1.xyzw).xyzw, (cb2[19].xyzw).xyzw)).xxxx).w;
+  o2a = o2.xy; o2b = o2.zw;
+  return;
+}
