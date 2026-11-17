@@ -29,6 +29,11 @@
 // Fila 517 (paso 2a, suplentes reales sentados): x on / off (de fabrica prendido; necesita x516 e y516), y cuantos llevan la
 // pechera de suplente (0 a 100 %, de fabrica 50: a quienes les toca se sortea al cargar el partido), z altura del asiento (cm),
 // w adelante / atras (cm). El paso 2a esta explicado mas abajo ("paso 2a").
+// Fila 518 (2e, 17/11): x que llevan los que tienen pechera (0 segun el clima del partido: verano la pechera, invierno la parte de arriba
+// de la campera; 1 siempre la pechera; 2 siempre la campera), y que pechera (0 la de suplente del juego en los dos equipos; 1 la propia de
+// cada equipo: naranja el local, verde el visitante, con su escudo), z probar clips (0 al azar; 1 a 8 todos con ese clip, al momento),
+// w clips de la sala de reunion (1 si). La pechera y la campera las pone PecheraPorJugador.lua (v0.15) con los modelos que ya usa en el
+// entrenamiento: lee pes21fx_banca_ropa (abajo) con GetProcAddress y cambia las tablas de piezas 0 y 8 en cada pedido de modelo.
 #include "core.h"
 #include <MinHook.h>
 #include <atomic>
@@ -41,6 +46,11 @@
 #include <cctype>
 #include <cmath>
 #include <intrin.h>
+
+// (2e) lo lee PecheraPorJugador.lua v0.15 (GetProcAddress de esta DLL, exportado en d3d11.def). Lo escribe el hilo del juego al armar la
+// lista de suplentes y vuelve a 0 al soltarlos (fin del partido): 0 nada (tablas como siempre), 1 las piezas 0 / 8 son la parte de arriba
+// de la campera del local / del visitante, 2 la pieza 8 es la pechera verde del visitante (pecheras propias de cada equipo).
+extern "C" { volatile unsigned char pes21fx_banca_ropa = 0; }
 
 namespace fx {
 
@@ -935,6 +945,8 @@ void __fastcall hk_Fdh(void* fd, void* res, uint32_t a3, uint8_t a4, uint64_t a5
 // Detalle y C reconstruido: /mnt/project-files/banca_suplentes/20261116_como_arma_el_banco.cpp.md, secciones 26 a 28.
 const int kRow2 = 517;   // x suplentes reales, y % con pechera, z altura del asiento (cm), w adelante / atras (cm)
 float Live2(int k, float def) { return (!g_cfg.info[kRow2][k].defined && g_cfg.live[kRow2][k] == 0.0f) ? def : g_cfg.live[kRow2][k]; }
+const int kRow3 = 518;   // (2e) x ropa (0 segun el clima, 1 pechera, 2 campera), y que pechera (0 la del juego, 1 la de cada equipo), z probar clips, w clips de la sala
+float Live3(int k, float def) { return (!g_cfg.info[kRow3][k].defined && g_cfg.live[kRow3][k] == 0.0f) ? def : g_cfg.live[kRow3][k]; }
 
 const uintptr_t kMatchPtr = 0x143702208ull;
 const uintptr_t kVtDrawHuman = 0x14261c078ull;                       // draw::util::Human
@@ -1031,7 +1043,21 @@ bool s_okSubs = false;
 struct GStr { union { char buf[16]; char* ptr; }; size_t size, cap; };   // std::string de MSVC (el del juego)
 
 // clips de sentado
-const int kNumClips = 7; const int kClipNo[kNumClips] = { 2, 3, 4, 5, 7, 8, 9 };
+// (2e, pedido de Agustin "revisa mas ganis que sirvan jugadores sentados"; lista medida en /mnt/project-files/banca_suplentes/
+// clips_sentados_fixdemo_20261117.txt). Solo los que dan la vuelta sin salto (menos de 10 grados entre el ultimo cuadro y el primero) y
+// con la cadera a la altura del asiento (50 a 56 cm abajo): los del vestuario 2, 3 y 5 (el 4, 7 y 9 saltaban 19 a 22 grados al
+// repetir) y los de la sala de reunion (waiting_01 sub1 / sub2 / sub3, 03a, 03c: 0,4 a 1,5 grados). En la sala la cadera mira de costado
+// (el clip es de una mesa redonda): giro = lo contrario del giro medio de la cadera (pista 2) contra la raiz, para que miren a la cancha.
+// La raiz del FixDemoHuman gira con FUN_141afccc0(ctl, fd+0x14 en radianes): cuaternion (0, sin(a/2), 0, cos(a/2)), adelante +z ->
+// (sin a, 0, cos a), la misma cuenta que se uso para medir la cadera.
+struct ClipDef { const char* name; float yaw; bool sala; };
+const ClipDef kClipDef[] = {
+    { "dml_md_lockerSpeech_001_sit_002", 2.7f, false }, { "dml_md_lockerSpeech_001_sit_003", -0.1f, false },
+    { "dml_md_lockerSpeech_001_sit_005", -0.1f, false },
+    { "dml_md_meeting_waiting_01_sub1", -96.7f, true }, { "dml_md_meeting_waiting_01_sub2", 110.5f, true },
+    { "dml_md_meeting_waiting_01_sub3", 96.2f, true }, { "dml_md_meeting_waiting_03a", 2.1f, true }, { "dml_md_meeting_waiting_03c", -1.7f, true },
+};
+const int kNumClips = (int)(sizeof kClipDef / sizeof kClipDef[0]);
 struct Clip { char path[112]; uint64_t slot[2]; bool ok, asked; };
 Clip s_clip[kNumClips];
 std::atomic<uint64_t> s_clipHash[kNumClips];
@@ -1065,12 +1091,15 @@ struct LiveSub {
     uint32_t teamIdx = 0; uint64_t id = 0; char name[40] = {}; Spot spot{}; bool bib = false, gk = false;
     float t0 = 0, start = 0, tCreateT = 0, phase0 = 0; double tCreate = 0; int endTicks = 0; bool faceTried = false; uint8_t player[0xF0] = {};
     float heightCm = 0, dyCm = 0;                      // (2d) estatura del modelo (h+0x10) y lo que se bajo la base por ella
+    uint8_t bibByte = 0;                               // (2e) pechera del LoadId si le toca: 1 pieza 0, 2 pieza 8
+    int shown = -1;                                    // (2e) clip que tiene puesto (el suyo o el de "probar clips")
 };
 enum { kIdle = 0, kWait, kClips, kRun, kOff };
 struct Subs {
     int phase = kIdle; uintptr_t match = 0, team[2] = {}; LiveSub s[48]; int n = 0, cur = 0;
     float T = 0; double tPhase = 0, lastTick = 0, lastCheck = 0, tSpawn = 0, tRetry = 0, tProgress = 0; bool pumpOwn = false, seekSaid = false, sheetSaid = false, doneSaid = false, resSaid = false;
     float A = 0; double lastG = -1.0;                  // (2d) reloj de la animacion (el del juego: pausa = quieto) y la ultima lectura de la fila 157
+    int test = 0;                                      // (2e) "probar clips" que se aplico (0 = cada uno el suyo)
 };
 Subs s_subs;                                           // solo el hilo del juego (y el destructor, con s_subMx)
 std::recursive_mutex s_subMx;
@@ -1108,6 +1137,7 @@ void SubsDestroyAll(const char* why) {
     if (k || bad || S.phase != kIdle) Log("banca: suplentes reales: %d sacados del banco (%s)%s", k, why, bad ? ", con errores al soltar" : "");
     if (bad) s_subsDead.store(true);
     S.n = 0; S.cur = 0; S.phase = kIdle; S.match = 0; S.pumpOwn = false; s_subActive.store(0); s_protect.store(0);
+    pes21fx_banca_ropa = 0;                            // (2e) las tablas de piezas vuelven a las de siempre en el proximo pedido de modelo
 }
 
 // 1 = ya esta en el gestor, 0 = no, -1 = error
@@ -1147,7 +1177,7 @@ __declspec(noinline) bool SubCreate(LiveSub& u, bool haveSW, uint8_t season, uin
         uint8_t* fd = mem ? (uint8_t*)((FdCtorFn)kFdCtor)(mem, (uint8_t)(0x40 + u.order)) : nullptr;
         if (fd) {
             uint8_t lid[0xa0];
-            ((LoadIdFn)kLoadId)(nullptr, lid, u.side, 0, u.player, u.gk ? 1 : 0, 0, 0, 0, (uint8_t)(u.bib ? 2 : 0));
+            ((LoadIdFn)kLoadId)(nullptr, lid, u.side, 0, u.player, u.gk ? 1 : 0, 0, 0, 0, (uint8_t)(u.bib ? u.bibByte : 0));
             if (haveSW) { lid[0x4f] = season; lid[0x50] = weather; }
             fd[0x490] = 0; fd[0x514] = 0;                 // sin efectos de lluvia / aliento de la cinematica
             ((FdLoadFn)kFdLoad)(fd, lid, (uint32_t)u.side, (uint8_t)u.place, (uint8_t)(u.gk ? 1 : 0));
@@ -1193,7 +1223,8 @@ void* FaceEnsure(LiveSub& u) {
 __declspec(noinline) bool SubStart(LiveSub& u, void* res, float T) {
     __try {
         uint8_t* fd = (uint8_t*)u.fd;
-        memcpy(fd + 8, &u.spot.x, 4); memcpy(fd + 0xc, &u.spot.y, 4); memcpy(fd + 0x10, &u.spot.z, 4); memcpy(fd + 0x14, &u.spot.yaw, 4);
+        const float yaw = u.spot.yaw + kClipDef[u.clip].yaw;   // (2e) giro propio del clip (sala de reunion)
+        memcpy(fd + 8, &u.spot.x, 4); memcpy(fd + 0xc, &u.spot.y, 4); memcpy(fd + 0x10, &u.spot.z, 4); memcpy(fd + 0x14, &yaw, 4);
         {   // (2d) estatura: como la cinematica (FUN_141f88270), solo con una altura creible
             void* hh = nullptr; memcpy(&hh, fd + 0x48, 8); float hc = 0;
             if (hh) memcpy(&hc, (const uint8_t*)hh + 0x10, 4);
@@ -1220,6 +1251,28 @@ __declspec(noinline) bool SubStart(LiveSub& u, void* res, float T) {
         u.t0 = T - u.phase0; u.endTicks = 0;
         void* h = nullptr; memcpy(&h, fd + 0x48, 8);
         if (h) ((HumanShowFn)kHumanShow)(h, 1);
+        u.shown = u.clip;
+        return ctl != nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { s_subsDead.store(true); return false; }
+}
+// (2e) "probar clips": cambia el clip de un sentado al momento. vf1 -> vf2 borra el controlador del cuerpo (fd+0x50) y el de cara y manos
+// (fd+0x58) y arma el nuevo con la base y el giro de fd+8..0x14 (la base ya trae lo de la estatura: no se toca). Sin fundido.
+__declspec(noinline) bool SubSwitch(LiveSub& u, void* res, int clip, float T) {
+    __try {
+        uint8_t* fd = (uint8_t*)u.fd;
+        const float yaw = u.spot.yaw + kClipDef[clip].yaw;
+        memcpy(fd + 0x14, &yaw, 4);
+        uint32_t saved = 0, id = 0x19;
+        ((HeapPushFn)kHeapPush)(&saved, &id);
+        const uint32_t idx = ((ClipIdxFn)kClipIdx)(res, s_clip[clip].path);
+        const float start = 0.0f; uint32_t bits = 0; memcpy(&bits, &start, 4);
+        (o_fdh ? o_fdh : (FdhVf1)kFdhVf1)(fd, res, idx, 0, (uint64_t)bits, nullptr);
+        ((HeapPopFn)kHeapPop)(&saved);
+        u.faceTried = false; FaceEnsure(u);              // vf2 borro el de cara y manos: se vuelve a crear
+        void* ctl = nullptr; memcpy(&ctl, fd + 0x50, 8);
+        float ph = u.phase0;
+        if (ctl) { const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1); ph = len > 1.5f ? fmodf(ph, len - 0.5f) : 0.0f; }
+        u.t0 = T - ph; u.endTicks = 0; u.shown = clip;
         return ctl != nullptr;
     } __except (EXCEPTION_EXECUTE_HANDLER) { s_subsDead.store(true); return false; }
 }
@@ -1261,9 +1314,25 @@ int SubsPrepare() {
     uintptr_t team[2] = {}; uint8_t conv[2] = {};
     for (int sd = 0; sd < 2; sd++)
         if (!Rd(m + 0x1978 + (uintptr_t)sd * 0x28, team[sd]) || !Heap(team[sd]) || !Rd(team[sd] + 0x2eec, conv[sd]) || conv[sd] < 11 || conv[sd] > 40) return 5;
-    S.n = 0; S.cur = 0; S.match = m; S.team[0] = team[0]; S.team[1] = team[1]; S.doneSaid = false; S.resSaid = false;
+    S.n = 0; S.cur = 0; S.match = m; S.team[0] = team[0]; S.team[1] = team[1]; S.doneSaid = false; S.resSaid = false; S.test = 0;
     const int cap = (int)(Live(3, 0.0f) + 0.5f);
     const float pct = std::min(100.0f, std::max(0.0f, Live2(1, 50.0f))), up = Live2(2, 0.0f), fwd = Live2(3, 0.0f);
+    // (2e, Agustin 17/11: "mostrar las pecheras de suplente en verano y las camperas en invierno", "solo la pechera de la campera y no el
+    // pantalon largo"). La estacion es la de PES21FX_match.ini (la misma que usan el viento y PecheraPorJugador.lua; 0 verano, 1
+    // invierno). Campera = la parte de arriba de la campera de cada equipo, puesta como pechera (pieza 0 el local, 8 el visitante) sobre el
+    // uniforme, asi quedan el short, las medias y las piernas (con el tipo 0x16 de la ropa de entrenamiento el juego apaga el uniforme).
+    const int ropaOpt = (int)(Live3(0, 0.0f) + 0.5f), bibOpt = (int)(Live3(1, 0.0f) + 0.5f);
+    const bool known = g_cfg.match.known; const int season = g_cfg.match.season;
+    const bool jacket = ropaOpt == 2 || (ropaOpt == 0 && known && season == 1);
+    const uint8_t bb[2] = { (uint8_t)((jacket || bibOpt == 1) ? 1 : 2), 2 };
+    pes21fx_banca_ropa = (unsigned char)(jacket ? 1 : bibOpt == 1 ? 2 : 0);
+    Log("banca: ropa de los suplentes: %s (opcion %s, estacion %s): local pieza %u, visitante pieza %u",
+        jacket ? "la parte de arriba de la campera de cada equipo" : bibOpt == 1 ? "la pechera propia de cada equipo" : "la pechera de suplente del juego",
+        ropaOpt == 0 ? "segun el clima" : ropaOpt == 1 ? "siempre pechera" : "siempre campera",
+        !known ? "sin dato (verano)" : season == 1 ? "invierno" : season == 0 ? "verano" : "otra (como verano)", bb[0] == 1 ? 0u : 8u, 8u);
+    // (2e) clips que se reparten: los de la sala de reunion solo con w518 = 1
+    int allow[kNumClips], na = 0; const bool sala = Live3(3, 1.0f) > 0.5f;
+    for (int i = 0; i < kNumClips; i++) if (sala || !kClipDef[i].sala) allow[na++] = i;
     for (int sd = 0; sd < 2; sd++) {
         static LiveSub tmp[40]; int ns = 0;
         for (int i = 11; i < conv[sd] && ns < 40; i++) {
@@ -1283,13 +1352,13 @@ int SubsPrepare() {
         char rowDiag[400]; const int got = BuildSpots(ss, sd, ns, up, fwd, sp, 40, &seats, &rows, rowDiag, sizeof rowDiag);
         const int nb = std::min(got, (int)(got * pct / 100.0f + 0.5f));
         int ord[40]; for (int k = 0; k < got; k++) ord[k] = k;
-        for (int k = 0; k < nb; k++) { const int j = k + (int)(Rnd() % (uint32_t)(got - k)); std::swap(ord[k], ord[j]); tmp[ord[k]].bib = true; }
-        // clips: una vuelta mezclada de los 7, asi dos vecinos nunca comparten clip; (2b) cada uno arranca en un punto al azar del clip
-        // (phase0, se acota al largo real en SubStart), asi los que repiten clip no se mueven juntos.
-        int perm[kNumClips]; for (int k = 0; k < kNumClips; k++) perm[k] = k;
-        for (int k = 0; k < kNumClips - 1; k++) std::swap(perm[k], perm[k + (int)(Rnd() % (uint32_t)(kNumClips - k))]);
+        for (int k = 0; k < nb; k++) { const int j = k + (int)(Rnd() % (uint32_t)(got - k)); std::swap(ord[k], ord[j]); tmp[ord[k]].bib = true; tmp[ord[k]].bibByte = bb[sd]; }
+        // clips: una vuelta mezclada de los permitidos, asi dos vecinos nunca comparten clip; (2b) cada uno arranca en un punto al azar del
+        // clip (phase0, se acota al largo real en SubStart), asi los que repiten clip no se mueven juntos.
+        int perm[kNumClips]; for (int k = 0; k < na; k++) perm[k] = allow[k];
+        for (int k = 0; k < na - 1; k++) std::swap(perm[k], perm[k + (int)(Rnd() % (uint32_t)(na - k))]);
         for (int k = 0; k < got && S.n < 48; k++) {
-            LiveSub& u = tmp[k]; u.spot = sp[k]; u.order = S.n; u.clip = perm[k % kNumClips]; u.start = 0.0f; u.phase0 = (float)(Rnd() % 9000u) / 1000.0f;
+            LiveSub& u = tmp[k]; u.spot = sp[k]; u.order = S.n; u.clip = perm[k % na]; u.start = 0.0f; u.phase0 = (float)(Rnd() % 9000u) / 1000.0f;
             S.s[S.n++] = u;
         }
         Log("banca: %s: %d convocados, %d suplentes, %d asientos en %d fila(s) (%s); se sientan %d, %d con pechera (%.0f %%); %s", sd ? "visitante" : "local", (int)conv[sd], ns,
@@ -1379,14 +1448,14 @@ void SubsTick(void* host) {
         if (haveRes) Log("banca: suplentes reales: sin ficha de las cinematicas todavia, pero esta el recurso \"fixdemo\": se sigue");
         int ready = 0;
         for (int i = 0; i < kNumClips; i++) {
-            sprintf_s(s_clip[i].path, "cpk_dat/common/demo/anime/FoxAnim/FixDemo/Animations/dml_md_lockerSpeech_001_sit_%03d.gani", kClipNo[i]);
+            sprintf_s(s_clip[i].path, "cpk_dat/common/demo/anime/FoxAnim/FixDemo/Animations/%s.gani", kClipDef[i].name);
             s_clip[i].asked = false;
             const int q = ClipQuery(i);
-            if (q < 0) { s_subsDead.store(true); Log("banca: suplentes reales: error al buscar el clip %d en el gestor: se apaga", kClipNo[i]); return; }
+            if (q < 0) { s_subsDead.store(true); Log("banca: suplentes reales: error al buscar el clip %s en el gestor: se apaga", kClipDef[i].name); return; }
             if (q) ready++;
         }
         s_protect.store(1);
-        for (int i = 0; i < kNumClips; i++) if (!s_clip[i].ok && !ClipAsk(i)) { s_subsDead.store(true); Log("banca: suplentes reales: error al pedir el clip %d: se apaga", kClipNo[i]); return; }
+        for (int i = 0; i < kNumClips; i++) if (!s_clip[i].ok && !ClipAsk(i)) { s_subsDead.store(true); Log("banca: suplentes reales: error al pedir el clip %s: se apaga", kClipDef[i].name); return; }
         Log("banca: suplentes reales: %d de %d clips de sentado ya estaban cargados, el resto se pidio", ready, kNumClips);
         S.phase = kClips; S.tPhase = now; S.pumpOwn = false;
         return; }
@@ -1439,9 +1508,10 @@ void SubsTick(void* host) {
                 }
                 S.cur++;                                                  // creados (con o sin exito)
                 int c0 = 0, c1 = 0; BudgetRead(0, c0, c1);
-                Log("banca: creando suplente %d de %d: %s %llu %s (lugar %d%s%s) en x %.2f y %.2f z %.2f, clip %d desde %.1f s; texturas usadas %d de %d; %d cargando",
-                    next + 1, S.n, u.side ? "visitante" : "local", (unsigned long long)u.id, u.name, u.place, u.gk ? ", arquero" : "", u.bib ? ", pechera" : "",
-                    u.spot.x, u.spot.y, u.spot.z, kClipNo[u.clip], u.phase0, c1, c0, loading);
+                Log("banca: creando suplente %d de %d: %s %llu %s (lugar %d%s%s) en x %.2f y %.2f z %.2f, clip %s (giro %+.0f) desde %.1f s; texturas usadas %d de %d; %d cargando",
+                    next + 1, S.n, u.side ? "visitante" : "local", (unsigned long long)u.id, u.name, u.place, u.gk ? ", arquero" : "",
+                    !u.bib ? "" : u.bibByte == 1 ? ", pechera (pieza 0)" : ", pechera (pieza 8)",
+                    u.spot.x, u.spot.y, u.spot.z, kClipDef[u.clip].name, kClipDef[u.clip].yaw, u.phase0, c1, c0, loading);
                 S.tSpawn = now;
                 if (SubCreate(u, haveSW, season, weather)) { u.state = 1; u.tCreate = now; u.tCreateT = S.T; S.tProgress = now; }
                 else if (s_subsDead.load()) { Log("banca: suplentes reales: ERROR dentro del juego al crear: no se toca nada mas en esta sesion"); return; }
@@ -1472,6 +1542,25 @@ void SubsTick(void* host) {
         if (pending && !S.doneSaid) {
             bool any = false; for (int k = 0; k < S.n && !any; k++) any = S.s[k].state == 0 || S.s[k].state == 1;
             if (!any) { S.doneSaid = true; Log("banca: suplentes reales: listo, %d sentados de %d en %.1f s", s_subActive.load(), S.n, now - S.tPhase); }
+        }
+    }
+    // (2e) probar clips (z518): 1..kNumClips = todos con ese clip, 0 = cada uno el suyo; al momento, sin recargar el partido
+    {
+        int want = (int)(Live3(2, 0.0f) + 0.5f); if (want < 0 || want > kNumClips) want = 0;
+        if (want && !s_clip[want - 1].ok) want = 0;                    // ese clip no cargo
+        if (want != S.test) {
+            void* res = FixdemoRes(); int n = 0, bad = 0;
+            if (res) {
+                for (int k = 0; k < S.n; k++) {
+                    LiveSub& u = S.s[k]; if (u.state != 2 || !u.fd) continue;
+                    const int c = want ? want - 1 : u.clip; if (c == u.shown) continue;
+                    if (SubSwitch(u, res, c, S.A)) n++; else bad++;
+                    if (s_subsDead.load()) { Log("banca: suplentes reales: ERROR dentro del juego al cambiar el clip: no se toca nada mas en esta sesion"); return; }
+                }
+                S.test = want;
+                if (want) Log("banca: probar clips: %d de %d con el %d de %d, %s (giro %+.0f)%s", n, s_subActive.load(), want, kNumClips, kClipDef[want - 1].name, kClipDef[want - 1].yaw, bad ? ", con fallos" : "");
+                else Log("banca: probar clips: apagado, %d vuelven a su clip", n);
+            }
         }
     }
     // mover a los sentados
