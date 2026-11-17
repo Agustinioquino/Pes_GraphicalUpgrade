@@ -582,6 +582,9 @@ static void ToolbarDraw() {
     const float barH = kBarH * k * std::max(1.0f, rf), statH = kStatH * k * std::max(1.0f, rf), fs = 15.0f * k * tf, fsS = 12.5f * k * tf, rowH = 28.0f * k * rf;
     s_secN = 0;
     const bool lDown = front && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, lEdge0 = lDown && !s_tlWas;      // boton izquierdo (el clic se resuelve al final)
+    // (17/11 07:23, aprobado: "clic derecho = valor de fabrica") borde del boton derecho para los campos numericos
+    static bool s_rWas = false; const bool rDown = front && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0, rEdge = rDown && !s_rWas; s_rWas = rDown;
+    static int s_hovId = -1; static double s_hovT = 0.0;      // campo bajo el mouse y desde cuando (para la ayuda)
     // (15/11 o) paneles: leftW / rightW = ancho del panel (se dibuja entero), leftV / rightV = lo que se ve (abre y cierra animado)
     float leftW = std::clamp(g_cfg.motorPanelLW, 160.0f, 900.0f) * k, rightW = std::clamp(g_cfg.motorPanelRW, 200.0f, 900.0f) * k;
     { const float room = ds.x - 260.0f * k; if (leftW + rightW > room) { const float f = std::max(0.2f, room / (leftW + rightW)); leftW *= f; rightW *= f; } }
@@ -679,6 +682,18 @@ static void ToolbarDraw() {
     auto numField = [&](int id, const ImVec2& p0, const ImVec2& p1, float& v, float step, float lo, float hi, const char* fmt, const char* unit) -> bool {
         const bool hv = hit(id, p0, p1); bool ch = false;
         if (lEdge0 && !hitOff && inside(p0, p1)) { s_pressId = id; s_pressVal = v; }
+        // (07:23) clic derecho = valor de fabrica (los del jugador, la velocidad, la intensidad y cerca / lejos de la camara)
+        { float d = 0.0f; bool has = true;
+          switch (id) { case 2100: case 2101: case 2102: case 2103: d = 0.0f; break; case 2104: case 2120: case 2121: d = 100.0f; break; case 2014: d = 0.05f; break; case 2015: d = 1000.0f; break; default: has = false; }
+          if (has && rEdge && !hitOff && inside(p0, p1) && s_editId != id && v != d) { UndoBegin(); s_ubEndPending = true; v = std::clamp(d, lo, hi); ch = true; Note("Valor de f\xC3\xA1" "brica"); }
+          if (inside(p0, p1) && !hitOff) { if (s_hovId != id) { s_hovId = id; s_hovT = Now(); }
+            else if (Now() - s_hovT > 0.7 && s_dragId != id && s_editId != id) {      // (07:23) ayuda al pasar el mouse
+              const char* hlp = has ? "Arrastr\xC3\xA1 de costado (May\xC3\xBAs = fino), clic para escribir, clic derecho = de f\xC3\xA1" "brica" : "Arrastr\xC3\xA1 de costado (May\xC3\xBAs = fino) o clic para escribir";
+              const char* ht = TRS(hlp); const float hs = fsS - 0.5f * k; const ImVec2 hz = font->CalcTextSizeA(hs, FLT_MAX, 0.0f, ht);
+              ImDrawList* fg = ImGui::GetForegroundDrawList(); const float hx = std::min(p0.x + pOffC, ds.x - hz.x - 14.0f * k), hy = p0.y - hz.y - 10.0f * k;
+              fg->AddRectFilled(ImVec2(hx, hy), ImVec2(hx + hz.x + 12.0f * k, hy + hz.y + 6.0f * k), IM_COL32(18, 18, 20, 240), 4.0f * k); fg->AddRect(ImVec2(hx, hy), ImVec2(hx + hz.x + 12.0f * k, hy + hz.y + 6.0f * k), IM_COL32(90, 90, 96, 255), 4.0f * k);
+              fg->AddText(font, hs, ImVec2(hx + 6.0f * k, hy + 3.0f * k), IM_COL32(225, 225, 228, 255), ht); } }
+          else if (s_hovId == id) s_hovId = -1; }
         if (s_dragId == id && lDown) {
             if (fabsf(mx + pOffC - s_dragX0) > 3.0f * k) s_dragMoved = true;
             if (s_dragMoved) { const float fine = (GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 0.1f : 1.0f; const float nv = std::clamp(s_dragV0 + (mx + pOffC - s_dragX0) / k * step * fine, lo, hi); if (nv != v) { v = nv; ch = true; } } }
