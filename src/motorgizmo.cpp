@@ -947,15 +947,20 @@ static void ToolbarDraw() {
               float v[5] = { J.pos[0], J.pos[1], J.pos[2], J.yawDeg, J.scale * 100.0f }; bool ch = false;
               auto fld = [&](int id, const char* nmv, float& val, float step, float lo, float hi, const char* fmt, const char* unit) { text(lx, y + rowH * 0.5f, dim, nmv, fsS + 1.0f * k);
                   const bool c2 = numField(id, ImVec2(x0 + rightW * 0.42f, y + 3.0f * k), ImVec2(fx1, y + rowH - 3.0f * k), val, step, lo, hi, fmt, unit); y += rowH; return c2; };
-              if (label("POSICI\xC3\x93N")) { ch |= fld(2100, "X (costado)", v[0], 0.01f, -100.0f, 100.0f, "%.2f", " m"); ch |= fld(2101, "Y (altura)", v[1], 0.01f, -20.0f, 50.0f, "%.2f", " m"); ch |= fld(2102, "Z (fondo)", v[2], 0.01f, -100.0f, 100.0f, "%.2f", " m"); y += 6.0f * k; }
-              if (label("GIRO")) { ch |= fld(2103, "Sobre el piso", v[3], 0.5f, -720.0f, 720.0f, "%.1f", "\xC2\xB0"); y += 6.0f * k; }
-              if (label("TAMA\xC3\x91O")) { ch |= fld(2104, "Escala", v[4], 0.5f, 10.0f, 500.0f, "%.0f", " %"); y += 6.0f * k; }
+              // (17/11, Agustin 05:15: mover "tampoco funcionaba en el jugador normal") el jugador del visor es del Editar: no se mueve (solo poses y
+              // festejos); mover, girar y tamano son para los jugadores propios del Motor
+              if (!ownPj) { text(lx, y + 9.0f * k, dim, "Este es el jugador del Editar: no se mueve.", fsS); y += 20.0f * k; text(lx, y + 9.0f * k, dim, "Para mover, girar o cambiar el tama\xC3\xB1o, agreg\xC3\xA1 uno arriba.", fsS); y += 26.0f * k; }
+              if (ownPj && label("POSICI\xC3\x93N")) { ch |= fld(2100, "X (costado)", v[0], 0.01f, -100.0f, 100.0f, "%.2f", " m"); ch |= fld(2101, "Y (altura)", v[1], 0.01f, -20.0f, 50.0f, "%.2f", " m"); ch |= fld(2102, "Z (fondo)", v[2], 0.01f, -100.0f, 100.0f, "%.2f", " m"); y += 6.0f * k; }
+              if (ownPj && label("GIRO")) { ch |= fld(2103, "Sobre el piso", v[3], 0.5f, -720.0f, 720.0f, "%.1f", "\xC2\xB0"); y += 6.0f * k; }
+              if (ownPj && label("TAMA\xC3\x91O")) { ch |= fld(2104, "Escala", v[4], 0.5f, 10.0f, 500.0f, "%.0f", " %"); y += 6.0f * k; }
               if (ch) MotorJugSet(v, v[3], v[4] / 100.0f);
               if (!ownPj && label("CUANDO SE ANIMA")) { const char* const nms[2] = { "Fijo en su lugar", "Lo lleva el clip" }; seg(1404, ImVec2(fx0, y), ImVec2(fx1, y + rowH), 2, J.fix ? 0 : 1, nms); y += rowH + 8.0f * k; }
-              button(1400, "Volver al centro");
-              text(lx, y + 9.0f * k, dim, "Flechas: mover.  Q / E: girar.  R / F: altura.", fsS); y += 20.0f * k;
-              text(lx, y + 9.0f * k, dim, "+ / -: tama\xC3\xB1o.  May\xC3\xBAs: m\xC3\xA1s r\xC3\xA1pido.", fsS); y += 20.0f * k;
-              text(lx, y + 9.0f * k, dim, "Tambi\xC3\xA9n con los iconos del piso.", fsS); y += 26.0f * k;
+              if (ownPj) {
+                  button(1400, "Volver al centro");
+                  text(lx, y + 9.0f * k, dim, "Flechas: mover.  Q / E: girar.  R / F: altura.", fsS); y += 20.0f * k;
+                  text(lx, y + 9.0f * k, dim, "+ / -: tama\xC3\xB1o.  May\xC3\xBAs: m\xC3\xA1s r\xC3\xA1pido.", fsS); y += 20.0f * k;
+                  text(lx, y + 9.0f * k, dim, "Tambi\xC3\xA9n con los iconos del piso.", fsS); y += 26.0f * k;
+              }
               if (ownPj) { if (label("ANIMACI\xC3\x93N")) { text(lx, y + 9.0f * k, dim, "Parado (clip del pasillo de la entrada).", fsS); y += 20.0f * k; text(lx, y + 9.0f * k, dim, "Las animaciones van en la ventana de cinem\xC3\xA1ticas.", fsS); y += 26.0f * k; } }
               else if (label("ANIMACI\xC3\x93N")) {
                   if (J.animSt < 0) { text(lx, y + rowH * 0.5f, dim, "No disponible en este juego.", fsS + 1.0f * k); y += rowH; }
@@ -1475,7 +1480,7 @@ static void ToolbarDraw() {
       // mover sobre el piso (segun se ve en pantalla), R / F = subir / bajar, Q / E = girar, + / - = tamano; Mayus = cuatro veces mas rapido.
       // Sin el boton derecho (volando, las letras son de la camara), sin menu abierto y sin estar escribiendo un numero.
       {   MotorJugState J; MotorJugGet(&J);
-          if (kb && !ctrl && !alt && J.hooked && J.seen && !(s_editId >= 0 && !s_editDone) && s_modal == 0 && s_menuOpen < 0) {
+          if (kb && !ctrl && !alt && J.hooked && J.seen && J.movable && !(s_editId >= 0 && !s_editDone) && s_modal == 0 && s_menuOpen < 0) {
               auto held = [](int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0 ? 1.0f : 0.0f; };
               const float mvR = held(VK_RIGHT) - held(VK_LEFT), mvF = held(VK_UP) - held(VK_DOWN), mvY = held('R') - held('F'), rot = held('E') - held('Q');
               const float scl = std::max(held(VK_OEM_PLUS), held(VK_ADD)) - std::max(held(VK_OEM_MINUS), held(VK_SUBTRACT));
@@ -1573,7 +1578,7 @@ static std::atomic<float> s_fh[6][3]; static std::atomic<int> s_fhN{0}, s_fDrag{
 static void JugFloorGizmo() {
     s_fhN.store(0, std::memory_order_relaxed);
     MotorJugState J; MotorJugGet(&J);
-    if (!J.hooked || !J.seen || !MotorVistaLive() || g_menuOpen.load(std::memory_order_relaxed)) { s_fDrag.store(-1); return; }
+    if (!J.hooked || !J.seen || !J.movable || !MotorVistaLive() || g_menuOpen.load(std::memory_order_relaxed)) { s_fDrag.store(-1); return; }
     const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const float P[3] = { J.wpos[0], J.wpos[1], J.wpos[2] };

@@ -691,7 +691,7 @@ struct MotorLight { uintptr_t obj, data; int kind, scene; bool on, shadow, writa
 struct MotorSceneInfo { int scenes, objects, models, lights; };
 void MotorVistaPresent(); bool MotorVistaLive(); ID3D11ShaderResourceView* MotorGridOverlay(ID3D11DeviceContext* ctx); bool MotorGridProject(const float* w, float* u, float* v); bool MotorGridRay(float u, float v, float* o, float* dir);
 // (17/11) motorjug.cpp: mover / girar al jugador del Motor y elegirle animacion (poses y festejos del juego)
-struct MotorJugState { bool hooked, seen; float pos[3], yawDeg, scale; int kind, id; bool pause, mirror, fix; int animSt; float wpos[3], rootScale; };   // animSt: 0 nada pedido, 1 pedido, 2 puesto, 3 el juego no lo acepto
+struct MotorJugState { bool hooked, seen; float pos[3], yawDeg, scale; int kind, id; bool pause, mirror, fix; int animSt; float wpos[3], rootScale; bool movable; };   // movable: (17/11 05:15) solo los jugadores propios se mueven (iconos del piso, teclas)   // animSt: 0 nada pedido, 1 pedido, 2 puesto, 3 el juego no lo acepto
 void MotorJugPresent(); void MotorJugGet(MotorJugState* s); void MotorJugSet(const float* p, float yawDeg, float scale); void MotorJugSetFix(bool on); void MotorJugAnim(int kind, int id, bool mirror); void MotorJugPause(bool on); void MotorJugReset();   // (16/11) motorvista.cpp: el jugador del Motor en la escena principal
 // (17/11 3icxbh etapa 2) motorpj.cpp: jugadores propios del Motor (FixDemoHuman del juego). kind: 0 por id, 1 jugador base, 2 igual al del Editar;
 // st: 0 libre, 1 pedido, 2 cargando, 3 listo, 4 fallo, 5 sacando

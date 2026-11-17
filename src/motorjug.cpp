@@ -284,10 +284,11 @@ void MotorJugGet(MotorJugState* s) {
         const int pj = MotorPjSel(); float p[3], y, sc;
         if (pj >= 0 && MotorPjGet(pj, p, &y, &sc)) {
             memset(s, 0, sizeof *s); s->hooked = true; s->seen = true; for (int i = 0; i < 3; i++) { s->pos[i] = p[i]; s->wpos[i] = p[i]; }
-            s->yawDeg = y; s->scale = sc; s->rootScale = s_rootSc.load(); s->animSt = -1; s->id = 0x2b; return;
+            s->yawDeg = y; s->scale = sc; s->rootScale = s_rootSc.load(); s->animSt = -1; s->id = 0x2b; s->movable = true; return;
         }
     }
-    s->hooked = s_okBone; s->seen = s_seen.load(); for (int i = 0; i < 3; i++) s->pos[i] = s_uPos[i].load(); s->yawDeg = s_uYaw.load(); s->scale = s_uScale.load();
+    s->hooked = s_okBone; s->seen = s_seen.load(); s->movable = false;
+    for (int i = 0; i < 3; i++) s->pos[i] = s_uPos[i].load(); s->yawDeg = s_uYaw.load(); s->scale = s_uScale.load();
     s->kind = s_aKind.load(); s->id = s_aId.load(); s->pause = s_uPause.load(); s->mirror = s_aMirror.load(); s->fix = s_uFix.load(); s->animSt = (s_okTick && s_okAnim) ? s_aSt.load() : -1;
     for (int i = 0; i < 3; i++) s->wpos[i] = s_wPos[i].load(); s->rootScale = s_rootSc.load(); s->hooked = s_okBone && s_okCmd;
 }
