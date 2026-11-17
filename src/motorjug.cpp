@@ -100,19 +100,36 @@ static void UpdPause(uintptr_t upd, bool on) {
     } __except (1) {}
 }
 static void __fastcall hk_Yaw(uintptr_t obj, uint32_t bits) {
-    if (t_obj && obj == t_obj) { float a; memcpy(&a, &bits, 4); const float add = s_uYaw.load(std::memory_order_relaxed) * 0.017453292f; if (a == a && add != 0.0f) { a += add; memcpy(&bits, &a, 4); } }
+    s_dYawAll.fetch_add(1, std::memory_order_relaxed);
+    if (t_obj && obj == t_obj) { s_dYawOur.fetch_add(1, std::memory_order_relaxed); float a; memcpy(&a, &bits, 4); s_dYawIn = a; const float add = s_uYaw.load(std::memory_order_relaxed) * 0.017453292f; if (a == a && add != 0.0f) { a += add; memcpy(&bits, &a, 4); } s_dYawOut = a; }
     o_yaw(obj, bits);
 }
 static void __fastcall hk_Pos(uintptr_t obj, const float* v) {
+    s_dPosAll.fetch_add(1, std::memory_order_relaxed);
     if (t_obj && obj == t_obj && v) {
+        s_dPosOur.fetch_add(1, std::memory_order_relaxed); memcpy(s_dV, v, 12);
         // el desplazamiento del clip gira con el jugador (sentido del giro del modelo INFERIDO: +angulo lleva +z hacia +x) y despues se suma el lugar pedido
         const float a = s_uYaw.load(std::memory_order_relaxed) * 0.017453292f, c = cosf(a), s = sinf(a);
         const float k = s_uFix.load(std::memory_order_relaxed) ? 0.0f : 1.0f;      // "fijo en su lugar": sin el desplazamiento del clip
         float w[4] = { k * (v[0] * c + v[2] * s) + s_uPos[0].load(), k * v[1] + s_uPos[1].load(), k * (-v[0] * s + v[2] * c) + s_uPos[2].load(), 0.0f };
         for (int i = 0; i < 3; i++) s_wPos[i].store(w[i], std::memory_order_relaxed);
-        t_posSent = true; o_pos(obj, w); return;
+        memcpy(s_dW, w, 12); t_posSent = true; o_pos(obj, w); return;
     }
     o_pos(obj, v);
+}
+// (17/11 d) prueba de Agustin 04:30 con 059236F2: el giro anda pero el lugar y el tamano no se ven, y el registro no decia nada de
+// lo que se mandaba. Cada 2 s (solo si algo cambio) se anota: cuantas ordenes de lugar / giro pasaron por el gancho y cuantas eran del
+// jugador del Motor, lo ultimo que mando el juego y lo que se mando en su lugar, y como quedo la escala de la raiz.
+static std::atomic<int> s_dPosAll{0}, s_dPosOur{0}, s_dYawAll{0}, s_dYawOur{0}, s_dScW{0}, s_dScFail{0};
+static float s_dV[3] = {}, s_dW[3] = {}, s_dYawIn = 0.0f, s_dYawOut = 0.0f;
+static void DiagTick() {
+    static ULONGLONG t = 0; const ULONGLONG n = GetTickCount64(); if (n - t < 2000) return; t = n;
+    static float last[5] = { 1e9f, 1e9f, 1e9f, 1e9f, 1e9f }; const float cur[5] = { s_uPos[0].load(), s_uPos[1].load(), s_uPos[2].load(), s_uYaw.load(), s_uScale.load() };
+    if (!memcmp(last, cur, sizeof cur)) return; memcpy(last, cur, sizeof cur);
+    static int nl = 0; if (nl++ >= 60) return;
+    Log("motor (jugador): pedido lugar (%.2f, %.2f, %.2f) giro %.1f tamano %.2f | ordenes de lugar %d (del jugador %d): juego (%.3f, %.3f, %.3f) -> mandado (%.3f, %.3f, %.3f) | giro %d (del jugador %d): %.3f -> %.3f rad | escala de la raiz escrita %d, fallo %d, ahora %.4f",
+        cur[0], cur[1], cur[2], cur[3], cur[4], s_dPosAll.exchange(0), s_dPosOur.exchange(0), s_dV[0], s_dV[1], s_dV[2], s_dW[0], s_dW[1], s_dW[2],
+        s_dYawAll.exchange(0), s_dYawOur.exchange(0), s_dYawIn, s_dYawOut, s_dScW.exchange(0), s_dScFail.exchange(0), s_rootSc.load());
 }
 static bool CallPos(uintptr_t obj, const float* w) { __try { o_pos(obj, w); return true; } __except (1) { return false; } }
 
@@ -134,14 +151,14 @@ static void __fastcall hk_Bone(uintptr_t upd, uintptr_t buf) {
         if (PtrOk(ctl) && ScaleRead(ctl, &bi, &cur)) {
             if (ctl != s_scCtl || fabsf(cur - s_scW) > 1e-5f) { s_scCtl = ctl; s_scBase = cur; s_scW = cur; static int n2 = 0; if (n2++ < 6) Log("motor (jugador): estatura del juego en la raiz (hueso %d): %.4f", bi, cur); }
             const float want = s_scBase * sc;
-            if (fabsf(want - s_scW) > 1e-5f && ScaleWrite(ctl, bi, want)) s_scW = want;
+            if (fabsf(want - s_scW) > 1e-5f) { if (ScaleWrite(ctl, bi, want)) { s_scW = want; s_dScW.fetch_add(1); } else s_dScFail.fetch_add(1); }
             s_rootSc.store(s_scW, std::memory_order_relaxed);
         }
         const bool pz = s_uPause.load(std::memory_order_relaxed);
         if (pz || s_paused) { UpdPause(upd, pz); s_paused = pz; }
         t_obj = obj; t_posSent = false;
         o_bone(upd, buf);
-        t_obj = 0;
+        t_obj = 0; DiagTick();
         if (!t_posSent) {      // este cuadro el juego no mando el lugar (clip sin desplazamiento): se manda el pedido, y al volver a cero una vez mas
             float w[4] = { s_uPos[0].load(), s_uPos[1].load(), s_uPos[2].load(), 0.0f }; const bool any = w[0] != 0.0f || w[1] != 0.0f || w[2] != 0.0f;
             if (any || s_ownPos) { CallPos(obj, w); s_ownPos = any; }
