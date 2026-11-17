@@ -122,12 +122,13 @@ struct Pj {
     int clip = -1;                  // clip de cuerpo pedido (motorclips.inc); -1 = parado
     float speed = 1.0f; bool paused = false; int restart = 0;   // restart: lo sube la interfaz
     float seek = -1.0f; int seekN = 0;                          // (06:52) linea de tiempo: ir a ese segundo del clip (seekN lo sube la interfaz)
+    float wpos[3] = {}; bool hasW = false;                     // (17/11 tarde) lugar real de la raiz (lo escribe el hilo del juego, con s_mx)
     float curT = 0.0f, lenT = 0.0f;                             // lo escribe el hilo del juego (con s_mx): tiempo del clip y su largo
     int face = -1; float faceW = 1.0f; bool blink = true;       // gesto (lista de 166); -1 = cara neutra del juego
     bool hidden = false;
     // solo el hilo del juego
     uint8_t* fd = nullptr; double tLoad = 0, tLast = 0, tPlay = 0; bool faceTried = false;
-    float scW = 1.0f;
+    float scW = 1.0f; void* scCtl = nullptr; float scBase = 0.0f;   // (17/11 tarde) tamano por root_main como FUN_141f87eb0
     float lastPos[3] = {}, lastYaw = 0.0f; void* posCtl = nullptr; int nMoved = 0;
     int clipA = -2, clipFail = -2, restartA = 0, seekA = 0, endTicks = 0; uint32_t seed = 0;   // clipA: el clip puesto
     uint8_t lid[0xa0] = {};
@@ -267,7 +268,7 @@ bool Create(Pj& p, int slot, const uint8_t* visorLid) {
             ((FdLoadFn)kFdLoad)(fd, p.lid, 0u, 0, 0);
         }
         ((HeapPopFn)kHeapPop)(&saved);
-        p.fd = fd; return fd != nullptr;
+        p.fd = fd; p.scBase = 0.0f; p.scCtl = nullptr; return fd != nullptr;
     } __except (1) { p.fd = nullptr; s_dead.store(true); return false; }
 }
 int Poll(Pj& p) {
@@ -315,7 +316,7 @@ bool Start(Pj& p, void* res, int clip, const float* pos, float yaw) {
         void* h = nullptr; memcpy(&h, p.fd + 0x48, 8); if (h) ((HumanShowFn)kHumanShow)(h, 1);
         void* ctl = nullptr; memcpy(&ctl, p.fd + 0x50, 8);
         p.posCtl = ctl; memcpy(p.lastPos, pos, 12); p.lastYaw = yaw;   // vf1 ya puso este lugar en la raiz
-        p.tPlay = 0.0; p.tLast = Now(); p.scW = 1.0f; p.clipA = clip; p.endTicks = 0;
+        p.tPlay = 0.0; p.tLast = Now(); p.scW = 1.0f; p.scCtl = nullptr; p.clipA = clip; p.endTicks = 0;
         return ctl != nullptr;
     } __except (1) { s_dead.store(true); return false; }
 }
@@ -331,7 +332,7 @@ bool Switch(Pj& p, void* res, int clip) {
         ((HeapPopFn)kHeapPop)(&saved);
         p.faceTried = false; FaceEnsure(p);
         void* ctl = nullptr; memcpy(&ctl, p.fd + 0x50, 8);
-        p.posCtl = nullptr; p.tPlay = 0.0; p.scW = 1.0f; p.clipA = clip; p.endTicks = 0;
+        p.posCtl = nullptr; p.tPlay = 0.0; p.scW = 1.0f; p.scCtl = nullptr; p.clipA = clip; p.endTicks = 0;
         return ctl != nullptr;
     } __except (1) { s_dead.store(true); return false; }
 }
@@ -372,6 +373,30 @@ void RowScale(Pj& p, float want) {
         if (fabsf(l - want) > 1e-4f) { const float f = want / l; v[0] *= f; v[1] *= f; v[2] *= f; ch = true; } }
     if (ch && fabsf(want - p.scW) > 1e-4f) { p.scW = want; static int nl = 0; if (nl++ < 8) Log("motor (jugadores propios): tamano %.2f en la matriz de la raiz", want); }
 }
+// (17/11 17:22, Agustin: "la escala no funciona") la matriz de la raiz (RowScale) se pasa a giro puro y pierde el largo. Leido en el C:
+// FUN_141f87eb0 (lo llama el juego cada vez que el jugador recibe un controlador nuevo, FUN_141f88xxx) pone la estatura como escala del
+// hueso root_main (indice = tabla 0x1438032e0 [0x13]) con FUN_141afa3c0(ctl, i, s) y la guarda por hueso en fd + 0x2cc + 4 * i (fd + 0x2c8 = 1
+// ya calculado); en los controladores siguientes usa ese valor guardado. Aca: base = la del juego (leida una vez), s = base x escala pedida,
+// con la funcion real sobre el controlador actual y el mismo valor en fd + 0x2cc, asi un clip nuevo lo conserva.
+typedef void (__fastcall* BoneScaleFn)(void*, unsigned, float);
+static void RootMainScale(Pj& p, float scale) {
+    void* ctl = nullptr; memcpy(&ctl, p.fd + 0x50, 8); if (!ctl) return;
+    const int i = *(const int*)(0x1438032e0ull + 0x13 * 4); if (i < 0 || i >= 20) return;
+    const uintptr_t arr = *(const uintptr_t*)((uintptr_t)ctl + 0x298); if (!PtrOk(arr)) return;
+    float* keep = (float*)(p.fd + 0x2cc + 4 * i);
+    if (p.scBase <= 0.0f) { const float b = p.fd[0x2c8] ? *keep : *(const float*)(arr + (size_t)i * 4); if (!(b > 0.3f && b < 3.0f)) return; p.scBase = b;
+        Log("motor (jugadores propios): estatura del juego %.3f (root_main %d)", b, i); }
+    const float want = p.scBase * std::clamp(scale, 0.05f, 10.0f);
+    if (ctl == p.scCtl && fabsf(want - p.scW) < 1e-5f && fabsf(*(const float*)(arr + (size_t)i * 4) - want) < 1e-5f) return;
+    ((BoneScaleFn)0x141afa3c0ull)(ctl, (unsigned)i, want); *keep = want;
+    if (fabsf(want - p.scW) > 1e-4f) { static int nl = 0; if (nl++ < 12) Log("motor (jugadores propios): tamano %.0f %% (root_main %.3f)", scale * 100.0f, want); }
+    p.scW = want; p.scCtl = ctl;
+}
+static void StoreWorld(Pj& p, const float* w) { std::lock_guard<std::mutex> lk(s_mx); memcpy(p.wpos, w, 12); p.hasW = true; }
+// (17/11 17:24, video de Agustin) los iconos del piso se dibujaban en el lugar PEDIDO; el jugador queda donde lo deja el clip (la raiz del
+// controlador, fila de la posicion en [ctl+0x188] + 0xd0, la que escribe FUN_141afd060). Se lee cada cuadro despues de vf4 para dibujarlos ahi.
+static bool ReadRootPos(void* ctl, float* o) { const uintptr_t R = *(const uintptr_t*)((uintptr_t)ctl + 0x188); if (!PtrOk(R)) return false;
+    const float* v = (const float*)(R + 0xd0); for (int k = 0; k < 3; k++) { if (!(v[k] == v[k]) || fabsf(v[k]) > 500.0f) return false; o[k] = v[k]; } return true; }
 static void StoreTimes(Pj& p, float len, float cur) { std::lock_guard<std::mutex> lk(s_mx); p.lenT = len; p.curT = cur; }   // fuera del __try (C2712)
 int Update(Pj& p, const Pj& w, double now) {
     __try {
@@ -393,7 +418,8 @@ int Update(Pj& p, const Pj& w, double now) {
             if (len > 0.2f && cur >= len - 0.003f) { if (++p.endTicks >= 6) { ((ClipSeekFn)kClipSeek)(ctl, 0, 0, 0.0f, 1, 1); p.endTicks = 0; } } else p.endTicks = 0;
         }
         if (ctl) StoreTimes(p, ((ClipTimeFn)kClipLen)(ctl, 0, 1), ((ClipTimeFn)kClipTime)(ctl, 0, 1));
-        RowScale(p, scale);
+        RootMainScale(p, scale);
+        { float rw[3]; if (ctl && ReadRootPos(ctl, rw)) StoreWorld(p, rw); }
         ((FdPushFn)kFdPush)(p.fd);
         void* h = nullptr; memcpy(&h, p.fd + 0x48, 8);
         void* face = FaceEnsure(p);
@@ -525,6 +551,10 @@ int MotorPjSel() { const int i = s_sel.load(); if (i < 0) return -1; std::lock_g
 bool MotorPjGet(int i, float* pos, float* yaw, float* scale) {
     if (i < 0 || i >= kMax) return false; std::lock_guard<std::mutex> lk(s_mx); const Pj& p = s_pj[i]; if (p.state < 1 || p.state > 3) return false;
     memcpy(pos, p.pos, 12); *yaw = p.yaw; *scale = p.scale; return true;
+}
+bool MotorPjWorld(int i, float* w) {
+    if (i < 0 || i >= kMax) return false; std::lock_guard<std::mutex> lk(s_mx); const Pj& p = s_pj[i]; if (p.state != 3 || !p.hasW) return false;
+    memcpy(w, p.wpos, 12); return true;
 }
 void MotorPjSet(int i, const float* pos, float yaw, float scale) {
     if (i < 0 || i >= kMax) return; std::lock_guard<std::mutex> lk(s_mx); Pj& p = s_pj[i]; if (p.state < 1 || p.state > 3) return;

@@ -699,7 +699,7 @@ constexpr int kMotorPjMax = 32;   // (17/11 06:36) antes 8
 struct MotorPjInfo { int sel; bool ticking, dead, hidden[kMotorPjMax]; int st[kMotorPjMax], kind[kMotorPjMax]; uint64_t id[kMotorPjMax]; char name[kMotorPjMax][48]; char msg[200];
     int clip[kMotorPjMax], face[kMotorPjMax]; float speed[kMotorPjMax], faceW[kMotorPjMax], curT[kMotorPjMax], lenT[kMotorPjMax]; bool paused[kMotorPjMax], blink[kMotorPjMax], clipOn[kMotorPjMax], clipBad[kMotorPjMax]; };
 void MotorPjTick(bool on, uintptr_t impl); int MotorPjAdd(int kind, uint32_t id); void MotorPjRemove(int i); void MotorPjSelect(int i); void MotorPjShow(int i, bool on); int MotorPjSel();
-bool MotorPjGet(int i, float* pos, float* yaw, float* scale); void MotorPjSet(int i, const float* pos, float yaw, float scale); void MotorPjInfoGet(MotorPjInfo* o);
+bool MotorPjGet(int i, float* pos, float* yaw, float* scale); bool MotorPjWorld(int i, float* w); void MotorPjSet(int i, const float* pos, float yaw, float scale); void MotorPjInfoGet(MotorPjInfo* o);
 // (17/11 06:36..06:38) duplicar, animacion y gesto por jugador (i = -1: a todos); clip -1 = parado; face -1 = cara neutra del juego
 int MotorPjDup(int i); void MotorPjAnimSet(int i, int clip, float speed, bool paused); void MotorPjRestart(int i); void MotorPjSeek(int i, float t); void MotorPjFaceSet(int i, int face, float w, bool blink);
 int MotorClipCount(); const char* MotorClipFile(int i); int MotorClipGroup(int i); int MotorClipGroupCount(); const char* MotorClipGroupKey(int g); int MotorClipIdle(); int MotorFaceCount(); const char* MotorFaceName(int i);

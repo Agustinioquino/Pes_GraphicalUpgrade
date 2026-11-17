@@ -284,6 +284,7 @@ void MotorJugGet(MotorJugState* s) {
         const int pj = MotorPjSel(); float p[3], y, sc;
         if (pj >= 0 && MotorPjGet(pj, p, &y, &sc)) {
             memset(s, 0, sizeof *s); s->hooked = true; s->seen = true; for (int i = 0; i < 3; i++) { s->pos[i] = p[i]; s->wpos[i] = p[i]; }
+            { float w[3]; if (MotorPjWorld(pj, w)) { const float dx = w[0] - p[0], dz = w[2] - p[2]; if (dx * dx + dz * dz < 9.0f && fabsf(w[1] - p[1]) < 3.0f) for (int i = 0; i < 3; i++) s->wpos[i] = w[i]; } }   // lejos del pedido = no es el lugar (se dibuja en el pedido)
             s->yawDeg = y; s->scale = sc; s->rootScale = s_rootSc.load(); s->animSt = -1; s->id = 0x2b; s->movable = true; return;
         }
     }

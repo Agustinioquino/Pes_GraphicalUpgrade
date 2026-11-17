@@ -519,7 +519,8 @@ void MotorPreCoverDraw() {
 // lo rehace. La camara no entra (como en Blender). Hasta 40 pasos (15/11 p: de 10 a 200, en Editar > Preferencias); una accion nueva borra lo que habia para rehacer.
 // (15/11 o) tambien lo que se cambia en el inspector: color, intensidad, sombra, alcance y posicion de cada luz, y las opciones de la
 // grilla. Un arrastre entero (de un campo o de un slider) es UN paso.
-struct UndoS { int v[3]; int grid, gridSize, gAlpha, gMajor, gAxes; float gCell; bool player; int nl; uintptr_t obj[64]; bool on[64], sh[64]; float col[64][4], pos[64][3], rng[64]; };
+struct UndoS { int v[3]; int grid, gridSize, gAlpha, gMajor, gAxes; float gCell; bool player; int nl; uintptr_t obj[64]; bool on[64], sh[64]; float col[64][4], pos[64][3], rng[64];
+    bool pjOk[kMotorPjMax], pjHid[kMotorPjMax]; float pjT[kMotorPjMax][5]; };      // (17/11 17:22, Agustin: "el ctrl+z deberia ser capaz de deshacer cambios mover escala etc") jugadores propios: lugar, giro, tamano, oculto
 static const int kUndoMax = 200;      // (15/11 p) Editar > Preferencias: de 10 a 200 pasos ([PES21FX] motor_deshacer_pasos, 40 de fabrica)
 static UndoS s_undo[kUndoMax], s_redo[kUndoMax]; static int s_undoN = 0, s_redoN = 0;
 static void GridSave() {      // (15/11 o) opciones de la grilla al ini
@@ -531,10 +532,13 @@ static void UndoSnap(UndoS& u) {
     u.gAlpha = g_cfg.motorGridAlpha; u.gMajor = g_cfg.motorGridMajor; u.gAxes = g_cfg.motorGridAxes; u.gCell = g_cfg.motorGridCell;
     u.nl = s_nLights; for (int i = 0; i < s_nLights; i++) { const MotorLight& L = s_lights[i]; u.obj[i] = L.obj; u.on[i] = L.on; u.sh[i] = L.shadow;
         memcpy(u.col[i], L.color, sizeof u.col[i]); memcpy(u.pos[i], L.pos, sizeof u.pos[i]); u.rng[i] = L.range; }
+    static MotorPjInfo PI; MotorPjInfoGet(&PI);
+    for (int i = 0; i < kMotorPjMax; i++) { float* t = u.pjT[i]; u.pjOk[i] = MotorPjGet(i, t, &t[3], &t[4]); u.pjHid[i] = PI.hidden[i]; if (!u.pjOk[i]) memset(t, 0, sizeof u.pjT[i]); }
 }
 static bool UndoSame(const UndoS& a, const UndoS& b) {
     if (a.v[0] != b.v[0] || a.v[1] != b.v[1] || a.v[2] != b.v[2] || a.grid != b.grid || a.gridSize != b.gridSize || a.player != b.player) return false;
     if (a.gAlpha != b.gAlpha || a.gMajor != b.gMajor || a.gAxes != b.gAxes || a.gCell != b.gCell) return false;
+    for (int i = 0; i < kMotorPjMax; i++) if (a.pjOk[i] && b.pjOk[i] && (a.pjHid[i] != b.pjHid[i] || memcmp(a.pjT[i], b.pjT[i], sizeof a.pjT[i]) != 0)) return false;
     for (int i = 0; i < a.nl; i++) for (int j = 0; j < b.nl; j++) if (a.obj[i] == b.obj[j]) {
         if (a.on[i] != b.on[j] || a.sh[i] != b.sh[j] || a.rng[i] != b.rng[j] || memcmp(a.col[i], b.col[j], sizeof a.col[i]) != 0 || memcmp(a.pos[i], b.pos[j], sizeof a.pos[i]) != 0) return false; }
     return true;
@@ -547,6 +551,9 @@ static void UndoApply(const UndoS& u) {
     if (g_cfg.motorGridAlpha != u.gAlpha || g_cfg.motorGridMajor != u.gMajor || g_cfg.motorGridAxes != u.gAxes || g_cfg.motorGridCell != u.gCell) {
         g_cfg.motorGridAlpha = u.gAlpha; g_cfg.motorGridMajor = u.gMajor; g_cfg.motorGridAxes = u.gAxes; g_cfg.motorGridCell = u.gCell; GridSave(); }
     if (u.player != MotorUiPlayer()) MotorUiTogglePlayer();
+    {   static MotorPjInfo PI; MotorPjInfoGet(&PI);      // jugadores que siguen en la escena: lugar, giro, tamano y oculto como estaban
+        for (int i = 0; i < kMotorPjMax; i++) { if (!u.pjOk[i]) continue; float p[3], y, sc; if (!MotorPjGet(i, p, &y, &sc)) continue;
+            MotorPjSet(i, u.pjT[i], u.pjT[i][3], u.pjT[i][4]); if (PI.hidden[i] != u.pjHid[i]) MotorPjShow(i, !u.pjHid[i]); } }
     int bad = 0;
     for (int i = 0; i < s_nLights; i++) { MotorLight& L = s_lights[i];
         for (int j = 0; j < u.nl; j++) if (u.obj[j] == L.obj) {
@@ -567,6 +574,34 @@ static void UndoStep(bool redo) {
 static UndoS s_ub; static bool s_ubOn = false, s_ubEndPending = false;
 static void UndoBegin() { if (!s_ubOn) { UndoSnap(s_ub); s_ubOn = true; } }
 static void UndoEnd() { if (!s_ubOn) return; s_ubOn = false; UndoS now; UndoSnap(now); if (!UndoSame(s_ub, now)) { UndoPush(s_undo, s_undoN, s_ub); s_redoN = 0; } }
+// (17/11 17:24, Agustin: "apretar shift y mantener para seleccionar muchos") VARIOS ELEGIDOS: Mayus + clic (en la lista o en la vista)
+// suma o saca un jugador; clic solo deja uno. El elegido principal (MotorPjSel) lleva los iconos y el Inspector; lo que se le hace a el
+// (mover, girar, tamano) se les hace a los demas elegidos con la misma diferencia.
+static uint32_t s_pjMulti = 0; static bool s_kbUndo = false;
+static void PjPick(int q, bool add) {
+    if (q < 0 || q >= kMotorPjMax) { s_pjMulti = 0; MotorPjSelect(-1); return; }
+    const uint32_t b = 1u << q;
+    if (!add) { s_pjMulti = b; MotorPjSelect(q); return; }
+    if (MotorPjSel() >= 0) s_pjMulti |= 1u << MotorPjSel();
+    if ((s_pjMulti & b) && MotorPjSel() == q) { s_pjMulti &= ~b; int nx = -1; for (int i = 0; i < kMotorPjMax; i++) if (s_pjMulti & (1u << i)) { nx = i; break; } MotorPjSelect(nx); }
+    else { s_pjMulti |= b; MotorPjSelect(q); }
+}
+static int PjMultiCount() { int n = 0; const int s0 = MotorPjSel(); for (int i = 0; i < kMotorPjMax; i++) { float p[3], y, sc; if (((s_pjMulti >> i) & 1u) && i != s0 && MotorPjGet(i, p, &y, &sc)) n++; } return n + (s0 >= 0 ? 1 : 0); }
+static void PjGroupSet(const float* np, float ny, float ns) {      // el elegido a (np, ny, ns) y los demas elegidos con la misma diferencia
+    const int s0 = MotorPjSel(); float p0[3], y0 = 0.0f, sc0 = 1.0f; const bool has = s0 >= 0 && MotorPjGet(s0, p0, &y0, &sc0);
+    MotorJugSet(np, ny, ns);
+    if (!has) return;
+    const float d[3] = { np[0] - p0[0], np[1] - p0[1], np[2] - p0[2] }, dy = ny - y0, f = sc0 > 1e-4f ? ns / sc0 : 1.0f;
+    for (int i = 0; i < kMotorPjMax; i++) { if (i == s0 || !((s_pjMulti >> i) & 1u)) continue; float p[3], y, sc; if (!MotorPjGet(i, p, &y, &sc)) continue;
+        const float q[3] = { p[0] + d[0], p[1] + d[1], p[2] + d[2] }; MotorPjSet(i, q, y + dy, std::clamp(sc * f, 0.05f, 10.0f)); }
+}
+static void PjHideSel() {      // (17/11 17:24, Agustin: "me faltan opciones para ocultar jugadores") H: oculta o muestra los elegidos
+    static MotorPjInfo PI; MotorPjInfoGet(&PI); const int s0 = MotorPjSel(); if (s0 < 0) return;
+    const bool hide = !PI.hidden[s0]; UndoBegin();
+    for (int i = 0; i < kMotorPjMax; i++) if (i == s0 || ((s_pjMulti >> i) & 1u)) { float p[3], y, sc; if (MotorPjGet(i, p, &y, &sc)) MotorPjShow(i, !hide); }
+    UndoEnd();
+}
+static void PjShowAll() { static MotorPjInfo PI; MotorPjInfoGet(&PI); UndoBegin(); int n = 0; for (int i = 0; i < kMotorPjMax; i++) if (PI.hidden[i]) { float p[3], y, sc; if (MotorPjGet(i, p, &y, &sc)) { MotorPjShow(i, true); n++; } } UndoEnd(); }
 static void ToolbarDraw() {
     if (!s_iconTried) IconsLoad();
     ImDrawList* dl = MotorDL(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
@@ -885,7 +920,8 @@ static void ToolbarDraw() {
       for (int j = 0; j < nSub; j++) {      // jugadores: el del Editar (ojo = cargarlo / sacarlo) y los propios (clic = elegirlo, ojo = mostrar / ocultar)
           const int q = pjIdx[j]; const float y = y0 + rowH * (float)(1 + nRows + j), yc = y + rowH * 0.5f;
           const ImVec2 p0(0, y), p1(leftW - 36.0f * k, y + rowH); const bool hv = hit(3000 + q, p0, p1);
-          const bool isSel = s_sel == 3 && PJ.sel == q;
+          const bool isSel = s_sel == 3 && PJ.sel == q, inMulti = s_sel == 3 && ((s_pjMulti >> q) & 1u) && PJ.sel != q;
+          if (inMulti) dl->AddRectFilled(p0, ImVec2(leftW, y + rowH), IM_COL32(240, 138, 36, 40));
           if (!isSel && hv) dl->AddRectFilled(p0, ImVec2(leftW, y + rowH), IM_COL32(255, 255, 255, 14));
           const float ind = 56.0f * k; dl->AddRectFilled(ImVec2(ind - 12.0f * k, yc - 1.0f), ImVec2(ind - 4.0f * k, yc), IM_COL32(90, 90, 94, 255));
           const bool off = PJ.hidden[q];
@@ -1092,7 +1128,7 @@ static void ToolbarDraw() {
               if (label("POSICI\xC3\x93N")) { ch |= fld(2100, "X (costado)", v[0], 0.01f, -100.0f, 100.0f, "%.2f", " m"); ch |= fld(2101, "Y (altura)", v[1], 0.01f, -20.0f, 50.0f, "%.2f", " m"); ch |= fld(2102, "Z (fondo)", v[2], 0.01f, -100.0f, 100.0f, "%.2f", " m"); y += 6.0f * k; }
               if (label("GIRO")) { ch |= fld(2103, "Sobre el piso", v[3], 0.5f, -720.0f, 720.0f, "%.1f", "\xC2\xB0"); y += 6.0f * k; }
               if (label("TAMA\xC3\x91O")) { ch |= fld(2104, "Escala", v[4], 0.5f, 10.0f, 500.0f, "%.0f", " %"); y += 6.0f * k; }
-              if (ch) MotorJugSet(v, v[3], v[4] / 100.0f);
+              if (ch) PjGroupSet(v, v[3], v[4] / 100.0f);
               if (label("MOVER")) {
                   { const char* const nms[2] = { "Libre", "A la grilla" }; text(lx, y + rowH * 0.5f, dim, "Al arrastrar", fsS + 1.0f * k);
                     seg(3303, ImVec2(x0 + rightW * 0.42f, y), ImVec2(fx1, y + rowH), 2, s_pjSnap ? 1 : 0, nms); y += rowH + 8.0f * k; }
@@ -1108,6 +1144,9 @@ static void ToolbarDraw() {
                       textC(a0, a1, ink, "Copiar (Ctrl+C)", fsS); textC(b0, b1, s_pjCb.ok ? ink : dim, "Pegar (Ctrl+V)", fsS); y += rowH + 10.0f * k; }
                   button(3301, "Mirar a la c\xC3\xA1mara");
                   button(3302, "Poner a todos en fila");
+                  button(3362, PjMultiCount() > 1 ? "Ocultar / mostrar los elegidos (H)" : "Ocultar / mostrar (H)");
+                  { const int nm = PjMultiCount(); if (nm > 1) { char tm[64]; snprintf(tm, sizeof tm, "%d jugadores elegidos: se mueven juntos.", nm); text(lx, y + 9.0f * k, ink, tm, fsS); y += 20.0f * k; } }
+                  text(lx, y + 9.0f * k, dim, "May\xC3\xBAs + clic: sumar o sacar de los elegidos.", fsS); y += 20.0f * k;
                   text(lx, y + 9.0f * k, dim, "Clic en un jugador de la vista: elegirlo y arrastrarlo.", fsS); y += 20.0f * k;
                   text(lx, y + 9.0f * k, dim, "Flechas: mover.  Q / E: girar.  R / F: altura.", fsS); y += 20.0f * k;
                   text(lx, y + 9.0f * k, dim, "+ / -: tama\xC3\xB1o.  May\xC3\xBAs: m\xC3\xA1s r\xC3\xA1pido.  Supr: sacarlo.", fsS); y += 20.0f * k;
@@ -1696,8 +1735,8 @@ static void ToolbarDraw() {
         if (id == 0) { if (s_exitT < 0.0) { s_exitT = Now(); s_exitSent = false; MotorGlitchSound(1); } }      // salir: primero el fundido (abajo)
         else if (id == 1 || id == 20) g_cfg.motorGrid = grid ? 0 : 1;
         else if (id == 1400) { MotorJugReset(); Note("Jugador al centro"); }
-        else if (id == 1460) { MotorPjSelect(-1); s_sel = 3; s_selObj = 0; }
-        else if (id >= 3000 && id < 3000 + kMotorPjMax) { MotorPjSelect(id - 3000); s_sel = 3; s_selObj = 0; s_pjGroup = -1; }
+        else if (id == 1460) { PjPick(-1, false); s_sel = 3; s_selObj = 0; }
+        else if (id >= 3000 && id < 3000 + kMotorPjMax) { PjPick(id - 3000, (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0); s_sel = 3; s_selObj = 0; s_pjGroup = -1; }
         else if (id >= 3200 && id < 3200 + kMotorPjMax) { MotorPjRemove(id - 3200); Note("Jugador sacado"); }
         else if (id == 3508) { s_tlMode = s_tlMode == 2 ? 1 : 2; Note(s_tlMode == 2 ? "L\xC3\xADnea de tiempo oculta" : "L\xC3\xADnea de tiempo visible"); }
         else if (id == 3520) { s_modal = 5; s_menuOpen = -1; }
@@ -1722,7 +1761,7 @@ static void ToolbarDraw() {
                             MotorPjSeek(i, t); if (!PI.paused[i] && id != 3500) MotorPjAnimSet(i, PI.clip[i], PI.speed[i], true); } } } }
         }
         else if (id >= 3100 && id < 3100 + kMotorPjMax) { static MotorPjInfo PI; MotorPjInfoGet(&PI); const int q = id - 3100; MotorPjShow(q, PI.hidden[q]); Note(PI.hidden[q] ? "Jugador visible" : "Jugador oculto"); }
-        else if (id >= 3300 && id <= 3343) {      // (06:36..06:38) opciones del jugador elegido: mover, animacion y gesto
+        else if ((id >= 3300 && id <= 3343) || (id >= 3360 && id <= 3362)) {      // (17/11 tarde) 3360-3362 copiar, pegar, ocultar: antes quedaban fuera del rango      // (06:36..06:38) opciones del jugador elegido: mover, animacion y gesto
             static MotorPjInfo PI; MotorPjInfoGet(&PI); const int q = MotorPjSel();
             const int nC = MotorClipCount(), nG = std::max(1, MotorClipGroupCount()), nF = MotorFaceCount();
             const int cur = q >= 0 && PI.clip[q] >= 0 && PI.clip[q] < nC ? PI.clip[q] : MotorClipIdle();
@@ -1739,6 +1778,7 @@ static void ToolbarDraw() {
             else if (id == 3310 || id == 3311) { s_pjGroup = ((s_pjGroup < 0 ? MotorClipGroup(cur) : s_pjGroup) + (id == 3311 ? 1 : nG - 1)) % nG; s_pjListTop = -1; }
             else if (id == 3312 || id == 3313) { const int c = (cur + (id == 3313 ? 1 : nC - 1)) % std::max(1, nC); MotorPjAnimSet(q, c, PI.speed[q], PI.paused[q]); s_pjGroup = MotorClipGroup(c); }
             else if (id == 3314 || id == 3315) s_pjListTop += id == 3315 ? 6 : -6;
+            else if (id == 3362) PjHideSel();
             else if (id == 3360 || id == 3361) { const int q = MotorPjSel(); static MotorPjInfo PI; MotorPjInfoGet(&PI);
             if (q >= 0 && id == 3360) { PjClip& c = s_pjCb; c.ok = MotorPjGet(q, c.pos, &c.yaw, &c.scale); c.clip = PI.clip[q]; c.speed = PI.speed[q]; c.paused = PI.paused[q]; c.face = PI.face[q]; c.faceW = PI.faceW[q]; c.blink = PI.blink[q];
                 if (c.ok) Note("Copiado: lugar, giro, tama\xC3\xB1o, animaci\xC3\xB3n y gesto del jugador %d", q + 1); }
@@ -1841,7 +1881,7 @@ static void ToolbarDraw() {
     // ---------------- teclado (el juego no lo ve dentro del Motor); volando con el boton derecho las letras son de la camara ----------------
     { auto tap = [&](int vk) { const bool d = (GetAsyncKeyState(vk) & 0x8000) != 0; const bool t = d && !s_kWas[vk & 255]; s_kWas[vk & 255] = d; return t; };
       const bool tF1 = tap(VK_F1), tF2 = tap(VK_F2), tEsc = tap(VK_ESCAPE), tLe = tap(VK_LEFT), tRi = tap(VK_RIGHT), tUp = tap(VK_UP), tDn = tap(VK_DOWN), tEn = tap(VK_RETURN), tDel = tap(VK_DELETE),
-                 tN = tap('N'), tO = tap('O'), tS = tap('S'), tG = tap('G'), tJ = tap('J'), tC = tap('C'), tV = tap('V'), tZ = tap('Z'), tY = tap('Y'), tL = tap('L'),
+                 tN = tap('N'), tO = tap('O'), tS = tap('S'), tG = tap('G'), tH = tap('H'), tJ = tap('J'), tC = tap('C'), tV = tap('V'), tZ = tap('Z'), tY = tap('Y'), tL = tap('L'),
                  t0 = tap(VK_NUMPAD0), t1 = tap(VK_NUMPAD1), t3 = tap(VK_NUMPAD3), t5 = tap(VK_NUMPAD5), t7 = tap(VK_NUMPAD7),
                  tPa = tap(VK_OEM_PLUS), tPb = tap(VK_ADD), tMa = tap(VK_OEM_MINUS), tMb = tap(VK_SUBTRACT), tPl = tPa || tPb, tMi = tMa || tMb,
                  tT = tap('T'), tX = tap('X'), tCm = tap(VK_OEM_COMMA), tDot = tap(VK_OEM_PERIOD), tDec = tap(VK_DECIMAL), tBk = tap(VK_BACK), tSpc = tap(VK_SPACE);
@@ -1885,6 +1925,7 @@ static void ToolbarDraw() {
           if (tSpc) kact(3502); else if (tCm) kact(3501); else if (tDot) kact(3503);      // (07:23) Espacio = reproducir / pausa, coma / punto = un cuadro atras / adelante
           else if (tG) kact(1); else if (tJ) kact(2); else if (tC) kact(3); else if (tV) kact(shift ? 741 : 740); else if (tZ) kact(742);
           else if (tT) kact(794); else if (tN) kact(795); else if (tX) kact(968);
+          else if (tH && s_sel == 3 && MotorPjSel() >= 0) { if (shift) { PjShowAll(); KbLabel("Mostrar todos"); } else { PjHideSel(); KbLabel("Ocultar / mostrar"); } }
           else if (tDel && s_sel == 3 && MotorPjSel() >= 0) { MotorPjRemove(MotorPjSel()); Note("Jugador sacado (Supr)"); }
           else if (tL) { bool any = false; for (int i = 0; i < s_nLights; i++) if (s_lights[i].on) any = true; kact(shift ? 702 : any ? 701 : 700); }
           else if (t1) kact(232); else if (t3) kact(230); else if (t7) kact(231); else if (t0) kact(202); else if (t5) kact(236); }
@@ -1903,9 +1944,10 @@ static void ToolbarDraw() {
                         const float lr = sqrtf((d2[0] - d1[0]) * (d2[0] - d1[0]) + (d2[2] - d1[2]) * (d2[2] - d1[2]));
                         if (lr > 1e-5f) { rx = (d2[0] - d1[0]) / lr; rz = (d2[2] - d1[2]) / lr; const float lf = sqrtf(d0[0] * d0[0] + d0[2] * d0[2]); if (lf > 0.05f) { fx = d0[0] / lf; fz = d0[2] / lf; } else { fx = -rz; fz = rx; if (fx * d0[0] + fz * d0[2] < 0.0f) { fx = -fx; fz = -fz; } } } } }
                   float np[3] = { J.pos[0] + (rx * mvR + fx * mvF) * dt, J.pos[1] + mvY * 0.5f * dt, J.pos[2] + (rz * mvR + fz * mvF) * dt };
-                  MotorJugSet(np, J.yawDeg + rot * 90.0f * dt, std::clamp(J.scale * expf(scl * 0.6f * dt), 0.1f, 5.0f));
+                  if (!s_kbUndo) { UndoBegin(); s_kbUndo = true; }      // (17/11 tarde) mantener la tecla = un paso de deshacer
+                  PjGroupSet(np, J.yawDeg + rot * 90.0f * dt, std::clamp(J.scale * expf(scl * 0.6f * dt), 0.1f, 5.0f));
                   KbLabel(rot != 0.0f ? "Girar al jugador" : scl != 0.0f ? "Tama\xC3\xB1o del jugador" : "Mover al jugador");
-              } } }
+              } else if (s_kbUndo) { s_kbUndo = false; UndoEnd(); } } else if (s_kbUndo) { s_kbUndo = false; UndoEnd(); } }
     }
     // ---------------- clic (al soltar, sobre lo mismo que se apreto) ----------------
     const bool lNow = lDown; const bool lEdge = lEdge0, lUp = !lNow && s_tlWas; s_tlWas = lNow;
@@ -1985,7 +2027,7 @@ static void ToolbarDraw() {
 // (17/11 b, Agustin 03:46: "deberia ser capaz de hacer estas acciones con iconos sobre el piso del jugador asi como con teclas del
 // teclado") ICONOS DEL PISO: a los pies del jugador, con la misma camara de la grilla (motorgrid.cpp MotorGridProject / MotorGridRay):
 // disco del centro = mover libre sobre el piso; flecha roja X y azul Z = mover por ese eje; flecha verde = altura; aro amarillo con
-// perilla = girar; cuadrado blanco = tamano. Se arrastran con el boton izquierdo. Tamano en pantalla constante.
+// perilla = girar; cuadrado blanco = tamano. Se arrastran con el boton izquierdo. Tamano en el mundo, segun el jugador (17/11 tarde).
 static std::atomic<float> s_fh[6][3]; static std::atomic<int> s_fhN{0}, s_fDrag{-1}; static float s_wY = 0.0f, s_cen[2] = {};
 static void JugFloorGizmo() {
     s_fhN.store(0, std::memory_order_relaxed);
@@ -1998,7 +2040,10 @@ static void JugFloorGizmo() {
     ImVec2 c0, c1; const float Pu[3] = { P[0], P[1] + 1.0f, P[2] };
     if (!proj(P, c0) || !proj(Pu, c1)) { s_fDrag.store(-1); return; }
     const float ppm = std::max(1.0f, sqrtf((c1.x - c0.x) * (c1.x - c0.x) + (c1.y - c0.y) * (c1.y - c0.y)));      // pixeles por metro a los pies
-    const float sz = std::clamp(120.0f * k / ppm, 0.05f, 20.0f), L = sz;
+    // (17/11 17:24, Agustin con video: "los iconos de mover no se mueven y escalan correctamente con el jugador") antes median 120 px fijos
+    // en pantalla: cerca de la camara quedaban chicos y lejos enormes al lado del jugador. Ahora miden en el mundo segun el tamano del
+    // jugador (0.55 m x escala), con un minimo de 34 px para poder tomarlos de lejos.
+    const float sz = std::clamp(std::max(0.55f * std::clamp(J.scale, 0.1f, 5.0f), 34.0f * k / ppm), 0.05f, 20.0f), L = sz;
     const float a = J.yawDeg * 0.017453292f;
     // (17/11 c, Agustin 04:28: "un estilo intermedio entre la a y la b") plato de vidrio con marcas (B) + flechas con punta y rombo (A):
     // 0 rombo = mover libre, 1 / 2 / 3 flechas X / Z / altura, 4 perilla del giro en el borde del plato, 5 cubito de tamano en el borde
@@ -2043,7 +2088,7 @@ static void JugFloorGizmo() {
             if (drag == 0 || drag == 1) np[0] = floorf(np[0] / cell + 0.5f) * cell;
             if (drag == 0 || drag == 2) np[2] = floorf(np[2] / cell + 0.5f) * cell;
             if (drag == 4) ny = floorf(ny / 15.0f + 0.5f) * 15.0f; }
-        MotorJugSet(np, ny, ns);
+        PjGroupSet(np, ny, ns);
     }
     // --- dibujo ---
     const int act = drag >= 0 ? drag : hot;
@@ -2127,14 +2172,15 @@ static void JugPick() {
     int drag = s_pickDrag.load();
     if (drag < 0 && lEdge && best >= 0 && !overUi && s_fDrag.load() < 0 && s_dragId < 0 && !s_dragging.load()) {
         float p[3], yw, sc; if (MotorPjGet(best, p, &yw, &sc) && floorHit(p[1], s_hit0)) {
-            MotorPjSelect(best); s_sel = 3; s_selObj = 0; s_pjGroup = -1; memcpy(s_p0, p, sizeof s_p0); s_y0 = p[1]; drag = best; s_pickDrag.store(best); UndoBegin(); }
+            const bool add = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0; if (!add && ((s_pjMulti >> best) & 1u) && PjMultiCount() > 1) MotorPjSelect(best); else PjPick(best, add);
+            s_sel = 3; s_selObj = 0; s_pjGroup = -1; memcpy(s_p0, p, sizeof s_p0); s_y0 = p[1]; drag = best; s_pickDrag.store(best); UndoBegin(); }
     }
     if (drag >= 0 && !lNow) { drag = -1; s_pickDrag.store(-1); UndoEnd(); }
     if (drag >= 0) { float h3[3], p[3], yw, sc;
         if (floorHit(s_y0, h3) && MotorPjGet(drag, p, &yw, &sc)) {
             float np[3] = { s_p0[0] + h3[0] - s_hit0[0], s_p0[1], s_p0[2] + h3[2] - s_hit0[2] };
             if (s_pjSnap) { const float cell = std::clamp(g_cfg.motorGridCell, 0.1f, 10.0f); np[0] = floorf(np[0] / cell + 0.5f) * cell; np[2] = floorf(np[2] / cell + 0.5f) * cell; }
-            MotorPjSet(drag, np, yw, sc); } }
+            if (MotorPjSel() == drag) PjGroupSet(np, yw, sc); else MotorPjSet(drag, np, yw, sc); } }
     // marca del jugador bajo el mouse (o arrastrado): su numero sobre la cabeza
     const int show = drag >= 0 ? drag : (s_fDrag.load() < 0 && !overUi ? best : -1);
     if (show >= 0) { float p[3], yw, sc; ImVec2 b; if (MotorPjGet(show, p, &yw, &sc)) { const float hd[3] = { p[0], p[1] + 1.95f * sc, p[2] };
