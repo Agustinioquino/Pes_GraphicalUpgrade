@@ -915,7 +915,13 @@ static void ToolbarDraw() {
         text(x0 + 12.0f * k, y + (rowH + 4.0f * k) * 0.5f, ink, tl, fs + 1.0f * k); } y += rowH + 4.0f * k + 8.0f * k;
       const float lx = x0 + 12.0f * k, fx0 = x0 + 12.0f * k, fx1 = ds.x - 12.0f * k;
       v1 = dl->VtxBuffer.Size;          // desde aca: contenido de lo marcado (fundido al cambiar)
-      auto label = [&](const char* t) -> bool { return secHead(x0 + 3.0f * k, ds.x - 4.0f * k, y, t, (uint32_t)std::min(s_sel, 4)); };      // (15/11 p) plegable
+      // (17/11 07:18, Agustin: "mejora las tarjetas, el diseno mas intuitivo") cada seccion del Inspector es una tarjeta: borde redondeado,
+      // fondo apenas mas claro y franja de color a la izquierda del titulo; se cierra cuando empieza la siguiente o al final del panel
+      float cardY0 = -1.0f;
+      auto cardClose = [&]() { if (cardY0 < 0.0f) return; const ImVec2 ca(x0 + 5.0f * k, cardY0), cb(ds.x - 6.0f * k, std::max(cardY0 + 22.0f * k * rf, y - 2.0f * k));
+          dl->AddRectFilled(ca, cb, IM_COL32(255, 255, 255, 6), 6.0f * k); dl->AddRect(ca, cb, IM_COL32(255, 255, 255, 24), 6.0f * k, 0, 1.0f);
+          dl->AddRectFilled(ImVec2(ca.x, ca.y + 4.0f * k), ImVec2(ca.x + 2.5f * k, ca.y + 18.0f * k * rf), (acc & 0x00ffffffu) | 0xb0000000u, 1.5f * k); cardY0 = -1.0f; y += 6.0f * k; };
+      auto label = [&](const char* t) -> bool { cardClose(); cardY0 = y; y += 2.0f * k; return secHead(x0 + 8.0f * k, ds.x - 9.0f * k, y, t, (uint32_t)std::min(s_sel, 4)); };      // (15/11 p) plegable
       auto value = [&](const char* nmv, const char* v) { text(lx, y + rowH * 0.5f, dim, nmv, fsS + 1.0f * k); const ImVec2 p0(x0 + rightW * 0.42f, y + 3.0f * k), p1(fx1, y + rowH - 3.0f * k); dl->AddRectFilled(p0, p1, cField, 3.0f * k); text(p0.x + 8.0f * k, y + rowH * 0.5f, ink, v, fsS + 1.0f * k); y += rowH; };
       auto button = [&](int id, const char* t) { const ImVec2 p0(fx0, y + 4.0f * k), p1(fx1, y + rowH + 6.0f * k); const bool hv = hit(id, p0, p1); dl->AddRectFilled(p0, p1, hv ? IM_COL32(86, 86, 92, 255) : IM_COL32(66, 66, 70, 255), 3.0f * k); dl->AddRect(p0, p1, cLine, 3.0f * k); textC(p0, p1, ink, t, fs); y += rowH + 14.0f * k; };
       if (s_sel == 0) {
@@ -1182,6 +1188,7 @@ static void ToolbarDraw() {
           button(220, player ? "Quitar de la escena" : "Cargar en la escena"); }
           text(lx, y + 8.0f * k, dim, "Es el \xC3\xBAltimo jugador que abriste en Editar.", fsS);
       }
+      cardClose();
       dl->PopClipRect();
       anim(v1, (1.0f - s_inspA) * 14.0f * k, 0.0f, s_inspA);
       { const float tx = dx + (Q.dock == 0 ? -1.0f : Q.dock == 1 ? 1.0f : 0.0f) * (1.0f - eo) * rightW; anim(v0, tx, 0.0f, eo * std::min(1.0f, aR * 1.6f) * (pMoving ? 0.85f : 1.0f)); clipShift(c0, tx); } hitOff = false;
