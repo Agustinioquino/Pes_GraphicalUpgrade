@@ -1070,12 +1070,12 @@ std::atomic<int> s_protect{0}; std::atomic<unsigned> s_unloadBlocked{0};
 
 // la descarga de un .gani nuestro se frena mientras haya suplentes creados con el (el gestor no cuenta usuarios)
 // (17/11 3icxbh) clips que usan los jugadores propios del Motor (motorpj.cpp): tampoco se descargan mientras esten anotados aca
-std::atomic<uint64_t> s_keepHash[8];
+std::atomic<uint64_t> s_keepHash[48];   // (17/11 3icxbh) 48: animaciones por jugador del Motor (motorpj.cpp)
 uint64_t __fastcall hk_ResUnload(void* mgr, void* key) {
     if (key) {
         uint64_t h = 0; uint8_t t = 0;
         if (Rd((uintptr_t)key, h) && Rd((uintptr_t)key + 8, t) && t >= 1 && t <= 5 && h)
-            for (int i = 0; i < 8; i++) if (s_keepHash[i].load(std::memory_order_relaxed) == h) { s_unloadBlocked.fetch_add(1, std::memory_order_relaxed); return 0; }
+            for (int i = 0; i < 48; i++) if (s_keepHash[i].load(std::memory_order_relaxed) == h) { s_unloadBlocked.fetch_add(1, std::memory_order_relaxed); return 0; }
     }
     if (key && s_protect.load(std::memory_order_relaxed) > 0) {
         uint64_t h = 0; uint8_t t = 0;
@@ -1782,9 +1782,9 @@ void Install() {
 // (17/11 3icxbh) para motorpj.cpp: frenar la descarga de un .gani (hash del gestor) y reproducir un clip con vf1 sin pasar por la sonda
 bool BancaGaniKeep(uint64_t h, bool on) {
     if (!h || !s_okSubs) return false;
-    for (int i = 0; i < 8; i++) if (s_keepHash[i].load() == h) { if (!on) s_keepHash[i].store(0); return true; }
+    for (int i = 0; i < 48; i++) if (s_keepHash[i].load() == h) { if (!on) s_keepHash[i].store(0); return true; }
     if (!on) return true;
-    for (int i = 0; i < 8; i++) { uint64_t z = 0; if (s_keepHash[i].compare_exchange_strong(z, h)) return true; }
+    for (int i = 0; i < 48; i++) { uint64_t z = 0; if (s_keepHash[i].compare_exchange_strong(z, h)) return true; }
     return false;
 }
 void BancaFdhPlay(void* fd, void* res, uint32_t idx, uint8_t a4, uint64_t startBits) { (o_fdh ? o_fdh : (FdhVf1)kFdhVf1)(fd, res, idx, a4, startBits, nullptr); }

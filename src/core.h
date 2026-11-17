@@ -695,9 +695,14 @@ struct MotorJugState { bool hooked, seen; float pos[3], yawDeg, scale; int kind,
 void MotorJugPresent(); void MotorJugGet(MotorJugState* s); void MotorJugSet(const float* p, float yawDeg, float scale); void MotorJugSetFix(bool on); void MotorJugAnim(int kind, int id, bool mirror); void MotorJugPause(bool on); void MotorJugReset();   // (16/11) motorvista.cpp: el jugador del Motor en la escena principal
 // (17/11 3icxbh etapa 2) motorpj.cpp: jugadores propios del Motor (FixDemoHuman del juego). kind: 0 por id, 1 jugador base, 2 igual al del Editar;
 // st: 0 libre, 1 pedido, 2 cargando, 3 listo, 4 fallo, 5 sacando
-struct MotorPjInfo { int sel; bool ticking, dead, hidden[8]; int st[8], kind[8]; uint64_t id[8]; char name[8][48]; char msg[200]; };
+constexpr int kMotorPjMax = 32;   // (17/11 06:36) antes 8
+struct MotorPjInfo { int sel; bool ticking, dead, hidden[kMotorPjMax]; int st[kMotorPjMax], kind[kMotorPjMax]; uint64_t id[kMotorPjMax]; char name[kMotorPjMax][48]; char msg[200];
+    int clip[kMotorPjMax], face[kMotorPjMax]; float speed[kMotorPjMax], faceW[kMotorPjMax], curT[kMotorPjMax], lenT[kMotorPjMax]; bool paused[kMotorPjMax], blink[kMotorPjMax], clipOn[kMotorPjMax], clipBad[kMotorPjMax]; };
 void MotorPjTick(bool on, uintptr_t impl); int MotorPjAdd(int kind, uint32_t id); void MotorPjRemove(int i); void MotorPjSelect(int i); void MotorPjShow(int i, bool on); int MotorPjSel();
 bool MotorPjGet(int i, float* pos, float* yaw, float* scale); void MotorPjSet(int i, const float* pos, float yaw, float scale); void MotorPjInfoGet(MotorPjInfo* o);
+// (17/11 06:36..06:38) duplicar, animacion y gesto por jugador (i = -1: a todos); clip -1 = parado; face -1 = cara neutra del juego
+int MotorPjDup(int i); void MotorPjAnimSet(int i, int clip, float speed, bool paused); void MotorPjRestart(int i); void MotorPjSeek(int i, float t); void MotorPjFaceSet(int i, int face, float w, bool blink);
+int MotorClipCount(); const char* MotorClipFile(int i); int MotorClipGroup(int i); int MotorClipGroupCount(); const char* MotorClipGroupKey(int g); int MotorClipIdle(); int MotorFaceCount(); const char* MotorFaceName(int i);
 int MotorSceneLights(MotorLight* out, int max, MotorSceneInfo* info); bool MotorLightSetOn(const MotorLight& L, bool on); int MotorLightsRestore();
 bool MotorLightSetColor(const MotorLight& L, const float* rgba); bool MotorLightSetShadow(const MotorLight& L, bool on); bool MotorLightSetRange(const MotorLight& L, float r); bool MotorLightSetPos(const MotorLight& L, const float* xyz); bool MotorLightCan(const MotorLight& L, int what);
 int MotorCursorKind(); const char* MotorKeyLabel(double* t);   // (15/11 p) motorgizmo.cpp: cursor de redimensionar (3 <->, 4 vertical) y nombre del ultimo atajo del Motor (overlay.cpp)   // (15/11 o) motorscene.cpp: inspector editable (what 0 color, 1 sombra, 2 alcance, 3 posicion)
@@ -762,7 +767,7 @@ struct DebugParam { int idx, comp; float minOn, safe; const char* name; const ch
 int DebugParamCount(); const DebugParam& DebugParamAt(int i); const DebugParam* FindDebugParam(int idx, int comp);
 bool DebugIsOn(const DebugParam& d, float v); int DebugActiveCount(); void DebugAllOff();   // con g_cfgMutex tomado
 // (11/11 3icxbh) Motor en tiempo real (motorlink.cpp): memoria compartida con el modulo de Sider + vista en alambre (y429)
-extern std::atomic<bool> g_motorWire; void MotorLinkPresent(); bool MotorWireBegin(ID3D11DeviceContext* c, ID3D11RasterizerState** prev); void MotorWireEnd(ID3D11DeviceContext* c, ID3D11RasterizerState* prev);
+extern std::atomic<bool> g_motorWire; void MotorLinkPresent(); bool MotorWireBegin(ID3D11DeviceContext* c, ID3D11RasterizerState** prev, uint64_t seed); extern std::atomic<bool> g_motorWireCol; void MotorWireEnd(ID3D11DeviceContext* c, ID3D11RasterizerState* prev);
 LRESULT OverlayWndProc(HWND, UINT, WPARAM, LPARAM, bool& handled);
 // (24/10) vidrio de los menus del juego, estilo Liquid Glass (glass.cpp): GS + PS propios para los dibujos del menu (55a003da),
 // copia desenfocada del fondo antes de los paneles; 189..192 opciones. v2 (24/10 c): el GS decide por triangulo, sin buffer

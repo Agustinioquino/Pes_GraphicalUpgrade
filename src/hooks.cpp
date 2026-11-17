@@ -1497,7 +1497,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         s.devKnown = true;
     }
     if (s.dev != g_dev.dev) return false;
-    if (g_motorWire.load(std::memory_order_relaxed)) d.wire = MotorWireBegin(c, &d.wireRS);   // (11/11 3icxbh) Motor en tiempo real: geometria del G-buffer en alambre (y429); se devuelve en FX_DRAW
+    if (g_motorWire.load(std::memory_order_relaxed)) d.wire = MotorWireBegin(c, &d.wireRS, (s.vs ? s.vs->hash : 0) ^ ((uint64_t)t_drawVerts << 20) ^ ((uint64_t)t_drawStart << 40) ^ (uint64_t)(uint32_t)t_drawBase);   // (11/11 3icxbh) Motor en tiempo real: geometria del G-buffer en alambre (y429); se devuelve en FX_DRAW
     const ShaderEntry *ps = s.ps, *vs = s.vs;
     GpuShaderProfDraw(c, ps, vs, s.sp);   // (13/11) perfil por shader del medidor (solo con x375, 120 cuadros por minuto; v3 tambien en las listas diferidas)
     // (27/10 b) brazos, manos, muslos y torso de TorsoBody del tono de la cara (brazos.cpp, filas 321 / 327): son las texturas
