@@ -71,16 +71,23 @@ def lerp(a, b, t): return tuple(x + (y - x) * t for x, y in zip(a, b))
 def perp(v, axis): return sub(v, mul(axis, dot(v, axis)))
 def smooth(t): t = max(0.0, min(1.0, t)); return t * t * (3 - 2 * t)
 
-# ---------------------------------------------------------------- esqueleto aproximado: hueso -> (padre, canal de giro, corrimiento en reposo, m)
-UARM, FARM, HANDO = 0.29, 0.26, 0.08          # brazo, antebrazo, muneca -> centro de la palma
+# ---------------------------------------------------------------- esqueleto DEL JUEGO: hueso -> (padre, canal de giro, corrimiento en reposo, m)
+# (18/11) antes era un esqueleto aproximado (pecho 0.22, cuello 0.22, antebrazo 0.26, piernas 0.44 / 0.44, cadera 0.98): en el juego las
+# manos no caian justas y los cuerpos se metian uno en otro. Ahora = los lugares de los huesos del modelo del Crear jugador (fmdl:
+# sk_belly / chest / neck / head, sk_upperarm / forearm / hand, sk_thigh / leg / foot, dsk_hip), en la convencion de giro de los .gani
+# (identidad = brazos en cruz, piernas y columna derechas; CONFIRMADO con el parado del juego). La misma tabla usa tools/vista_juego.py.
+UARM, FARM, HANDO = 0.290, 0.290, 0.08        # brazo, antebrazo, muneca -> centro de la palma
+MUSLO, CANILLA = 0.421, 0.442
+CLAV = 0.165                                   # pivote de la clavicula -> hombro (el pivote no esta en los fmdl: INFERIDO)
 S = {
-    'root': (None, 0, (0, 0, 0)), 'hips': ('root', 2, (0, 0.98, 0)),
-    'thighA': ('hips', 6, (0.09, -0.02, 0)), 'kneeA': ('thighA', 7, (0, -0.44, 0)), 'footA': ('kneeA', 8, (0, -0.44, 0)),
-    'thighB': ('hips', 10, (-0.09, -0.02, 0)), 'kneeB': ('thighB', 11, (0, -0.44, 0)), 'footB': ('kneeB', 12, (0, -0.44, 0)),
-    'spine': ('hips', 13, (0, 0.10, 0)), 'chest': ('spine', 14, (0, 0.22, 0)), 'neck': ('chest', 15, (0, 0.22, 0)), 'head': ('neck', 16, (0, 0.10, 0)),
+    'root': (None, 0, (0, 0, 0)), 'hips': ('root', 2, (0, 0.992, -0.018)),
+    'thighA': ('hips', 6, (0.090, -0.032, 0.071)), 'kneeA': ('thighA', 7, (0, -MUSLO, 0)), 'footA': ('kneeA', 8, (0, -CANILLA, 0)),
+    'thighB': ('hips', 10, (-0.090, -0.032, 0.071)), 'kneeB': ('thighB', 11, (0, -MUSLO, 0)), 'footB': ('kneeB', 12, (0, -CANILLA, 0)),
+    'spine': ('hips', 13, (0, 0.104, 0.018)), 'chest': ('spine', 14, (0, 0.167, 0.014)), 'neck': ('chest', 15, (0, 0.269, 0.019)),
+    'head': ('neck', 16, (0, 0.108, 0.021)),
     'headc': ('head', None, (0, 0.09, 0.03)),
-    'clavL': ('chest', 17, (0.03, 0.16, 0)), 'uarmL': ('clavL', 19, (0.15, 0, 0)), 'farmL': ('uarmL', 20, (UARM, 0, 0)), 'handL': ('farmL', 21, (FARM, 0, 0)),
-    'clavR': ('chest', 22, (-0.03, 0.16, 0)), 'uarmR': ('clavR', 24, (-0.15, 0, 0)), 'farmR': ('uarmR', 25, (-UARM, 0, 0)), 'handR': ('farmR', 26, (-FARM, 0, 0)),
+    'clavL': ('chest', 17, (0.03, 0.192, 0.016)), 'uarmL': ('clavL', 19, (CLAV, 0, 0)), 'farmL': ('uarmL', 20, (UARM, 0, 0)), 'handL': ('farmL', 21, (FARM, 0, 0)),
+    'clavR': ('chest', 22, (-0.03, 0.192, 0.016)), 'uarmR': ('clavR', 24, (-CLAV, 0, 0)), 'farmR': ('uarmR', 25, (-UARM, 0, 0)), 'handR': ('farmR', 26, (-FARM, 0, 0)),
 }
 ORDER = list(S.keys())
 ARM = {'R': (22, 24, 25, 26, -1.0), 'L': (17, 19, 20, 21, 1.0)}   # clavicula, brazo, antebrazo, mano, signo del eje del brazo
@@ -307,18 +314,20 @@ def ik_brazo(lado, P, rot, wrist, codo, dedos, palma, prev=None):
         if mejor is None or c < mejor[0]: mejor = (c, o, r)
     return mejor[2] + (mejor[1],)
 
-PIERNA = 0.44
+PIERNA = 0.5 * (MUSLO + CANILLA)
 def ik_pierna(pie, P, T, Qpie, ref):
     """pierna de dos huesos (muslo libre, rodilla solo en x como en los clips de Konami) hasta el tobillo T; el plano de la rodilla sale
-    del muslo del clip parado (ref = su eje x en el mundo), el pie queda con el giro Qpie del clip parado (plano en el piso)"""
+    del muslo del clip parado (ref = su eje x en el mundo), el pie queda con el giro Qpie del clip parado (plano en el piso).
+    (18/11) muslo y canilla con sus largos del juego (0.421 / 0.442)"""
     th = 'thigh' + pie; H = P[th][0]; Qh = P['hips'][1]
-    d = sub(T, H); L = max(0.05, min(norm(d), 2 * PIERNA * 0.999)); dn = unit(d)
+    d = sub(T, H); L = max(abs(CANILLA - MUSLO) + 0.05, min(norm(d), (MUSLO + CANILLA) * 0.999)); dn = unit(d)
     x = unit(perp(ref, dn))
-    al = math.acos(max(-1.0, min(1.0, L / (2 * PIERNA))))
+    al = math.acos(max(-1.0, min(1.0, (MUSLO * MUSLO + L * L - CANILLA * CANILLA) / (2 * MUSLO * L))))      # muslo <-> recta cadera-tobillo
+    be = math.acos(max(-1.0, min(1.0, (MUSLO * MUSLO + CANILLA * CANILLA - L * L) / (2 * MUSLO * CANILLA))))  # angulo en la rodilla
     d1 = qrot(qaxis(x, -math.degrees(al)), dn)            # la rodilla va adelante
     yw = mul(d1, -1.0); zw = cross(x, yw)
     Qt = qmat(x, yw, zw)
-    qk = qaxis((1, 0, 0), math.degrees(2 * al))
+    qk = qaxis((1, 0, 0), math.degrees(math.pi - be))
     Qs = qm(Qt, qk)
     return qm(qi(Qh), Qt), qk, qm(qi(Qs), Qpie), norm(d) - L
 
@@ -587,6 +596,7 @@ def escribir(base, poses, canales=(0, 2, 6, 7, 8, 10, 11, 12) + tuple(range(13, 
 N = 540            # cuadros (18 s)
 WALK = 2.44        # lo que camina cada uno hasta el otro (desde el lugar del cuadro 0)
 PASO = 0.22        # el paso de cada uno para el abrazo (y el de vuelta)
+SEP_CAMINA = 0.86   # (18/11) de cadera a cadera al irse caminando juntos (antes 0.66)
 CHOQUE = 150       # choque de las dos manos
 CHOQUE2 = 312      # (20:13-20:14) apreton de manos formal y bajo, al soltar el abrazo
 
@@ -638,7 +648,9 @@ def coreografia(D, quien, pie0):
     # (20:13, Agustin: "despues del saludo los dos salgan caminando y charlando para un mismo lado") al soltar el abrazo medio paso atras,
     # se dan la mano y giran hacia el mismo lado: A a su izquierda, B a su derecha (en el mundo los dos van hacia +x de A), uno al lado
     # del otro a 0.66 m, B 6 cuadros atrasado. Pie de adelante en el giro: A el izquierdo, B el derecho.
-    WB = WALK + 0.10; cz = WB + 0.5 * (lz + rz); t = 0 if A else 6; s_ = 1.0 if A else -1.0
+    # (18/11, Agustin: "cuando salen a caminar estan muy juntos") con los cuerpos del juego a 0.66 m se rozan los brazos: SEP_CAMINA
+    # entre los dos (de cadera a cadera); el paso atras al soltarse se ajusta para eso
+    WB = WALK + 0.5 * (D - 2 * WALK - SEP_CAMINA); cz = WB + 0.5 * (lz + rz); t = 0 if A else 6; s_ = 1.0 if A else -1.0
     def lado_(d, cerca, yaw=90.0, ancho=NW):
         pie_izq = cerca if A else not cerca         # A va a su izquierda (cerca = su pie izquierdo); B a su derecha
         return (cx + s_ * d, cz - ancho if cerca else cz + ancho, s_ * yaw + (TL if pie_izq else TR))
@@ -853,11 +865,11 @@ def cara_y_dedos_vivos(pista, A, C, C2):
         if k[1:] != limpio[-1][1:]: limpio.append(k)
     return limpio
 
+ABRAZO_D = 0.62
 def distancia_auto(base):
-    """los pechos se tocan en el abrazo: distancia entre raices = pecho de A + pecho de B (inclinados) + grosor de los dos"""
-    J = coreografia(4.0, 'A', base.pie0); f = 240
-    P = fk(cuerpo(base, J, f), base.root[f], base.hips[f])
-    return round(2 * (P['chest'][0][2] + 0.145), 2)
+    """(18/11) distancia entre raices en el abrazo: medida con las mallas del juego (tools/vista_juego.py --revisar). Con 0.42 (pechos de
+    0.145) uno se metia 6 cm en el otro: la camiseta sobresale 0.16-0.17 del pecho y el pecho alto va inclinado hacia el otro"""
+    return ABRAZO_D
 
 def revisar(info, D):
     """choque: distancia entre las palmas; abrazo: brazos contra el cuerpo del otro (capsula del torso)"""

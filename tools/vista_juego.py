@@ -145,10 +145,42 @@ def textura(ftex_path, png_path):
     im = Image.open(io.BytesIO(dds)); im.load(); im = im.convert('RGBA'); im.thumbnail((1024, 1024)); im.save(png_path)
     return os.path.basename(png_path)
 
+def piel(m, mats, esc, quien, D):
+    """vertices y normales de la malla m en el mundo (mats = 20 x 12 del cuadro)"""
+    M = mats.reshape(20, 4, 3)                       # columnas: R0 R1 R2 t
+    bi = m['bi'].astype(int); bw = m['bw']
+    R = np.einsum('vk,vkcr->vrc', bw, M[bi, :3, :]); t = np.einsum('vk,vkr->vr', bw, M[bi, 3, :])
+    p = np.einsum('vrc,vc->vr', R, m['pos']) + t; n = np.einsum('vrc,vc->vr', R, m['nrm'])
+    p = p * esc
+    if quien == 1: p = np.stack([-p[:, 0], p[:, 1], D - p[:, 2]], 1); n = np.stack([-n[:, 0], n[:, 1], -n[:, 2]], 1)
+    return p, n / np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-6)
+
+def revisar(cuerpo, jug, D, paso=2):
+    """cuanto se mete un cuerpo en el otro (camiseta + cara contra camiseta + cara), por cuadro: nos quedamos con el peor"""
+    duros = [m for m in cuerpo if m['kind'] in ('shirt', 'shorts')]
+    sub_ = lambda ms: [dict(m, **{k: m[k][::3] for k in ('pos', 'nrm', 'bi', 'bw')}) for m in ms]
+    duros = sub_(duros); res = []
+    for f in range(0, jug[0]['n'] + 1, paso):
+        PN = []
+        for i in (0, 1):
+            ms = duros + sub_([m for m in jug[i]['cara'] if m['kind'] == 'face'])
+            ps, ns = zip(*[piel(m, jug[i]['frames'][f], jug[i]['escala'], i, D) for m in ms]); PN.append((np.concatenate(ps), np.concatenate(ns)))
+        peor = 0.0
+        for a, b in ((0, 1), (1, 0)):
+            pa = PN[a][0]; pb, nb = PN[b]
+            lo = pb.min(0) - 0.05; hi = pb.max(0) + 0.05; sel = np.all((pa > lo) & (pa < hi), 1); pa = pa[sel]
+            if not len(pa): continue
+            d2 = ((pa[:, None, :] - pb[None, :, :]) ** 2).sum(2); j = d2.argmin(1)
+            pen = -np.einsum('vr,vr->v', pa - pb[j], nb[j]); pen[np.sqrt(d2[np.arange(len(pa)), j]) > 0.06] = 0
+            peor = max(peor, float(pen.max()))
+        res.append((f, peor))
+    return res
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('a'); ap.add_argument('b'); ap.add_argument('base'); ap.add_argument('caras'); ap.add_argument('salida')
     ap.add_argument('--caras_id', default='7511,4522'); ap.add_argument('--estaturas', default='170,185'); ap.add_argument('--D', type=float, default=5.74)
+    ap.add_argument('--revisar', action='store_true'); ap.add_argument('--botas', default='')
     ap.add_argument('--colores', default='0.80,0.16,0.14;0.14,0.30,0.75')
     o = ap.parse_args()
     ids = o.caras_id.split(','); est = [float(x) for x in o.estaturas.split(',')]
@@ -176,6 +208,19 @@ def main():
                 a = np.clip((y - 0.50) / 0.10, 0, 1); c = np.clip((0.17 - y) / 0.07, 0, 1); b = 1 - a - c
                 m['bi'] = np.stack([th, kn, ft, kn], 1).astype(np.float32); m['bw'] = np.stack([a, b, c, 0 * a], 1).astype(np.float32)
         cuerpo += [dict(m, kind=kind) for m in ms]
+    # botines (fpk del juego: Asset/model/character/boots/kNNNN; --botas = carpeta con boots.fmdl y ek*_c_L_bsm_alp.ftex). Vienen hechos
+    # para pies a +-0.093 m (piernas derechas): se corren a los pies del modelo (+-0.194, piernas en A) y van enteros al hueso del pie
+    texc = {}
+    if o.botas and os.path.exists(os.path.join(o.botas, 'boots.fmdl')):
+        for m in pieza(os.path.join(o.botas, 'boots.fmdl')):
+            x = m['pos'][:, 0]; side = np.where(x >= 0, 1.0, -1.0)
+            m['pos'] = m['pos'].copy(); m['pos'][:, 0] += side * (BIND['footA'][0] - 0.093)
+            m['bi'] = np.stack([np.where(side > 0, BI['footA'], BI['footB'])] * 4, 1).astype(np.float32)
+            m['bw'] = np.tile(np.array([1, 0, 0, 0], np.float32), (len(x), 1))
+            cuerpo.append(dict(m, kind='boots'))
+        import glob
+        c = [f for f in glob.glob(os.path.join(o.botas, 'ek*_c_L_bsm_alp.ftex')) if not os.path.basename(f).startswith('ek0051i') and 'i_c_' not in os.path.basename(f)]
+        if c: texc['boots'] = textura(c[0], os.path.join(outdir, 'botas_bsm.png'))
     jug = []
     for i in (0, 1):
         g = G.Base(open([o.a, o.b][i], 'rb').read())
@@ -196,9 +241,18 @@ def main():
             frames.append(np.array(mats, np.float32).reshape(-1))
         jug.append(dict(escala=esc[i], estatura=est[i], color=cols[i], tex=tx, cara=cara + pelo, frames=np.array(frames, np.float32), n=g.n))
     escm = 0.5 * (esc[0] + esc[1]); Dm = o.D * escm
+    if o.revisar:
+        r = revisar(cuerpo, jug, Dm)
+        malos = [(f, p) for f, p in r if p > 0.01]
+        print('cuerpo dentro del otro (> 1 cm): %d cuadros de %d; peor %.1f cm en el cuadro %d' % (len(malos), len(r), max(p for f, p in r) * 100, max(r, key=lambda x: x[1])[0]))
+        tramos = []
+        for f, p in malos:
+            if tramos and f - tramos[-1][1] <= 4: tramos[-1][1] = f; tramos[-1][2] = max(tramos[-1][2], p)
+            else: tramos.append([f, f, p])
+        for a, b, p in tramos: print('  cuadros %d-%d: hasta %.1f cm' % (a, b, p * 100))
     def enc(ms): return [dict(kind=m['kind'], pos=b64(m['pos']), nrm=b64(m['nrm']), uv=b64(m['uv']), bi=b64(m['bi']), bw=b64(m['bw']),
                                faces=b64(m['faces']), nv=int(len(m['pos'])), nf=int(len(m['faces']))) for m in ms]
-    J = dict(huesos=BONES, bind=[list(BIND[b]) for b in BONES], D=Dm, cuerpo=enc(cuerpo),
+    J = dict(texc=texc, huesos=BONES, bind=[list(BIND[b]) for b in BONES], D=Dm, cuerpo=enc(cuerpo),
              jugadores=[dict(escala=j['escala'], estatura=j['estatura'], color=j['color'], tex=j['tex'], cara=enc(j['cara']),
                              n=j['n'], frames=b64(j['frames'])) for j in jug])
     json.dump(J, open(o.salida, 'w'))

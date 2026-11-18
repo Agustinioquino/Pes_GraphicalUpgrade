@@ -79,6 +79,7 @@ window.init = async function(scene, base) {
   for (let i = 0; i < 2; i++) { const J = S.jugadores[i]; frames.push(b64f(J.frames, Float32Array));
     for (const m of J.cara) buffers.push({...mkMesh(m), who: i});
     for (const k in J.tex) texs[i + k] = await loadTex(base + J.tex[k]); }
+  for (const k in (S.texc || {})) texs['c' + k] = await loadTex(base + S.texc[k]);
   floorVao = gl.createVertexArray(); gl.bindVertexArray(floorVao); const fb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, fb);
   const R = 30; gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-R,0,-R, R,0,-R, R,0,R, -R,0,-R, R,0,R, -R,0,R]), gl.STATIC_DRAW);
   const l = gl.getAttribLocation(PF, 'pos'); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 3, gl.FLOAT, false, 0, 0); gl.bindVertexArray(null);
@@ -109,7 +110,7 @@ window.draw = function(f, views) {
         for (const m of buffers) { if (m.who != -1 && m.who != i) continue;
           if (pass && (m.kind == 'eye' || m.kind == 'hair')) continue;
           let c = KCOL[m.kind]; if (m.kind == 'shirt') c = J.color; if (m.kind == 'shorts') c = [0.95,0.95,0.95]; if (m.kind == 'socks') c = J.color;
-          let t = null; if (m.kind == 'face') t = texs[i + 'face_bsm_alp']; if (m.kind == 'hair') t = texs[i + 'hair_parts_bsm_alp'];
+          let t = null; if (m.kind == 'face') t = texs[i + 'face_bsm_alp']; if (m.kind == 'hair') t = texs[i + 'hair_parts_bsm_alp']; if (m.kind == 'boots') t = texs['cboots'];
           gl.uniform1i(gl.getUniformLocation(P,'useTex'), t ? 1 : 0); gl.uniform1i(gl.getUniformLocation(P,'alphaTest'), m.kind == 'hair' ? 1 : 0);
           if (t) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform1i(gl.getUniformLocation(P,'tex'), 0); }
           gl.uniform3fv(gl.getUniformLocation(P,'col'), c || [0.7,0.7,0.7]);
