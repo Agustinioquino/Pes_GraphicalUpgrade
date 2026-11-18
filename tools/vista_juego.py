@@ -259,20 +259,22 @@ def contacto_ik(Ws, inc, letras, alturas, f, estado):
         sn.append(dict(hand=[W['handL'][0].copy(), W['handR'][0].copy()], chest=W['chest'][0].copy(), X=X, sc=min(max(sc, 0.6), 1.5)))
     for i in (0, 1):
         W = Ws[i]; o = sn[1 - i]; me = sn[i]; tr = inc[letras[i]]; Z = np.cross(o['X'], up)
-        goal = {}; wc = {}
+        goal = {}; wc = {}; acc = {}
         for (hand, anchor, f0, n, off) in tr['segs']:
-            if hand in goal: continue
             kf = f - f0
             if kf < 0 or kf > n - 1: continue
             c = tr['c'][off + kf]; w = c[0]
             if w <= 0.001: continue
             A = o['hand'][anchor] if anchor < 2 else o['chest']
-            sc = o['sc'] if anchor == 2 else 0.5 * (o['sc'] + me['sc'])
+            sc = o['sc'] if anchor >= 2 else 0.5 * (o['sc'] + me['sc'])
             Tw = A + sc * (c[1] * o['X'] + c[2] * up + c[3] * Z)
             e = Tw - me['hand'][hand]
             if anchor < 2: e *= 0.5
             if np.linalg.norm(e) > 0.40: continue
-            goal[hand] = me['hand'][hand] + w * e; wc[hand] = w
+            a_ = acc.setdefault(hand, [0.0, np.zeros(3), 0.0]); a_[0] += w; a_[1] += w * e
+            if anchor != 3: a_[2] += w          # ancla 3: solo la mano (no cuenta para las puntas de pie)
+        for hand, (ws, es, wl) in acc.items():   # dos tramos seguidos de la misma mano se funden (antes mandaba el primero)
+            goal[hand] = me['hand'][hand] + es / max(1.0, ws); wc[hand] = min(1.0, wl)
         diff = alturas[1 - i] - alturas[i]
         shMax = min(max((diff - 3.0) / 8.0, 0), 1) * 0.2443; tipMax = min(max((diff - 5.0) / 10.0, 0), 1) * 0.06 * me['sc']
         shW = [0.0, 0.0]; liftW = 0.0
