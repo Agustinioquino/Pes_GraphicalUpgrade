@@ -72,22 +72,25 @@ def perp(v, axis): return sub(v, mul(axis, dot(v, axis)))
 def smooth(t): t = max(0.0, min(1.0, t)); return t * t * (3 - 2 * t)
 
 # ---------------------------------------------------------------- esqueleto DEL JUEGO: hueso -> (padre, canal de giro, corrimiento en reposo, m)
-# (18/11) antes era un esqueleto aproximado (pecho 0.22, cuello 0.22, antebrazo 0.26, piernas 0.44 / 0.44, cadera 0.98): en el juego las
-# manos no caian justas y los cuerpos se metian uno en otro. Ahora = los lugares de los huesos del modelo del Crear jugador (fmdl:
-# sk_belly / chest / neck / head, sk_upperarm / forearm / hand, sk_thigh / leg / foot, dsk_hip), en la convencion de giro de los .gani
-# (identidad = brazos en cruz, piernas y columna derechas; CONFIRMADO con el parado del juego). La misma tabla usa tools/vista_juego.py.
-UARM, FARM, HANDO = 0.290, 0.290, 0.08        # brazo, antebrazo, muneca -> centro de la palma
-MUSLO, CANILLA = 0.421, 0.442
-CLAV = 0.165                                   # pivote de la clavicula -> hombro (el pivote no esta en los fmdl: INFERIDO)
+# (18/11) = body_anim_skel.ask del juego (common/anime/FoxAnim/Body/CharacterAssets, dt13_all.cpk; el mismo en FixDemo), con los canales
+# de body_skel.frig: 2 sk_root_hip (+3 lugar), 4 dsk_hip, 6/7/8 muslo / pierna / pie izq, 10/11/12 der, 13 sk_belly, 14 pecho, 15 cuello,
+# 16 cabeza, 17 sk_shoulder_l, 19 brazo, 20 antebrazo, 21 mano; 22-26 der (5/9/18/23 = lugares fijos). Reposo de animacion = giro
+# identidad en todos (brazos en cruz). Antes era un esqueleto aproximado (pecho 0.22, cuello 0.22, antebrazo 0.26, clavicula al medio del
+# pecho): en el juego las manos no caian justas y los cuerpos se metian uno en otro. 'hips' = sk_root_hip (1.096 m, de ahi cuelgan la
+# columna y dsk_hip), 'pelvis' = dsk_hip (de ahi cuelgan los muslos). tools/vista_juego.py usa esta misma tabla.
+UARM, FARM, HANDO = 0.2900, 0.2900, 0.08      # brazo, antebrazo (largos de los corrimientos del juego), muneca -> centro de la palma
+MUSLO, CANILLA = 0.4213, 0.4418
+OFF_FARM = (0.2887, 0.0, -0.0278); OFF_HAND = (0.2860, 0.0, 0.0479)          # (brazo izquierdo; el derecho con x al reves)
+OFF_KNEE = (-0.0001, -0.4198, 0.0351); OFF_FOOT = (-0.0001, -0.4393, -0.0467)  # (pierna izquierda)
 S = {
-    'root': (None, 0, (0, 0, 0)), 'hips': ('root', 2, (0, 0.992, -0.018)),
-    'thighA': ('hips', 6, (0.090, -0.032, 0.071)), 'kneeA': ('thighA', 7, (0, -MUSLO, 0)), 'footA': ('kneeA', 8, (0, -CANILLA, 0)),
-    'thighB': ('hips', 10, (-0.090, -0.032, 0.071)), 'kneeB': ('thighB', 11, (0, -MUSLO, 0)), 'footB': ('kneeB', 12, (0, -CANILLA, 0)),
-    'spine': ('hips', 13, (0, 0.104, 0.018)), 'chest': ('spine', 14, (0, 0.167, 0.014)), 'neck': ('chest', 15, (0, 0.269, 0.019)),
-    'head': ('neck', 16, (0, 0.108, 0.021)),
+    'root': (None, 0, (0, 0, 0)), 'hips': ('root', 2, (0, 1.0961, 0)), 'pelvis': ('hips', 4, (0, -0.1040, -0.0184)),
+    'thighA': ('pelvis', 6, (0.0900, -0.0321, 0.0713)), 'kneeA': ('thighA', 7, OFF_KNEE), 'footA': ('kneeA', 8, OFF_FOOT),
+    'thighB': ('pelvis', 10, (-0.0900, -0.0321, 0.0713)), 'kneeB': ('thighB', 11, (0.0001, OFF_KNEE[1], OFF_KNEE[2])), 'footB': ('kneeB', 12, (0.0001, OFF_FOOT[1], OFF_FOOT[2])),
+    'spine': ('hips', 13, (0, 0, 0)), 'chest': ('spine', 14, (0, 0.1667, 0.0138)), 'neck': ('chest', 15, (0, 0.2693, 0.0197)),
+    'head': ('neck', 16, (0, 0.1080, 0.0209)),
     'headc': ('head', None, (0, 0.09, 0.03)),
-    'clavL': ('chest', 17, (0.03, 0.192, 0.016)), 'uarmL': ('clavL', 19, (CLAV, 0, 0)), 'farmL': ('uarmL', 20, (UARM, 0, 0)), 'handL': ('farmL', 21, (FARM, 0, 0)),
-    'clavR': ('chest', 22, (-0.03, 0.192, 0.016)), 'uarmR': ('clavR', 24, (-CLAV, 0, 0)), 'farmR': ('uarmR', 25, (-UARM, 0, 0)), 'handR': ('farmR', 26, (-FARM, 0, 0)),
+    'clavL': ('chest', 17, (0.1051, 0.2043, 0.0197)), 'uarmL': ('clavL', 19, (0.0899, 0, 0)), 'farmL': ('uarmL', 20, OFF_FARM), 'handL': ('farmL', 21, OFF_HAND),
+    'clavR': ('chest', 22, (-0.1051, 0.2043, 0.0197)), 'uarmR': ('clavR', 24, (-0.0899, 0, 0)), 'farmR': ('uarmR', 25, (-OFF_FARM[0], 0, OFF_FARM[2])), 'handR': ('farmR', 26, (-OFF_HAND[0], 0, OFF_HAND[2])),
 }
 ORDER = list(S.keys())
 ARM = {'R': (22, 24, 25, 26, -1.0), 'L': (17, 19, 20, 21, 1.0)}   # clavicula, brazo, antebrazo, mano, signo del eje del brazo
@@ -269,6 +272,20 @@ def al_otro(p, D):    # punto del modelo del otro jugador (enfrentado, a D metro
 def dir_otro(v): return (-v[0], v[1], -v[2])
 
 # ---------------------------------------------------------------- IK del brazo
+_CORR = {}
+def _corr(lado, b):
+    """giro que lleva el corrimiento real del hueso hijo al eje x (con el signo del lado)"""
+    k = (lado, b)
+    if k not in _CORR:
+        o = unit(S[b + lado][2]); x = (ARM[lado][4], 0.0, 0.0); c = cross(o, x); d = dot(o, x)
+        _CORR[k] = qn((c[0], c[1], c[2], 1.0 + d))
+    return _CORR[k]
+def _corr_pierna(pie, b):
+    k = (pie, b)
+    if k not in _CORR:
+        o = unit(S[b + pie][2]); x = (0.0, -1.0, 0.0); c = cross(o, x); d = dot(o, x)
+        _CORR[k] = qn((c[0], c[1], c[2], 1.0 + d))
+    return _CORR[k]
 def _ik(lado, Sh, qc, wrist, pp0, dedos, palma):
     sg = ARM[lado][4]
     d = sub(wrist, Sh); L = norm(d); dn = unit(d)
@@ -291,7 +308,11 @@ def _ik(lado, Sh, qc, wrist, pp0, dedos, palma):
     Qf = qm(Qu, qf)
     xh = mul(unit(dedos), sg); yh = unit(perp(mul(palma, -1.0), xh)); zh = cross(xh, yh)
     Qh = qmat(xh, yh, zh)
-    return qm(qi(qc), Qu), qf, qm(qi(Qf), Qh), E
+    # (18/11) en el esqueleto del juego el codo y la muneca no estan justo sobre el eje x del hueso (z -2.8 / +4.8 cm): se gira cada
+    # hueso para que su corrimiento real apunte donde el IK lo quiere
+    A = _corr(lado, 'farm'); Bq = _corr(lado, 'hand')
+    Qu2 = qm(Qu, A); Qf2 = qm(Qf, Bq)
+    return qm(qi(qc), Qu2), qm(qi(Qu2), Qf2), qm(qi(Qf2), Qh), E
 
 def giro_y_dobles(q):
     """mano local -> (giro sobre el eje del antebrazo, doblez de la muneca) en grados"""
@@ -329,7 +350,9 @@ def ik_pierna(pie, P, T, Qpie, ref):
     Qt = qmat(x, yw, zw)
     qk = qaxis((1, 0, 0), math.degrees(math.pi - be))
     Qs = qm(Qt, qk)
-    return qm(qi(Qh), Qt), qk, qm(qi(Qs), Qpie), norm(d) - L
+    Qt2 = qm(Qt, _corr_pierna(pie, 'knee')); Qs2 = qm(Qs, _corr_pierna(pie, 'foot'))     # (18/11) rodilla y tobillo del juego no van justo en -y
+    Qp = P['pelvis'][1] if 'pelvis' in P else Qh
+    return qm(qi(Qp), Qt2), qm(qi(Qt2), Qs2), qm(qi(Qs2), Qpie), norm(d) - L
 
 # (20:55, Agustin: "que sea adaptable para la altura de cada jugador", "mostrame una vista previa con distintas alturas") estatura de
 # cada jugador (1 = la del clip). Los puntos de encuentro ('mundo': choque, apreton) quedan a la altura media de los dos y los del otro

@@ -12,12 +12,17 @@ function prog(vs, fs) { const p = gl.createProgram(); gl.attachShader(p, sh(gl.V
   gl.linkProgram(p); if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw gl.getProgramInfoLog(p); return p; }
 const VS = `#version 300 es
 in vec3 pos; in vec3 nrm; in vec2 uv; in vec4 bi; in vec4 bw;
-uniform mat4 B[20]; uniform mat4 place; uniform mat4 vp; uniform float shadow;
+uniform highp sampler2D B; uniform mat4 vp; uniform float shadow;
 out vec3 vN; out vec2 vUV; out vec3 vW;
+// huesos en una textura: 3 texeles por hueso = filas de la matriz 3x4 (giro con escala | lugar), ya en el mundo
+void fila(int b, float w, inout vec4 r0, inout vec4 r1, inout vec4 r2){
+  r0 += w*texelFetch(B, ivec2(b*3,0), 0); r1 += w*texelFetch(B, ivec2(b*3+1,0), 0); r2 += w*texelFetch(B, ivec2(b*3+2,0), 0); }
 void main(){
-  mat4 M = B[int(bi.x)]*bw.x + B[int(bi.y)]*bw.y + B[int(bi.z)]*bw.z + B[int(bi.w)]*bw.w;
-  vec4 w = place * (M * vec4(pos,1.0));
-  vN = normalize(mat3(place) * mat3(M) * nrm); vUV = uv; vW = w.xyz;
+  vec4 r0 = vec4(0.0), r1 = vec4(0.0), r2 = vec4(0.0);
+  fila(int(bi.x), bw.x, r0, r1, r2); fila(int(bi.y), bw.y, r0, r1, r2); fila(int(bi.z), bw.z, r0, r1, r2); fila(int(bi.w), bw.w, r0, r1, r2);
+  vec4 p4 = vec4(pos, 1.0); vec4 w = vec4(dot(r0, p4), dot(r1, p4), dot(r2, p4), 1.0);
+  vec3 n3 = vec3(dot(r0.xyz, nrm), dot(r1.xyz, nrm), dot(r2.xyz, nrm));
+  vN = normalize(n3); vUV = uv; vW = w.xyz;
   if (shadow > 0.5) { vec3 L = normalize(vec3(0.45,1.0,0.35)); w.xyz -= L * (w.y / L.y); w.y = 0.002; }
   gl_Position = vp * w;
 }`;
@@ -64,14 +69,12 @@ function look(e, c) { const z = norm(sub(e, c)), x = norm(cross([0,1,0], z)), y 
   return new Float32Array([x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0, -dot(x,e),-dot(y,e),-dot(z,e),1]); }
 const sub = (a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]], dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2], cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
 const norm = a => { const l = Math.hypot(...a) || 1; return [a[0]/l,a[1]/l,a[2]/l]; };
-function placeM(i) { const s = S.jugadores[i].escala; if (i == 0) return new Float32Array([s,0,0,0, 0,s,0,0, 0,0,s,0, 0,0,0,1]);
-  return new Float32Array([-s,0,0,0, 0,s,0,0, 0,0,-s,0, 0,0,S.D,1]); }
-function boneMats(i, f) { const J = S.jugadores[i]; const fr = frames[i]; f = Math.min(f, J.n); const out = new Float32Array(20*16);
-  for (let b = 0; b < 20; b++) { const q = fr.subarray((f*20+b)*12, (f*20+b)*12+12);
-    out.set([q[0],q[1],q[2],0, q[3],q[4],q[5],0, q[6],q[7],q[8],0, q[9],q[10],q[11],1], b*16); } return out; }
-function hipsW(i, f) { const m = boneMats(i, f).subarray(16, 32); const b = S.bind[1]; const s = S.jugadores[i].escala;
-  const p = [m[0]*b[0]+m[4]*b[1]+m[8]*b[2]+m[12], m[1]*b[0]+m[5]*b[1]+m[9]*b[2]+m[13], m[2]*b[0]+m[6]*b[1]+m[10]*b[2]+m[14]];
-  return i == 0 ? [p[0]*s, p[1]*s, p[2]*s] : [-p[0]*s, p[1]*s, S.D - p[2]*s]; }
+let boneTex = null;
+function boneRows(i, f) { const J = S.jugadores[i]; const NB = S.nb; f = Math.min(f, J.n); const fr = frames[i]; const out = new Float32Array(NB*12);
+  for (let b = 0; b < NB; b++) { const q = fr.subarray((f*NB+b)*12, (f*NB+b)*12+12);   // columnas c0 c1 c2 t -> filas
+    for (let r = 0; r < 3; r++) { out[b*12+r*4] = q[r]; out[b*12+r*4+1] = q[3+r]; out[b*12+r*4+2] = q[6+r]; out[b*12+r*4+3] = q[9+r]; } } return out; }
+function hipsW(i, f) { const NB = S.nb; f = Math.min(f, S.jugadores[i].n); const q = frames[i].subarray((f*NB+1)*12, (f*NB+1)*12+12); const b = S.bind[1];
+  return [q[0]*b[0]+q[3]*b[1]+q[6]*b[2]+q[9], q[1]*b[0]+q[4]*b[1]+q[7]*b[2]+q[10], q[2]*b[0]+q[5]*b[1]+q[8]*b[2]+q[11]]; }
 let floorVao;
 window.init = async function(scene, base) {
   S = scene; P = prog(VS, FS); PF = prog(FLOOR_VS, FLOOR_FS);
@@ -105,7 +108,9 @@ window.draw = function(f, views) {
       if (pass) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); } else { gl.disable(gl.BLEND); gl.depthMask(true); }
       gl.uniform1f(gl.getUniformLocation(P,'shadow'), pass);
       for (let i = 0; i < 2; i++) {
-        gl.uniformMatrix4fv(gl.getUniformLocation(P,'B'), false, boneMats(i, f)); gl.uniformMatrix4fv(gl.getUniformLocation(P,'place'), false, placeM(i));
+        if (!boneTex) { boneTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, boneTex); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST); }
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, boneTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, S.nb*3, 1, 0, gl.RGBA, gl.FLOAT, boneRows(i, f)); gl.uniform1i(gl.getUniformLocation(P,'B'), 1);
         const J = S.jugadores[i];
         for (const m of buffers) { if (m.who != -1 && m.who != i) continue;
           if (pass && (m.kind == 'eye' || m.kind == 'hair')) continue;
