@@ -254,9 +254,11 @@ def cuerpo(base, J, f):
         if a > 1e-3:
             # (20:50, Agustin: "se mueve mucho la cadera"): la cadera a la mitad de la captura; el torso y la cabeza van 3 cuadros atrasados
             # respecto de los pies (el peso del cuerpo llega despues del paso)
-            ph2 = fz[0][max(0, f - 3)]
-            for ch, k in ((2, 0.45), (13, 0.75), (14, 0.75), (15, 0.6), (16, 0.55)):
-                rot[ch] = qm(rot[ch], qslerp((0.0, 0.0, 0.0, 1.0), marcha_en(ch, ph if ch == 2 else ph2), a * k))
+            # (18/11 01:20, Agustin: "quitar los movimientos roboticos desfasando un poco los movimientos entre las partes del cuerpo")
+            # la cadera lidera; columna 2 cuadros despues, pecho 3, cuello 5, cabeza 6 (accion superpuesta); cuanto usa cada parte = estilo
+            e = getattr(J, 'estilo', None) or dict(cadera=0.45, torso=0.75, cabeza=0.55)
+            for ch, k, d in ((2, e['cadera'], 0), (13, e['torso'], 2), (14, e['torso'], 3), (15, e['cabeza'] * 1.1, 5), (16, e['cabeza'], 6)):
+                rot[ch] = qm(rot[ch], qslerp((0.0, 0.0, 0.0, 1.0), marcha_en(ch, fz[0][max(0, f - d)]), a * k))
     ab = abrazo_en(J.nombre, f)
     if ab:
         env, d = ab
@@ -320,6 +322,7 @@ def giro_y_dobles(q):
     tw = math.degrees(2 * math.atan2(q[0], q[3])); twq = qn((q[0], 0, 0, q[3]))
     return tw, qangle(qm(q, qi(twq)))
 
+DIAG = None
 def ik_brazo(lado, P, rot, wrist, codo, dedos, palma, prev=None, obst=None):
     """P = fk del cuerpo (con la clavicula ya girada). El codo se gira alrededor del eje hombro -> muneca (hasta 90 grados) para que la
     muneca no tenga que torcerse de mas (en los clips de Konami la mano gira hasta ~75-100 grados); `prev` = el giro elegido en el cuadro
@@ -328,6 +331,19 @@ def ik_brazo(lado, P, rot, wrist, codo, dedos, palma, prev=None, obst=None):
     Sh = P[bu][0]; qc = P[bc][1]; dn = unit(sub(wrist, Sh))
     mejor = None
     for o in range(-120, 121, 3) if obst else range(-90, 91, 3):
+        mejor = _prueba(lado, Sh, qc, wrist, codo, dedos, palma, prev, obst, dn, o, mejor)
+    # (18/11 01:14, Agustin: "todavia se ven brazos atravesando el torso") si abriendo el codo no alcanza, la muneca se corre hacia
+    # afuera del cuerpo del otro (de a 2 cm, hasta 12): mejor una mano un poco mas afuera que un brazo adentro del otro
+    if obst and mejor[3] > 0.004:
+        sal = obst.afuera(wrist)
+        for k in range(1, 7):
+            w2 = add(wrist, mul(sal, 0.02 * k)); dn2 = unit(sub(w2, Sh))
+            for o in range(-120, 121, 6): mejor = _prueba(lado, Sh, qc, w2, codo, dedos, palma, prev, obst, dn2, o, mejor, 300.0 * 0.02 * k)
+    if obst and DIAG is not None: DIAG.append(mejor[3])
+    return mejor[2] + (mejor[1],)
+
+def _prueba(lado, Sh, qc, wrist, codo, dedos, palma, prev, obst, dn, o, mejor, extra=0.0):
+    if True:
         pp = qrot(qaxis(dn, o), codo)
         r = _ik(lado, Sh, qc, wrist, pp, dedos, palma)
         tw, sw = giro_y_dobles(r[2])
@@ -335,10 +351,11 @@ def ik_brazo(lado, P, rot, wrist, codo, dedos, palma, prev=None, obst=None):
         # (18/11, Agustin: "se atraviesan muchas veces con los brazos") el codo se abre para que brazo y antebrazo no entren en el
         # cuerpo ni en los brazos del otro (1 cm adentro cuesta como 20 grados de muneca); limites humanos: muneca torcida > 80 y
         # doblada > 75 grados cuestan mucho
-        if obst: c += 5000.0 * obst(Sh, r[3], wrist)
+        pen = obst(Sh, r[3], wrist) if obst else 0.0
+        c += 5000.0 * pen + extra
         c += 8.0 * max(0.0, abs(tw) - 80.0) + 8.0 * max(0.0, sw - 75.0)
-        if mejor is None or c < mejor[0]: mejor = (c, o, r)
-    return mejor[2] + (mejor[1],)
+        if mejor is None or c < mejor[0]: mejor = (c, o, r, pen)
+    return mejor
 
 PIERNA = 0.5 * (MUSLO + CANILLA)
 def ik_pierna(pie, P, T, Qpie, ref):
@@ -577,6 +594,10 @@ def hacer_obst(Po, brazos_otro, D):
                     d = _dseg(po, s0, s1)
                     if d < r + r2: pen += r + r2 - d
         return pen
+    def afuera(w):
+        l = qrot(qinv, sub(al_otro(w, D), c)); d = unit((l[0], 0.0, l[2] - 0.036))
+        return dir_otro(qrot(q, d))
+    fn.afuera = afuera
     return fn
 
 MUNECA_DOBLA, MUNECA_GIRA = 70.0, 85.0
@@ -646,10 +667,13 @@ def armar(base, Js, D):
             if getattr(J, 'fase', None):     # brazos y hombros de la caminata del juego encima (solo con el brazo colgando; hombros siempre)
                 ph = J.fase[0][f]; am = J.fase[1][f] * J.marcha_amp
                 if am > 1e-3:
+                    # (18/11) desfase entre partes: hombro 2 cuadros despues de la cadera, brazo 3, antebrazo 5, mano 7 (la mano llega
+                    # ultima: seguimiento); amplitud segun el estilo de cada jugador
+                    e = getattr(J, 'estilo', None) or dict(brazos=1.0, clav=1.0); fa_ = J.fase[0]
                     for lado, chs_ in (('L', (19, 20, 21)), ('R', (24, 25, 26))):
-                        wb = brazo_suelto(J, lado)[f] * am
-                        for ch in chs_: r[ch] = qm(r[ch], qslerp((0.0, 0.0, 0.0, 1.0), marcha_en(ch, ph), wb))
-                    for ch in (17, 22): r[ch] = qm(r[ch], qslerp((0.0, 0.0, 0.0, 1.0), marcha_en(ch, ph), am))
+                        wb = min(1.3, brazo_suelto(J, lado)[f] * am * e['brazos'])
+                        for ch, d in zip(chs_, (3, 5, 7)): r[ch] = qm(r[ch], qslerp((0.0, 0.0, 0.0, 1.0), marcha_en(ch, fa_[max(0, f - d)]), wb))
+                    for ch in (17, 22): r[ch] = qm(r[ch], qslerp((0.0, 0.0, 0.0, 1.0), marcha_en(ch, fa_[max(0, f - 2)]), min(1.4, am * e['clav'])))
             fin.append(r)
         for i in range(len(Js)):
             salida[i][f] = fin[i]; Pf = fk(fin[i], raices[i][f], base.hips[f])
@@ -691,7 +715,9 @@ N = 780            # cuadros (26 s; 18/11 Agustin: "que la parte de caminando y 
 WALK = 2.44        # lo que camina cada uno hasta el otro (desde el lugar del cuadro 0)
 PASO = 0.22        # el paso de cada uno para el abrazo (y el de vuelta)
 SEP_CAMINA = 0.86   # (18/11) de cadera a cadera al irse caminando juntos (antes 0.66)
-CHOQUE = 150       # choque de las dos manos
+SEP_PUNO = 1.02     # (18/11) de cadera a cadera en el choque de punos (despues de dos pasos atras)
+CHOQUE = 150       # (18/11 01:17, Agustin) saludo con UNA mano: se agarran la derecha a la altura del pecho y A tira de B al abrazo (antes: choque de las dos manos arriba)
+PASO_TIRA, PASO_VIENE = 0.14, 0.30    # paso al abrazo del que tira (A) y del que es atraido (B); suman 2 x PASO
 CHOQUE2 = 312      # (20:13-20:14) apreton de manos al soltar el abrazo; (18/11, Agustin) ahora saludo de punito (choque de punos)
 
 # (18/11 00:41, Agustin: "que la parte de caminando y charlando sea mas larga y que se miren al hablar, asi se ve robotico") charla al
@@ -747,7 +773,7 @@ def coreografia(D, quien, pie0):
     # viejos caminando") caminando los pies van cerca de la linea del medio (como walk02: 13-20 cm entre tobillos, no los 31 del parado) y
     # cada pie apunta un poco afuera, distinto en cada uno; parado vuelven al ancho del clip del juego
     TL, TR = (7.0, -4.5) if A else (4.0, -8.0)
-    NW = 0.075
+    NW = 0.065 if A else 0.090      # (18/11) estilo propio: A camina mas angosto, B mas ancho
     def L_(dz, x=None, yaw=None): return (lx if x is None else x, lz + dz, TL if yaw is None else yaw)
     def R_(dz, x=None, yaw=None): return (rx if x is None else x, rz + dz, TR if yaw is None else yaw)
     def Lw(dz): return L_(dz, 0.5 * (lx + rx) + NW)
@@ -765,8 +791,8 @@ def coreografia(D, quien, pie0):
     def pasos(ini, lista):    # lista = [(desde, hasta, huella)]: despega el talon en 'desde', queda plano en 'hasta'
         k = [(-100, ini)]; cur = ini; n_ = 0
         for a, b, v in lista:
-            if not (94 <= a <= 320):
-                j = J_[n_ % len(J_)]; j2 = J_[(n_ + 3) % len(J_)]; n_ += 1; a, b = a + j, b + j + (1 if j2 > 0 else 0)
+            # (18/11 01:14, Agustin: "caminan como si estuvieran rengos") el desfase paso a paso dejaba un pie apoyado 15 cuadros y el
+            # otro 21: renguera. Ahora el ritmo es parejo en cada uno (el desfase queda ENTRE los dos jugadores: ow y t)
             k += [(a, cur), (b, v)]; cur = v
         return k
     # (20:13, Agustin: "despues del saludo los dos salgan caminando y charlando para un mismo lado") al soltar el abrazo medio paso atras,
@@ -775,6 +801,9 @@ def coreografia(D, quien, pie0):
     # (18/11, Agustin: "cuando salen a caminar estan muy juntos") con los cuerpos del juego a 0.66 m se rozan los brazos: SEP_CAMINA
     # entre los dos (de cadera a cadera); el paso atras al soltarse se ajusta para eso
     WB = WALK + 0.5 * (D - 2 * WALK - SEP_CAMINA); cz = WB + 0.5 * (lz + rz); t = 0 if A else 6; s_ = 1.0 if A else -1.0
+    # (01:15, Agustin: "la transicion entre el abrazo y el choque de punos... puedan caminar hacia atras un poco") al soltarse dan dos
+    # pasos atras hasta SEP_PUNO entre caderas (a un brazo doblado de distancia) y ahi chocan los punos
+    WF = WALK + 0.5 * (D - 2 * WALK - SEP_PUNO)
     def lado_(d, cerca, yaw=90.0, ancho=NW):
         pie_izq = cerca if A else not cerca         # A va a su izquierda (cerca = su pie izquierdo); B a su derecha
         return (cx + s_ * d, cz - ancho if cerca else cz + ancho, s_ * yaw + (TL if pie_izq else TR))
@@ -786,11 +815,14 @@ def coreografia(D, quien, pie0):
     guia = [x for k, x in enumerate(sal) if k % 2 == 0]; otro_ = [x for k, x in enumerate(sal) if k % 2 == 1]
     # (18/11 00:52, Agustin: "elimina el delay que hay entre que se paran de caminar y se chocan las manos") los dos ultimos pasos se
     # alargan (frenan: desacelerar) y el ultimo apoya justo cuando suben las manos: llegan y chocan en el mismo envion
-    u1 = (94, 122) if A else (98, 126); u2 = (124, 146) if A else (128, 150)
-    pL = pasos(Lw(WALK - 2.66), [(0 + ow, 26 + ow, Lw(WALK - 1.70)), (44 + ow, 70 + ow, Lw(WALK - 0.74)), (u1[0], u1[1], L_(WALK)),
-                                  (158, 180, L_(WALK + PASO)), (276, 300, L_(WB))] + (guia if A else otro_))
-    pR = pasos(Rw(WALK - 3.14), [(-22 + ow, 4 + ow, Rw(WALK - 2.18)), (22 + ow, 48 + ow, Rw(WALK - 1.22)), (66 + ow, 92 + ow, Rw(WALK - 0.32)),
-                                  (u2[0], u2[1], R_(WALK)), (170, 192, R_(WALK + PASO)), (284, 308, R_(WB))] + (otro_ if A else guia))
+    # (01:14, Agustin: "no me gusta la pausa que hay cuando se acercan antes de chocar las manos") ritmo parejo hasta el final: toda la
+    # llegada va 14 cuadros mas tarde y el ultimo pie apoya en el momento del choque (los brazos suben durante los dos ultimos pasos)
+    ow2 = (0 if A else 2) + 14; PH = PASO_TIRA if A else PASO_VIENE
+    u1 = (88 + ow2, 114 + ow2); u2 = (110 + ow2, C - 2) if A else (112 + ow2, C)
+    pL = pasos(Lw(WALK - 2.66), [(0 + ow2, 26 + ow2, Lw(WALK - 1.70)), (44 + ow2, 70 + ow2, Lw(WALK - 0.74)), (u1[0], u1[1], L_(WALK)),
+                                  ((160, 180) if A else (156, 174)) + (L_(WALK + PH),), (276, 296, L_(WF + 0.04)), (C2 - 4, C2 + 8, L_(WF))] + (guia if A else otro_))
+    pR = pasos(Rw(WALK - 3.14), [(-22 + ow2, 4 + ow2, Rw(WALK - 2.18)), (22 + ow2, 48 + ow2, Rw(WALK - 1.22)), (66 + ow2, 92 + ow2, Rw(WALK - 0.32)),
+                                  (u2[0], u2[1], R_(WALK)), ((172, 192) if A else (166, 186)) + (R_(WALK + PH),), (286, 306, R_(WF))] + (otro_ if A else guia))
     pies = {'A': pL, 'B': pR}
     FZ = fases(pL, pR, N); MAMP = 0.85        # zancada 0.96 contra 1.19 del juego: un poco menos de vaiven
     ox, oz = 0.5 * (lx + rx), 0.5 * (lz + rz)
@@ -815,7 +847,7 @@ def coreografia(D, quien, pie0):
             r[13] = (1.5 * sq, 0.0, 0.0); r[14] = (2.5 * sq, 0.0, 0.0)
         # (20:53, Agustin: "al handshake y al chocar le falta impacto, igual al abrazo") golpe: el cuerpo recibe el contacto y rebota
         # (oscilacion que se apaga): choque arriba = pecho y cabeza para atras; abrazo = el pecho se cierra al encontrarse; apreton = sacudida
-        for f0, ch_amp in ((C, {13: -2.5, 14: -3.5, 15: -3.0, 16: -4.0}), (188, {13: 2.0, 14: 3.0, 16: 3.5}), (C2, {14: 1.5, 16: 2.0})):
+        for f0, ch_amp in (((C + 8, {13: -2.0, 14: -3.0}) if A else (C + 9, {13: 2.5, 14: 4.0, 15: 1.5, 16: 2.5})), (188, {13: 2.0, 14: 3.0, 16: 3.5}), (C2, {14: 1.5, 16: 2.0})):
             if f0 <= f < f0 + 24:
                 k = math.exp(-(f - f0) / 5.0) * math.sin((f - f0) * 0.55 + 0.6) / math.sin(0.6)
                 for ch, amp in ch_amp.items():
@@ -830,15 +862,18 @@ def coreografia(D, quien, pie0):
     # y caminando se miran de costado al hablar (A tiene a B a su derecha, B tiene a A a su izquierda)
     hd = [(276, (10, -20 if A else -24, 14)), (292, (9, -18 if A else -22, 12)), (304, (2, -4, 2)), (310, (-4, 0, 0)), (C2 + 2, (-5, 0, 0)), (C2 + 6, (6, 0, 0)), (C2 + 16, (-1, 0, 0)),
           (C2 + 24, (0, 0, 0)), (344 + t, (0, 22 * sgn, 0)), (366 + t, (0, 4 * sgn, 0))] + mirada_caminando(A, sgn)
+    # (18/11 01:19, Agustin: "a cada jugador le falta un estilo propio al caminar") postura al caminar: A algo inclinado adelante y
+    # compacto; B erguido, pecho afuera
+    po13, po14 = (4.5, 0.5) if A else (1.0, -3.5)
     giros = {
-        13: [(0, (3, 0, 0)), (C - 14 + ow // 2, (3, 0, 0)), (C - 2, (-3, 0, 0)), (C + 10, (0, 0, 0)), (182, (inc * 0.6, 0, 0)),
+        13: [(0, (po13, 0, 0)), (C - 14 + ow // 2, (po13, 0, 0)), (C - 2, (1, 0, 0)), (C + 10, (0, 0, 0)), (182, (inc * 0.6, 0, 0)),
              (234, (inc * 0.6, 2.5 * sgn, 0)), (280, (inc * 0.6, 3.0 * sgn, 0)), (296, (inc * 0.5, 0, 0)), (306, (inc * 0.3, 0, 0)), (C2 + 2, (3, 0, 0)), (336, (1, 0, 0)),
-             (360, (2, 0, 0)), (N, (2, 0, 0))],
-        14: [(0, (0, 0, 0)), (C + 10, (0, 0, 0)), (186, (inc, 0, 0)), (290, (inc, 0, 0)), (304, (inc * 0.4, 0, 0)), (C2 + 4, (1, 0, 0)), (340, (0, 0, 0)),
-             (380, (0, -8 * sgn, 0)), (N, (0, -8 * sgn, 0))],
-        15: [(0, (0, 0, 0))] + [(f, (v[0] * 0.5, v[1], 0)) for f, v in hA] + [(C - 12 + ow // 2, (0, 0, 0)), (C - 2, (-8, 0, 0)), (C + 8, (-4, 0, 0)),
+             (360, (po13, 0, 0)), (N, (po13, 0, 0))],
+        14: [(0, (po14, 0, 0)), (C - 16, (po14, 0, 0)), (C + 10, (0, 0, 0)), (186, (inc, 0, 0)), (290, (inc, 0, 0)), (304, (inc * 0.4, 0, 0)), (C2 + 4, (1, 0, 0)), (340, (0, 0, 0)),
+             (380, (po14, -8 * sgn, 0)), (N, (po14, -8 * sgn, 0))],
+        15: [(0, (0, 0, 0))] + [(f, (v[0] * 0.5, v[1], 0)) for f, v in hA] + [(C - 12 + ow // 2, (0, 0, 0)), (C - 2, (-2, 0, 0)), (C + 8, (-1, 0, 0)),
              (176, (2, -10, 4)), (194, (6, -26, 11)), (276, (6, -24, 11)), (292, (5, -21, 10)), (304, (1, -4, 2))] + [(f, (v[0] * 0.5, v[1] * 0.45, 0)) for f, v in hd[3:]],
-        16: [(0, (0, 0, 0))] + hA + [(C - 12 + ow // 2, (0, 0, 0)), (C - 2, (-12, 0, 0)), (C + 8, (-6, 0, 0)), (176, (4, -12, 6)),
+        16: [(0, (0, 0, 0))] + hA + [(C - 12 + ow // 2, (0, 0, 0)), (C - 2, (-3, 0, 0)), (C + 8, (-1, 0, 0)), (176, (4, -12, 6)),
              (194, (10, -22 if A else -26, 14))] + [(f, (v[0], v[1] * 0.6, v[2])) for f, v in hd],
         22: [(0, (0, 0, 0))],     # (18/11) la clavicula sigue sola al brazo (ritmo del hombro en armar)
         17: [(0, (0, 0, 0))],
@@ -910,13 +945,21 @@ def coreografia(D, quien, pie0):
               (82, charla('R', 70, gA[2:])), (88, charla('R', 70, gA[2:])), (100, balanceo('R')), (C - 20, balanceo('R'))]
     else:
         kR = [(0, balanceo('R')), (66, balanceo('R')), (78, charla('R', 72, gB)), (112, charla('R', 72, gB)), (122, balanceo('R')), (C - 16, balanceo('R'))]
-    kR += [(C - 7 + ow // 8, prepara('R')), (C, contacto('R')), (C + 7, rebote('R')), (172, sobre_hombro), (190, espalda_alta)]
+    # (18/11 01:17, Agustin: "en vez de un choque de las dos manos podria ser un saludo de manos con una y que uno de los dos lo atraiga
+    # hacia el para el abrazo") las derechas se agarran arriba, a la altura del pecho (palmas enfrentadas, dedos arriba y adelante, codo
+    # abajo): la mano se carga atras y arriba (anticipacion), golpe del agarre, A tira hacia si (B viene con un paso largo) y se sueltan
+    # al entrar al abrazo. tira = cuanto se corre el punto hacia A (m)
+    def agarre(tira=0.0, dy=0.0):
+        return mundo((0.0, 1.26 + dy, cm - sgn * tira), (-1, -1.1, -0.3), unit((0.12, 0.72, 0.68)), (1, 0, 0))
+    carga = yo('root', (-0.27, 1.36, 0.16), (-1, -0.8, -0.5), unit((0.1, 0.9, 0.4)), unit((1, 0, 0.3)))
+    kR += [(C - 10 + ow // 8, carga), (C, agarre()), (C + 3, agarre(0.0, -0.035)), (C + 8, agarre(-0.015, -0.01)), (C + 15, agarre(0.13, 0.02)),
+           (175, sobre_hombro), (192, espalda_alta)]
     pats = [212, 228, 244] if A else [220, 238]
     for p in pats: kR += [(p - 2, espalda_alta), (p + 5, palmada(1)), (p + 12, espalda_alta)]
     # (20:59, Agustin: "la transicion entre el abrazo y el apreton de mano no me gusta") al soltarse las manos se deslizan de la espalda a
     # los hombros del otro y se quedan ahi mientras dan el paso atras (se miran a un brazo de distancia); despues la derecha baja, se
     # carga un poco atras y va al apreton
-    kR += [(276, espalda_alta), (286, sobre_hombro), (293, hombro_R), (297, hombro_R), (303, puno(0.26, -0.06, -0.10)), (C2 - 4, puno(0.10, 0.0, -0.02)), (C2, puno()), (C2 + 2, puno(-0.005)),
+    kR += [(274, espalda_alta), (282, sobre_hombro), (287, hombro_R), (291, hombro_R), (302, puno(0.26, -0.06, -0.10)), (C2 - 4, puno(0.10, 0.0, -0.02)), (C2, puno()), (C2 + 2, puno(-0.005)),
            (C2 + 7, puno(0.09, 0.03)), (C2 + 14, puno(0.16, -0.02)), (C2 + 22, apreton_suelta), (C2 + 36, balanceo('R'))]
     if A:
         for (f0, f1), pts in zip(HABLA_A, (gA, gA2)):
@@ -930,8 +973,8 @@ def coreografia(D, quien, pie0):
     else:
         kL = [(0, balanceo('L')), (72, balanceo('L')), (84, charla('L', 80, [(0.0, 0.0, 0.0), (0.03, 0.04, 0.03), (0.0, 0.01, 0.0), (0.04, 0.05, 0.03)], 22)),
               (110, charla('L', 80, [(0.0, 0.0, 0.0), (0.03, 0.04, 0.03), (0.0, 0.01, 0.0), (0.04, 0.05, 0.03)], 22)), (122, balanceo('L')), (C - 16, balanceo('L'))]
-    kL += [(C - 7 + ow // 8, prepara('L')), (C, contacto('L')), (C + 7, rebote('L')), (178, bajo_brazo), (194, espalda_baja),
-           (278, espalda_baja), (288, salida_baja), (296, hombro_L), (304, hombro_L), (C2 + 4, abajo('L')), (340, abajo('L')), (352 + t, balanceo('L'))]
+    kL += [(C + 4, balanceo('L')), (C + 10, abajo('L')), (180, bajo_brazo), (196, espalda_baja),
+           (276, espalda_baja), (284, salida_baja), (289, hombro_L), (293, hombro_L), (C2 + 4, abajo('L')), (340, abajo('L')), (352 + t, balanceo('L'))]
     if A: kL += [(N, balanceo('L'))]
     else:
         for (f0, f1), pts in zip(HABLA_B, (gB, gB2)):
@@ -940,13 +983,16 @@ def coreografia(D, quien, pie0):
     w = [(0, 1.0), (N, 1.0)]
     J = Jugador('A' if A else 'B', giros, {'R': {'k': kR, 'w': w}, 'L': {'k': kL, 'w': w}}, raiz, pies)
     J.giros_fn = giros_fn; J.fase = FZ; J.marcha_amp = MAMP
-    J.contacto = [(C - 3, C + 6), (186, 297), (C2 - 1, C2 + 3)]
+    # estilo de la caminata (cuanto de la captura del juego usa cada parte): A = pasos compactos, poca cadera y brazos cortos;
+    # B = hombros que ruedan y brazos amplios
+    J.estilo = dict(cadera=0.38, torso=0.62, cabeza=0.50, brazos=0.78, clav=0.9) if A else dict(cadera=0.54, torso=0.98, cabeza=0.62, brazos=1.22, clav=1.4)
+    J.contacto = [(C - 2, C + 15), (186, 288), (C2 - 1, C2 + 3)]
     # ------- cara y manos (las pone el Motor junto con el clip): (cuadro, gesto de la cara, peso, mano izquierda, mano derecha)
     if A:
         J.pista = [(0, 'smil_talk_blink_soft', 0.8, 'relax', 'relax'), (20, 'smil_talk_blink_soft', 0.8, 'relax', 'hiraki_normal'),
                    (46, 'smil_talk_blink_soft', 0.9, 'relax', 'pointing'), (74, 'smil_talk_blink_soft', 0.8, 'relax', 'hiraki_normal'),
                    (94, 'smil_soft', 0.6, 'relax', 'relax'), (118, 'pow_brwnit_wink_r', 1.0, 'relax', 'relax'),
-                   (C - 10, 'smil_mho', 1.0, 'open_full', 'open_full'), (C + 14, 'smil_soft', 0.8, 'open_full_half', 'open_full_half'),
+                   (C - 10, 'smil_mho', 1.0, 'relax', 'handshake_normal1'), (C + 16, 'smil_soft', 0.8, 'open_full_half', 'open_full_half'),
                    (190, 'smil_shut_eyhc', 0.9, 'open_full', 'open_full'), (278, 'smil_soft', 0.8, 'open_full_half', 'open_full_half'),
                    (298, 'smil_soft', 0.9, 'relax', 'soft_nigiri'), (C2 + 18, 'smil_soft', 0.8, 'relax', 'relax'),
                    (388, 'smil_talk_blink_soft', 0.85, 'relax', 'hiraki_normal'), (446, 'smil_soft', 0.7, 'relax', 'relax'),
@@ -956,8 +1002,8 @@ def coreografia(D, quien, pie0):
                    (RISA + 26, 'smil_soft', 0.85, 'relax', 'relax'), (750, 'smil_soft', 0.7, 'relax', 'relax')]
     else:
         J.pista = [(0, 'smil_soft', 0.6, 'relax', 'relax'), (70, 'smil_talk_blink_soft', 0.8, 'hiraki_normal', 'hiraki_normal'),
-                   (122, 'smil_soft', 0.7, 'relax', 'relax'), (C - 8, 'smil_mho', 1.0, 'open_full', 'open_full'),
-                   (C + 14, 'smil_soft', 0.8, 'open_full_half', 'open_full_half'), (190, 'smil_shut_eyhc', 0.8, 'open_full', 'open_full'),
+                   (122, 'smil_soft', 0.7, 'relax', 'relax'), (C - 8, 'smil_mho', 1.0, 'relax', 'handshake_normal1'),
+                   (C + 16, 'smil_soft', 0.8, 'open_full_half', 'open_full_half'), (190, 'smil_shut_eyhc', 0.8, 'open_full', 'open_full'),
                    (278, 'smil_talk_blink_soft', 0.7, 'open_full_half', 'open_full_half'), (298, 'smil_soft', 0.9, 'relax', 'soft_nigiri'),
                    (C2 + 18, 'smil_soft', 0.8, 'relax', 'relax'), (400, 'smil_mho_soft', 0.7, 'relax', 'relax'), (420, 'smil_soft', 0.7, 'relax', 'relax'),
                    (454, 'smil_talk_blink_soft', 0.85, 'hiraki_normal', 'relax'), (516, 'smil_mho_soft', 0.9, 'relax', 'relax'),
@@ -1011,7 +1057,8 @@ def cara_y_dedos_vivos(pista, A, C, C2):
         if k[1:] != limpio[-1][1:]: limpio.append(k)
     return limpio
 
-ABRAZO_D = 0.62
+ABRAZO_D = 0.56     # (18/11 01:18, Agustin: "hay como mucha distancia entre ambos") antes 0.62
+ABRAZO_D_VIEJA = 0.62
 def distancia_auto(base):
     """(18/11) distancia entre raices en el abrazo: medida con las mallas del juego (tools/vista_juego.py --revisar). Con 0.42 (pechos de
     0.145) uno se metia 6 cm en el otro: la camiseta sobresale 0.16-0.17 del pecho y el pecho alto va inclinado hacia el otro"""
@@ -1022,7 +1069,7 @@ def revisar(info, D):
     def palma(P, lado):
         bh = BONE[lado][3]; W, q = P[bh]; sg = ARM[lado][4]
         return add(W, qrot(q, (sg * HANDO, -0.02, 0)))
-    for la, lb in (('R', 'L'), ('L', 'R')):
+    for la, lb in (('R', 'R'),):
         pa = palma(info[CHOQUE][0], la); pb = al_otro(palma(info[CHOQUE][1], lb), D)
         print('choque cuadro %d: mano %s de A con mano %s de B: separacion %.1f cm (en %.2f %.2f %.2f)' % (CHOQUE, la, lb, norm(sub(pa, pb)) * 100, *pa))
     peor = (9, 0, '')
@@ -1056,7 +1103,7 @@ def revisar(info, D):
 RAMPA_C = 8
 def ventanas_contacto():
     C, C2 = CHOQUE, CHOQUE2      # mano: 0 izquierda, 1 derecha; ancla: 0 su muneca izquierda, 1 su muneca derecha, 2 su pecho
-    return [(C - 3, C + 6, {0: 1, 1: 0}), (186, 297, {0: 2, 1: 2}), (C2 - 1, C2 + 3, {1: 1})]
+    return [(C - 2, C + 15, {1: 1}), (186, 288, {0: 2, 1: 2}), (C2 - 1, C2 + 3, {1: 1})]
 
 def marco(P):
     x = sub(P['thighA'][0], P['thighB'][0]); x = unit((x[0], 0.0, x[2])); return x, (0.0, 1.0, 0.0), cross(x, (0.0, 1.0, 0.0))
