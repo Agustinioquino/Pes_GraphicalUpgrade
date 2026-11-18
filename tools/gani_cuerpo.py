@@ -320,18 +320,23 @@ def giro_y_dobles(q):
     tw = math.degrees(2 * math.atan2(q[0], q[3])); twq = qn((q[0], 0, 0, q[3]))
     return tw, qangle(qm(q, qi(twq)))
 
-def ik_brazo(lado, P, rot, wrist, codo, dedos, palma, prev=None):
+def ik_brazo(lado, P, rot, wrist, codo, dedos, palma, prev=None, obst=None):
     """P = fk del cuerpo (con la clavicula ya girada). El codo se gira alrededor del eje hombro -> muneca (hasta 90 grados) para que la
     muneca no tenga que torcerse de mas (en los clips de Konami la mano gira hasta ~75-100 grados); `prev` = el giro elegido en el cuadro
     anterior, para que no salte. Devuelve (q brazo local, q antebrazo local, q mano local, codo, giro del codo elegido)."""
     bc, bu = BONE[lado][0], BONE[lado][1]
     Sh = P[bu][0]; qc = P[bc][1]; dn = unit(sub(wrist, Sh))
     mejor = None
-    for o in range(-90, 91, 3):
+    for o in range(-120, 121, 3) if obst else range(-90, 91, 3):
         pp = qrot(qaxis(dn, o), codo)
         r = _ik(lado, Sh, qc, wrist, pp, dedos, palma)
         tw, sw = giro_y_dobles(r[2])
         c = abs(tw) + 0.6 * sw + 0.4 * abs(o) + (1.5 * abs(o - prev) if prev is not None else 0.0)
+        # (18/11, Agustin: "se atraviesan muchas veces con los brazos") el codo se abre para que brazo y antebrazo no entren en el
+        # cuerpo ni en los brazos del otro (1 cm adentro cuesta como 20 grados de muneca); limites humanos: muneca torcida > 80 y
+        # doblada > 75 grados cuestan mucho
+        if obst: c += 5000.0 * obst(Sh, r[3], wrist)
+        c += 8.0 * max(0.0, abs(tw) - 80.0) + 8.0 * max(0.0, sw - 75.0)
         if mejor is None or c < mejor[0]: mejor = (c, o, r)
     return mejor[2] + (mejor[1],)
 
@@ -393,7 +398,15 @@ def brazo_en(J, lado, f, Pyo, Potro, D):
         return objetivo_parado(lado, Pyo) if o == 'parado' else objetivo_mundo(o, Pyo, Potro, D)
     if f <= k[0][0]: return res(k[0][1])
     for (f0, o0), (f1, o1) in zip(k, k[1:]):
-        if f <= f1: return mezcla_obj(res(o0), res(o1), smooth((f - f0) / float(f1 - f0)))
+        if f <= f1:
+            u = (f - f0) / float(f1 - f0); a, b = res(o0), res(o1); m = mezcla_obj(a, b, smooth(u))
+            # (18/11, Agustin: principios de animacion, ARCOS) la muneca no va en linea recta de una clave a la otra: el camino se
+            # curva hacia afuera y arriba (como gira el brazo desde el hombro), mas cuanto mas largo el viaje; cero en las claves
+            d = sub(b[0], a[0]); L = norm(d)
+            if L > 0.12 and not (getattr(o0, 'balanceo', False) and getattr(o1, 'balanceo', False)):
+                sg = ARM[lado][4]; bu = qrot(Pyo['root'][1], (sg * 0.55, 0.75, -0.2)); bu = perp(bu, unit(d))
+                if norm(bu) > 1e-6: m = (add(m[0], mul(unit(bu), 0.14 * L * math.sin(math.pi * smooth(u)))),) + tuple(m[1:])
+            return m
     return res(k[-1][1])
 
 # ---------------------------------------------------------------- el pie al caminar: despega con la punta y apoya con el talon
@@ -544,8 +557,54 @@ def suavizar(salida, a, b, chs=tuple(range(13, 27)), w=(1, 2, 3, 4, 3, 2, 1)):
             salida[f][ch] = qn(lerp(q[f], qn(acc), m))
 
 # ---------------------------------------------------------------- armado de los dos clips
+def _dseg(p, a, b):
+    ab = sub(b, a); t = max(0.0, min(1.0, dot(sub(p, a), ab) / max(dot(ab, ab), 1e-9))); return norm(sub(p, add(a, mul(ab, t))))
+
+def hacer_obst(Po, brazos_otro, D):
+    """cuanto (m) entran brazo y antebrazo en el torso del otro (elipse medida en la camiseta del juego: 0.20 de ancho a la altura del
+    pecho, 0.16 abajo, 0.13 de fondo, centro 3.6 cm delante del hueso del pecho) y en sus brazos (cuadro anterior)"""
+    c, q = Po['chest']; qinv = qi(q)
+    def fn(Sh, E, Wr):
+        pen = 0.0
+        for a, b, r, ts in ((Sh, E, 0.055, (0.2, 0.45, 0.7, 0.95)), (E, Wr, 0.045, (0.15, 0.4, 0.65))):
+            for t in ts:
+                po = al_otro(lerp(a, b, t), D); l = qrot(qinv, sub(po, c))
+                if -0.40 < l[1] < 0.28:
+                    hw = (0.16 if l[1] < -0.05 else 0.205) + r + 0.01; hd = 0.13 + r + 0.01
+                    e = math.sqrt((l[0] / hw) ** 2 + ((l[2] - 0.036) / hd) ** 2)
+                    if e < 1.0: pen += (1.0 - e) * min(hw, hd)
+                for s0, s1, r2 in brazos_otro:
+                    d = _dseg(po, s0, s1)
+                    if d < r + r2: pen += r + r2 - d
+        return pen
+    return fn
+
+MUNECA_DOBLA, MUNECA_GIRA = 70.0, 85.0
+def mano_humana(q):
+    """(18/11) la muneca no dobla mas de MUNECA_DOBLA ni gira mas de MUNECA_GIRA grados (lo de mas se pierde: la mano queda un poco
+    menos orientada que lo pedido pero en una pose posible)"""
+    if q[3] < 0: q = tuple(-x for x in q)
+    twq = qn((q[0], 0.0, 0.0, q[3])); sw = qm(q, qi(twq))
+    tw = math.degrees(2 * math.atan2(twq[0], twq[3])); sa = qangle(sw)
+    if abs(tw) > MUNECA_GIRA: twq = qaxis((1, 0, 0), math.copysign(MUNECA_GIRA, tw))
+    if sa > MUNECA_DOBLA: sw = qslerp((0.0, 0.0, 0.0, 1.0), sw, MUNECA_DOBLA / sa)
+    return qn(qm(sw, twq))
+
+def limites(poses):
+    """(18/11, Agustin: "que la forma que doblen las manos, brazos sea humanamente posible") codo: solo dobla para su lado, 0-145
+    grados; muneca: giro (pronacion) hasta ~85, doblez hasta ~75"""
+    for i, ps in enumerate(poses):
+        for lado, (fa, ha) in (('izq', (20, 21)), ('der', (25, 26))):
+            cod = []; tw_ = []; sw_ = []; malos = []
+            for f in range(len(ps)):
+                r = ps[f]; q = r[fa]; ang = qangle(q); sgn_ = q[1] * (1 if q[3] >= 0 else -1) * (1 if lado == 'der' else -1)
+                tw, sw = giro_y_dobles(r[ha]); cod.append(ang); tw_.append(abs(tw)); sw_.append(sw)
+                if ang > 145 or abs(tw) > 90 or sw > 80: malos.append(f)
+            print('limites jugador %s brazo %s: codo hasta %.0f, muneca giro hasta %.0f y doblez hasta %.0f grados; cuadros fuera de lo humano: %d%s' % (
+                'AB'[i], lado, max(cod), max(tw_), max(sw_), len(malos), (' (%d-%d)' % (malos[0], malos[-1])) if malos else ''))
+
 def armar(base, Js, D):
-    n = base.n; salida = [dict() for _ in Js]; info = []; prev = {}; raices = [[] for _ in Js]; self_estira = [0.0]
+    n = base.n; salida = [dict() for _ in Js]; info = []; prev = {}; raices = [[] for _ in Js]; self_estira = [0.0]; brazos_prev = {}
     for f in range(n + 1):
         Pp = fk(base.rot[f], base.root[f], base.hips[f])     # el clip parado (su muslo da el plano de la rodilla)
         if f == 0: P0 = Pp                                   # los pies quedan donde estan en el cuadro 0 del parado (fijos, + el paso)
@@ -568,12 +627,20 @@ def armar(base, Js, D):
         fin = []
         for i, J in enumerate(Js):
             r = dict(rots[i]); P = Ps[i]; Po = Ps[1 - i]; YO[0] = i
+            cerca = norm(sub(al_otro(P['hips'][0], D), Po['hips'][0])) < 1.4
+            obst = hacer_obst(Po, brazos_prev.get(1 - i, []), D) if cerca else None
             for lado in ('R', 'L'):
                 w = pista(J.brazos[lado]['w'], f)
                 if w <= 0: continue
-                clav, ua, fa, ha, _ = ARM[lado]
+                clav, ua, fa, ha, sg = ARM[lado]
                 W, cd, dd, pd = brazo_en(J, lado, f, P, Po, D)
-                qu, qf, qh, E, og = ik_brazo(lado, P, r, W, cd, dd, pd, prev.get((i, lado)))
+                # (18/11 00:51, Agustin: "que los trapecios tambien se muevan") ritmo del hombro: al levantar el brazo por encima de
+                # ~55 grados la clavicula sube (hasta 18) y al ir adelante / cruzar se adelanta (hasta 12): el hombro lidera al brazo
+                Sh = P[BONE[lado][1]][0]; lf = qrot(qi(P['root'][1]), unit(sub(W, Sh)))
+                sube = math.degrees(math.acos(max(-1.0, min(1.0, -lf[1]))))
+                up_ = max(0.0, min(18.0, 0.30 * (sube - 55.0))); pro = max(0.0, min(12.0, 9.0 * max(0.0, lf[2]) * min(1.0, sube / 60.0) + 8.0 * max(0.0, -sg * lf[0])))
+                r[clav] = qm(r[clav], qeuler((0.0, -sg * pro, sg * up_))); P = fk(r, raices[i][f], base.hips[f])
+                qu, qf, qh, E, og = ik_brazo(lado, P, r, W, cd, dd, pd, prev.get((i, lado)), obst)
                 prev[(i, lado)] = og
                 r[ua] = qslerp(r[ua], qu, w); r[fa] = qslerp(r[fa], qf, w); r[ha] = qslerp(r[ha], qh, w)
             if getattr(J, 'fase', None):     # brazos y hombros de la caminata del juego encima (solo con el brazo colgando; hombros siempre)
@@ -584,12 +651,16 @@ def armar(base, Js, D):
                         for ch in chs_: r[ch] = qm(r[ch], qslerp((0.0, 0.0, 0.0, 1.0), marcha_en(ch, ph), wb))
                     for ch in (17, 22): r[ch] = qm(r[ch], qslerp((0.0, 0.0, 0.0, 1.0), marcha_en(ch, ph), am))
             fin.append(r)
-        for i in range(len(Js)): salida[i][f] = fin[i]
+        for i in range(len(Js)):
+            salida[i][f] = fin[i]; Pf = fk(fin[i], raices[i][f], base.hips[f])
+            brazos_prev[i] = [(Pf[a][0], Pf[b][0], rr) for a, b, rr in (('uarmL', 'farmL', 0.055), ('farmL', 'handL', 0.045), ('uarmR', 'farmR', 0.055), ('farmR', 'handR', 0.045))]
         for i in range(len(Js)): fin[i]['raiz'] = raices[i][f]
     print('piernas: lo que le falto a la pierna mas estirada para llegar al tobillo = %.1f mm' % (self_estira[0] * 1000))
     for i, J in enumerate(Js):
         if getattr(J, 'contacto', None) is not None: filtrar([salida[i][f] for f in range(n + 1)], J)
         suavizar([salida[i][f] for f in range(n + 1)], 176, 306)
+        for f in range(n + 1):
+            for ch in (21, 26): salida[i][f][ch] = mano_humana(salida[i][f][ch])
     info = [[fk(salida[i][f], raices[i][f], base.hips[f]) for i in range(len(Js))] for f in range(n + 1)]
     return salida, info
 
@@ -694,7 +765,7 @@ def coreografia(D, quien, pie0):
     def pasos(ini, lista):    # lista = [(desde, hasta, huella)]: despega el talon en 'desde', queda plano en 'hasta'
         k = [(-100, ini)]; cur = ini; n_ = 0
         for a, b, v in lista:
-            if not (150 <= a <= 320):
+            if not (94 <= a <= 320):
                 j = J_[n_ % len(J_)]; j2 = J_[(n_ + 3) % len(J_)]; n_ += 1; a, b = a + j, b + j + (1 if j2 > 0 else 0)
             k += [(a, cur), (b, v)]; cur = v
         return k
@@ -713,10 +784,13 @@ def coreografia(D, quien, pie0):
         d_ += 0.48; sal.append((a_, a_ + 26, lado_(d_, cerca_))); cerca_ = not cerca_; a_ += 22
     sal = [(a + t, b + t, v) for a, b, v in sal]
     guia = [x for k, x in enumerate(sal) if k % 2 == 0]; otro_ = [x for k, x in enumerate(sal) if k % 2 == 1]
-    pL = pasos(Lw(WALK - 2.66), [(0 + ow, 26 + ow, Lw(WALK - 1.70)), (44 + ow, 70 + ow, Lw(WALK - 0.74)), (88 + ow, 114 + ow, L_(WALK)),
+    # (18/11 00:52, Agustin: "elimina el delay que hay entre que se paran de caminar y se chocan las manos") los dos ultimos pasos se
+    # alargan (frenan: desacelerar) y el ultimo apoya justo cuando suben las manos: llegan y chocan en el mismo envion
+    u1 = (94, 122) if A else (98, 126); u2 = (124, 146) if A else (128, 150)
+    pL = pasos(Lw(WALK - 2.66), [(0 + ow, 26 + ow, Lw(WALK - 1.70)), (44 + ow, 70 + ow, Lw(WALK - 0.74)), (u1[0], u1[1], L_(WALK)),
                                   (158, 180, L_(WALK + PASO)), (276, 300, L_(WB))] + (guia if A else otro_))
     pR = pasos(Rw(WALK - 3.14), [(-22 + ow, 4 + ow, Rw(WALK - 2.18)), (22 + ow, 48 + ow, Rw(WALK - 1.22)), (66 + ow, 92 + ow, Rw(WALK - 0.32)),
-                                  (114 + ow, 134 + ow, R_(WALK)), (170, 192, R_(WALK + PASO)), (284, 308, R_(WB))] + (otro_ if A else guia))
+                                  (u2[0], u2[1], R_(WALK)), (170, 192, R_(WALK + PASO)), (284, 308, R_(WB))] + (otro_ if A else guia))
     pies = {'A': pL, 'B': pR}
     FZ = fases(pL, pR, N); MAMP = 0.85        # zancada 0.96 contra 1.19 del juego: un poco menos de vaiven
     ox, oz = 0.5 * (lx + rx), 0.5 * (lz + rz)
@@ -766,10 +840,8 @@ def coreografia(D, quien, pie0):
              (176, (2, -10, 4)), (194, (6, -26, 11)), (276, (6, -24, 11)), (292, (5, -21, 10)), (304, (1, -4, 2))] + [(f, (v[0] * 0.5, v[1] * 0.45, 0)) for f, v in hd[3:]],
         16: [(0, (0, 0, 0))] + hA + [(C - 12 + ow // 2, (0, 0, 0)), (C - 2, (-12, 0, 0)), (C + 8, (-6, 0, 0)), (176, (4, -12, 6)),
              (194, (10, -22 if A else -26, 14))] + [(f, (v[0], v[1] * 0.6, v[2])) for f, v in hd],
-        22: [(0, (0, 0, 0)), (C - 12 + ow // 2, (0, 0, 0)), (C - 4, (0, 0, -8)), (C, (0, 0, -12)), (C + 8, (0, 0, -8)), (188, (0, 10, -8)), (276, (0, 10, -8)),
-             (300, (0, 5, -2)), (C2, (0, 0, -2)), (340, (0, 0, 0))],
-        17: [(0, (0, 0, 0)), (C - 12 + ow // 2, (0, 0, 0)), (C - 4, (0, 0, 8)), (C, (0, 0, 12)), (C + 8, (0, 0, 6)), (188, (0, -10, -2)), (276, (0, -10, -2)),
-             (300, (0, -5, 0)), (320, (0, 0, 0))],
+        22: [(0, (0, 0, 0))],     # (18/11) la clavicula sigue sola al brazo (ritmo del hombro en armar)
+        17: [(0, (0, 0, 0))],
     }
     # ------- objetivos de los brazos
     def yo(hueso, p, codo, dedos, palma): return dict(t=('yo', hueso, p), codo=codo, dedos=dedos, palma=palma)
@@ -801,18 +873,23 @@ def coreografia(D, quien, pie0):
     def contacto(lado): sg = ARM[lado][4]; return mundo((sg * 0.20, 1.78, cm), (sg * 1, -0.5, -0.3), (sg * 0.12, 1, 0.12), fwd)
     def rebote(lado): sg = ARM[lado][4]; return mundo((sg * 0.25, 1.72, cm - 0.08), (sg * 1, -0.5, -0.3), (sg * 0.15, 1, 0.2), fwd)
     def abajo(lado): sg = ARM[lado][4]; return yo('root', (sg * 0.25, 0.91, 0.07), (sg * 0.3, 0, -1), (0, -1, 0.1), (-sg, 0, 0))
-    sobre_hombro = otro('chest', (0.20, 0.30, 0.02), (1, 0.8, 0), (-0.4, -0.5, -1), (0, -1, 0))
-    espalda_alta = otro('chest', (0.05, 0.13, -0.12), (1, 0.5, -0.3), (-1, -0.35, 0), (0, 0, 1))
-    def palmada(k): return otro('chest', (0.05, 0.13, -0.12 - 0.06 * k), (1, 0.5, -0.3), (-1, -0.35, 0), (0, 0, 1))
+    sobre_hombro = otro('chest', (0.20, 0.35, -0.01), (1, 0.8, 0), (-0.4, -0.5, -1), (0, -1, 0))
+    # (18/11) medido con las mallas del juego: con la mano en el medio de la espalda el antebrazo cortaba el costado del otro (4-5 cm):
+    # las manos van mas al costado y apoyadas sobre la camiseta: la espalda de la camiseta esta 9.4 cm detras del hueso del pecho y 7 cm
+    # detras del de la columna (medido en shirt_out.fmdl); medido en la vista previa, la palma queda 3-4 cm mas afuera que el objetivo por
+    # las capas encima (vaiven del abrazo del juego, suavizado): objetivo casi sobre la camiseta. La mano de abajo va a la cintura
+    # (mas baja): asi su brazo pasa por debajo del brazo del otro y no lo cruza
+    espalda_alta = otro('chest', (0.09, 0.12, -0.106), (1, 0.5, -0.3), (-1, -0.35, 0), (0, 0, 1))
+    def palmada(k): return otro('chest', (0.09, 0.12, -0.106 - 0.06 * k), (1, 0.5, -0.3), (-1, -0.35, 0), (0, 0, 1))
     al_costado = otro('chest', (0.32, 0.12, -0.02), (1, 0.4, -0.2), (-0.2, -0.8, -0.8), (-1, 0, 0.3))
-    bajo_brazo = otro('spine', (-0.30, 0.10, 0.04), (-0.8, -0.8, -0.2), (0.3, 0, -1), (1, 0, 0.3))
-    espalda_baja = otro('spine', (-0.06, 0.12, -0.13), (-1, -0.4, -0.4), (1, 0.15, 0), (0, 0, 1))
+    bajo_brazo = otro('spine', (-0.33, 0.02, 0.02), (-0.8, -0.8, -0.2), (0.3, 0, -1), (1, 0, 0.3))
+    espalda_baja = otro('spine', (-0.10, 0.02, -0.078), (-1, -0.4, -0.4), (1, 0.15, 0), (0, 0, 1))
     salida_baja = otro('spine', (-0.33, 0.04, 0.02), (-1, -0.6, -0.2), (0.1, -0.6, -0.8), (1, 0, 0.3))
     # apreton de manos formal y bajo (las dos derechas en el medio, a la altura de la cintura): palma hacia adentro (A +x, B tambien en
     # su marco: quedan enfrentadas), dedos adelante, pulgar arriba; tres sacudidas cortas
     def apreton(dy=0.0): return mundo((0.0, 1.02 + dy, cm), (-1, -0.8, -0.4), unit((0.25, -0.15, 1)), (1, 0, 0))
-    hombro_R = otro('chest', (0.18, 0.22, 0.09), (1, -0.5, 0.6), (-0.2, 0.3, -1), (0, -1, 0.2))      # mi derecha en su hombro izquierdo
-    hombro_L = otro('chest', (-0.18, 0.22, 0.09), (-1, -0.5, 0.6), (0.2, 0.3, -1), (0, -1, 0.2))     # mi izquierda en su hombro derecho
+    hombro_R = otro('chest', (0.18, 0.265, 0.06), (1, -0.5, 0.6), (-0.2, 0.3, -1), (0, -1, 0.2))      # mi derecha en su hombro izquierdo
+    hombro_L = otro('chest', (-0.18, 0.265, 0.06), (-1, -0.5, 0.6), (0.2, 0.3, -1), (0, -1, 0.2))     # mi izquierda en su hombro derecho
     pre_apreton = mundo((-0.14, 0.97, cm - 0.30), (-1, -0.9, -0.2), unit((0.25, -0.35, 1)), unit((1, 0, 0.2)))
     apreton_ida = mundo((-0.07, 1.06, cm - 0.12), (-1, -0.8, -0.4), unit((0.2, -0.1, 1)), unit((1, 0, 0.2)))
     apreton_suelta = mundo((-0.09, 1.00, cm - 0.15), (-1, -0.8, -0.4), unit((0.15, -0.2, 1)), unit((1, 0, 0.2)))
@@ -1041,6 +1118,7 @@ def main():
     Js = [coreografia(D, 'A', base.pie0), coreografia(D, 'B', base.pie0)]
     poses, info = armar(base, Js, D)
     revisar(info, D)
+    limites(poses)
     os.makedirs(a[1], exist_ok=True); nombres = []
     for J, p in zip(Js, poses):
         b = escribir(base, p)

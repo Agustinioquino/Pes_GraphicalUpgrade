@@ -12,6 +12,8 @@ const { chromium } = require('playwright'); const fs = require('fs'); const path
     r.fulfill({ status: 200, contentType: ct, body: fs.readFileSync(f) });
   });
   await p.goto('http://vista.local/vista_juego.html');
+  const tam = (process.env.TAM || '960x460').split('x').map(Number);   // tamano del cuadro (4 vistas: 1280x720)
+  await p.setViewportSize({ width: tam[0], height: tam[1] }); await p.evaluate(([w, h]) => { const c = document.getElementById('c'); c.width = w; c.height = h; }, tam);
   const sc = JSON.parse(fs.readFileSync(path.join(dir, 'escena.json')));
   console.log('mallas', await p.evaluate(async s => await window.init(s, '/'), sc));
   const n = sc.jugadores[0].n;

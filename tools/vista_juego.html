@@ -94,14 +94,14 @@ window.draw = function(f, views) {
   gl.enable(gl.DEPTH_TEST); gl.clearColor(0.957,0.957,0.941,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
   const h0 = hipsW(0, f), h1 = hipsW(1, f); const mid = [(h0[0]+h1[0])/2, 0.95, (h0[2]+h1[2])/2];
   tx = (tx === null || window._snap) ? mid : [tx[0]+(mid[0]-tx[0])*0.15, 0.95, tx[2]+(mid[2]-tx[2])*0.15];
-  const W = cv.width / views.length; const sep = Math.hypot(h0[0]-h1[0], h0[2]-h1[2]);
+  const cols = views.length == 4 ? 2 : views.length, rows = views.length == 4 ? 2 : 1; const W = cv.width / cols, H = cv.height / rows; const sep = Math.hypot(h0[0]-h1[0], h0[2]-h1[2]);
   window._sep = sep;
   views.forEach((v, vi) => {
-    gl.viewport(vi*W, 0, W, cv.height);
+    gl.viewport((vi % cols)*W, (rows - 1 - Math.floor(vi / cols))*H, W, H);
     const yaw = v.yaw*Math.PI/180, pit = v.pitch*Math.PI/180; v = {...v, dist: Math.max(v.dist, sep * (v.k ?? 1.9))};
     const eye = [tx[0] + Math.sin(yaw)*Math.cos(pit)*v.dist, tx[1] + Math.sin(-pit)*v.dist*-1 + 0, tx[2] - Math.cos(yaw)*Math.cos(pit)*v.dist];
     eye[1] = tx[1] - Math.sin(pit)*v.dist;
-    const vp = mmul(persp(v.fov*Math.PI/180, W/cv.height, 0.1, 100), look(eye, [tx[0], v.ty ?? tx[1], tx[2]]));
+    const vp = mmul(persp(v.fov*Math.PI/180, W/H, 0.1, 100), look(eye, [tx[0], v.ty ?? tx[1], tx[2]]));
     gl.useProgram(PF); gl.uniformMatrix4fv(gl.getUniformLocation(PF,'vp'), false, vp); gl.bindVertexArray(floorVao); gl.drawArrays(gl.TRIANGLES, 0, 6);
     gl.useProgram(P); gl.uniformMatrix4fv(gl.getUniformLocation(P,'vp'), false, vp);
     for (const pass of [1, 0]) {

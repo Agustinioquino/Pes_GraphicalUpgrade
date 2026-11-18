@@ -193,6 +193,15 @@ def ik2(W, u, f, h, T, upv):
     rot_sub(W, u, q_from_to_np(sw, st), S_)
 
 MANO = {0: ('uarmL', 'farmL', 'handL'), 1: ('uarmR', 'farmR', 'handR')}
+def puntas_con_peso(T, desde=6, k=0.6, periodo=16.0, z=0.55, piso=-0.025):
+    """(18/11) curva de las puntas de pie con los principios de animacion: ANTICIPACION (antes de subir baja un poco: rodillas),
+    OVERSHOOT y SETTLE (resorte poco amortiguado: se pasa arriba y se asienta) y PESO al bajar (cae y las rodillas absorben)"""
+    n = len(T); x = 0.0; v = 0.0; w = 2 * math.pi / periodo; out = []
+    for f in range(n):
+        g = T[f] - k * max(0.0, T[min(n - 1, f + desde)] - T[f])
+        a = w * w * (g - x) - 2 * z * w * v; v += a; x += v; out.append(max(piso, x))
+    return out
+
 def contacto_ik(Ws, inc, letras, alturas, f, estado):
     """Ws = [mundo A, mundo B] del cuadro f (se cambian en el lugar). Igual que ContactIK: cada uno mira lo del otro ANTES de corregir"""
     up = np.array([0.0, 1.0, 0.0]); sn = []
@@ -232,8 +241,18 @@ def contacto_ik(Ws, inc, letras, alturas, f, estado):
             a = min(shMax, math.asin(min(1.0, over / rc))); shW[k] = a; over -= rc * math.sin(a)
             if over > 0: liftW = max(liftW, min(tipMax, over))
         st = estado[i]; kk = min(max((1 / 30.0) * 6.0, 0), 1)
-        st['lift'] += (liftW - st['lift']) * kk
+        st['crudo'] = liftW
+        if st.get('forz') is not None: st['lift'] = st['forz']      # curva con anticipacion y peso (puntas_con_peso)
+        else: st['lift'] += (liftW - st['lift']) * kk
         for k in (0, 1): st['shr'][k] += (shW[k] - st['shr'][k]) * kk
+        if st['lift'] < -0.001:
+            # (18/11, Agustin: "no tiene anticipacion ni peso") antes de subir y al bajar de las puntas el cuerpo baja: rodillas que se
+            # doblan con los pies quedos en el piso
+            fijo = {ft: (W[ft][0].copy(), W[ft][1].copy()) for ft in ('footA', 'footB')}
+            for b in BONES: W[b][0] = W[b][0] + up * st['lift']
+            fw = np.cross(W['thighA'][0] - W['thighB'][0], up); fw /= max(np.linalg.norm(fw), 1e-6)
+            for th_, kn_, ft in (('thighA', 'kneeA', 'footA'), ('thighB', 'kneeB', 'footB')):
+                ik2(W, th_, kn_, ft, fijo[ft][0], fw); W[ft][1] = fijo[ft][1]
         if st['lift'] > 0.001:
             for b in BONES: W[b][0] = W[b][0] + up * st['lift']
             xm = W['thighA'][0] - W['thighB'][0]; xm = xm - up * np.dot(xm, up)
@@ -570,7 +589,20 @@ def main():
         jug.append(dict(escala=esc[i], estatura=est[i], color=cols[i], tex=tx, cara=cara + pelo, n=g.n, ff=ff,
                         bx=bind_extra(rig, ff) if rig else {}, frames=[]))
     estado = [dict(lift=0.0, shr=[0.0, 0.0]) for _ in (0, 1)]; reg = []
-    for f in range(min(gs[0].n, gs[1].n) + 1):
+    nf = min(gs[0].n, gs[1].n) + 1; curva = None
+    if inc and not o.sin_ajuste:      # primera pasada: cuanto pide subir cada uno en cada cuadro; despues la curva con peso
+        crudo = [[], []]
+        for f in range(nf):
+            Ws = [al_mundo(fk(gs[i].rot[f], gs[i].root[f], gs[i].hips[f]), esc[i], i, Dm) for i in (0, 1)]
+            contacto_ik(Ws, inc, 'AB', est, f, estado)
+            for i in (0, 1): crudo[i].append(estado[i]['crudo'])
+        curva = [puntas_con_peso(c) for c in crudo]
+        estado = [dict(lift=0.0, shr=[0.0, 0.0]) for _ in (0, 1)]
+        print('puntas de pie (cm, max / min con la bajada de anticipacion y peso): A %.1f / %.1f, B %.1f / %.1f' % (
+            max(curva[0]) * 100, min(curva[0]) * 100, max(curva[1]) * 100, min(curva[1]) * 100))
+    for f in range(nf):
+        if curva:
+            for i in (0, 1): estado[i]['forz'] = curva[i][f]
         Ws = [al_mundo(fk(gs[i].rot[f], gs[i].root[f], gs[i].hips[f]), esc[i], i, Dm) for i in (0, 1)]
         if inc and not o.sin_ajuste:
             contacto_ik(Ws, inc, 'AB', est, f, estado)
