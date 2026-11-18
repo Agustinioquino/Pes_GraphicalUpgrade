@@ -145,7 +145,9 @@ struct Pj {
     uint8_t hcm = 0, wkg = 0;
     // (17/11 22:55, "no coinciden correctamente") contactos de la pareja de clips propios (ContactIK): solo el hilo del juego
     int partner = -1; float lift = 0.0f, shr[2] = { 0.0f, 0.0f }; double cLog = 0.0; int cN = 0;
-    struct Snap { bool ok = false; float t = 0; float hand[2][3] = {}; float chest[3] = {}; float X[3] = {}; float sc = 1.0f; } sn[2];
+    float liftV = 0.0f, ag = 0.0f, agV = 0.0f;     // (18/11) velocidad del resorte de las puntas de pie; cuanto se agacha el alto (cm x peso) y su velocidad
+    struct Snap { bool ok = false; float t = 0; float hand[2][3] = {}; float chest[3] = {}; float X[3] = {}; float sc = 1.0f;
+        float sh[3] = {}; float armL = 0.0f; } sn[2];      // (18/11) hombro derecho y largo del brazo derecho: agarre exacto
     // (17/11 23:08, Agustin: "darme opciones para editar las animaciones en tiempo real, mover huesos, expresiones, con ayudas de ia")
     // EDITOR: lugares de los huesos en el mundo para la vista (los escribe el juego, con s_mx) y mano / pie agarrado (lo escribe la interfaz)
     float bw[32][3] = {}; int bwN = 0; int bpar[32] = {}; int blab[32] = {}; float bax[3][3] = {}; float bsc = 1.0f;
@@ -820,11 +822,46 @@ static void IK2(float* Q, float* P, const SkDesc& d, int u, int f, int h, const 
     QFromTo(sw, st, Rs); RotSub(Q, P, d.n, d.par, u, Rs, S);
 }
 static void ArmIK(float* Q, float* P, const SkDesc& d, int k, const float* T, const float* upM) { float Re[4], Rs[4]; IK2(Q, P, d, d.up[k], d.fo[k], d.hand[k], T, upM, Re, Rs); }
+// (18/11 03:25, saludo v8: lo que la vista previa ya hacia y el juego no) peso de un tramo de contacto en el cuadro fr (0 fuera del tramo)
+static inline float SegW(const OwnTrack* tr, const OwnSeg& g, float fr) {
+    const float kf = fr - (float)g.f0; if (kf < 0.0f || kf > (float)(g.n - 1)) return 0.0f;
+    const int i0 = std::min((int)kf, g.n - 1), i1 = std::min(i0 + 1, g.n - 1); const float a = kf - (float)i0;
+    const float* c0 = tr->cdat + (size_t)(g.off + i0) * 4; const float* c1 = tr->cdat + (size_t)(g.off + i1) * 4; return c0[0] + (c1[0] - c0[0]) * a;
+}
+// sube o baja el cuerpo entero (giros y lugares en el modelo). lift > 0: puntas de pie (todo sube y cada pie gira sobre la punta: talon
+// arriba, la punta queda en el piso). lift < 0: se agacha (todo baja, los pies quedan donde estaban y las rodillas se doblan).
+static void LiftBody(float* Q, float* P, const SkDesc& d, float lift, const float* upM, float sc, const float* kneeAx) {
+    if (fabsf(lift) <= 0.001f) return;
+    float xm[3]; VSub(P + d.thigh[0] * 4, P + d.thigh[1] * 4, xm); const float dd = VDot(xm, upM); for (int c = 0; c < 3; c++) xm[c] -= upM[c] * dd;
+    const bool okx = VNorm(xm);
+    if (lift < 0.0f) {
+        float fp[2][3], fq[2][4]; for (int k = 0; k < 2; k++) { memcpy(fp[k], P + d.foot[k] * 4, 12); memcpy(fq[k], Q + d.foot[k] * 4, 16); }
+        for (int i = 0; i < d.n; i++) for (int c = 0; c < 3; c++) P[i * 4 + c] += upM[c] * lift;
+        for (int k = 0; k < 2; k++) {
+            const int kn = d.par[d.foot[k]]; if (kn < 0 || d.par[kn] != d.thigh[k]) continue;
+            // la rodilla se dobla en el plano que ya trae la pierna; si viene recta del todo, sobre el eje de lado (kneeAx: el que
+            // lleva "arriba" hacia adelante, asi la rodilla sale para adelante)
+            float Re[4], Rs[4]; IK2(Q, P, d, d.thigh[k], kn, d.foot[k], fp[k], kneeAx ? kneeAx : xm, Re, Rs); memcpy(Q + d.foot[k] * 4, fq[k], 16);     // el pie conserva su giro
+        }
+        return;
+    }
+    for (int i = 0; i < d.n; i++) for (int c = 0; c < 3; c++) P[i * 4 + c] += upM[c] * lift;
+    if (okx) {
+        const float ha = 0.08f * sc, tz = 0.14f * sc, Rr = sqrtf(ha * ha + tz * tz), ph = atan2f(tz, ha);
+        const float th = std::max(0.0f, ph - acosf(std::min(1.0f, (ha + lift) / Rr)));
+        float R[4]; QAxisAng(xm, th, R);
+        for (int k = 0; k < 2; k++) { float pv[3]; memcpy(pv, P + d.foot[k] * 4, 12); RotSub(Q, P, d.n, d.par, d.foot[k], R, pv); }
+    }
+}
+// forma del agarre de las dos manos derechas (tools/vista_juego.py GRIP, buscada con las mallas de las manos del juego): cada palma
+// 2.9 cm de su lado, dedos 60 grados desde la vertical hacia el otro, 2 cm adelantada y 3 cm hacia su menique; palma = muneca + 8 cm
+static const float kGripT = 0.029f, kGripS = -0.02f, kGripU = 0.03f, kGripAng = 1.0472f, kHandO = 0.08f;
 static void ContactIK(Pj& p, void* ctl, float dtR) {
     const int slot = (int)(&p - s_pj); SkDesc& d = s_sk[slot];
     p.sn[1] = p.sn[0]; p.sn[0].ok = false;
     const OwnTrack* tr = OwnTrackOf(p.clipA);
-    if (!tr || !d.parOk || d.n < 2) { p.lift = 0.0f; return; }
+    auto zero = [&]() { p.lift = p.liftV = p.ag = p.agV = 0.0f; };
+    if (!tr || !d.parOk || d.n < 2) { zero(); return; }
     __try {
         const uintptr_t qa = *(const uintptr_t*)((uintptr_t)ctl + 0x20); const uintptr_t r = *(const uintptr_t*)((uintptr_t)ctl + 0x88); if (!PtrOk(qa) || !PtrOk(r)) return;
         const uintptr_t pa = *(const uintptr_t*)(r + 0x50); if (!PtrOk(pa)) return;
@@ -833,44 +870,73 @@ static void ContactIK(Pj& p, void* ctl, float dtR) {
         if (!d.roleOk) return;
         RootX X; if (!RootGet(ctl, X)) return;
         const float t = ((ClipTimeFn)kClipTime)(ctl, 0, 1);
-        // lo de este jugador antes de corregir (lo usa el otro)
+        const float up[3] = { 0, 1, 0 }; float upM[3]; DirToModel(X, up, upM); VNorm(upM);
+        const bool pair = !(p.partner < 0 || p.partner >= kMax || p.partner == slot);
         Pj::Snap& s0 = p.sn[0]; s0.t = t;
-        for (int k = 0; k < 2; k++) ToWorld(X, P + d.hand[k] * 4, s0.hand[k]);
-        ToWorld(X, P + d.chest * 4, s0.chest);
         float tl[3], tr_[3], hw[3]; ToWorld(X, P + d.thigh[0] * 4, tl); ToWorld(X, P + d.thigh[1] * 4, tr_); ToWorld(X, P + d.head * 4, hw);
         VSub(tl, tr_, s0.X); s0.X[1] = 0.0f; if (!VNorm(s0.X)) return;
         { const float mid[3] = { 0.5f * (tl[0] + tr_[0]), 0.5f * (tl[1] + tr_[1]), 0.5f * (tl[2] + tr_[2]) }; float v[3]; VSub(hw, mid, v); s0.sc = tr->torso > 0.1f ? std::clamp(VLen(v) / tr->torso, 0.6f, 1.5f) : 1.0f; }
+        // (18/11, vista previa v6-v8) ANTES de la foto que mira el otro: lo que quedo del cuadro anterior de las puntas de pie con peso
+        // (p.lift, puede ser negativo: baja antes de subir) y del agacharse del mas alto (p.ag, cm de diferencia x peso del abrazo:
+        // 0.4 cm de rodillas y 0.4 grados de torso por cm, hasta 6 cm y 6 grados). Asi las manos del otro van al cuerpo ya movido.
+        if (pair) {
+            const float baja = std::min(0.06f, 0.004f * p.ag), incl = std::min(6.0f, 0.4f * p.ag) * 0.0174533f;
+            const Pj& o = s_pj[p.partner];
+            float f[3] = { 0, 0, 0 }; if (o.sn[0].ok) { float mc[3]; ToWorld(X, P + d.chest * 4, mc); VSub(o.sn[0].chest, mc, f); f[1] = 0.0f; }
+            float fM[3], ax[3]; DirToModel(X, f, fM);
+            VCross(upM, fM, ax); const bool axOk = VNorm(ax);          // girar sobre este eje lleva "arriba" hacia el otro
+            if (incl > 1e-4f && axOk) {
+                int sp = d.chest; { const int hips = d.par[d.thigh[0]]; for (int g = 0; g < 16 && d.par[sp] >= 0 && d.par[sp] != hips; g++) sp = d.par[sp]; if (d.par[sp] != hips) sp = d.chest; }
+                float R[4], pv[3]; memcpy(pv, P + sp * 4, 12); QAxisAng(ax, incl, R); RotSub(Q, P, d.n, d.par, sp, R, pv);
+            }
+            LiftBody(Q, P, d, p.lift - baja, upM, s0.sc, axOk ? ax : nullptr);
+        } else zero();
+        // lo de este jugador (ya subido / agachado) antes de corregir los brazos: lo usa el otro
+        for (int k = 0; k < 2; k++) ToWorld(X, P + d.hand[k] * 4, s0.hand[k]);
+        ToWorld(X, P + d.chest * 4, s0.chest);
+        { float Ew[3], v[3]; ToWorld(X, P + d.up[1] * 4, s0.sh); ToWorld(X, P + d.fo[1] * 4, Ew); VSub(Ew, s0.sh, v); s0.armL = VLen(v); VSub(s0.hand[1], Ew, v); s0.armL += VLen(v); }
         s0.ok = true;
-        if (p.partner < 0 || p.partner >= kMax || p.partner == slot) { p.lift = 0.0f; return; }
+        if (!pair) return;
         const Pj& o = s_pj[p.partner]; if (!o.sn[0].ok) return;
         float k1 = 0.0f; const float dt01 = o.sn[1].ok ? o.sn[0].t - o.sn[1].t : 0.0f;
         if (fabsf(t - o.sn[0].t) > 0.25f) return;                                    // fuera de sincronia: sin corregir
         if (dt01 > 0.001f && dt01 < 0.25f) k1 = std::clamp((t - o.sn[0].t) / dt01, -1.0f, 1.5f);   // lo del otro llevado a mi segundo
         auto at = [&](const float* a0, const float* a1, float* out) { for (int c = 0; c < 3; c++) out[c] = a0[c] + (k1 != 0.0f ? (a0[c] - a1[c]) * k1 : 0.0f); };
-        const float up[3] = { 0, 1, 0 }; float Z[3]; VCross(o.sn[0].X, up, Z);
+        float Z[3]; VCross(o.sn[0].X, up, Z);
         const float fr = t * 30.0f;
-        float goal[2][3], wC[2] = { 0, 0 }; bool has[2] = { false, false }; float errC[2] = { 0, 0 };
+        float goal[2][3] = {}, wC[2] = { 0, 0 }; bool has[2] = { false, false }; float errC[2] = { 0, 0 };
+        // anclas: 0 / 1 = muneca izq / der del otro (cada uno pone la mitad), 2 = su pecho, 3 = su pecho pero solo la mano (no cuenta
+        // para las puntas de pie), 4 = agarre exacto de las dos derechas (abajo). Dos tramos de la misma mano se funden por su peso.
+        float accW[2] = { 0, 0 }, accL[2] = { 0, 0 }, accE[2][3] = {}; float w4 = 0.0f, cw = 0.0f, cw8 = 0.0f, cw16 = 0.0f;
         for (int si = 0; si < tr->nSeg; si++) {
-            const OwnSeg& g = tr->seg[si]; if (g.hand < 0 || g.hand > 1 || has[g.hand]) continue;
+            const OwnSeg& g = tr->seg[si]; if (g.hand < 0 || g.hand > 1) continue;
+            if (g.anchor == 2) { cw8 = std::max(cw8, SegW(tr, g, fr + 8.0f)); cw16 = std::max(cw16, SegW(tr, g, fr + 16.0f)); }
             const float kf = fr - (float)g.f0; if (kf < 0.0f || kf > (float)(g.n - 1)) continue;
             const int i0 = std::min((int)kf, g.n - 1), i1 = std::min(i0 + 1, g.n - 1); const float a = kf - (float)i0;
             const float* c0 = tr->cdat + (size_t)(g.off + i0) * 4; const float* c1 = tr->cdat + (size_t)(g.off + i1) * 4;
             const float w = c0[0] + (c1[0] - c0[0]) * a; if (w <= 0.001f) continue;
+            if (g.anchor == 2) cw = std::max(cw, w);
+            if (g.anchor == 4) { if (g.hand == 1) w4 = std::max(w4, w); continue; }
+            if (g.anchor < 0 || g.anchor > 3) continue;
             const float v[3] = { c0[1] + (c1[1] - c0[1]) * a, c0[2] + (c1[2] - c0[2]) * a, c0[3] + (c1[3] - c0[3]) * a };
             float A[3]; if (g.anchor < 2) at(o.sn[0].hand[g.anchor], o.sn[1].hand[g.anchor], A); else at(o.sn[0].chest, o.sn[1].chest, A);
-            const float sc = g.anchor == 2 ? o.sn[0].sc : 0.5f * (o.sn[0].sc + s0.sc);
+            const float sc = g.anchor >= 2 ? o.sn[0].sc : 0.5f * (o.sn[0].sc + s0.sc);
             float Tw[3]; for (int c = 0; c < 3; c++) Tw[c] = A[c] + sc * (v[0] * o.sn[0].X[c] + v[1] * up[c] + v[2] * Z[c]);
             float e[3]; VSub(Tw, s0.hand[g.hand], e); if (g.anchor < 2) for (int c = 0; c < 3; c++) e[c] *= 0.5f;
-            const float el = VLen(e); errC[g.hand] = el;
+            const float el = VLen(e); errC[g.hand] = std::max(errC[g.hand], el);
             if (el > 0.40f) { if (p.cN < 40 && p.cLog + 1.0 < s_lastTick.load()) { p.cN++; p.cLog = s_lastTick.load(); Log("motor (contactos): jugador %d cuadro %.0f: la mano %s esta a %.0f cm del punto: demasiado lejos, sin corregir", slot + 1, fr, g.hand ? "der" : "izq", el * 100.0f); } continue; }
-            for (int c = 0; c < 3; c++) goal[g.hand][c] = s0.hand[g.hand][c] + w * e[c];
-            has[g.hand] = true; wC[g.hand] = w;
+            accW[g.hand] += w; for (int c = 0; c < 3; c++) accE[g.hand][c] += w * e[c];
+            if (g.anchor != 3) accL[g.hand] += w;
+        }
+        for (int k = 0; k < 2; k++) {
+            if (accW[k] <= 0.0f) continue;
+            const float den = std::max(1.0f, accW[k]); for (int c = 0; c < 3; c++) goal[k][c] = s0.hand[k][c] + accE[k][c] / den;
+            has[k] = true; wC[k] = std::min(1.0f, accL[k]);
         }
         // diferencia de estatura (cm; > 0 = el otro es mas alto): hombros desde 3 cm, puntas de pie desde 5 cm (6 cm de talon con 15 cm)
         const float diff = (p.hcm && o.hcm) ? (float)o.hcm - (float)p.hcm : (o.sn[0].sc - s0.sc) * 180.0f;
         const float shMax = std::clamp((diff - 3.0f) / 8.0f, 0.0f, 1.0f) * 0.2443f;          // hasta 14 grados de hombro
         const float tipMax = std::clamp((diff - 5.0f) / 10.0f, 0.0f, 1.0f) * 0.06f * s0.sc;   // hasta 6 cm de talon
-        float upM[3]; DirToModel(X, up, upM); VNorm(upM);
         float shW[2] = { 0, 0 }, liftW = 0.0f;
         for (int k = 0; k < 2; k++) {
             if (!has[k]) continue;
@@ -882,23 +948,20 @@ static void ContactIK(Pj& p, void* ctl, float dtR) {
             liftW = std::max(liftW, tipMax * wC[k] * std::clamp((v[1] + 0.05f) / 0.20f, 0.0f, 1.0f));
             if (over <= 0.0f || v[1] <= 0.0f) continue;
             over *= v[1] / std::max(VLen(v), 1e-3f);                     // lo que falta para arriba
-            const int cl = d.par[d.up[k]]; float cw[3]; ToWorld(X, P + cl * 4, cw); VSub(Sw, cw, v); const float rc = std::max(0.05f, VLen(v));
+            const int cl = d.par[d.up[k]]; float cw_[3]; ToWorld(X, P + cl * 4, cw_); VSub(Sw, cw_, v); const float rc = std::max(0.05f, VLen(v));
             const float a = std::min(shMax, asinf(std::min(1.0f, over / rc))); shW[k] = a; over -= rc * sinf(a);
             if (over > 0.0f) liftW = std::max(liftW, std::min(tipMax, over));
         }
-        const float kk = std::clamp(dtR * 6.0f, 0.0f, 1.0f);
-        p.lift += (liftW - p.lift) * kk; for (int k = 0; k < 2; k++) p.shr[k] += (shW[k] - p.shr[k]) * kk;
-        // puntas de pie: todo el cuerpo sube y cada pie gira sobre la punta (talon arriba, la punta queda en el piso)
-        if (p.lift > 0.001f) {
-            for (int i = 0; i < d.n; i++) for (int c = 0; c < 3; c++) P[i * 4 + c] += upM[c] * p.lift;
-            float xm[3]; VSub(P + d.thigh[0] * 4, P + d.thigh[1] * 4, xm); const float dd = VDot(xm, upM); for (int c = 0; c < 3; c++) xm[c] -= upM[c] * dd;
-            if (VNorm(xm)) {
-                const float ha = 0.08f * s0.sc, tz = 0.14f * s0.sc, Rr = sqrtf(ha * ha + tz * tz), ph = atan2f(tz, ha);
-                const float th = std::max(0.0f, ph - acosf(std::min(1.0f, (ha + p.lift) / Rr)));
-                float R[4]; QAxisAng(xm, th, R);
-                for (int k = 0; k < 2; k++) { float pv[3]; memcpy(pv, P + d.foot[k] * 4, 12); RotSub(Q, P, d.n, d.par, d.foot[k], R, pv); }
-            }
-        }
+        const float kk = std::clamp(dtR * 6.0f, 0.0f, 1.0f); const float df = std::clamp(dtR * 30.0f, 0.0f, 3.0f);     // df = cuadros del clip que pasaron
+        for (int k = 0; k < 2; k++) p.shr[k] += (shW[k] - p.shr[k]) * kk;
+        // (18/11 00:50, principios de animacion: anticipacion, peso, overshoot) puntas de pie con peso: antes de subir el cuerpo baja
+        // (hasta 0.65 de lo que va a subir, mientras el contacto del abrazo se acerca: su peso 16 cuadros adelante), y la subida es un
+        // resorte (periodo 15 cuadros, amortiguado 0.5: se pasa un poco y se asienta). Se aplica en el cuadro que viene, antes de la foto.
+        { float G = liftW; if (liftW < 0.004f && p.lift < 0.004f && tipMax > 0.0f && cw16 > cw + 0.02f) G = -0.65f * tipMax * (cw16 - cw);
+          const float w = 6.2832f / 15.0f; p.liftV += (w * w * (G - p.lift) - 2.0f * 0.5f * w * p.liftV) * df; p.lift = std::max(-0.05f, p.lift + p.liftV * df); }
+        // el mas alto se agacha y se inclina mientras dura el abrazo (lidera 8 cuadros; resorte de periodo 26, casi sin rebote)
+        { const float g = std::max(cw, cw8) * std::max(0.0f, -diff); const float w = 6.2832f / 26.0f;
+          p.agV += (w * w * (g - p.ag) - 2.0f * 0.75f * w * p.agV) * df; p.ag = std::max(0.0f, p.ag + p.agV * df); }
         // hombro arriba (clavicula): gira alrededor de su base hacia arriba
         for (int k = 0; k < 2; k++) {
             if (p.shr[k] < 0.002f) continue;
@@ -907,12 +970,46 @@ static void ContactIK(Pj& p, void* ctl, float dtR) {
             float R[4], pv[3]; memcpy(pv, P + cl * 4, 12); QAxisAng(ax, p.shr[k], R); RotSub(Q, P, d.n, d.par, cl, R, pv);
         }
         for (int k = 0; k < 2; k++) { if (!has[k]) continue; float Tm[3]; ToModel(X, goal[k], Tm); ArmIK(Q, P, d, k, Tm, upM); }
-        if ((has[0] || has[1]) && p.cN < 40 && p.cLog + 0.5 < s_lastTick.load()) { p.cN++; p.cLog = s_lastTick.load();
+        // (18/11 01:35, Agustin: "al agarrarse la mano sea perfecta no importa la altura"; 02:15 "sin deformaciones, solo que se muevan
+        // las manos o brazos") AGARRE EXACTO (ancla 4): en cada cuadro el agarre se arma en el medio de las dos palmas, cada una a su
+        // altura, y cada brazo lleva su muneca ahi (hombro y codo); la mano queda entera y con el giro que trae el clip (el del agarre).
+        // Los dos jugadores hacen la misma cuenta con las fotos de los dos, asi coinciden. nn = mi izquierda (perpendicular al otro).
+        float gripLeft = -1.0f;
+        if (w4 > 0.001f && o.sn[0].armL > 0.2f && s0.armL > 0.2f) {
+            float oc[3], oh[3], osh[3]; at(o.sn[0].chest, o.sn[1].chest, oc); at(o.sn[0].hand[1], o.sn[1].hand[1], oh); at(o.sn[0].sh, o.sn[1].sh, osh);
+            float f[3]; VSub(oc, s0.chest, f); f[1] = 0.0f;
+            float nn[3]; { const float dx = VDot(s0.X, f) / std::max(VDot(f, f), 1e-6f); for (int c = 0; c < 3; c++) nn[c] = s0.X[c] - f[c] * dx; nn[1] = 0.0f; }
+            if (VNorm(f) && VNorm(nn)) {
+                const float ca = cosf(kGripAng), sa = sinf(kGripAng), e = 0.5f * (s0.sc + o.sn[0].sc);
+                float n0[3]; VCross(up, f, n0); const float hnd = VDot(n0, nn) >= 0.0f ? 1.0f : -1.0f;      // mano del sistema de ejes (no se supone)
+                float dm[3], dO[3], nO[3], thm[3], thO[3];
+                for (int c = 0; c < 3; c++) { dm[c] = up[c] * ca + f[c] * sa; dO[c] = up[c] * ca - f[c] * sa; nO[c] = -nn[c]; }
+                VCross(nn, dm, thm); VCross(nO, dO, thO); for (int c = 0; c < 3; c++) { thm[c] *= hnd; thO[c] *= hnd; }
+                float M[3]; for (int c = 0; c < 3; c++) M[c] = 0.5f * ((s0.hand[1][c] + dm[c] * kHandO * s0.sc) + (oh[c] + dO[c] * kHandO * o.sn[0].sc));
+                float wrM[3], wrO[3];
+                auto munecas = [&]() { for (int c = 0; c < 3; c++) {
+                    wrM[c] = M[c] - kGripT * e * nn[c] - kGripS * e * dm[c] + kGripU * e * thm[c] - dm[c] * kHandO * s0.sc;
+                    wrO[c] = M[c] - kGripT * e * nO[c] - kGripS * e * dO[c] + kGripU * e * thO[c] - dO[c] * kHandO * o.sn[0].sc; } };
+                for (int it = 0; it < 4; it++) {          // si a un brazo no le da el largo, el agarre se corre hacia su hombro
+                    munecas(); float corr[3] = { 0, 0, 0 }, v[3];
+                    VSub(wrM, s0.sh, v); float ex = VLen(v) - s0.armL * 0.985f; if (ex > 0.0f) { const float l = VLen(v); for (int c = 0; c < 3; c++) corr[c] -= v[c] / l * ex; }
+                    VSub(wrO, osh, v); ex = VLen(v) - o.sn[0].armL * 0.985f; if (ex > 0.0f) { const float l = VLen(v); for (int c = 0; c < 3; c++) corr[c] -= v[c] / l * ex; }
+                    if (VLen(corr) < 1e-4f) break;
+                    for (int c = 0; c < 3; c++) M[c] += corr[c];
+                }
+                munecas();
+                float cur[3], Tw[3], Tm[3], q0[4]; ToWorld(X, P + d.hand[1] * 4, cur); for (int c = 0; c < 3; c++) Tw[c] = cur[c] + w4 * (wrM[c] - cur[c]);
+                memcpy(q0, Q + d.hand[1] * 4, 16); ToModel(X, Tw, Tm); ArmIK(Q, P, d, 1, Tm, upM); memcpy(Q + d.hand[1] * 4, q0, 16);
+                float aw[3], rr[3]; ToWorld(X, P + d.hand[1] * 4, aw); VSub(aw, Tw, rr); gripLeft = VLen(rr);
+            }
+        }
+        if ((has[0] || has[1] || gripLeft >= 0.0f) && p.cN < 40 && p.cLog + 0.5 < s_lastTick.load()) { p.cN++; p.cLog = s_lastTick.load();
             float aw[2][3]; for (int k = 0; k < 2; k++) ToWorld(X, P + d.hand[k] * 4, aw[k]);
             float r0[3], r1[3]; VSub(aw[0], goal[0], r0); VSub(aw[1], goal[1], r1);
-            Log("motor (contactos): jugador %d cuadro %.0f: corrijo izq %.1f cm (queda %.1f), der %.1f cm (queda %.1f); hombros %.0f / %.0f grados, puntas %.1f cm (el otro %+.0f cm; estaturas %.2f / %.2f)",
+            Log("motor (contactos): jugador %d cuadro %.0f: corrijo izq %.1f cm (queda %.1f), der %.1f cm (queda %.1f); agarre exacto %s (peso %.2f, queda %.1f cm); hombros %.0f / %.0f grados, puntas %+.1f cm, agachado %.1f cm (el otro %+.0f cm; estaturas %.2f / %.2f)",
                 slot + 1, fr, has[0] ? errC[0] * 100 : 0.0f, has[0] ? VLen(r0) * 100 : 0.0f, has[1] ? errC[1] * 100 : 0.0f, has[1] ? VLen(r1) * 100 : 0.0f,
-                p.shr[0] * 57.3f, p.shr[1] * 57.3f, p.lift * 100.0f, diff, s0.sc, o.sn[0].sc); }
+                gripLeft >= 0.0f ? "si" : "no", w4, gripLeft >= 0.0f ? gripLeft * 100.0f : 0.0f,
+                p.shr[0] * 57.3f, p.shr[1] * 57.3f, p.lift * 100.0f, std::min(0.06f, 0.004f * p.ag) * 100.0f, diff, s0.sc, o.sn[0].sc); }
     } __except (1) { return; }
 }
 // ---- (23:08) EDITOR en el hilo del juego: mano / pie agarrado (IK hacia el punto del mouse, el giro queda en la pose del editor) y los
