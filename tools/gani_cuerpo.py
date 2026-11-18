@@ -550,7 +550,7 @@ def brazo_en(J, lado, f, Pyo, Potro, D):
             # cruza con velocidad; solo arranca / frena suave donde el objetivo se queda (dos claves seguidas iguales) o en las puntas.
             # El choque de punos (296-340) queda como estaba (Agustin: "el punito esta bien")
             def quieta(j): return j <= 0 or j >= len(k) - 1 or k[j][1] is k[j - 1][1] or k[j][1] is k[j + 1][1]
-            if 296 <= f0 and f1 <= 340: s_ = smooth(u)
+            if 288 <= f0 and f1 <= 340: s_ = smooth(u)     # el punito y su llegada (desde que suelta el brazo del otro) no se tocan
             else:
                 m0 = 0.0 if quieta(i_) else 0.85; m1 = 0.0 if quieta(i_ + 1) else 0.85
                 s_ = (u ** 3 - 2 * u ** 2 + u) * m0 + (-2 * u ** 3 + 3 * u ** 2) + (u ** 3 - u ** 2) * m1
@@ -1099,10 +1099,13 @@ def coreografia(D, quien, pie0):
         r = {0: (0.0, yaw_de(f), 0.0)}      # (20:44) cadera / pecho / cabeza del paso: capa de la caminata del juego (cuerpo())
         if 190 < f < 236:   # (20:51) se aprietan al principio (el vaiven del abrazo sale de la captura del juego: abrazo_en)
             sq = smooth((f - 192) / 10.0) * smooth((236 - f) / 14.0)
-            r[13] = (1.5 * sq, 0.0, 0.0); r[14] = (2.5 * sq, 0.0, 0.0)
+            r[13] = (0.8 * sq, 0.0, 0.0); r[14] = (1.2 * sq, 0.0, 0.0)     # (18/11 03:00) la mitad: los torsos se metian 5.9 cm
         # (20:53, Agustin: "al handshake y al chocar le falta impacto, igual al abrazo") golpe: el cuerpo recibe el contacto y rebota
         # (oscilacion que se apaga): choque arriba = pecho y cabeza para atras; abrazo = el pecho se cierra al encontrarse; apreton = sacudida
         def suma(ch, x, y): v = r.get(ch, (0.0, 0.0, 0.0)); r[ch] = (v[0] + x, v[1] + y, v[2])
+        if C - 24 < f < C + 2:      # anticipacion del apreton: el hombro derecho va atras con la mano que se carga y el pecho se abre
+            k = campana(f, C - 22 + ow // 8, C - 11 + ow // 8, C + 1)
+            suma(14, -1.5 * k, -7.0 * k); suma(13, -0.5 * k, -3.0 * k); suma(16, 0.0, 4.0 * k)
         if C < f < C + 36:
             if A:      # arrastrado: el hombro derecho sale adelante (pecho gira a la izquierda), el torso se va adelante y la cabeza queda atras, llega despues
                 k = campana(f, C + 9, C + 16, C + 32); k2 = campana(f, C + 10, C + 18, C + 34)
@@ -1219,13 +1222,18 @@ def coreografia(D, quien, pie0):
     # arriba del hombro y la mano llega al omoplato de mas lejos (brazo que rodea, codo cerca), y la izquierda baja a la cintura hasta
     # el medio; el mas BAJO (A) abraza por el medio: la derecha pasa por encima del brazo bajo del alto y apoya en la mitad de la
     # espalda con el codo abajo, la izquierda va por debajo del brazo
-    if A: ea = (0.05, -0.02, -0.100); codo_ea = (1, -0.5, 0.2); entra_R = otro('chest', (0.33, 0.02, 0.02), (1, -0.5, 0.3), (-0.3, -0.1, -1), (-1, 0, 0.2))
+    # (18/11 02:40, medido) con la mano del bajo en el medio de la espalda el brazo tendria que atravesar el costado del alto: quedaba
+    # a 4-7 cm de la camiseta y con el codo abierto a la altura del hombro. La mano va al omoplato de su lado (hasta donde el brazo
+    # llega rodeando) y el codo abajo, pegado
+    # (medido con entre.py: la manga derecha del bajo se metia 3-5 cm en la manga izquierda del alto, los brazos se cruzan ahi) el
+    # codo del bajo un poco mas arriba y el brazo bajo del alto mas pegado a su costado
+    if A: ea = (0.13, -0.04, -0.085); codo_ea = (0.8, -0.7, 0.3); entra_R = otro('chest', (0.33, 0.02, 0.02), (1, -0.5, 0.3), (-0.3, -0.1, -1), (-1, 0, 0.2))
     else: ea = (-0.06, 0.10, -0.096); codo_ea = (0.7, 0.6, 0.5); entra_R = sobre_hombro
     espalda_alta = otro('chest', ea, codo_ea, (-1, -0.6, 0), (0, 0, 1))
     def palmada(k): return otro('chest', (ea[0], ea[1], ea[2] - 0.06 * k), codo_ea, (-1, -0.6, 0), (0, 0, 1))
     al_costado = otro('chest', (0.32, 0.12, -0.02), (1, 0.4, -0.2), (-0.2, -0.8, -0.8), (-1, 0, 0.3))
     bajo_brazo = otro('spine', (-0.33, 0.02, 0.02), (-0.8, -0.8, -0.2), (0.3, 0, -1), (1, 0, 0.3))
-    espalda_baja = otro('spine', (-0.06 if A else 0.0, 0.02, -0.070), (-1, -0.3, 0.3), (1, 0.15, 0), (0, 0, 1))
+    espalda_baja = otro('spine', (-0.06 if A else 0.0, 0.02 if A else -0.03, -0.058 if A else -0.070), (-1, -0.3, 0.3) if A else (-0.6, -1.0, 0.3), (1, 0.15, 0), (0, 0, 1))
     salida_baja = otro('spine', (-0.33, 0.04, 0.02), (-1, -0.6, -0.2), (0.1, -0.6, -0.8), (1, 0, 0.3))
     # apreton de manos formal y bajo (las dos derechas en el medio, a la altura de la cintura): palma hacia adentro (A +x, B tambien en
     # su marco: quedan enfrentadas), dedos adelante, pulgar arriba; tres sacudidas cortas
@@ -1250,9 +1258,9 @@ def coreografia(D, quien, pie0):
     if A:
         # (18/11 01:39, "la caminata del principio rehacela") antes A hacia tres gestos seguidos en 3 s mientras caminaba: ahora camina
         # con el brazo de la captura y solo lo senala una vez (lo reconoce de lejos); B le contesta abriendo la mano
-        kR = [(0, balanceo('R')), (40, balanceo('R')), (51, senala('R', 51)), (72, senala('R', 51)), (88, balanceo('R')), (C - 20, balanceo('R'))]
+        kR = [(0, balanceo('R')), (40, balanceo('R')), (51, senala('R', 51)), (72, senala('R', 51)), (88, balanceo('R')), (C - 25, balanceo('R'))]
     else:
-        kR = [(0, balanceo('R')), (70, balanceo('R')), (81, frase('R', 76, 112, 2)), (104, frase('R', 76, 112, 2)), (118, balanceo('R')), (C - 16, balanceo('R'))]
+        kR = [(0, balanceo('R')), (70, balanceo('R')), (81, frase('R', 76, 112, 2)), (104, frase('R', 76, 112, 2)), (118, balanceo('R')), (C - 24, balanceo('R'))]
     # (18/11 01:17, Agustin: "en vez de un choque de las dos manos podria ser un saludo de manos con una y que uno de los dos lo atraiga
     # hacia el para el abrazo") las derechas se agarran arriba, a la altura del pecho (palmas enfrentadas, dedos arriba y adelante, codo
     # abajo): la mano se carga atras y arriba (anticipacion), golpe del agarre, A tira hacia si (B viene con un paso largo) y se sueltan
@@ -1263,10 +1271,29 @@ def coreografia(D, quien, pie0):
     def agarre(tira=0.0, dy=0.0, lado=0.0):
         # forma del agarre = la de agarre_exacto (vista_juego.py), buscada con las mallas de las manos: dedos 30 grados sobre la
         # horizontal hacia el otro, palma al costado, cada palma 2.9 cm de su lado, 2 cm adelantada y 3 cm hacia su menique
-        return mundo((sgn * lado - 0.029, 1.26 + dy - 0.016, cm + sgn * tira + 0.032), (-1, -1.1, -0.3), (0.0, 0.5, 0.866), (1, 0, 0))
-    carga = yo('root', (-0.27, 1.36, 0.16), (-1, -0.8, -0.5), unit((0.1, 0.9, 0.4)), unit((1, 0, 0.3)))
-    kR += [(C - 10 + ow // 8, carga), (C, agarre()), (C + 3, agarre(0.0, -0.035)), (C + 8, agarre(-0.04, -0.02)), (C + 17, agarre(0.22, 0.03, 0.09)), (C + 21, agarre(0.24, 0.0, 0.11)),
+        # (18/11 02:50, medido con propio.py) con el codo a 48 grados bajo la horizontal el antebrazo entraba 4-6 cm en la propia
+        # camiseta durante el agarre: codo mas afuera (37 grados)
+        return mundo((sgn * lado - 0.029, 1.26 + dy - 0.016, cm + sgn * tira + 0.032), (-1, -0.75, -0.15), (0.0, 0.5, 0.866), (1, 0, 0))
+    # (18/11 02:21, Agustin: "le falta una preparacion corta para la apretada de mano", "una anticipacion en los brazos") la mano se
+    # cargaba de pasada, sin detenerse. Ahora el brazo va atras y arriba (codo atras, mano al lado del hombro), se queda 3 cuadros
+    # cargado y recien sale al agarre; el hombro derecho va atras con el (giros_fn)
+    # (visto en la vista: con la mano al lado del hombro quedaba un puno delante del pecho y el antebrazo entraba 6 cm en el cuerpo)
+    # la mano abierta sale al costado y atras a la altura de la cintura (como para chocarla), y de ahi viene en arco al agarre.
+    # Las claves van 4-5 cuadros antes de lo que se ve (el brazo suelto se funde y los resortes atrasan)
+    # (visto: con la mano a 47 cm al costado el codo subia a la altura del hombro, como un ala, y despues la mano venia pegada al
+    # pecho) el brazo baja casi estirado, afuera y atras (28 grados del cuerpo), mano abierta; y entra al agarre desde afuera, en
+    # arco (clave de paso `entra`: 20 cm a su derecha y 16 cm antes del punto de encuentro)
+    # (visto: a mitad de camino la mano pasaba pegada a la cintura, como "manos en la cadera") todo el arco va mas afuera
+    # (medido: con la mano a 45 cm del hombro el codo subia a 1.37 m y quedaba atras, "manos en la cadera"; el brazo va casi
+    # estirado, abajo, afuera y atras: el codo queda bajo)
+    carga = yo('root', (-0.37, 0.88, -0.20), (-0.5, -0.3, -0.8), unit((-0.3, -0.9, 0.1)), unit((0.5, 0.0, 0.85)))
+    entra = mundo((-0.30, 1.15, cm - 0.22), (-1, -0.6, -0.3), unit((0.3, 0.2, 0.9)), unit((1, 0, 0.15)))
+    kR += [(C - 15 + ow // 8, carga), (C - 10 + ow // 8, carga), (C - 4, entra), (C, agarre()), (C + 3, agarre(0.0, -0.035)), (C + 8, agarre(-0.04, -0.02)), (C + 17, agarre(0.22, 0.03, 0.13)), (C + 21, agarre(0.24, 0.0, 0.15)),
            (C + 29, entra_R), (194, espalda_alta)]
+    # (18/11 02:22, Agustin: "cuando el jugador tira con fuerza ahi deberia empezar el abrazo y que el otro reaccione con un poco de
+    # atraso") el azul (B) no espera: suelta la mano en el final del tiron y la pasa de una por arriba del hombro (llega al omoplato en
+    # el cuadro 184, antes 194); el rojo (A) sigue como estaba (194): llega 10 cuadros despues
+    if not A: kR[-2:] = [(C + 27, entra_R), (C + 34, espalda_alta)]
     pats = [206, 220] if A else [213]
     for p in pats: kR += [(p - 2, espalda_alta), (p + 5, palmada(1)), (p + 12, espalda_alta)]
     # (20:59, Agustin: "la transicion entre el abrazo y el apreton de mano no me gusta") al soltarse las manos se deslizan de la espalda a
@@ -1295,8 +1322,15 @@ def coreografia(D, quien, pie0):
     else:
         kL = [(0, balanceo('L')), (C - 16, balanceo('L'))]
     # la mano que no saluda queda suelta (brazo de la captura), no clavada delante de la panza; despues del abrazo cae sola
-    kL += [(C + 4, balanceo('L')), (C + 16, balanceo('L')), (C + 32, bajo_brazo), (198, espalda_baja),
-           (266, espalda_baja), (276, salida_baja), (294, balanceo('L')), (352 + t, balanceo('L'))]
+    # brazo izquierdo: el de B se abre mientras tira (contrapeso, ya buscando al otro) y lo envuelve apenas llega (cuadro 183);
+    # el de A queda atras por el tiron (arrastre) y abraza despues (198)
+    if A:
+        arrastre = yo('root', (0.27, 0.95, -0.15), (0.3, 0.2, -1), unit((0.0, -1, -0.35)), (-1, 0, 0))
+        kL += [(C + 7, balanceo('L')), (C + 17, arrastre), (C + 34, bajo_brazo), (198, espalda_baja)]
+    else:
+        abre = yo('root', (0.37, 1.02, 0.20), (0.8, -0.3, -0.6), unit((0.3, -0.3, 1)), unit((-1, 0, 0.3)))
+        kL += [(C + 2, balanceo('L')), (C + 12, abre), (C + 22, bajo_brazo), (C + 33, espalda_baja)]
+    kL += [(266, espalda_baja), (276, salida_baja), (294, balanceo('L')), (352 + t, balanceo('L'))]
     if A: kL += [(N, balanceo('L'))]
     else:
         for k_, (f0, f1) in enumerate(HABLA_B):
@@ -1320,13 +1354,14 @@ def coreografia(D, quien, pie0):
     # (la captura de los brazos es de una caminata mas rapida que la nuestra: menos vaiven)
     J.estilo = (dict(cadera=0.38, torso=0.62, cabeza=0.50, brazos=0.70, clav=0.8, brazo_R=0.94, atraso_R=1) if A else
                 dict(cadera=0.54, torso=0.98, cabeza=0.62, brazos=0.92, clav=1.1, brazo_L=0.92, atraso_L=2, atraso_R=1))
-    J.contacto = [(C - 2, C + 21), (188, 268), (C2 - 1, C2 + 3)]
+    J.contacto = [(C - 2, C + 21), (182, 268), (C2 - 1, C2 + 3)]
     # ------- cara y manos (las pone el Motor junto con el clip): (cuadro, gesto de la cara, peso, mano izquierda, mano derecha)
     if A:
         J.pista = [(0, 'smil_soft', 0.7, 'relax', 'relax'), (34, 'smil_talk_blink_soft', 0.85, 'relax', 'normal'),
                    (47, 'smil_talk_blink_soft', 0.9, 'relax', 'pointing'), (76, 'smil_talk_blink_soft', 0.8, 'relax', 'normal'),
                    (90, 'smil_soft', 0.6, 'relax', 'relax'), (118, 'pow_brwnit_wink_r', 1.0, 'relax', 'relax'),
-                   (C - 10, 'smil_mho', 1.0, 'relax', 'handshake_normal1'), (C + 22, 'smil_soft', 0.8, 'open_full_half', 'open_full_half'),
+                   (C - 16, 'pow_brwnit_wink_r', 1.0, 'relax', 'hiraki_normal'), (C - 10, 'smil_mho', 1.0, 'relax', 'hiraki_normal'),
+                   (C - 5, 'smil_mho', 1.0, 'relax', 'handshake_normal1'), (C + 22, 'smil_soft', 0.8, 'open_full_half', 'open_full_half'),
                    (190, 'smil_shut_eyhc', 0.9, 'open_full_half', 'open_full_half'), (270, 'smil_soft', 0.8, 'relax', 'normal'),
                    (298, 'smil_soft', 0.9, 'relax', 'soft_nigiri'), (C2 + 18, 'smil_soft', 0.8, 'relax', 'relax'),
                    (388, 'smil_talk_blink_soft', 0.85, 'relax', 'hiraki_normal'), (446, 'smil_soft', 0.7, 'relax', 'relax'),
@@ -1336,8 +1371,9 @@ def coreografia(D, quien, pie0):
                    (RISA + 26, 'smil_soft', 0.85, 'relax', 'relax'), (750, 'smil_soft', 0.7, 'relax', 'relax')]
     else:
         J.pista = [(0, 'smil_soft', 0.6, 'relax', 'relax'), (70, 'smil_talk_blink_soft', 0.8, 'hiraki_normal', 'hiraki_normal'),
-                   (122, 'smil_soft', 0.7, 'relax', 'relax'), (C - 8, 'smil_mho', 1.0, 'relax', 'handshake_normal1'),
-                   (C + 22, 'smil_soft', 0.8, 'open_full_half', 'open_full_half'), (190, 'smil_shut_eyhc', 0.8, 'open_full_half', 'open_full_half'),
+                   (122, 'smil_soft', 0.7, 'relax', 'relax'), (C - 15, 'smil_soft', 0.7, 'relax', 'hiraki_normal'),
+                   (C - 8, 'smil_mho', 1.0, 'relax', 'hiraki_normal'), (C - 4, 'smil_mho', 1.0, 'relax', 'handshake_normal1'),
+                   (C + 12, 'smil_mho', 1.0, 'open_full_half', 'handshake_normal1'), (C + 22, 'smil_soft', 0.8, 'open_full_half', 'open_full_half'), (190, 'smil_shut_eyhc', 0.8, 'open_full_half', 'open_full_half'),
                    (270, 'smil_talk_blink_soft', 0.7, 'relax', 'normal'), (298, 'smil_soft', 0.9, 'relax', 'soft_nigiri'),
                    (C2 + 18, 'smil_soft', 0.8, 'relax', 'relax'), (400, 'smil_mho_soft', 0.7, 'relax', 'relax'), (420, 'smil_soft', 0.7, 'relax', 'relax'),
                    (454, 'smil_talk_blink_soft', 0.85, 'hiraki_normal', 'relax'), (516, 'smil_mho_soft', 0.9, 'relax', 'relax'),
@@ -1348,7 +1384,7 @@ def coreografia(D, quien, pie0):
     mp = {}
     for k in J.pista: mp[fc(k[0])] = (fc(k[0]),) + tuple(k[1:])
     J.pista = [mp[f] for f in sorted(mp)]
-    J.plano = lambda f: smooth((f - (C + 29)) / 12.0) * (1.0 - smooth((f - 284) / 10.0))
+    J.plano = lambda f: smooth((f - (C + (29 if A else 23))) / 12.0) * (1.0 - smooth((f - 284) / 10.0))
     return J
 
 # (20:43-20:46, Agustin: "les falta mucho movimiento en los dedos", "faltan movimientos en los ojos y las cejas") encima de las claves de
@@ -1358,7 +1394,11 @@ def cara_y_dedos_vivos(pista, A, C, C2):
     def libre(f): return not (C - 12 <= f <= C + 22 or 184 <= f <= 342)
     hablaR = [(a, b - 6, 19) for a, b in HABLA_A] if A else [(78, 110, 20)]
     hablaL = [] if A else [(a, b - 6, 21) for a, b in HABLA_B]
-    habla_cara = [(34, 90, 20)] + [(a - 4, b, 20) for a, b in HABLA_A] if A else [(70, 122, 20)] + [(a - 4, b, 20) for a, b in HABLA_B]
+    # (18/11 01:45, Agustin: "a las animaciones faciales tambien le falta ese toque de captura facial") medido: las cejas de acento
+    # reemplazaban cada 20 cuadros a la captura del que habla (smil_talk_blink_soft, 207 cuadros reales) y al volver la captura
+    # arrancaba otra vez de cero: solo se veian sus primeros 20 cuadros, repetidos. Ahora el que HABLA deja correr la captura
+    # entera, sin cortes; las cejas y la media sonrisa pasan al que ESCUCHA, a destiempo (reacciona a lo que oye)
+    escucha = ([(92, 116)] + list(HABLA_B)) if A else ([(36, 68)] + list(HABLA_A))
     extra = {'L': [], 'R': []}
     for lado, rangos in (('R', hablaR), ('L', hablaL)):
         for f0, f1, cada in rangos:
@@ -1368,14 +1408,20 @@ def cara_y_dedos_vivos(pista, A, C, C2):
     for lado, rangos in (('R', hablaR), ('L', hablaL)):
         ocup = [(a - 4, b + 16) for a, b, _ in rangos] + ([(30, 90)] if A and lado == 'R' else [])
         for a, b in caminar:
-            for k, g in enumerate(range(a + (0 if lado == 'R' else 9), b, 17)):
-                if any(x <= g <= y for x, y in ocup): continue
-                extra[lado].append((g, ('relax', 'normal', 'relax', 'soft_nigiri')[k % 4]))
+            # (18/11 01:44, Agustin: "a las manos fuera de las poses tambien dales vida") antes cambiaban cada 17 cuadros justos y
+            # las dos manos igual: ahora a destiempo (11 a 29 cuadros), cada mano con su orden, y a veces se abren
+            g = a + (0 if lado == 'R' else 9); k = 0 if lado == 'R' else 3
+            while g < b:
+                if not any(x <= g <= y for x, y in ocup):
+                    extra[lado].append((g, ('relax', 'normal', 'relax', 'soft_nigiri', 'normal', 'hiraki_normal', 'relax')[k % 7]))
+                g += (13, 23, 17, 29, 11, 19)[(k + (0 if A else 2)) % 6]; k += 1
     cejas = []
-    for f0, f1, cada in habla_cara:
-        for k, g in enumerate(range(f0 + 6, f1, cada)):
-            cejas.append((g, 'neut_brwup_mho_eyo_soft_l' if k % 3 == 0 else 'smug_brwup_smirk_l' if k % 3 == 1 else 'neut_brwup_breth', 0.55))
-            cejas.append((g + 12, None, None))
+    for n_, (f0, f1) in enumerate(escucha):
+        g = f0 + 8 + 3 * n_; k = n_ + (0 if A else 1)
+        while g + 18 < f1:
+            dur = (22, 16, 28)[k % 3]
+            cejas.append((g, ('neut_brwup_mho_eyo_soft_l', 'smug_brwup_smirk_l', 'neut_brwup_breth')[k % 3], 0.5)); cejas.append((g + dur, None, None))
+            g += dur + (13, 21, 9)[k % 3]; k += 1
     marcos = sorted(set([k[0] for k in pista] + [g for g, _ in extra['L'] + extra['R']] + [g for g, *_ in cejas]))
     out = []
     for f in marcos:
@@ -1395,7 +1441,7 @@ def cara_y_dedos_vivos(pista, A, C, C2):
         if k[1:] != limpio[-1][1:]: limpio.append(k)
     return limpio
 
-ABRAZO_D = 0.56     # (18/11 01:18, Agustin: "hay como mucha distancia entre ambos") antes 0.62
+ABRAZO_D = 0.58     # (18/11 01:18, Agustin: "hay como mucha distancia entre ambos") antes 0.62; (03:05) 0.56 -> 0.58: con 0.56 los torsos se metian 5-6 cm todo el abrazo
 ABRAZO_D_VIEJA = 0.62
 def distancia_auto(base):
     """(18/11) distancia entre raices en el abrazo: medida con las mallas del juego (tools/vista_juego.py --revisar). Con 0.42 (pechos de
@@ -1444,7 +1490,7 @@ def ventanas_contacto():
     # ancla 3 = su pecho pero SOLO la mano (sin puntas de pie ni agacharse): la mano en el brazo del otro al soltarse del abrazo
     # (sin esto, con estaturas distintas la mano del alto iba a la cabeza del bajo)
     # ancla 4 = agarre exacto de las dos manos derechas (el Motor lo recalcula en cada cuadro: ver agarre_exacto en vista_juego.py)
-    return [(fc(C - 2), fc(C + 21), {1: 4}), (fc(188), fc(268), {0: 2, 1: 2}), (fc(276), fc(290), {1: 3}), (fc(C2 - 1), fc(C2 + 3), {1: 1})]
+    return [(fc(C - 2), fc(C + 21), {1: 4}), (fc(182), fc(268), {0: 2, 1: 2}), (fc(276), fc(290), {1: 3}), (fc(C2 - 1), fc(C2 + 3), {1: 1})]
 
 def marco(P):
     x = sub(P['thighA'][0], P['thighB'][0]); x = unit((x[0], 0.0, x[2])); return x, (0.0, 1.0, 0.0), cross(x, (0.0, 1.0, 0.0))

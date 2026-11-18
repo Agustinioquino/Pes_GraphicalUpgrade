@@ -32,7 +32,7 @@ in vec3 vN; in vec2 vUV; in vec3 vW;
 uniform vec3 col; uniform int useTex; uniform sampler2D tex; uniform float shadow; uniform int alphaTest;
 out vec4 o;
 void main(){
-  if (shadow > 0.5) { o = vec4(0.0,0.0,0.0,0.22); return; }
+  if (shadow > 0.5) { o = vec4(0.80,0.80,0.78,1.0); return; }   // sombra lisa (antes negra al 22 %: donde se encimaban las mallas quedaban manchas mas oscuras)
   vec4 base = vec4(col,1.0);
   if (useTex == 1) { base = texture(tex, vUV); if (alphaTest == 1 && base.a < 0.4) discard; base.a = 1.0; }
   vec3 N = normalize(vN); if (!gl_FrontFacing) N = -N;
@@ -97,11 +97,16 @@ window.draw = function(f, views) {
   const cols = views.length == 4 ? 2 : views.length, rows = views.length == 4 ? 2 : 1; const W = cv.width / cols, H = cv.height / rows; const sep = Math.hypot(h0[0]-h1[0], h0[2]-h1[2]);
   window._sep = sep;
   views.forEach((v, vi) => {
-    gl.viewport((vi % cols)*W, (rows - 1 - Math.floor(vi / cols))*H, W, H);
-    const yaw = v.yaw*Math.PI/180, pit = v.pitch*Math.PI/180; v = {...v, dist: Math.max(v.dist, sep * (v.k ?? 1.9))};
+    // (18/11 03:08, Agustin: "las vistas no me gustan", las mira en el celular) cada vista puede traer su lugar en el cuadro
+    // (r = [x, y, ancho, alto] de 0 a 1, y desde arriba): una grande y tres chicas; y la distancia se abre lo justo para que
+    // entren los dos (sep * k + k0), no 1.9 veces la separacion
+    let vx = (vi % cols)*W, vy = (rows - 1 - Math.floor(vi / cols))*H, vw = W, vh = H;
+    if (v.r) { vw = Math.round(v.r[2]*cv.width); vh = Math.round(v.r[3]*cv.height); vx = Math.round(v.r[0]*cv.width); vy = cv.height - Math.round(v.r[1]*cv.height) - vh; }
+    gl.viewport(vx, vy, vw, vh);
+    const yaw = v.yaw*Math.PI/180, pit = v.pitch*Math.PI/180; v = {...v, dist: Math.max(v.dist, sep * (v.k ?? 1.9) + (v.k0 ?? 0))};
     const eye = [tx[0] + Math.sin(yaw)*Math.cos(pit)*v.dist, tx[1] + Math.sin(-pit)*v.dist*-1 + 0, tx[2] - Math.cos(yaw)*Math.cos(pit)*v.dist];
     eye[1] = tx[1] - Math.sin(pit)*v.dist;
-    const vp = mmul(persp(v.fov*Math.PI/180, W/H, 0.1, 100), look(eye, [tx[0], v.ty ?? tx[1], tx[2]]));
+    const vp = mmul(persp(v.fov*Math.PI/180, vw/vh, 0.1, 100), look(eye, [tx[0], v.ty ?? tx[1], tx[2]]));
     gl.useProgram(PF); gl.uniformMatrix4fv(gl.getUniformLocation(PF,'vp'), false, vp); gl.bindVertexArray(floorVao); gl.drawArrays(gl.TRIANGLES, 0, 6);
     gl.useProgram(P); gl.uniformMatrix4fv(gl.getUniformLocation(P,'vp'), false, vp);
     for (const pass of [1, 0]) {
