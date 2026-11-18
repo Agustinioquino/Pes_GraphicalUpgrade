@@ -916,6 +916,33 @@ static void ContactIK(Pj& p, void* ctl, float dtR) {
 static void EdPutGame(int slot, float t, int bone, const float* e) { std::lock_guard<std::mutex> lk(s_mx); EdPutLocked(slot, t, bone, e); }
 static void StoreBones(Pj& p, const float (*bw)[3], int n, const int* par, const int* lab, const float (*ax)[3], float sc) {
     std::lock_guard<std::mutex> lk(s_mx); p.bwN = n; memcpy(p.bw, bw, sizeof(float) * 3 * n); memcpy(p.bpar, par, sizeof(int) * n); memcpy(p.blab, lab, sizeof(int) * n); memcpy(p.bax, ax, sizeof p.bax); p.bsc = sc; }
+// (17/11 23:59, Agustin: "haz que la vista previa sea igual que la vista in game") GRABACION de la pareja: cada cuadro del juego, la raiz
+// en el mundo (lugar + ejes) y los 20 huesos (giro local [ctl+0x20] y lugar en el modelo [[ctl+0x88]+0x50]) en PES21FX\grabacion_jugadorN.txt,
+// desde que el clip vuelve a 0 hasta 1500 cuadros. Con eso la vista previa se calibra con el esqueleto y la convencion reales del juego.
+static FILE* s_rec[kMax]; static int s_recN[kMax]; static float s_recT[kMax];
+static bool RecRead(void* ctl, float* q, float* pp, int* n, float* rt, float* ax) {
+    __try {
+        const uintptr_t qa = *(const uintptr_t*)((uintptr_t)ctl + 0x20), r = *(const uintptr_t*)((uintptr_t)ctl + 0x88); if (!PtrOk(qa) || !PtrOk(r)) return false;
+        const uintptr_t pa = *(const uintptr_t*)(r + 0x50); if (!PtrOk(pa)) return false;
+        int c = *(const int*)(r + 0x18); if (c < 2 || c > 32) return false; *n = c;
+        memcpy(q, (const void*)qa, 16 * c); memcpy(pp, (const void*)pa, 16 * c);
+        const uintptr_t R = *(const uintptr_t*)((uintptr_t)ctl + 0x188); if (!PtrOk(R)) return false;
+        memcpy(ax, (const void*)(R + 0xa0), 48); memcpy(rt, (const void*)(R + 0xd0), 12); return true;
+    } __except (1) { return false; }
+}
+static void RecFrame(Pj& p, void* ctl) {
+    const int i = (int)(&p - s_pj); if (p.partner < 0) { if (s_rec[i]) { fclose(s_rec[i]); s_rec[i] = nullptr; } return; }
+    const float t = ((ClipTimeFn)kClipTime)(ctl, 0, 1);
+    if (t < s_recT[i] - 0.5f && s_rec[i]) { fclose(s_rec[i]); s_rec[i] = nullptr; s_recN[i] = -1; }      // el clip volvio a empezar: se cierra (la primera vuelta queda)
+    s_recT[i] = t;
+    if (!s_rec[i] && s_recN[i] == 0 && t < 0.2f) { std::wstring f = g_cfg.baseDir + L"PES21FX\\grabacion_jugador" + std::to_wstring(i + 1) + L".txt"; s_rec[i] = _wfopen(f.c_str(), L"w");
+        if (s_rec[i]) { fprintf(s_rec[i], "zfx_grabacion 1 jugador %d estatura %u peso %u clip %d\n", i + 1, (unsigned)p.hcm, (unsigned)p.wkg, p.clip); Log("motor (grabacion): jugador %d grabando la pareja", i + 1); } }
+    if (!s_rec[i]) return;
+    float q[128], pp[128], rt[3], ax[12]; int n = 0; if (!RecRead(ctl, q, pp, &n, rt, ax)) return;
+    FILE* f = s_rec[i]; fprintf(f, "t %.4f raiz %.4f %.4f %.4f ejes", t, rt[0], rt[1], rt[2]); for (int k = 0; k < 12; k++) fprintf(f, " %.4f", ax[k]); fprintf(f, " n %d\n", n);
+    for (int b = 0; b < n; b++) fprintf(f, "h %d %.5f %.5f %.5f %.5f %.4f %.4f %.4f\n", b, q[b * 4], q[b * 4 + 1], q[b * 4 + 2], q[b * 4 + 3], pp[b * 4], pp[b * 4 + 1], pp[b * 4 + 2]);
+    if (++s_recN[i] >= 1500) { fclose(f); s_rec[i] = nullptr; s_recN[i] = -1; Log("motor (grabacion): jugador %d: 1500 cuadros grabados", i + 1); }
+}
 static void EditPass(Pj& p, void* ctl, const Pj& w) {
     const int slot = (int)(&p - s_pj); SkDesc& d = s_sk[slot];
     if (!d.parOk || d.n < 2) return;
@@ -1003,6 +1030,7 @@ int Update(Pj& p, const Pj& w, double now) {
         if (ctl) PoseApply(p, ctl, w);
         if (ctl) ContactIK(p, ctl, (float)dt);         // (22:55) contactos de la pareja de clips propios
         if (ctl) EditPass(p, ctl, w);                   // (23:08) editor: agarrar mano / pie y lugares de los huesos para la vista
+        if (ctl) RecFrame(p, ctl);                      // (23:59) grabacion de la pareja para calibrar la vista previa
         if (ctl && !w.paused && w.mode == 0) {      // si el clip no da la vuelta solo (como la banca): 6 cuadros quieto en el final -> al principio
             const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1), cur = ((ClipTimeFn)kClipTime)(ctl, 0, 1);
             if (len > 0.2f && cur >= len - 0.003f) { if (++p.endTicks >= 6) { if (walk) { Replay(p, ctl, 0.0f); p.tPlay = 0.0; } else ((ClipSeekFn)kClipSeek)(ctl, 0, 0, 0.0f, 1, 1); p.endTicks = 0; } } else p.endTicks = 0;
