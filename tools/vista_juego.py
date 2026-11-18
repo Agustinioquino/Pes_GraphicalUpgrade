@@ -202,7 +202,7 @@ def contacto_ik(Ws, inc, letras, alturas, f, estado):
         sn.append(dict(hand=[W['handL'][0].copy(), W['handR'][0].copy()], chest=W['chest'][0].copy(), X=X, sc=min(max(sc, 0.6), 1.5)))
     for i in (0, 1):
         W = Ws[i]; o = sn[1 - i]; me = sn[i]; tr = inc[letras[i]]; Z = np.cross(o['X'], up)
-        goal = {}
+        goal = {}; wc = {}
         for (hand, anchor, f0, n, off) in tr['segs']:
             if hand in goal: continue
             kf = f - f0
@@ -215,14 +215,17 @@ def contacto_ik(Ws, inc, letras, alturas, f, estado):
             e = Tw - me['hand'][hand]
             if anchor < 2: e *= 0.5
             if np.linalg.norm(e) > 0.40: continue
-            goal[hand] = me['hand'][hand] + w * e
+            goal[hand] = me['hand'][hand] + w * e; wc[hand] = w
         diff = alturas[1 - i] - alturas[i]
-        shMax = min(max((diff - 3.0) / 8.0, 0), 1) * 0.2443; tipMax = min(max((diff - 8.0) / 12.0, 0), 1) * 0.06 * me['sc']
+        shMax = min(max((diff - 3.0) / 8.0, 0), 1) * 0.2443; tipMax = min(max((diff - 5.0) / 10.0, 0), 1) * 0.06 * me['sc']
         shW = [0.0, 0.0]; liftW = 0.0
         for k, g in goal.items():
             u, fo, h = MANO[k]; Sw, Ew, Hw = W[u][0], W[fo][0], W[h][0]
             L = (np.linalg.norm(Ew - Sw) + np.linalg.norm(Hw - Ew)) * 0.97
             v = g - Sw; over = np.linalg.norm(v) - L
+            # (18/11, Agustin: "no veo que messi se ponga de puntitas de pie") el mas bajo sube a las puntas cuando la mano va a la
+            # altura del hombro o mas arriba, gradual con la diferencia de estatura y con lo alto que va la mano (no solo si no llega)
+            liftW = max(liftW, tipMax * wc[k] * min(max((v[1] + 0.05) / 0.20, 0), 1))
             if over <= 0 or v[1] <= 0: continue
             over *= v[1] / max(np.linalg.norm(v), 1e-3)
             cl = PAR[u]; rc = max(0.05, np.linalg.norm(Sw - W[cl][0]))

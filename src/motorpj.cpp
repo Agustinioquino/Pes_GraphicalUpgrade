@@ -849,7 +849,7 @@ static void ContactIK(Pj& p, void* ctl, float dtR) {
         auto at = [&](const float* a0, const float* a1, float* out) { for (int c = 0; c < 3; c++) out[c] = a0[c] + (k1 != 0.0f ? (a0[c] - a1[c]) * k1 : 0.0f); };
         const float up[3] = { 0, 1, 0 }; float Z[3]; VCross(o.sn[0].X, up, Z);
         const float fr = t * 30.0f;
-        float goal[2][3]; bool has[2] = { false, false }; float errC[2] = { 0, 0 };
+        float goal[2][3], wC[2] = { 0, 0 }; bool has[2] = { false, false }; float errC[2] = { 0, 0 };
         for (int si = 0; si < tr->nSeg; si++) {
             const OwnSeg& g = tr->seg[si]; if (g.hand < 0 || g.hand > 1 || has[g.hand]) continue;
             const float kf = fr - (float)g.f0; if (kf < 0.0f || kf > (float)(g.n - 1)) continue;
@@ -864,19 +864,23 @@ static void ContactIK(Pj& p, void* ctl, float dtR) {
             const float el = VLen(e); errC[g.hand] = el;
             if (el > 0.40f) { if (p.cN < 40 && p.cLog + 1.0 < s_lastTick.load()) { p.cN++; p.cLog = s_lastTick.load(); Log("motor (contactos): jugador %d cuadro %.0f: la mano %s esta a %.0f cm del punto: demasiado lejos, sin corregir", slot + 1, fr, g.hand ? "der" : "izq", el * 100.0f); } continue; }
             for (int c = 0; c < 3; c++) goal[g.hand][c] = s0.hand[g.hand][c] + w * e[c];
-            has[g.hand] = true;
+            has[g.hand] = true; wC[g.hand] = w;
         }
-        // diferencia de estatura (cm; > 0 = el otro es mas alto): hombros desde 3 cm, puntas de pie desde 8 cm
+        // diferencia de estatura (cm; > 0 = el otro es mas alto): hombros desde 3 cm, puntas de pie desde 5 cm (6 cm de talon con 15 cm)
         const float diff = (p.hcm && o.hcm) ? (float)o.hcm - (float)p.hcm : (o.sn[0].sc - s0.sc) * 180.0f;
         const float shMax = std::clamp((diff - 3.0f) / 8.0f, 0.0f, 1.0f) * 0.2443f;          // hasta 14 grados de hombro
-        const float tipMax = std::clamp((diff - 8.0f) / 12.0f, 0.0f, 1.0f) * 0.06f * s0.sc;   // hasta 6 cm de talon
+        const float tipMax = std::clamp((diff - 5.0f) / 10.0f, 0.0f, 1.0f) * 0.06f * s0.sc;   // hasta 6 cm de talon
         float upM[3]; DirToModel(X, up, upM); VNorm(upM);
         float shW[2] = { 0, 0 }, liftW = 0.0f;
         for (int k = 0; k < 2; k++) {
             if (!has[k]) continue;
             float Sw[3], Ew[3], Hw[3], v[3]; ToWorld(X, P + d.up[k] * 4, Sw); ToWorld(X, P + d.fo[k] * 4, Ew); ToWorld(X, P + d.hand[k] * 4, Hw);
             VSub(Ew, Sw, v); float L = VLen(v); VSub(Hw, Ew, v); L = (L + VLen(v)) * 0.97f;
-            VSub(goal[k], Sw, v); float over = VLen(v) - L; if (over <= 0.0f || v[1] <= 0.0f) continue;
+            VSub(goal[k], Sw, v); float over = VLen(v) - L;
+            // (18/11, Agustin: "no veo que messi se ponga de puntitas de pie") el mas bajo sube a las puntas cuando la mano va a la altura
+            // del hombro o mas arriba: gradual con la diferencia de estatura y con lo alto que va la mano (no solo si el brazo no llega)
+            liftW = std::max(liftW, tipMax * wC[k] * std::clamp((v[1] + 0.05f) / 0.20f, 0.0f, 1.0f));
+            if (over <= 0.0f || v[1] <= 0.0f) continue;
             over *= v[1] / std::max(VLen(v), 1e-3f);                     // lo que falta para arriba
             const int cl = d.par[d.up[k]]; float cw[3]; ToWorld(X, P + cl * 4, cw); VSub(Sw, cw, v); const float rc = std::max(0.05f, VLen(v));
             const float a = std::min(shMax, asinf(std::min(1.0f, over / rc))); shW[k] = a; over -= rc * sinf(a);

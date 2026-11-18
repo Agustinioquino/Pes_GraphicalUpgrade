@@ -93,7 +93,7 @@ let tx = null;
 window.draw = function(f, views) {
   gl.enable(gl.DEPTH_TEST); gl.clearColor(0.957,0.957,0.941,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
   const h0 = hipsW(0, f), h1 = hipsW(1, f); const mid = [(h0[0]+h1[0])/2, 0.95, (h0[2]+h1[2])/2];
-  tx = tx === null ? mid : [tx[0]+(mid[0]-tx[0])*0.15, 0.95, tx[2]+(mid[2]-tx[2])*0.15];
+  tx = (tx === null || window._snap) ? mid : [tx[0]+(mid[0]-tx[0])*0.15, 0.95, tx[2]+(mid[2]-tx[2])*0.15];
   const W = cv.width / views.length; const sep = Math.hypot(h0[0]-h1[0], h0[2]-h1[2]);
   window._sep = sep;
   views.forEach((v, vi) => {

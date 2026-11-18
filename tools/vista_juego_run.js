@@ -18,6 +18,7 @@ const { chromium } = require('playwright'); const fs = require('fs'); const path
   const fr = which === 'todos' ? [...Array(Math.floor(n / step) + 1).keys()].map(i => i * step) : which.split(',').map(Number);
   const out = path.join(dir, process.env.SALIDA || 'cuadros'); fs.mkdirSync(out, { recursive: true });
   const views = JSON.parse(process.env.VISTAS || '[{"yaw":35,"pitch":-12,"dist":7.6,"fov":34},{"yaw":90,"pitch":-4,"dist":8.2,"fov":34}]');
+  if (process.env.SNAP) await p.evaluate(() => { window._snap = true; });   // camara directo al medio (cuadros sueltos)
   for (const f of fr) {
     const url = await p.evaluate(([f, v]) => { window.draw(f, v); return document.getElementById('c').toDataURL('image/png'); }, [f, views]);
     fs.writeFileSync(path.join(out, String(f).padStart(4, '0') + '.png'), Buffer.from(url.split(',')[1], 'base64'));
