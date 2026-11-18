@@ -234,6 +234,41 @@ def suave_con_peso(T, adelanto=8, periodo=26.0, z=0.75):
         g = max(T[f], T[min(n - 1, f + adelanto)]); a = w * w * (g - x) - 2 * z * w * v; v += a; x += v; out.append(max(0.0, x))
     return out
 
+# (18/11 01:35, Agustin: "al agarrarse la mano sea perfecta no importa la altura, quizas usar una funcion que haga que se recalcule
+# en el fotograma"; 02:15: "sin deformaciones, solo que se muevan las manos o brazos para coincidir con las alturas")
+# AGARRE EXACTO: en cada cuadro del saludo se arma el agarre en el medio de las dos palmas (donde las deja la animacion, cada una a su
+# altura) y cada brazo va ahi por IK (hombro, codo, muneca); la mano queda entera, sin deformar, con el giro exacto del agarre.
+# La forma del agarre se busco con las mallas de las manos del juego (tools/vista_agarre.py: 1512 combinaciones): palmas enfrentadas
+# a 5.8 cm entre ejes (la palma mide 4.3 cm de grosor), dedos 30 grados sobre la horizontal hacia el otro, pulgar arriba, cada mano
+# 2 cm adelantada y 3 cm corrida hacia su menique: los dedos (pose handshake_normal1) envuelven el canto de la otra mano.
+# Medido: lo mas que se mete una mano en la otra = 5.7 mm (1 % de los vertices), antes 17 mm (9 %).
+GRIP = dict(t=0.029, ang=60.0, s=-0.02, u=0.03)
+def agarre_exacto(Ws, w, sc, log=None):
+    up = np.array([0.0, 1.0, 0.0]); a = math.radians(GRIP['ang']); e = 0.5 * (sc[0] + sc[1])
+    def palma(W, s): return W['handR'][0] - np.array(G.qrot(tuple(W['handR'][1]), (1.0, 0.0, 0.0))) * G.HANDO * s
+    fwd = Ws[1]['chest'][0] - Ws[0]['chest'][0]; fwd[1] = 0.0; fwd = fwd / max(np.linalg.norm(fwd), 1e-6)
+    n = np.cross(up, fwd); M = 0.5 * (palma(Ws[0], sc[0]) + palma(Ws[1], sc[1]))
+    for it in range(4):
+        tg = []; corr = np.zeros(3)
+        for i, sg in ((0, 1.0), (1, -1.0)):
+            d = up * math.cos(a) + sg * fwd * math.sin(a); nn = sg * n; th = np.cross(nn, d)
+            cpal = M - GRIP['t'] * e * nn - GRIP['s'] * e * d + GRIP['u'] * e * th
+            wr = cpal - d * G.HANDO * sc[i]
+            x = -d; y = -nn; z = np.cross(x, y)
+            tg.append((wr, np.array(G.qmat(tuple(x), tuple(y), tuple(z))), d))
+            W = Ws[i]; S_ = W['uarmR'][0]; L = (np.linalg.norm(W['farmR'][0] - S_) + np.linalg.norm(W['handR'][0] - W['farmR'][0])) * 0.985
+            v = wr - S_; ex = np.linalg.norm(v) - L
+            if ex > 0: corr -= v / np.linalg.norm(v) * ex          # no llega: el agarre se corre hacia su hombro
+        if np.linalg.norm(corr) < 1e-4: break
+        M = M + corr
+    for i in (0, 1):
+        W = Ws[i]; q0 = W['handR'][1].copy(); cur = W['handR'][0].copy()
+        ik2(W, 'uarmR', 'farmR', 'handR', cur + w * (tg[i][0] - cur), up)
+        W['handR'][1] = np.array(G.qslerp(tuple(q0), tuple(tg[i][1]), w))
+        if log is not None:
+            fa = W['handR'][0] - W['farmR'][0]; fa /= max(np.linalg.norm(fa), 1e-6); dd = -np.array(G.qrot(tuple(W['handR'][1]), (1.0, 0.0, 0.0)))
+            log.append((i, math.degrees(math.acos(max(-1.0, min(1.0, float(np.dot(fa, dd)))))), float(np.linalg.norm(W['handR'][0] - tg[i][0])) if w > 0.999 else 0.0))
+
 def contacto_ik(Ws, inc, letras, alturas, f, estado):
     """Ws = [mundo A, mundo B] del cuadro f (se cambian en el lugar). Igual que ContactIK: cada uno mira lo del otro ANTES de corregir"""
     up = np.array([0.0, 1.0, 0.0]); sn = []
@@ -262,7 +297,7 @@ def contacto_ik(Ws, inc, letras, alturas, f, estado):
         goal = {}; wc = {}; acc = {}
         for (hand, anchor, f0, n, off) in tr['segs']:
             kf = f - f0
-            if kf < 0 or kf > n - 1: continue
+            if kf < 0 or kf > n - 1 or anchor == 4: continue          # ancla 4 = agarre exacto (despues, los dos juntos)
             c = tr['c'][off + kf]; w = c[0]
             if w <= 0.001: continue
             A = o['hand'][anchor] if anchor < 2 else o['chest']
@@ -303,6 +338,15 @@ def contacto_ik(Ws, inc, letras, alturas, f, estado):
             rot_sub(W, cl, q_axis(ax / np.linalg.norm(ax), st['shr'][k]), W[cl][0].copy())
         for k, g in goal.items(): ik2(W, *MANO[k], g, up)
         estado[i]['log'] = (len(goal), shW, liftW)
+    wg = []
+    for i in (0, 1):
+        tr = inc[letras[i]]; w = 0.0
+        for (hand, anchor, f0, n, off) in tr['segs']:
+            if anchor == 4 and 0 <= f - f0 <= n - 1: w = max(w, tr['c'][off + f - f0][0])
+        wg.append(w)
+    if min(wg) > 0.001:
+        lg = []; agarre_exacto(Ws, 0.5 * (wg[0] + wg[1]), [sn[0]['sc'], sn[1]['sc']], lg)
+        estado[0].setdefault('agarre', []).append((f, lg))
 
 def b64(a): return base64.b64encode(np.ascontiguousarray(a).tobytes()).decode()
 
@@ -495,27 +539,32 @@ def capas_pista(keys, fr):
         return keys[j][0]
     return k, q, a, desde(i), (desde(i - 1) if q else 0)
 
+def dedos_mundo(rig, Pw, esc, s_, pose):
+    """lugar y giro en el mundo de los huesos de los dedos de la mano s_ ('L' / 'R') con la pose {hueso: (giro, lugar)}"""
+    out = {}; Rb, mir = rig.Rh[s_]
+    hb = 'hand' + s_; Rf = qmat3(RB[hb]).T @ Rb; Qh = G.qm(tuple(Pw[hb][1]), tuple(mat_q(Rf)))
+    Qw = [None] * len(rig.hask); Pp = [None] * len(rig.hask)
+    for i, n in enumerate(rig.hask):
+        ql = pose.get(n, (np.array([0, 0, 0, 1.0]), None))[0]
+        if np.prod(mir) < 0: ql = np.array([-mir[0] * ql[0], -mir[1] * ql[1], -mir[2] * ql[2], ql[3]])   # giro espejado
+        if i == 0: Qw[i] = np.array(Qh); Pp[i] = Pw[hb][0]; continue
+        pi = rig.hpar[i]; off = mir * rig.hoff[i] * esc
+        Pp[i] = Pp[pi] + np.array(G.qrot(tuple(Qw[pi]), tuple(off))); Qw[i] = np.array(G.qm(tuple(Qw[pi]), tuple(ql)))
+        out['h%s:%s' % (s_, n)] = (Pp[i], Qw[i])
+    return out
+
 def mundo_extra(rig, Pw, esc, keys, fr, face_fmdl, seed):
     """lugar y giro en el mundo de los dedos y de la cara en el cuadro fr (Pw = cuerpo en el mundo)"""
     out = {}
     k, q, a, f0, fq = capas_pista(keys, fr) if keys else (None, None, 1, 0, 0)
     # manos
     for s_, idx in (('L', 3), ('R', 4)):
-        Rb, mir = rig.Rh[s_]
         cur = rig.clip('hand', k[idx]) if k else None; prv = rig.clip('hand', q[idx]) if q else None
         lay = []
         if cur: lay.append((a if prv else 1.0, cur.muestra(0)))
         if prv: lay.append((1 - a, prv.muestra(0)))
         pose = mezcla(lay) if lay else {}
-        hb = 'hand' + s_; Rf = qmat3(RB[hb]).T @ Rb; Qh = G.qm(tuple(Pw[hb][1]), tuple(mat_q(Rf)))
-        Qw = [None] * len(rig.hask); Pp = [None] * len(rig.hask)
-        for i, n in enumerate(rig.hask):
-            ql = pose.get(n, (np.array([0, 0, 0, 1.0]), None))[0]
-            if np.prod(mir) < 0: ql = np.array([-mir[0] * ql[0], -mir[1] * ql[1], -mir[2] * ql[2], ql[3]])   # giro espejado
-            if i == 0: Qw[i] = np.array(Qh); Pp[i] = Pw[hb][0]; continue
-            pi = rig.hpar[i]; off = mir * rig.hoff[i] * esc
-            Pp[i] = Pp[pi] + np.array(G.qrot(tuple(Qw[pi]), tuple(off))); Qw[i] = np.array(G.qm(tuple(Qw[pi]), tuple(ql)))
-            out['h%s:%s' % (s_, n)] = (Pp[i], Qw[i])
+        out.update(dedos_mundo(rig, Pw, esc, s_, pose))
     # cara
     abs_, rel = rig.cara_locales(face_fmdl)
     lay = []
@@ -654,6 +703,10 @@ def main():
                 mats[BI[b]] = np.concatenate([M, t[:, None]], 1).T.reshape(-1)
             J['frames'].append(mats.reshape(-1))
     for J in jug: J['frames'] = np.array(J['frames'], np.float32); J['n'] = len(J['frames']) - 1
+    ag = estado[0].get('agarre')
+    if ag:
+        mu = [x[1] for f, lg in ag for x in lg]; rs = [x[2] for f, lg in ag for x in lg]
+        print('agarre exacto: cuadros %d-%d; muneca doblada hasta %.0f grados; lo que le falto a la mano para llegar: %.1f mm' % (ag[0][0], ag[-1][0], max(mu), max(rs) * 1000))
     if reg:
         print('ajuste por altura (hombros izq/der A, izq/der B en grados; puntas A / B en cm), algunos cuadros:')
         for r in reg[::max(1, len(reg) // 12)]: print('  ', r)

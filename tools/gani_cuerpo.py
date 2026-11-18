@@ -146,12 +146,29 @@ class Base:
 def pista(keys, f):
     """keys = [(cuadro, valor)], valor = tupla o numero; fundido suave entre claves; antes / despues = la primera / ultima"""
     if f <= keys[0][0]: return keys[0][1]
-    for (f0, v0), (f1, v1) in zip(keys, keys[1:]):
-        if f <= f1:
-            t = smooth((f - f0) / float(f1 - f0))
-            if isinstance(v0, (int, float)): return v0 + (v1 - v0) * t
-            return lerp(v0, v1, t)
-    return keys[-1][1]
+    if f >= keys[-1][0]: return keys[-1][1]
+    # (18/11 02:18, Agustin: "un poco mas de fluidez en los movimientos y menos roboticidad") antes cada tramo entre dos claves
+    # arrancaba y frenaba (suave - suave): el movimiento se detenia en CADA clave. Ahora es una curva que pasa por las claves sin
+    # frenar cuando el movimiento sigue para el mismo lado, y solo frena donde cambia de sentido o se queda quieto (curva cubica
+    # monotona: no se pasa de largo)
+    n = len(keys); i = 0
+    while i + 2 < n and keys[i + 1][0] < f: i += 1
+    (f0, v0), (f1, v1) = keys[i], keys[i + 1]; h = float(f1 - f0)
+    if h <= 0: return v1
+    num = isinstance(v0, (int, float))
+    def comp(v): return (v,) if num else v
+    def pend(k):
+        if k <= 0 or k >= n - 1: return (0.0,) * len(comp(v0))
+        (fa, va), (fb, vb), (fc_, vc) = keys[k - 1], keys[k], keys[k + 1]; out = []
+        for a, b, c in zip(comp(va), comp(vb), comp(vc)):
+            if fb <= fa or fc_ <= fb: out.append(0.0); continue
+            d0 = (b - a) / float(fb - fa); d1 = (c - b) / float(fc_ - fb)
+            out.append(0.0 if d0 * d1 <= 0 else 2.0 * d0 * d1 / (d0 + d1))
+        return tuple(out)
+    u = (f - f0) / h; m0 = pend(i); m1 = pend(i + 1)
+    h00 = 2 * u ** 3 - 3 * u ** 2 + 1; h10 = u ** 3 - 2 * u ** 2 + u; h01 = -2 * u ** 3 + 3 * u ** 2; h11 = u ** 3 - u ** 2
+    r = tuple(h00 * a + h10 * h * ma + h01 * b + h11 * h * mb for a, b, ma, mb in zip(comp(v0), comp(v1), m0, m1))
+    return r[0] if num else r
 
 class Jugador:
     """giros: {canal: [(cuadro, (x, y, z) grados)]} encima del clip parado; brazos: {'R'|'L': {'w': [(f, peso)], 'k': [(f, objetivo)]}}
@@ -175,12 +192,24 @@ def marcha_cargar(carpeta):
     chs = (2, 13, 14, 15, 16, 17, 19, 20, 21)     # (21:00, Agustin: "las manos moviendose, los hombros") + clavicula y brazo izquierdo (el suelto)
     todos = {ch: [] for ch in chs}; bins = {ch: [[] for _ in range(NB)] for ch in chs}; py = [[] for _ in range(NB)]; px = [[] for _ in range(NB)]
     W = [add(b.root[f], b.hips[f]) for f in range(b.n + 1)]
+    # (18/11 02:24, Agustin: "la caminata del azul en el torso se ve un poco saltando entre puntos") medido: una vez por ciclo la cadera
+    # saltaba 6-10 grados en UN cuadro (y columna, pecho, cuello y cabeza con ella). Causa: los ciclos de la captura duran 42-48 cuadros
+    # y se repartian de a un cuadro en 48 casilleros: 3 casilleros (15, 31 y 47) solo recibian el cuadro del ciclo mas largo y los
+    # demas el promedio de 4-5 ciclos -> esos 3 quedaban hasta 14 grados lejos de sus vecinos. Ahora cada ciclo se lee en el centro de
+    # CADA casillero (entre cuadros): todos los casilleros promedian los 5 ciclos.
+    Wd = []
+    for f in range(b.n + 1):
+        m = [W[g] for g in range(max(0, f - 22), min(b.n, f + 22) + 1)]         # vaiven: contra el promedio de un ciclo
+        Wd.append((W[f][0] - sum(v[0] for v in m) / len(m), W[f][1] - sum(v[1] for v in m) / len(m)))
+    # y cada ciclo se cierra sobre si mismo antes de promediar (lo que le falta para terminar igual que empezo se reparte parejo en
+    # todo el ciclo): sin esto quedaba un saltito de 2 grados en pecho, cuello y cabeza donde el ciclo vuelve a empezar
     for f0, f1 in zip(ho, ho[1:]):
-        for f in range(f0, f1):
-            i = min(NB - 1, int((f - f0) * NB / float(f1 - f0)))
-            for ch in chs: todos[ch].append(b.rot[f][ch]); bins[ch][i].append(b.rot[f][ch])
-            m = [W[g] for g in range(max(0, f - 22), min(b.n, f + 22) + 1)]     # vaiven: contra el promedio de un ciclo
-            py[i].append(W[f][1] - sum(v[1] for v in m) / len(m)); px[i].append(W[f][0] - sum(v[0] for v in m) / len(m))
+        cq = {ch: qm(qi(_qen(b, ch, f1)), _qen(b, ch, f0)) for ch in chs}
+        cw = (Wd[f0][0] - Wd[f1][0], Wd[f0][1] - Wd[f1][1])
+        for i in range(NB):
+            uc = (i + 0.5) / NB; f = f0 + uc * (f1 - f0); g = int(f); u = f - g; g1 = min(b.n, g + 1)
+            for ch in chs: q = _cerrar(_qen(b, ch, f), cq[ch], uc); todos[ch].append(q); bins[ch][i].append(q)
+            py[i].append(Wd[g][1] * (1 - u) + Wd[g1][1] * u + cw[1] * (uc - 0.5)); px[i].append(Wd[g][0] * (1 - u) + Wd[g1][0] * u + cw[0] * (uc - 0.5))
     def media(qs):
         r = qs[0]; acc = (0.0, 0.0, 0.0, 0.0)
         for q in qs: acc = add(acc, q if dot(q, r) >= 0 else mul(q, -1.0))
@@ -210,6 +239,10 @@ def _qmedia(qs):
     r = qs[0]; acc = (0.0, 0.0, 0.0, 0.0)
     for q in qs: acc = add(acc, q if dot(q, r) >= 0 else mul(q, -1.0))
     return qn(acc)
+def _cerrar(q, d, u):
+    """q de un ciclo en u (0..1) con el resto del cierre d (= fin^-1 * principio) repartido parejo: mitad para cada lado desde el medio"""
+    I = (0.0, 0.0, 0.0, 1.0)
+    return qm(q, qslerp(I, d, u - 0.5)) if u >= 0.5 else qm(q, qslerp(I, qi(d), 0.5 - u))
 def _qen(b, ch, f):
     f = max(0.0, min(float(b.n), f)); i = int(f); j = min(b.n, i + 1); return qslerp(b.rot[i][ch], b.rot[j][ch], f - i)
 def marcha_ciclos(b, ho):
@@ -241,9 +274,11 @@ def brazos_reales(carpeta):
     fn = os.path.join(carpeta, 'dml_end_timeup02_lose_walk01.gani')
     if not os.path.exists(fn): return
     b = Base(open(fn, 'rb').read()); f0, T = 60.5, 34.5
-    def q_(ch, u):
-        q = _qen(b, ch, f0 + u * T)
-        return qslerp(q, _qen(b, ch, f0 + (u - 1.0) * T), smooth((u - 0.85) / 0.15)) if u > 0.85 else q
+    # (18/11 02:24) el ciclo no cierra solo: entre el cuadro 95 y el 60.5 el brazo viene girando despacio (hombro 27-42 grados, mano
+    # 46-78). Antes ese resto se fundia en los ultimos 5 cuadros del ciclo: un latigazo del brazo por ciclo. Ahora el resto se reparte
+    # parejo en TODO el ciclo (mitad para cada lado desde el medio): cierra sin ningun tramo rapido.
+    I = (0.0, 0.0, 0.0, 1.0); cierre = {ch: qm(qi(_qen(b, ch, f0 + T)), _qen(b, ch, f0)) for ch in (17, 19, 20, 21, 22, 24, 25, 26)}
+    def q_(ch, u): return _cerrar(_qen(b, ch, f0 + u * T), cierre[ch], u)
     del BRAZO_C[:]
     BRAZO_C.append({ch: [q_(ch, (i + 0.5) / NB) for i in range(NB)] for ch in (17, 19, 20, 21, 22, 24, 25, 26)})
     for ch in (17, 19, 20, 21, 22, 24, 25, 26): BRAZO_M[ch] = _qmedia(BRAZO_C[0][ch])
@@ -325,8 +360,21 @@ def fases(pL, pR, n, w_lleno=24, w_nada=36, borde=14):
         v = am[max(0, f - 9):f + 10]; sm.append(sum(v) / len(v))
     return fa, sm
 
+# (18/11 02:26, Agustin: el torso salta al caminar, "en la final se nota") segunda causa medida: debajo de la caminata seguia corriendo
+# el clip parado, y ese jugador parado cambia el peso de pierna (la raiz va y viene 6.6 cm a 11 mm por cuadro, la cadera gira 1.4
+# grados por cuadro). Caminando de costado eso quedaba hacia adelante y atras: la cadera avanzaba a 12-35 mm por cuadro en vez de
+# 18-26, sin relacion con los pasos, y en el cuadro 600 (donde el parado pega la vuelta) cambiaba de golpe. Ahora, mientras camina,
+# el clip parado queda quieto en la pose que tenia al arrancar (o al frenar): J.quieto(f) = (cuanto, cuadro de esa pose). Solo la raiz,
+# la cadera, la columna y el pecho (lo que salta); el cuello y la cabeza del parado siguen vivos como antes.
+def base_de(base, J, f):
+    q = getattr(J, 'quieto', None)
+    if not q: return base.rot[f], base.root[f]
+    w, g = q(f)
+    if w < 1e-4: return base.rot[f], base.root[f]
+    return {ch: (qslerp(v, base.rot[g][ch], w) if ch in (2, 13, 14) else v) for ch, v in base.rot[f].items()}, lerp(base.root[f], base.root[g], w)
+
 def cuerpo(base, J, f):
-    rot = dict(base.rot[f])
+    rot = dict(base_de(base, J, f)[0])
     fz = getattr(J, 'fase', None)
     if fz:
         ph, a = fz[0][f], fz[1][f] * J.marcha_amp
@@ -495,15 +543,24 @@ def brazo_en(J, lado, f, Pyo, Potro, D):
         if callable(o): return o(f, Pyo, Potro)
         return objetivo_parado(lado, Pyo) if o == 'parado' else objetivo_mundo(o, Pyo, Potro, D)
     if f <= k[0][0]: return res(k[0][1])
-    for (f0, o0), (f1, o1) in zip(k, k[1:]):
+    for i_, ((f0, o0), (f1, o1)) in enumerate(zip(k, k[1:])):
         if f <= f1:
-            u = (f - f0) / float(f1 - f0); a, b = res(o0), res(o1); m = mezcla_obj(a, b, smooth(u))
+            u = (f - f0) / float(f1 - f0); a, b = res(o0), res(o1)
+            # (18/11 02:18, fluidez) la mano ya no frena en cada clave: si la clave es de paso (antes y despues va a otro lugar) la
+            # cruza con velocidad; solo arranca / frena suave donde el objetivo se queda (dos claves seguidas iguales) o en las puntas.
+            # El choque de punos (296-340) queda como estaba (Agustin: "el punito esta bien")
+            def quieta(j): return j <= 0 or j >= len(k) - 1 or k[j][1] is k[j - 1][1] or k[j][1] is k[j + 1][1]
+            if 296 <= f0 and f1 <= 340: s_ = smooth(u)
+            else:
+                m0 = 0.0 if quieta(i_) else 0.85; m1 = 0.0 if quieta(i_ + 1) else 0.85
+                s_ = (u ** 3 - 2 * u ** 2 + u) * m0 + (-2 * u ** 3 + 3 * u ** 2) + (u ** 3 - u ** 2) * m1
+            m = mezcla_obj(a, b, s_)
             # (18/11, Agustin: principios de animacion, ARCOS) la muneca no va en linea recta de una clave a la otra: el camino se
             # curva hacia afuera y arriba (como gira el brazo desde el hombro), mas cuanto mas largo el viaje; cero en las claves
             d = sub(b[0], a[0]); L = norm(d)
             if L > 0.12 and not (getattr(o0, 'balanceo', False) and getattr(o1, 'balanceo', False)):
                 sg = ARM[lado][4]; bu = qrot(Pyo['root'][1], (sg * 0.55, 0.75, -0.2)); bu = perp(bu, unit(d))
-                if norm(bu) > 1e-6: m = (add(m[0], mul(unit(bu), 0.14 * L * math.sin(math.pi * smooth(u)))),) + tuple(m[1:])
+                if norm(bu) > 1e-6: m = (add(m[0], mul(unit(bu), 0.14 * L * math.sin(math.pi * s_))),) + tuple(m[1:])
             return m
     return res(k[-1][1])
 
@@ -756,7 +813,7 @@ def armar(base, Js, D):
         if f == 0: P0 = Pp                                   # los pies quedan donde estan en el cuadro 0 del parado (fijos, + el paso)
         rots = []; Ps = []
         for i, J in enumerate(Js):
-            rp = add(base.root[f], J.raiz(f) if callable(J.raiz) else pista(J.raiz, f))
+            rp = add(base_de(base, J, f)[1], J.raiz(f) if callable(J.raiz) else pista(J.raiz, f))
             # (20:58, Agustin: "si uno es mas alto, que el otro levante la punta de los pies para alcanzarlo en el choque alto y en el abrazo;
             # con la misma altura eso no pasa") puntas de pie del mas bajo: talon arriba segun la diferencia de estatura (hasta 6 cm)
             tp = puntas(i, f); rp = add(rp, (0.0, tp, 0.0)); raices[i].append(rp)
@@ -1157,12 +1214,18 @@ def coreografia(D, quien, pie0):
     # (18/11 01:49) codo arriba y hacia mi (apoyado en su hombro), no abierto al costado; la mano llega mas al medio de la espalda
     # y un poco hundida en la camiseta (medido: quedaba a 3-10 cm)
     # el mas bajo (A) no llega al medio de la espalda por arriba del hombro del alto: su mano queda en el omoplato
-    ea = (0.11, 0.19, -0.098) if A else (0.03, 0.10, -0.096)
-    espalda_alta = otro('chest', ea, (0.5, 0.9, 0.5), (-1, -0.6, 0), (0, 0, 1))
-    def palmada(k): return otro('chest', (ea[0], ea[1], ea[2] - 0.06 * k), (0.5, 0.9, 0.5), (-1, -0.6, 0), (0, 0, 1))
+    # (18/11 02:18, Agustin: "el abrazo se ve raro") los dos hacian el mismo abrazo en espejo y el mas bajo tenia que pasar el brazo
+    # por arriba del hombro del alto (estirado, codo arriba). Ahora cada uno abraza segun su altura: el ALTO (B) pasa la derecha por
+    # arriba del hombro y la mano llega al omoplato de mas lejos (brazo que rodea, codo cerca), y la izquierda baja a la cintura hasta
+    # el medio; el mas BAJO (A) abraza por el medio: la derecha pasa por encima del brazo bajo del alto y apoya en la mitad de la
+    # espalda con el codo abajo, la izquierda va por debajo del brazo
+    if A: ea = (0.05, -0.02, -0.100); codo_ea = (1, -0.5, 0.2); entra_R = otro('chest', (0.33, 0.02, 0.02), (1, -0.5, 0.3), (-0.3, -0.1, -1), (-1, 0, 0.2))
+    else: ea = (-0.06, 0.10, -0.096); codo_ea = (0.7, 0.6, 0.5); entra_R = sobre_hombro
+    espalda_alta = otro('chest', ea, codo_ea, (-1, -0.6, 0), (0, 0, 1))
+    def palmada(k): return otro('chest', (ea[0], ea[1], ea[2] - 0.06 * k), codo_ea, (-1, -0.6, 0), (0, 0, 1))
     al_costado = otro('chest', (0.32, 0.12, -0.02), (1, 0.4, -0.2), (-0.2, -0.8, -0.8), (-1, 0, 0.3))
     bajo_brazo = otro('spine', (-0.33, 0.02, 0.02), (-0.8, -0.8, -0.2), (0.3, 0, -1), (1, 0, 0.3))
-    espalda_baja = otro('spine', (-0.06, 0.02, -0.070), (-1, -0.3, 0.3), (1, 0.15, 0), (0, 0, 1))
+    espalda_baja = otro('spine', (-0.06 if A else 0.0, 0.02, -0.070), (-1, -0.3, 0.3), (1, 0.15, 0), (0, 0, 1))
     salida_baja = otro('spine', (-0.33, 0.04, 0.02), (-1, -0.6, -0.2), (0.1, -0.6, -0.8), (1, 0, 0.3))
     # apreton de manos formal y bajo (las dos derechas en el medio, a la altura de la cintura): palma hacia adentro (A +x, B tambien en
     # su marco: quedan enfrentadas), dedos adelante, pulgar arriba; tres sacudidas cortas
@@ -1198,10 +1261,12 @@ def coreografia(D, quien, pie0):
     # 28 cm en 9 cuadros hacia su pecho, y recien ahi se sueltan para abrazarse
     # (medido: tirando derecho al pecho el antebrazo de B entraba 6 cm en su propio cuerpo) B tira hacia su costado derecho (lado)
     def agarre(tira=0.0, dy=0.0, lado=0.0):
-        return mundo((sgn * lado, 1.26 + dy, cm + sgn * tira), (-1, -1.1, -0.3), unit((0.12, 0.72, 0.68)), (1, 0, 0))
+        # forma del agarre = la de agarre_exacto (vista_juego.py), buscada con las mallas de las manos: dedos 30 grados sobre la
+        # horizontal hacia el otro, palma al costado, cada palma 2.9 cm de su lado, 2 cm adelantada y 3 cm hacia su menique
+        return mundo((sgn * lado - 0.029, 1.26 + dy - 0.016, cm + sgn * tira + 0.032), (-1, -1.1, -0.3), (0.0, 0.5, 0.866), (1, 0, 0))
     carga = yo('root', (-0.27, 1.36, 0.16), (-1, -0.8, -0.5), unit((0.1, 0.9, 0.4)), unit((1, 0, 0.3)))
     kR += [(C - 10 + ow // 8, carga), (C, agarre()), (C + 3, agarre(0.0, -0.035)), (C + 8, agarre(-0.04, -0.02)), (C + 17, agarre(0.22, 0.03, 0.09)), (C + 21, agarre(0.24, 0.0, 0.11)),
-           (C + 29, sobre_hombro), (194, espalda_alta)]
+           (C + 29, entra_R), (194, espalda_alta)]
     pats = [206, 220] if A else [213]
     for p in pats: kR += [(p - 2, espalda_alta), (p + 5, palmada(1)), (p + 12, espalda_alta)]
     # (20:59, Agustin: "la transicion entre el abrazo y el apreton de mano no me gusta") al soltarse las manos se deslizan de la espalda a
@@ -1212,7 +1277,7 @@ def coreografia(D, quien, pie0):
     cima_hombro = otro('chest', (0.17, 0.285, -0.035), (1, 0.1, 0.4), (-0.3, -0.2, -1), (0, -1, 0.1))
     # (medido en la vista: con la mano arriba del hombro del otro el codo subia hasta la cabeza) la mano sale de la espalda rodeando el
     # hombro por afuera y queda en el costado del brazo del otro (deltoides), con el codo abajo: B le da dos palmadas ahi, A la apoya
-    rodea = otro('chest', (0.25, 0.22, -0.06), (1, -0.2, 0.3), (-0.3, 0.1, -1), (-1, 0, 0.3))
+    rodea = otro('chest', (0.27, 0.05, -0.05) if A else (0.25, 0.22, -0.06), (1, -0.2, 0.3), (-0.3, 0.1, -1), (-1, 0, 0.3))
     en_brazo = otro('chest', (0.275, 0.16, 0.02), (1, -0.8, 0.5), (-0.25, 0.25, -1), (-1, 0, 0))
     brazo_aire = otro('chest', (0.31, 0.15, 0.04), (1, -0.8, 0.5), (-0.25, 0.25, -1), (-1, 0, 0))
     if A: suelta_R = [(266, espalda_alta), (272, rodea), (279, en_brazo), (290, en_brazo)]
@@ -1245,6 +1310,10 @@ def coreografia(D, quien, pie0):
         if f > 0 and FZ[0][f] < FZ[0][f - 1] - 0.5: c_ += 1
         ci.append(c_)
     J.ciclo = ci; J.ciclo0 = 0 if A else 3      # cada uno arranca en otro ciclo de la captura
+    # el clip parado queda quieto debajo de las dos caminatas (base_de): en la del principio en la pose con la que frena, en la
+    # final en la pose con la que arranca (despues del punito, que no se toca)
+    q0 = max([f for f in range(0, 200) if FZ[1][f] > 0.5] or [0]); q1 = 346 + t
+    J.quieto = lambda f: (FZ[1][f], q0) if f < 200 else (FZ[1][f] * smooth((f - (332 + t)) / 18.0), q1)
     # estilo de la caminata (cuanto de la captura del juego usa cada parte): A = pasos compactos, poca cadera y brazos cortos;
     # B = hombros que ruedan y brazos amplios
     # brazos: cuanto del vaiven de la captura (el derecho y el izquierdo no van iguales) y cuadros de atraso de cada brazo
@@ -1374,13 +1443,14 @@ def ventanas_contacto():
     C, C2 = CHOQUE, CHOQUE2      # mano: 0 izquierda, 1 derecha; ancla: 0 su muneca izquierda, 1 su muneca derecha, 2 su pecho
     # ancla 3 = su pecho pero SOLO la mano (sin puntas de pie ni agacharse): la mano en el brazo del otro al soltarse del abrazo
     # (sin esto, con estaturas distintas la mano del alto iba a la cabeza del bajo)
-    return [(fc(C - 2), fc(C + 21), {1: 1}), (fc(188), fc(268), {0: 2, 1: 2}), (fc(276), fc(290), {1: 3}), (fc(C2 - 1), fc(C2 + 3), {1: 1})]
+    # ancla 4 = agarre exacto de las dos manos derechas (el Motor lo recalcula en cada cuadro: ver agarre_exacto en vista_juego.py)
+    return [(fc(C - 2), fc(C + 21), {1: 4}), (fc(188), fc(268), {0: 2, 1: 2}), (fc(276), fc(290), {1: 3}), (fc(C2 - 1), fc(C2 + 3), {1: 1})]
 
 def marco(P):
     x = sub(P['thighA'][0], P['thighB'][0]); x = unit((x[0], 0.0, x[2])); return x, (0.0, 1.0, 0.0), cross(x, (0.0, 1.0, 0.0))
 
 def contactos(info, D, i):
-    o = 1 - i; segs = []; datos = []; nmano = {0: 'handL', 1: 'handR'}; nancla = {0: 'handL', 1: 'handR', 2: 'chest', 3: 'chest'}
+    o = 1 - i; segs = []; datos = []; nmano = {0: 'handL', 1: 'handR'}; nancla = {0: 'handL', 1: 'handR', 2: 'chest', 3: 'chest', 4: 'handR'}
     for f0, f1, mapa in ventanas_contacto():
         for mano, ancla in sorted(mapa.items()):
             a = max(0, f0 - RAMPA_C); b = min(len(info) - 1, f1 + RAMPA_C); off = len(datos)
