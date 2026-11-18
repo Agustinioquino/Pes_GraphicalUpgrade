@@ -35,7 +35,7 @@ cbuffer PESHair : register(b11)
   float4 pesHairRoot;   // color raiz rgb, w = 1 si esta definido
   float4 pesHairTip;    // color punta rgb, w = 1 si esta definido
   float4 pesHairBrow;   // ceja: grosor, densidad, elevacion, largo (multiplicadores)
-  float4 pesHairMisc;   // x = 1 enlazado, y = 1 mapa de pelo propio del usuario
+  float4 pesHairMisc;   // x = 1 enlazado, y = 1 mapa de pelo propio del usuario, w = cuanto falta de las hebras (12/11: aparecen / se van de a poco, 0 = completas)
   float4 pesBrowCol;    // (04/11 i) color de ceja del jugador (fila 367 / [cejas_cara]): rgb, w = mezcla con el color pintado
   float4 pesBrowBack;   // (04/11 l) color a contraluz (fila 369; lo usa el PS)
   float4 pesBrowX;      // (04/11 l) x = hebras extra del jugador (fila 370)
@@ -312,7 +312,10 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
   float dens = clamp(P74.y, 0.25, 3.0) * 70000.0 *   // (07/11 b, Agustin: "falta cantidad") 40000 -> 70000
                    // (06/11, Agustin: "se ven poco pobladas") 25000 -> 40000
                  (hb ? max(pesHairBrow.y, 0.05) : 1.0);
-  float keepBase = saturate(uvArea * dens / (float)(PES_INST * PES_PER_INST));
+  // (12/11, Agustin: "me gusta que vayan de a poco") al entrar / salir de las 3 caras mas cercanas o acercarse al limite de y75 m
+  // las hebras se suman / se van de a una (la DLL mueve pesHairMisc.w en ~0.6 s y la ceja pintada vuelve en la misma medida)
+  float fadeK = hb ? saturate(1.0 - pesHairMisc.w) : 1.0;
+  float keepBase = saturate(uvArea * dens / (float)(PES_INST * PES_PER_INST)) * fadeK;
   float skRefB = beardTri ? PesBeardSkinRef() : 0.01;   // (08/11 y) piel limpia de la cara (una vez por triangulo)
   float keepBeard = saturate(uvArea * clamp(BR.y, 0.1, 4.0) * 30000.0 / (float)(PES_INST * PES_PER_INST));
   float mLen = hb ? max(pesHairBrow.w, 0.05) : 1.0, mWid = hb ? max(pesHairBrow.x, 0.05) : 1.0, mLift = hb ? pesHairBrow.z : 1.0;
@@ -348,11 +351,11 @@ void main(triangle FaceV v[3], uint pid : SV_PrimitiveID, uint inst : SV_GSInsta
     bool born = ph >= lerp(0.35, 0.12, fill) && rk < keepBase * saturate(m.r + fill + 0.3) * saturate((ph - 0.2) * 2.5 + fill * 1.5) * lerp(0.5, 1.4, strk);   // (07/11 b) umbrales mas blandos: mas pelo
     // (04/11 l, Agustin: "permitirme cargar 400 hebras mas por jugador") x370 = hebras EXTRA en total (las dos cejas, ~0.016 de area UV
     // cada una): nacen sobre todo donde la ceja pintada es rala (rellenan huecos), nunca fuera de la ceja pintada
-    float pX = hb ? uvArea * max(pesBrowX.x, 0.0) * 31.0 / (float)(PES_INST * PES_PER_INST) * saturate(1.3 - ph) * 1.6 : 0.0;
+    float pX = hb ? fadeK * uvArea * max(pesBrowX.x, 0.0) * 31.0 / (float)(PES_INST * PES_PER_INST) * saturate(1.3 - ph) * 1.6 : 0.0;
     // (08/11 w, Agustin: "no me gusta la opcion de hebras extras para rellenar, le falta algo") las extra nacian sobre todo en el borde
     // ralo (halo de pelos sueltos alrededor de la ceja): ahora siguen la forma de la ceja pintada como las demas (mas donde es tupida)
     // y van en las capas de arriba, con la direccion y el mechon de sus vecinas: suman volumen dentro de la ceja, no pelusa afuera
-    pX = hb ? uvArea * max(pesBrowX.x, 0.0) * 31.0 / (float)(PES_INST * PES_PER_INST) * saturate(ph * 1.4) * 1.3 : 0.0;
+    pX = hb ? fadeK * uvArea * max(pesBrowX.x, 0.0) * 31.0 / (float)(PES_INST * PES_PER_INST) * saturate(ph * 1.4) * 1.3 : 0.0;
     // (08/11 y, Agustin: "no me gusta como se aplican las hebras extras") seguian formando una capa de arriba aparte (volumen hinchado,
     // mas cortas): ahora nacen solo SOBRE los trazos pintados (como las del mapa, strk alto), en las mismas capas y con el mismo largo
     // que sus vecinas y mas finas: suman densidad dentro de cada trazo sin engordar la ceja

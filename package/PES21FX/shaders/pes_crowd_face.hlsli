@@ -225,7 +225,7 @@ bool PesCrowdShirtInHand(inout uint4 vPos, inout uint4 vNrm, inout uint4 vTan, i
     return true;
 }
 
-void PesCrowdFace(inout uint4 vPos, inout uint4 vNrm, inout uint4 vTan, inout uint4 vCol, uint persona, uint4 vIdx, uint4 vWgt, inout uint4 vUV)
+void PesCrowdFace0(inout uint4 vPos, inout uint4 vNrm, inout uint4 vTan, inout uint4 vCol, uint persona, uint4 vIdx, uint4 vWgt, inout uint4 vUV)
 {
     float4 col = asfloat(vCol);
     float mk = col.x * 255.0;
@@ -266,4 +266,47 @@ void PesCrowdFace(inout uint4 vPos, inout uint4 vNrm, inout uint4 vTan, inout ui
     P += float3(0.0, b, 0.25 * b);
     if (body.x > 0.0 || body.z != 0.0) PesCrowdBody(P, N, T, vIdx, asfloat(vWgt), persona, body);
     vPos.xyz = asuint(P); vNrm.xyz = asuint(N); vTan.xyz = asuint(T);
+}
+
+// (14/11 0kygek, Agustin: "mejorar la variedad de los aficionados ... modificar los valores para cada uno") VARIEDAD POR HINCHA: el juego
+// reparte 14 modelos; aca cada hincha (persona = su indice fijo del juego) lleva su propia altura, contextura, panza, hombros y tamano de
+// cabeza, siempre los mismos para ese hincha. Se aplica en la pose de reposo (metros del modelo, pies en y = 0) antes del skinning,
+// despues de los gestos y del cuerpo, asi todo lo demas queda igual. Fila 515: x on (0 = como el juego) | y altura (+-, 0.05 = +-5 %)
+// | z contextura y panza | w cabeza. La remera en la mano (COLOR.x 200..203) no se toca.
+float PesCrowdHash(uint x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return (x & 0xffffffu) / 16777216.0; }
+void PesCrowdVariety(inout uint4 vPos, inout uint4 vNrm, inout uint4 vTan, uint persona)
+{
+    float4 V = IniParams.Load(int2(515, 0));
+    if (V.x <= 0.0) return;
+    const float k = saturate(V.x);
+    const float r1 = PesCrowdHash(persona * 4u + 1u), r2 = PesCrowdHash(persona * 4u + 2u), r3 = PesCrowdHash(persona * 4u + 3u), r4 = PesCrowdHash(persona * 4u + 4u);
+    // altura: dos sorteos promediados (mas gente cerca del medio, pocos muy altos o muy bajos)
+    const float hs = 1.0 + k * clamp(V.y, 0.0, 0.12) * (r1 + PesCrowdHash(persona * 4u + 5u) - 1.0) * 2.0;
+    const float bld = (r2 * 2.0 - 1.0);                               // -1 flaco .. +1 robusto
+    const float ws = 1.0 + k * clamp(V.z, 0.0, 0.2) * bld;            // ancho y fondo del cuerpo
+    const float sh = 1.0 + k * clamp(V.z, 0.0, 0.2) * 0.6 * (r4 * 2.0 - 1.0);   // hombros (aparte de la contextura)
+    const float belly = k * clamp(V.z, 0.0, 0.2) * 0.45 * saturate(bld * 0.7 + r3 * 0.6 - 0.2);   // metros hacia adelante (robustos y algunos mas)
+    const float hd = 1.0 + k * clamp(V.w, 0.0, 0.12) * (r3 * 2.0 - 1.0);
+    float3 P = asfloat(vPos.xyz), N = asfloat(vNrm.xyz), T = asfloat(vTan.xyz);
+    // cabeza (desde el cuello para arriba), alrededor de su centro
+    const float3 hc = float3(0.0, 1.66, 0.03);
+    const float hk = smoothstep(1.50, 1.58, P.y);
+    P = lerp(P, hc + (P - hc) * hd, hk);
+    // panza: torso de adelante, entre la cadera y el pecho, sin los brazos (|x| < 0.2)
+    const float bk = smoothstep(0.86, 1.0, P.y) * (1.0 - smoothstep(1.22, 1.36, P.y)) * saturate(P.z / 0.06 + 0.5) * (1.0 - smoothstep(0.12, 0.2, abs(P.x)));
+    P.z += belly * bk;
+    // hombros: ancho solo arriba del pecho (brazos incluidos, se abren con los hombros)
+    const float sk = smoothstep(1.25, 1.42, P.y) * (1.0 - hk);
+    P.x *= lerp(1.0, sh, sk);
+    // contextura y altura (pies en el piso)
+    P.xz *= ws; P.y *= hs;
+    N = normalize(float3(N.x / ws, N.y / hs, N.z / ws));
+    T = normalize(float3(T.x * ws, T.y * hs, T.z * ws));
+    vPos.xyz = asuint(P); vNrm.xyz = asuint(N); vTan.xyz = asuint(T);
+}
+void PesCrowdFace(inout uint4 vPos, inout uint4 vNrm, inout uint4 vTan, inout uint4 vCol, uint persona, uint4 vIdx, uint4 vWgt, inout uint4 vUV)
+{
+    const float mk0 = asfloat(vCol.x) * 255.0;
+    PesCrowdFace0(vPos, vNrm, vTan, vCol, persona, vIdx, vWgt, vUV);
+    if (mk0 < 199.5 || mk0 > 203.5) PesCrowdVariety(vPos, vNrm, vTan, persona);
 }

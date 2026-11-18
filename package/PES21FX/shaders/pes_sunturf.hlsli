@@ -40,6 +40,33 @@ float3 PESTurfDiffuse(float3 sunC, float rawNdotL, float wrapD, float4 PG, float
   return (dirD + through * leaf) * sunC * warm;
 }
 
+// (13/11 tanda 2) x496 UN SOLO SOL CERCA Y LEJOS: la hoja vertical de cerca. La envoltura (trans ~0.9) y el manto encendian el costado y la
+// cara de atras casi como el frente: cada hoja cercana quedaba a ~0.9-1.0 del sol y el pasto de cerca se veia parejo. Las normales de las
+// hojas miran a la camara (498b30), asi que aca el N.L medio de esas normales (mNL, desde la direccion de la vista) es el del suelo y cada
+// hoja se aparta de ese medio segun su propio N.L: de frente mas clara, de espaldas mas oscura, el promedio igual que la cancha a cualquier
+// azimut del sol. La luz que atraviesa la hoja (bk) no pasa en la sombra de verdad (vis) y no tiene piso. Solo hojas casi verticales: el
+// suelo y las tarjetas planas no cambian. 0 = como antes.
+// N: normal de la hoja, L: hacia el sol del motor, upT: arriba de la cancha (sin dar vuelta), V: del punto al ojo (todo en vista);
+// vis: visibilidad limpia del sol (1 = al sol)
+float3 PESTurfDiffuse2(float3 sunC, float rawNdotL, float wrapD, float4 PG, float trans, float upNL, float3 N, float3 L, float3 upT, float3 V, float vis)
+{
+  float3 o = PESTurfDiffuse(sunC, rawNdotL, wrapD, PG, trans, upNL);          // la de antes, sin cambios
+  float3 upU = (dot(upT, L) < 0.0 && upNL > 0.0) ? -upT : upT;               // la misma vuelta que upNL en quien llama ("el sol siempre arriba")
+  float nUpS = dot(normalize(N), upU);
+  float kBl = saturate(IniParams.Load(int2(496, 0)).x) * saturate((1.0 - abs(nUpS)) * 2.0);   // 0 en el suelo y en las tarjetas planas
+  if (kBl < 0.001) return o;
+  float3 leaf = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.96, 0.72), saturate(PG.y) * saturate((trans - 0.15) / 0.25));   // = PESTurfDiffuse
+  float4 SW = IniParams.Load(int2(111, 0)); float sunUp = dot(SW.xyz, SW.xyz) > 0.5 ? SW.y : 1.0;
+  float3 warm = lerp(float3(1.0, 1.0, 1.0), float3(1.07, 1.0, 0.84), saturate(PG.z) * (1.0 - smoothstep(0.17, 0.42, sunUp)));   // = PESTurfDiffuse
+  float uL = dot(upU, L);                                                      // = upNL
+  float3 Vh = V - upU * dot(V, upU); Vh *= rsqrt(max(dot(Vh, Vh), 1e-8));     // hacia el ojo, en el plano de la cancha
+  float3 Lh = L - upU * uL;                                                    // el sol en el plano de la cancha (largo = coseno de la altura)
+  float mNL = sqrt(saturate(1.0 - nUpS * nUpS)) * 0.63662 * dot(Vh, Lh) + nUpS * uL;   // N.L medio de las normales que miran a la camara
+  float dir = max(max(upNL + 0.7 * (rawNdotL - mNL), 0.15 * upNL), 0.0);     // 0.7 = contraste; el medio = el suelo
+  float bk = saturate(-rawNdotL) * saturate(trans) * 0.5 * vis;              // a traves de la hoja: nada en la sombra de verdad, sin piso
+  return lerp(o, (dir + bk * leaf) * sunC * warm, kBl);
+}
+
 // sombra entre hojas (1 = sin sombra). sC: posicion en pantalla (v0.xy / v0.ww), uvC: uv del G-buffer, Am / Bm: de una a la
 // otra (calculados fuera de cualquier if), pix: SV_Position.xy, L: hacia el sol en espacio de vista
 float PESTurfMicroShadow(Texture2D<float4> dT, SamplerState sP, float2 sC, float2 uvC, float2 Am, float2 Bm, float2 pix, float3 L,
@@ -74,7 +101,10 @@ float PESTurfMicroShadow(Texture2D<float4> dT, SamplerState sP, float2 sC, float
   // (Agustin: "al acercarme mucho la camara se oscurece"). Ahora la sombra reparte la luz en vez de quitarla: la hoja tapada baja (la hoja
   // de delante deja pasar algo, no es negra) y la que ve el sol sube un poco, asi el promedio queda como de lejos y se ve el contraste
   float kk = fadeT * saturate(k) * eM.x * eM.y;
-  return max(1.0 + kk * (0.18 - 0.62 * occ), 0.0);
+  // (11/11 g, Agustin: "el sol afectando a las hojas individuales") natural en primerisimo plano (menos de ~1-2 mm por pixel: las hojas 3D):
+  // cada hoja tapada queda en la sombra de verdad (0.27, la luz del cielo y el rebote la llenan) y la que ve el sol sube (1.22). Lejos como antes
+  float clN = (IniParams.Load(int2(407, 0)).x < 0.5) ? 1.0 - smoothstep(0.0009, 0.0025, mpp) : 0.0;
+  return max(1.0 + kk * lerp(0.18 - 0.62 * occ, 0.22 - 0.95 * occ, clN), 0.0);
 }
 
 // (04/11) translucidez a contraluz: la luz del sol que ATRAVIESA la hoja hacia la camara (mirando hacia el sol se encienden las puntas).
@@ -108,5 +138,7 @@ float3 PESTurfTransmit(float3 sunC, float2 sC, float2 uvC, Texture2D<float4> dT,
   float trK = lerp(tr, tr * tr, nearQ);                  // (06/11) de lejos lineal (una hoja verde 0.4 -> 0.5 en vez de 0.25)
   float3 tint = lerp(float3(1.0, 1.0, 1.0), float3(1.10, 1.0, 0.42), saturate(PG.y));   // clorofila: amarillo verdoso (y313)
   float amt = k * lerp(saturate(P330.w), 1.0, nearQ) * trK * back * lobe;
+  // (11/11 h, Agustin: "le falta ese detalle de luz atravesando") natural de cerca: la hoja a contraluz deja pasar 1.7x (lejos igual)
+  if (IniParams.Load(int2(407, 0)).x < 0.5) amt *= lerp(1.0, 1.7, nearQ);
   return sunC * tint * amt;
 }

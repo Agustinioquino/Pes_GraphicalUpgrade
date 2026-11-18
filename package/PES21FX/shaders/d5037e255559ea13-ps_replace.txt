@@ -242,6 +242,21 @@ void main(
   r5.xyz = ((r9.xyzx / r0.zzzz)).xyz;
   r0.y = ((g_ShadowTexture.SampleCmp(g_samplerComparisonLess_Linear_Clmap_s, (r5.xyxx).xy, (r5.zzzz).x)).xxxx).y;
   r0.x = ((r0.yyyy + r0.xxxx)).x;
+  // PES21 FX (15/11, Agustin: "los shaders de las sombras se carguen como si fuera un partido"): sombra de los FOCOS (luces del
+  // modo Editar) con el filtro estable del sol. El filtro del juego toma 12 muestras con ruido que cambia cada cuadro (m_timeParam):
+  // el borde de la sombra hierve sobre la ropa y la piel. Con y20 > 0 (el mismo ajuste del filtro del sol) se toman 16 muestras en
+  // disco con un giro fijo por pixel (sin reloj) y radio z20 (x2 texeles: el del juego llega a 4.5). La suma queda en la misma escala
+  // (12 = todo en sombra). REGLA de la boca: donde la mascara marca boca (o sin mascara) queda el filtro del juego tal cual.
+  { float4 pesSH = IniParams.Load(int2(20,0));
+    [branch] if (pesSH.y > 0.5 && !PesSkMouthPx(v2.xy)) {
+      float pesRot = 6.2831853 * frac(52.9829189 * frac(dot(floor(v2.xy), float2(0.06711056, 0.00583715))));
+      float pesRad = clamp(pesSH.z, 0.5, 4.0) * 2.0 * r0.z / max(g_psScene.m_shadowMapResolutions.y, 1.0);
+      float pesSum = 0.0;
+      [unroll] for (int pesJ = 0; pesJ < 16; pesJ++) {
+        float pesR = sqrt((pesJ + 0.5) / 16.0), pesA = pesJ * 2.39996323 + pesRot;
+        float3 pesQ = float3(r8.xy + float2(cos(pesA), sin(pesA)) * (pesR * pesRad), r9.z) / r0.z;
+        pesSum += g_ShadowTexture.SampleCmpLevelZero(g_samplerComparisonLess_Linear_Clmap_s, pesQ.xy, pesQ.z).x; }
+      r0.x = pesSum * 0.75; } }
   r0.x = ((r0.wwww * r0.xxxx)).x;
   r0.x = ((-(r0.xxxx) * float4(asfloat(0x3daaaaabU), asfloat(0x3daaaaabU), asfloat(0x3daaaaabU), asfloat(0x3daaaaabU)) + float4(1.000000, 1.000000, 1.000000, 1.000000))).x;
   r5.xyzw = ((r0.xxxx * r0.xxxx)).xyzw;

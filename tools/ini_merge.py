@@ -28,7 +28,7 @@ def dividir(b):
 
 RE_SEC = re.compile(rb"^\s*\[([^\]]+)\]")
 RE_KV = re.compile(rb"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
-RE_MENU = re.compile(rb"^\s*(choice|slider|toggle|button|label|texto)\s*=\s*([xyzw]?\d+)\b")
+RE_MENU = re.compile(rb"^\s*(choice|slider|toggle|button|label|texto)\s*=\s*([xyzw]?\d+|[xyzw])\b")   # (13/11) tambien "slider = y" (componente de la fila de la tarjeta)
 
 def clave(linea, sec):
     """clave logica de una linea (None si es comentario / vacia / seccion)."""

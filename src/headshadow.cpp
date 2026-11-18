@@ -76,7 +76,7 @@ void HeadShadowPresent() {
     float* I = g_cfg.live[kHsRowInfo];
     s_count = 0; I[0] = 0.0f;
     s_body = false; g_cfg.live[kHsRowBody][3] = 0.0f;
-    if (U[0] < 0.5f || g_cfg.live[101][0] > 0.5f) return;   // apagado, o "sol libre" (la luz no es la del LightCB)
+    if (U[0] < 0.5f || (g_cfg.live[101][0] > 0.5f && g_cfg.live[452][3] < 1.5f)) return;   // apagado, o "sol libre" solo en el shader (la luz no es la del LightCB); con w452 = 2 el motor ya tiene el sol libre
     if (!Ensure() || !g_dev.imm) return;
     std::vector<float> L, S; int lf = -1, sf = -1;
     if (!NamedCBRead("LightCB", L, &lf) || L.size() < 4 || !NamedCBRead("SceneCB", S, &sf) || S.size() < 88) return;
@@ -139,6 +139,9 @@ void HeadShadowPresent() {
         float nx = clip[0] / clip[3], ny = clip[1] / clip[3];
         if (fabsf(nx) > 1.4f || fabsf(ny) > 1.4f) { cOff++; continue; }
         if (c.d > 60.0f) { cFar++; continue; }
+        // (14/11 0kygek) optimizacion: cabeza de menos de 32 px de alto en pantalla (camara del partido) = la sombra fina de nariz / cejas
+        // ocupa menos de un pixel: se queda con la del estadio (como las de mas de 60 m) y no se repite la cascada entera para ella
+        if (g_bbH && 0.25f * fabsf(P[5]) / clip[3] * 0.5f * (float)g_bbH < 32.0f) { cFar++; continue; }
         cand.push_back(c);
     }
     s_cAlive = cAlive; s_cNoPos = cNoPos; s_cBehind = cBehind; s_cOff = cOff; s_cFar = cFar; s_cOk = (int)cand.size();
