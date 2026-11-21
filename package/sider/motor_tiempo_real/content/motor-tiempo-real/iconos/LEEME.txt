@@ -1,0 +1,8 @@
+Iconos de la barra del Motor en tiempo real (PES21FX).
+Van en <juego>\content\motor-tiempo-real\iconos\ y se pueden cambiar sin tocar la DLL:
+PNG cuadrado (128 x 128 recomendado), dibujo blanco con fondo transparente.
+  volver.png   boton Volver
+  vista.png    abre / cierra el panel de Vista y render
+  jugador.png  carga / quita al jugador
+  grilla.png   prende / apaga la grilla del piso
+Si falta alguno, la DLL dibuja uno simple en su lugar.

@@ -83,6 +83,8 @@ float3 PESDecN(float2 uv) {
 float PESLinZ(float2 uv) {
   return g_psScene.m_projectionParam.z / (inDepth.SampleLevel(g_samplerPoint_Clamp_s, uv, 0).x - g_psScene.m_projectionParam.w);
 }
+#include "pes_microsh.hlsli"   // PES21 (13/11): micro sombras v4, sombra de relieve con direccion
+#include "pes_vista_motor.hlsli"   // PES21 (11/11, Motor en tiempo real): vistas del motor (fila 429)
 void main(
   float4 v0 : SV_Position0,
   float2 v1 : TEXCOORD0,
@@ -543,15 +545,51 @@ void main(
       float roughS = saturate(gmC.x);
       float so = saturate(pow(max(ndvS + aoK, 1e-4), exp2(-16.0 * roughS - 1.0)) - 1.0 + aoK);
       aoS = lerp(aoK, so, saturate(AOP.y));
+      // (13/11) MICRO SOMBRAS v4 (pes_microsh.hlsli), como 619b: sombra de relieve con direccion hacia la luz dominante del
+      // editor. x88 fuerza, y88 on/off, w88 largo (0 = 1); z88 ya no se usa
       float4 MS = IniParams.Load(int2(88,0));
       float3 LwM = g_psSystem.m_dominantLightDir.xyz;
-      if (MS.y > 0.5 && MS.x > 0.0 && dot(LwM, LwM) > 1e-6 && zA < 15.0) {
+      if (MS.y > 0.5 && MS.x > 0.0 && tyC == 0 && dot(LwM, LwM) > 1e-6 && zA < 15.0) {
         float3 LdM = normalize(float3(dot(LwM, g_psScene.m_view._m00_m10_m20), dot(LwM, g_psScene.m_view._m01_m11_m21), dot(LwM, g_psScene.m_view._m02_m12_m22)) + 1e-6);
         LdM.z = -LdM.z;
         float ndlM = dot(Na, LdM);
-        float micro = saturate(abs(ndlM) + 2.0 * aoRaw * aoRaw - 1.0);
-        float msK = lerp(1.0, max(micro, 0.4), saturate(MS.x) * saturate(ndlM * 4.0));
-        diffC *= msK; specC *= skinC ? msK : lerp(1.0, msK, 0.5);
+        float sunF = saturate(ndlM * 6.0) * saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
+        if (sunF > 0.01) {
+          float pxmM = 1.0 / max(2.0 * abs(g_psScene.m_projectionParam.x) * zA * g_psSystem.m_renderBuffer.z, 1e-5);
+          float rBase = (skinC ? 0.006 : 0.015) * (MS.w > 0.001 ? clamp(MS.w, 0.25, 4.0) : 1.0);
+          float rM = max(rBase, 5.0 / pxmM);
+          float farK = saturate((3.0 * rBase - rM) / (1.5 * rBase) + 1.0);
+          if (farK > 0.01) {
+            float3 P0 = float3((sA - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zA, zA);
+            float3 Nc0 = PESDecN(uvC);
+            float3 NvC = float3(Nc0.xy, -Nc0.z);
+            float rPx = clamp(rM * pxmM, 2.0, 24.0);
+            float tolM = 0.35 * rM + 0.001;
+            float3 nAcc = 0; float nW = 0;
+            [unroll] for (int mi = 0; mi < 8; mi++) {
+              float angM = mi * 0.78539816 + 0.3927;
+              float2 uvM = uvC + float2(cos(angM), sin(angM)) * rPx * g_psSystem.m_renderBuffer.zw;
+              float zM = PESLinZ(uvM);
+              float3 Pm = float3(((uvM * float2(2, -2) + float2(-1, 1)) - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zM, zM);
+              float wM = abs(dot(Pm - P0, NvC)) < tolM ? 1.0 : 0.0;
+              nAcc += PESDecN(uvM) * wM; nW += wM;
+            }
+            if (nW > 2.5) {
+              float3 NsM = normalize(nAcc + Nc0); NsM.z = -NsM.z;
+              // ESTABLE: el ruido por pixel solo con el TAA de la DLL prendido (x454), que lo promedia; sin TAA paso fijo (sin hormigueo)
+              float jitM = IniParams.Load(int2(454,0)).x > 0.5 ? frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715)))) : 0.5;
+              float softM = MS.z > 0.001 ? clamp(MS.z, 0.25, 3.0) : 1.0;   // z88 suavidad de la penumbra (0 = 1)
+              float visM = PESMicroShadowDir(uvC, P0, Na, NsM, LdM, rM, jitM, softM);
+              float3 floorM = skinC ? float3(0.62, 0.44, 0.40) : float3(0.35, 0.35, 0.35);
+              // REACTIVO al sudor / lluvia: la pelicula de agua llena el poro y alisa la piel (la rugosidad del G-buffer baja de ~0.42
+              // seca a ~0.2 mojada): con la piel mojada la sombra del poro se acorta hasta un 60 %; arrugas y pliegues grandes quedan
+              float wetM = skinC ? saturate((0.38 - saturate(gmC.x)) / 0.18) : 0.0;
+              float kM = saturate(MS.x) * farK * sunF * (1.0 - 0.6 * wetM);
+              diffC *= lerp(1.0, lerp(floorM, 1.0, visM), kM);
+              specC *= lerp(1.0, lerp(0.25, 1.0, visM), kM);
+            }
+          }
+        }
       }
     }
     r0.xyw = diffC * aoD + specC * aoS;
@@ -613,5 +651,6 @@ void main(
       o0.xyz = ((bits >> (31 - bx)) & 1) ? float3(0.5, 0.5, 0.5) : float3(0, 0, 0);
     }
   }
+  PESVistaMotor(o0, v0.xy, 0.08);   // PES21 (11/11, Motor en tiempo real): vistas del motor (fila 429); va ultima para ganarle a las otras vistas de prueba
   return;
 }

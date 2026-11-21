@@ -1,0 +1,544 @@
+// PES21 FX (11/11/2026, hilo del Motor en tiempo real) - EL MOTOR EN EL MENU NATIVO DEL JUEGO
+//
+// Agustin (20:23 - 20:38): el Motor sin el overlay de Sider, con los MENUS DEL JUEGO, manejables con teclado, mouse y control;
+// la DLL solo para lo que el juego no hace. Leido en el exe 1.07.02 (memoria del proyecto panel-nativo-motor-diseno):
+//  - El boton 12 del menu de Editar ("Motor en tiempo real", modulo de Sider) abre el estudio 3D: un nodo de flujo propio
+//    (BugCheck/BugCheckSim...) cuya pagina es la de Apariencia del juego (menu::MenuEditPlAppearance, tabla 0x1426edeb8),
+//    una lista nativa (MenuEditCmnSettingList) con el visor 3D al lado.
+//  - Todas las paginas del Editar nacen en 0x140a977d0(clave, nombre del nodo, bandera). Gancho ahi: si la pagina recien
+//    creada es la de Apariencia y el nodo es uno de los del Motor, se le cambia la tabla de funciones por una COPIA con
+//    ocho ranuras propias. La pagina de Apariencia de verdad (Editar > Jugadores) no se toca.
+//  - Con eso las filas pasan a ser las del Motor (lista nativa: mismo dibujo, sonido, cursor, mouse y control del juego):
+//    "Vista", "Alambre" y "Pantalla partida", cada una con el selector nativo de izquierda / derecha. Cambiar una fila
+//    escribe la fila 429 (la misma que usan el menu de PES21FX y el panel de Sider).
+//  - Vestir al jugador: la pagina de Apariencia pide el modelo pero no el uniforme (por eso el estudio salia sin camiseta).
+//    Antes de que la pagina pida el modelo se llama a la funcion del juego que viste al visor (0x141f06920), igual que hace
+//    el juego con su maniqui (0x140ce8ef0): mismo hilo, mismo momento, sin Lua en el medio (la 0.6 del modulo se colgaba
+//    por llamarla desde Lua). Equipo: el del ultimo jugador que se vio en el Editar si es el mismo; si no, "sin equipo"
+//    (0xfffcc000), el valor que usa el propio juego.
+//  - El boton "restablecer apariencia" de esa pagina (accion 3, escribe datos del jugador) queda anulado en la copia, y tambien
+//    el "aceptar" de la pagina (mandaba el evento de la fila al flujo: salir a Cara / Peinado / Fisico).
+//  - Segunda lectura (22:40): el nombre que recibe la fabrica es el del nodo del flujo (nodo+0x38; 0x141fb1f80 -> "menu" ->
+//    0x140a958e0); la pagina de Apariencia solo esta en la tabla del Editar (0x14266b620, entrada 75); aceptar sobre una fila
+//    con selector no hace nada en el juego (0x140e3daa0), la opcion se cambia con izquierda / derecha (0x140e3c770), que avisa
+//    por la ranura 63; con el mouse, el clic sobre el selector lo convierte menumouse.cpp en "derecha".
+// Nada se escribe en el exe. [PES21FX] motor_pagina = 0 deja la pagina como antes; motor_vestir = 0 no viste.
+#include "core.h"
+#include <MinHook.h>
+#include <atomic>
+#include <cstring>
+#include <cstdio>
+#include <string>
+#include <cmath>
+#include <algorithm>
+
+namespace fx {
+
+static const unsigned kStamp = 0x62787C6A;
+static const uintptr_t kFactory = 0x140a977d0ull;          // fabrica de paginas del Editar (clave, nombre, bandera)
+static const uintptr_t kVtApp = 0x1426edeb8ull;            // menu::MenuEditPlAppearance (89 ranuras)
+static const int kSlots = 89;
+// 0x140a977d0: mov [rsp+8],rbx; mov [rsp+10h],rbp; mov [rsp+18h],rsi; push rdi; push r12..r15; sub rsp,20h; xor r15d,r15d
+static const unsigned char kFactorySig[31] = { 0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x6c,0x24,0x10,0x48,0x89,0x74,0x24,0x18,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x83,0xec,0x20,0x45,0x33,0xff };
+// 0x141f06920: mov [rsp+8],rbx; mov [rsp+18h],r8d; push rdi; sub rsp,50h; lea r10,[rcx+0C8h]
+static const unsigned char kDressSig[22] = { 0x48,0x89,0x5c,0x24,0x08,0x44,0x89,0x44,0x24,0x18,0x57,0x48,0x83,0xec,0x50,0x4c,0x8d,0x91,0xc8,0x00,0x00,0x00 };
+// ranuras de la tabla que se comprueban antes de copiarla (indice, valor esperado)
+static const struct { int slot; uintptr_t fn; } kExpect[] = {
+    { 49, 0x140c09410ull }, { 50, 0x140c09370ull }, { 52, 0x140c09470ull }, { 62, 0x141b42640ull }, { 63, 0x141b42640ull },
+    { 75, 0x140c09280ull }, { 76, 0x140c08e70ull }, { 78, 0x140c08da0ull }, { 85, 0x1403f9410ull }, { 86, 0x140b725f0ull } };
+
+// funciones del juego que se llaman (todas con argumentos simples; leidas en el desensamblado)
+typedef void* (*PFN_Factory)(void* key, void* name, void* flag);
+typedef uintptr_t (*PFN_Page)(void* page);
+typedef void (*PFN_SetCount)(void* page, unsigned n);                       // 0x140cd3680
+typedef unsigned char (*PFN_RowType)(void* page, unsigned type, unsigned row, char);   // 0x140cd39f0
+typedef void (*PFN_RowTexts)(void* page);                                   // 0x140cd3740: textos por las ranuras 85 / 86
+typedef void* (*PFN_Child)(void* node, unsigned i);                         // 0x140e8fa80
+typedef void* (*PFN_Find)(void* sub, const char* name);                     // [nodo+0x98]->ranura 1
+typedef void (*PFN_NodeOn)(void* node, char on, char b, unsigned mask);     // 0x140e4dfc0
+typedef void (*PFN_SelClear)(void* sel);                                    // 0x140e54140
+typedef void (*PFN_SelAdd)(void* sel, const char* text);                    // 0x140e53ee0
+typedef void (*PFN_SelSet)(void* sel, unsigned i);                          // 0x140e54180
+typedef void (*PFN_Headline)(void* node, const char* text);                 // 0x140e56ca0
+typedef void (*PFN_HelpText)(void* page, int slot, const char* text);       // 0x140e43500: texto de un boton de la barra de ayuda ("" lo saca)
+typedef void* (*PFN_GetMv)();                                               // 0x141f05cd0
+typedef void (*PFN_MvHold)(void* mv, char on, void*, void*);                // 0x141f06e10
+typedef uintptr_t (*PFN_Dress)(void* mv, uint64_t key, uint32_t team, uint32_t a, uint32_t gk, uint32_t kit, uint8_t b);   // 0x141f06920
+static const PFN_SetCount g_SetCount = (PFN_SetCount)0x140cd3680ull;
+static const PFN_RowType g_RowType = (PFN_RowType)0x140cd39f0ull;
+static const PFN_RowTexts g_RowTexts = (PFN_RowTexts)0x140cd3740ull;
+static const PFN_Child g_Child = (PFN_Child)0x140e8fa80ull;
+static const PFN_NodeOn g_NodeOn = (PFN_NodeOn)0x140e4dfc0ull;
+static const PFN_SelClear g_SelClear = (PFN_SelClear)0x140e54140ull;
+static const PFN_SelAdd g_SelAdd = (PFN_SelAdd)0x140e53ee0ull;
+static const PFN_SelSet g_SelSet = (PFN_SelSet)0x140e54180ull;
+static const PFN_Headline g_Headline = (PFN_Headline)0x140e56ca0ull;
+static const PFN_HelpText g_HelpText = (PFN_HelpText)0x140e43500ull;
+static const PFN_GetMv g_GetMv = (PFN_GetMv)0x141f05cd0ull;
+static const PFN_MvHold g_MvHold = (PFN_MvHold)0x141f06e10ull;
+static const PFN_Dress g_Dress = (PFN_Dress)0x141f06920ull;
+typedef void (*PFN_NodeShow)(void* node, char on, unsigned mask);           // 0x140e4e650: bandera de visible del nodo (+0xc) y aplicar
+typedef void (*PFN_ClipVisible)(void* clip, unsigned char on);              // 0x141f96bc0: propiedad 0x1007 (visible) del clip del nodo
+typedef void (*PFN_MvShow)(void* mv, char on);                              // 0x141f05f50: mostrar / esconder el modelo del visor
+static const PFN_NodeShow g_NodeShow = (PFN_NodeShow)0x140e4e650ull;
+static const PFN_ClipVisible g_ClipVisible = (PFN_ClipVisible)0x141f96bc0ull;
+static const PFN_MvShow g_MvShow = (PFN_MvShow)0x141f05f50ull;
+static const uintptr_t kCtx = 0x1438040a8ull, kInvalidTeam = 0x143528f44ull, kVtMv = 0x142ba7c68ull;
+
+static PFN_Factory o_factory = nullptr;
+static bool s_tried = false, s_ok = false;
+static void* s_vt[1 + kSlots] = {};        // [0] = el dato de tipo que va antes de la tabla; la pagina apunta a s_vt + 1
+static PFN_Page o_build = nullptr, o_ready = nullptr;
+static uint64_t s_seenKey = 0; static uint32_t s_seenTeam = 0;    // ultimo jugador que se vio en el Editar con su equipo
+static std::atomic<int> s_nPages{0};
+// (22:48, Agustin: el icono de la ultima tecla "solo en el motor") la pagina del estudio del Motor que esta viva: la anota la fabrica y
+// la confirma en cada cuadro el gancho de entrada de los menus (menumouse.cpp llama a MotorPageSeen con cada ventana activa)
+static std::atomic<void*> s_motorWin{nullptr}; static std::atomic<double> s_motorT{-1.0e9};
+// (15/11, Agustin 01:51: "enfocate en el menu en si, sin fondo con grilla, sin el menu tipico del modo editar con un boton para
+// volver atras ... evita que cargue el jugador al principio solo el menu del motor") MENU PROPIO: el estudio abre vacio (fondo con
+// grilla, motorgrid.cpp), con una barra de iconos y el boton Volver (motorgizmo.cpp). El panel nativo de filas queda escondido y
+// se abre desde su icono; el jugador se carga / se quita desde el suyo. Los pedidos llegan del hilo de Present (atomicos) y se
+// cumplen en el hilo del juego, en MotorPageSeen. [PES21FX] motor_menu_propio = 0 vuelve a la lista de siempre.
+static std::atomic<bool> s_uiPanel{false}, s_uiPlayer{false}, s_uiBack{false};
+static void* s_uiWin = nullptr; static bool s_uiPlayerShown = false; static int s_uiPanelApplied = -1;
+
+static bool Readable(const void* p, size_t n) {
+    MEMORY_BASIC_INFORMATION mi{};
+    if (!p || !VirtualQuery(p, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return false;
+    return (uintptr_t)p + n <= (uintptr_t)mi.BaseAddress + mi.RegionSize;
+}
+static inline bool Ptr(const void* p) { const uintptr_t a = (uintptr_t)p; return a >= 0x10000ull && a < 0x7ffffffff000ull && (a & 7) == 0; }
+static inline uint32_t U32(const uint8_t* p) { uint32_t v; memcpy(&v, p, 4); return v; }
+static inline uint64_t U64(const uint8_t* p) { uint64_t v; memcpy(&v, p, 8); return v; }
+static inline uint8_t* P8(const uint8_t* p) { uint8_t* v; memcpy(&v, p, 8); return v; }
+static bool Writable(const void* p, size_t n) {
+    MEMORY_BASIC_INFORMATION mi{};
+    if (!p || !VirtualQuery(p, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & 0xff) != PAGE_READWRITE) return false;
+    return (uintptr_t)p + n <= (uintptr_t)mi.BaseAddress + mi.RegionSize;
+}
+
+// std::string del juego (MSVC): 16 bytes en linea o puntero, largo en +0x10, capacidad en +0x18
+static bool GameStr(const void* s, char* out, size_t n) {
+    out[0] = 0;
+    if (!Ptr(s) || !Readable(s, 0x20)) return false;
+    const uint8_t* b = (const uint8_t*)s; const uint64_t len = U64(b + 0x10), cap = U64(b + 0x18);
+    if (len >= n || len > 512 || cap < len) return false;
+    const char* t = cap >= 0x10 ? (const char*)P8(b) : (const char*)b;
+    if (cap >= 0x10 && (!Ptr((const void*)((uintptr_t)t & ~7ull)) || !Readable(t, (size_t)len + 1))) return false;
+    memcpy(out, t, (size_t)len); out[len] = 0; return true;
+}
+
+// ---------------------------------------------------------------- las filas del Motor
+static const char* const kVista[] = { "Normal", "Luz difusa", "Luz especular", "Normales", "Normales de mundo", "Albedo (sin luz)", "Profundidad", "Oclusion", "Sombra del sol", "Solo luz (sin texturas)", "Material" };
+static const char* const kNoSi[] = { "No", "Si", "Si, con teselacion" };
+static const char* const kCorte[] = { "No", "25 %", "50 %", "75 %" };
+static const float kCorteV[] = { 0.0f, 0.25f, 0.5f, 0.75f };
+struct Fila { const char* nombre; const char* const* op; int n; };
+static const Fila kFilas[] = { { "Vista", kVista, 11 }, { "Alambre", kNoSi, 3 }, { "Pantalla partida", kCorte, 4 } };
+static const int kNFilas = (int)(sizeof kFilas / sizeof kFilas[0]);
+
+static int FilaActual(int r) {
+    float v[4];
+    { std::lock_guard<std::mutex> lk(g_cfgMutex); for (int i = 0; i < 4; i++) v[i] = g_cfg.live[429][i]; }
+    if (r == 0) return std::clamp((int)(v[0] + 0.5f), 0, 10);
+    if (r == 1) return v[1] > 1.5f ? 2 : v[1] > 0.5f ? 1 : 0;
+    int best = 0; for (int i = 1; i < 4; i++) if (std::fabs(kCorteV[i] - v[2]) < std::fabs(kCorteV[best] - v[2])) best = i;
+    return best;
+}
+
+static void* Sub(void* node, const char* name) {      // hijo por nombre, como hace el juego: [nodo+0x98]->ranura 1 (nodo+0x98, nombre)
+    if (!Ptr(node)) return nullptr;
+    void* sub = (uint8_t*)node + 0x98; void** vt = *(void***)sub;
+    if (!Ptr(vt) || !Ptr(vt[1])) return nullptr;
+    return ((PFN_Find)vt[1])(sub, name);
+}
+
+// ---------------------------------------------------------------- el panel se mueve (camino A: paneles con piezas del juego)
+// Agustin 20:23 "interfaz movible" / 23:12 "no el diseno del menu de Editar". El panel de la pagina (titulo + filas) es el nodo
+// de arriba de la ventana (Impl+0x90). Todo nodo tiene "poner posicion" en la ranura 19 (0x140e4e5a0, o 0x140e90340 en el nodo
+// ventana: usa el clip padre 0x141f95c60 y lo suelta con 0x141f968e0) = propiedad 0x1000 del clip (posicion local, 2 floats);
+// 0x141f95cd0 la lee. Se guarda la posicion de fabrica al armar la pagina y se le suma [PES21FX] motor_panel_x / _y (unidades
+// del escenario de 1920 x 1080). menumouse.cpp avisa del mouse: arrastrar desde la franja del titulo mueve el panel.
+typedef int (*PFN_SetPos)(void* node, float* xy);
+typedef void (*PFN_ClipGetPos)(void* clip, float* x, float* y);             // 0x141f95cd0
+typedef void* (*PFN_ClipParent)(void* clip);                                // 0x141f95c60
+typedef void (*PFN_ClipRelease)(void* clip);                                // 0x141f968e0
+static void* s_panelWin = nullptr; static float s_panelBX = 0, s_panelBY = 0; static bool s_panelOk = false;
+static std::atomic<bool> s_panelSave{false};
+static void* s_dragWin = nullptr; static float s_dragMX = 0, s_dragMY = 0, s_dragOX = 0, s_dragOY = 0;
+
+static void* PanelNode(void* page, uintptr_t* setPos) {
+    uint8_t* I = P8((uint8_t*)page + 0x88); uint8_t* top = Ptr(I) ? P8(I + 0x90) : nullptr;
+    if (!Ptr(top) || !Readable(top, 0x48)) return nullptr;
+    void** vt = *(void***)top; if (!Ptr(vt) || !Readable(vt, 0xa0)) return nullptr;
+    const uintptr_t f = (uintptr_t)vt[0x98 / 8];
+    if (f != 0x140e4e5a0ull && f != 0x140e90340ull) return nullptr;
+    if (!Ptr(P8(top + 0x40))) return nullptr;
+    *setPos = f; return top;
+}
+static void PanelApply(void* page) {
+    if (page != s_panelWin || !s_panelOk) return;
+    uintptr_t f = 0; void* top = PanelNode(page, &f); if (!top) return;
+    float p[2] = { s_panelBX + g_cfg.motorPanelX, s_panelBY + g_cfg.motorPanelY };
+    ((PFN_SetPos)f)(top, p);
+}
+// al armar la pagina: anota la posicion de fabrica del panel y aplica la guardada
+static void PanelInit(void* page) {
+    s_panelWin = page; s_panelOk = false; s_dragWin = nullptr;
+    uintptr_t f = 0; uint8_t* top = (uint8_t*)PanelNode(page, &f);
+    if (!top) { Log("motor (pagina): el panel no tiene la funcion de posicion esperada: no se puede mover"); return; }
+    void* clip = P8(top + 0x40); void* par = nullptr;
+    if (f == 0x140e90340ull) par = ((PFN_ClipParent)0x141f95c60ull)(clip);
+    float x = 1.0e9f, y = 1.0e9f;
+    ((PFN_ClipGetPos)0x141f95cd0ull)(par ? par : clip, &x, &y);
+    if (par) ((PFN_ClipRelease)0x141f968e0ull)(par);
+    if (!(std::fabs(x) < 8000.0f) || !(std::fabs(y) < 8000.0f)) { Log("motor (pagina): no pude leer la posicion del panel: no se puede mover"); return; }
+    s_panelBX = x; s_panelBY = y; s_panelOk = true;
+    g_cfg.motorPanelX = std::clamp(g_cfg.motorPanelX, -1900.0f, 1900.0f); g_cfg.motorPanelY = std::clamp(g_cfg.motorPanelY, -1000.0f, 1000.0f);
+    if (g_cfg.motorPanelX != 0.0f || g_cfg.motorPanelY != 0.0f) PanelApply(page);
+    static int n = 0; if (n++ < 8) Log("motor (pagina): panel en %.0f, %.0f de fabrica; corrido %.0f, %.0f (se arrastra con el mouse desde el titulo)", x, y, g_cfg.motorPanelX, g_cfg.motorPanelY);
+}
+// menumouse.cpp, en cada paso de la ventana con el mouse sobre el juego: (mx, my) en el escenario de 1920 x 1080; down = boton
+// izquierdo apretado; edge = recien apretado; (tx, ty, tw) = primera fila dibujada (la franja del titulo esta justo encima).
+// Devuelve true si el clic es del arrastre (no va al menu)
+bool MotorPageDrag(void* win, float mx, float my, bool down, bool edge, float tx, float ty, float tw) {
+    if (!win || win != s_panelWin || !s_panelOk || win != s_motorWin.load(std::memory_order_relaxed)) return false;
+    if (s_dragWin == win) {
+        if (down) {
+            g_cfg.motorPanelX = std::clamp(s_dragOX + (mx - s_dragMX), -1900.0f, 1900.0f);
+            g_cfg.motorPanelY = std::clamp(s_dragOY + (my - s_dragMY), -1000.0f, 1000.0f);
+            PanelApply(win);
+            return true;
+        }
+        s_dragWin = nullptr;
+        s_panelSave.store(true);                    // el ini lo escribe el hilo de Present (MotorPagePresent)
+        return false;
+    }
+    if (edge && down && tw > 40.0f && mx > tx && mx < tx + tw && my > ty - 56.0f && my < ty - 1.0f) {
+        s_dragWin = win; s_dragMX = mx; s_dragMY = my; s_dragOX = g_cfg.motorPanelX; s_dragOY = g_cfg.motorPanelY;
+        return true;
+    }
+    return false;
+}
+
+// ranura 78: cantidad de filas
+static unsigned my_Count(void*) { return (unsigned)kNFilas; }
+// ranuras 85 / 86: el texto de cada fila es literal (sin numero de texto del juego)
+static int my_RowTextId(void*, unsigned) { return -1; }
+static const char* my_RowText(void*, unsigned row) { return row < (unsigned)kNFilas ? kFilas[row].nombre : ""; }
+// ranura 52: "restablecer apariencia" (escribe datos del jugador): no en el Motor. Ranura 49: aceptar de la pagina (mandaba el
+// evento de la fila al flujo). Sobre una fila con selector el juego ni la llama; queda anulada por si no hay fila elegida
+static void my_Nop(void*) {}
+
+// ranura 76: arma las filas. Primero corre la funcion de la pagina (deja el titulo con el escudo, los botones de ayuda y devuelve
+// "listo" como siempre) y despues se ponen las filas del Motor.
+// La funcion de la pagina (0x140c08e70) recorre su lista de filas (vector de u32 en +0x120..+0x128: 0 cara, 1 peinado, 2 fisico,
+// 3 ...) y a cada una le pone texto por numero, evento "0_Face"... y apagado segun el jugador; al final fija la cantidad. Mientras
+// corre se le deja una lista de kNFilas entradas con un valor que no conoce (>= 4): asi solo crea las filas vacias y fija la
+// cantidad en kNFilas. La lista se restaura apenas vuelve. Si la lista no es la esperada no se toca y las filas se corrigen despues.
+static uintptr_t my_Build(void* page) {
+    uint8_t* pg = (uint8_t*)page;
+    uint32_t* vb = (uint32_t*)P8(pg + 0x120); uint32_t* ve = (uint32_t*)P8(pg + 0x128);
+    uint32_t saved[17] = {}; size_t n = 0; bool tamper = false;
+    if (Ptr(vb) && ve > vb && (((uintptr_t)ve - (uintptr_t)vb) & 3) == 0 && (uintptr_t)ve - (uintptr_t)vb <= 17 * 4) {
+        n = (size_t)(ve - vb);
+        if (n >= (size_t)kNFilas && n <= 17 && Writable(vb, n * 4)) {
+            bool sane = true; for (size_t i = 0; i < n; i++) if (vb[i] >= 16) sane = false;
+            if (sane) {
+                memcpy(saved, vb, n * 4);
+                for (int i = 0; i < kNFilas; i++) vb[i] = 0xff;
+                uint32_t* cut = vb + kNFilas; memcpy(pg + 0x128, &cut, 8);
+                tamper = true;
+            }
+        }
+    }
+    const uintptr_t ret = o_build(page);
+    if (tamper) { memcpy(vb, saved, n * 4); memcpy(pg + 0x128, &ve, 8); }
+    uint8_t* I = P8(pg + 0x88);
+    uint8_t* root = Ptr(I) ? P8(I + 0x98) : nullptr;
+    void* list = Ptr(root) ? g_Child(root, 0) : nullptr;
+    const int k = s_nPages.load(std::memory_order_relaxed);
+    if (!Ptr(list)) { if (k <= 6) Log("motor (pagina): sin lista de filas en la pagina %p: quedan las filas de Apariencia", page); return ret; }
+    if (!tamper) g_SetCount(page, (unsigned)kNFilas);
+    int hechas = 0;
+    for (int i = 0; i < kNFilas; i++) {
+        g_RowType(page, 1, (unsigned)i, 0);                              // 1 = fila con selector (clase de control 0), como 0x140c079e0
+        void* row = g_Child(list, (unsigned)i);
+        if (!Ptr(row)) continue;
+        g_NodeOn(row, 1, 1, 2);                                          // la pagina apaga algunas (cara / peinado de caras reales)
+        void* sel = Sub(row, "selector");
+        if (!Ptr(sel)) continue;
+        g_SelClear(sel);
+        for (int j = 0; j < kFilas[i].n; j++) g_SelAdd(sel, kFilas[i].op[j]);
+        g_SelSet(sel, (unsigned)FilaActual(i));
+        hechas++;
+    }
+    g_RowTexts(page);                                                    // nombres de las filas (ranuras 85 / 86)
+    uint8_t* top = Ptr(I) ? P8(I + 0x90) : nullptr;
+    void* head = Ptr(top) ? Sub(top, "headline") : nullptr;
+    if (Ptr(head)) g_Headline(head, TRS("Motor en tiempo real"));
+    // (Agustin 23:12: "ni que muestres los botones abajo del mando") la barra de ayuda se arma con el texto de cada boton
+    // (Impl+0x168 + 0x20 x boton, 17 botones; 0x140e73660 saca los que no tienen texto y esconde la barra si no queda ninguno).
+    // Se vacian los que tienen texto; los modos de las acciones (Impl+0x120) no cambian: "volver" sigue andando
+    PanelInit(page);
+    int sinAyuda = 0;
+    if (g_cfg.motorHelpBar == 0 && Ptr(I) && Readable(I + 0x168, 17 * 0x20))
+        for (int i = 0; i < 17; i++) if (U64(I + 0x178 + (size_t)i * 0x20) != 0) { g_HelpText(page, i, ""); sinAyuda++; }
+    if (k <= 6) Log("motor (pagina): filas del Motor puestas en la pagina %p (%d de %d con selector; lista de la pagina %s, %d entradas; titulo %s; %d botones de ayuda sacados)",
+                    page, hechas, kNFilas, tamper ? "apartada mientras armaba" : "sin tocar", (int)n, Ptr(head) ? "puesto" : "sin nodo", sinAyuda);
+    return ret;
+}
+
+// ranura 63: el juego cambio el valor de una fila (izquierda / derecha; 0x140e3c770 la llama con grupo, fila y opcion nueva)
+static void my_Value(void*, int group, int row, int value) {
+    if (group != 0 || row < 0 || row >= kNFilas) return;
+    const int v = std::clamp(value, 0, kFilas[row].n - 1);
+    {
+        std::lock_guard<std::mutex> lk(g_cfgMutex);
+        if (row == 0) g_cfg.live[429][0] = (float)v;
+        else if (row == 1) g_cfg.live[429][1] = (float)v;      // 0 no, 1 alambre (piel sin teselar), 2 alambre con la teselacion
+        else g_cfg.live[429][2] = kCorteV[v];
+    }
+    static int n = 0; if (n++ < 40) Log("motor (pagina): %s -> %s", kFilas[row].nombre, kFilas[row].op[v]);
+}
+
+static uintptr_t my_ReadyPlayer(void* page);
+// ranura 75: la pagina espera al visor 3D y le pide el modelo. Justo antes se viste al visor (equipo + camiseta), con las mismas
+// guardas que usa el juego para su maniqui
+// el visor del Editar listo para recibir un pedido (las mismas guardas que la ranura 75 del juego, 0x140c09280)
+static uint8_t* MvReady() {
+    uint8_t* ctx = *(uint8_t**)kCtx; uint8_t* mv = (uint8_t*)g_GetMv();
+    if (!Ptr(ctx) || !Ptr(mv) || !Readable(mv, 0x118) || *(uintptr_t*)mv != kVtMv) return nullptr;
+    if (U32(mv + 0x90) != 0 || U32(mv + 0x8c) - 4u >= 2u) return nullptr;
+    return mv;
+}
+static uintptr_t my_Ready(void* page) {
+    if (g_cfg.motorOwnMenu != 0 && page == s_uiWin && !s_uiPlayer.load(std::memory_order_relaxed)) {
+        // menu propio sin jugador al abrir: no se pide el modelo. La pagina sigue apenas el visor esta en reposo, como siempre
+        uint8_t* mv = MvReady(); if (!mv) return 0;
+        g_MvShow(mv, 0);                                    // por si quedo a la vista de la pagina anterior
+        s_uiPlayerShown = false;
+        static int n = 0; if (n++ < 8) Log("motor (pagina): menu propio: el estudio abre sin jugador (se carga desde su icono)");
+        return 1;
+    }
+    const uintptr_t r = my_ReadyPlayer(page);
+    if (r && page == s_uiWin) s_uiPlayerShown = true;
+    return r;
+}
+static uintptr_t my_ReadyPlayer(void* page) {
+    if (g_cfg.motorDress) {
+        uint8_t* ctx = *(uint8_t**)kCtx; uint8_t* mv = (uint8_t*)g_GetMv();
+        if (Ptr(ctx) && Ptr(mv) && Readable(ctx + 0xe0, 0x10) && Readable(mv, 0x118) && *(uintptr_t*)mv == kVtMv && Ptr(P8(mv + 0x78)) &&
+            U32(mv + 0x90) == 0 && U32(mv + 0x8c) - 4u < 2u) {
+            const uint64_t key = U64(ctx + 0xe0); const uint32_t id = (uint32_t)(key >> 32), bad = *(uint32_t*)kInvalidTeam;
+            if (id != 0 && (uint16_t)key != 0xffff) {
+                uint32_t team = 0xfffcc000u;                              // "sin equipo" del propio juego
+                if (key == s_seenKey && s_seenTeam != bad && s_seenTeam != 0xffffffffu) team = s_seenTeam;
+                g_MvHold(mv, 0, nullptr, nullptr);
+                g_Dress(mv, key, team, 0, 0, team & 0xffffc000u, 0);
+                static int n = 0; if (n++ < 20) Log("motor (pagina): visor vestido antes de pedir el modelo (jugador %04X / %08X, equipo %08X%s)",
+                                                    (unsigned)(uint16_t)key, (unsigned)id, (unsigned)team, team == 0xfffcc000u ? " = sin equipo" : "");
+            }
+        }
+    }
+    return o_ready(page);
+}
+
+// ---------------------------------------------------------------- el gancho
+static void* hk_Factory(void* key, void* name, void* flag) {
+    void* page = o_factory(key, name, flag);
+    {   // de paso: el ultimo jugador con equipo que se vio en el Editar (para vestirlo con su camiseta)
+        uint8_t* ctx = *(uint8_t**)kCtx;
+        if (Ptr(ctx) && Readable(ctx + 0xe0, 0x10)) {
+            const uint64_t k = U64(ctx + 0xe0); const uint32_t t = U32(ctx + 0xe8), bad = *(uint32_t*)kInvalidTeam;
+            if ((uint32_t)(k >> 32) != 0 && (uint16_t)k != 0xffff && t != bad && t != 0xffffffffu) { s_seenKey = k; s_seenTeam = t; }
+        }
+    }
+    if (!page || !Readable(page, 0x138) || *(uintptr_t*)page != kVtApp) return page;
+    char nm[96];
+    const bool okName = GameStr(name, nm, sizeof nm);
+    const int k = s_nPages.fetch_add(1, std::memory_order_relaxed);
+    const bool mine = okName && strncmp(nm, "BugCheck/BugCheckSim", 20) == 0;
+    const bool swap = mine && g_cfg.motorPage != 0;
+    if (k < 12) Log("motor (pagina): pagina de Apariencia %p creada para el nodo \"%s\" -> %s", page, okName ? nm : "?",
+                    swap ? "filas del Motor" : mine ? "es la del Motor, pero motor_pagina = 0: quedan las filas de Apariencia" : "se deja como es");
+    if (mine) { s_motorWin.store(page); s_motorT.store(Now()); }
+    if (swap) {
+        *(void***)page = &s_vt[1];
+        s_uiWin = page; s_uiPanel.store(false); s_uiPlayer.store(g_cfg.motorStartPlayer != 0);      /* (17/11 07:44, prueba de 1CCF3CCE: "los jugadores no cargan") sin el jugador del visor el visor del Editar no corre su cuadro y los jugadores propios no pasan a la vista principal: se vuelve a cargar como en 5F08210D */ s_uiBack.store(false); s_uiPlayerShown = false; s_uiPanelApplied = -1;
+    }
+    return page;
+}
+
+// ---------------------------------------------------------------- menu propio: panel nativo a pedido y jugador a pedido
+// El panel de filas son dos nodos de la ventana: Impl+0x90 (titulo) e Impl+0x98 (raiz con la lista). Se esconden como lo hace el
+// juego con sus nodos: 0x140e4e650(nodo, on, 2) (bandera +0xc y aplicar) y ademas la propiedad "visible" de su clip (0x1007,
+// 0x141f96bc0), que es lo que mira el reproductor de la pantalla al dibujar.
+static void PanelShow(void* page, bool on) {
+    uint8_t* I = P8((uint8_t*)page + 0x88); if (!Ptr(I) || !Readable(I, 0xa0)) return;
+    int hechos = 0;
+    for (int k = 0; k < 2; k++) {
+        uint8_t* n = P8(I + (k ? 0x98 : 0x90));
+        if (!Ptr(n) || !Readable(n, 0x48)) continue;
+        void** vt = *(void***)n; if (!Ptr(vt) || !Readable(vt, 0x30) || !Ptr(vt[4])) continue;
+        if (((U32(n + 0xc) & 2u) != 0) != on) g_NodeShow(n, on ? 1 : 0, 2);
+        uint8_t* clip = P8(n + 0x40);
+        if (Ptr(clip) && Readable(clip, 0x10)) { g_ClipVisible(clip, on ? 1 : 0); hechos++; }
+    }
+    if (s_uiPanelApplied != (on ? 1 : 0)) {
+        s_uiPanelApplied = on ? 1 : 0;
+        static int n = 0; if (n++ < 12) Log("motor (pagina): menu propio: panel de filas %s (%d de 2 nodos)", on ? "a la vista" : "escondido", hechos);
+    }
+}
+// hilo del juego, una vez por cuadro con la pagina del Motor activa
+static std::atomic<double> s_uiTick0{ -1.0e9 }, s_uiTickLast{ -1.0e9 };
+// (15/11 j, Agustin 04:05: "verifica que la animacion tape la carga de la interfaz de el motor") listo = la pagina del Motor ya paso
+// 0.3 s seguidos por UiTick (lista del Editar escondida cada cuadro, estudio dibujando); hasta eso el editor sigue tapado
+bool MotorUiReady() { const double n = Now(); return n - s_uiTickLast.load() < 0.2 && n - s_uiTick0.load() > 0.3; }
+static void UiTick(void* win) {
+    { const double n = Now(); if (n - s_uiTickLast.load() > 0.2) s_uiTick0.store(n); s_uiTickLast.store(n); }
+    const bool wantPanel = false;      // (15/11 b, Agustin 02:23) la lista del Editar no se muestra nunca: "Vista" abre el panel propio (motorgizmo.cpp)
+    if (!wantPanel || s_uiPanelApplied != 1) PanelShow(win, wantPanel);      // escondido: se sostiene en cada cuadro
+    // (17/11 07:44, prueba de 1CCF3CCE: "los jugadores no cargan") sin el jugador del visor del Editar el visor no corre su cuadro y los
+    // jugadores propios no pasan a la vista principal (en el registro no sale "jugador a la escena principal"). Con algun jugador propio
+    // pedido se carga tambien el del visor, como en 5F08210D. Esconderlo sin perder la vista principal queda para despues.
+    bool anyPj = false; for (int i = 0; i < 32 && !anyPj; i++) { float p3[3], y = 0, sc = 1; anyPj = MotorPjGet(i, p3, &y, &sc); }
+    // (17:22) con el jugador del Editar oculto ya no hace falta cargarlo: el visor corre su cuadro con la lista vacia (motorvista.cpp)
+    // (17/11 17:52, captura de Agustin: con el jugador del Editar oculto, NINGUN jugador propio sale vestido) la ropa de los jugadores
+    // propios sale del uniforme que el visor del Editar carga para su jugador: con jugadores propios el jugador del Editar se carga
+    // siempre; "Oculto" solo lo deja en la escena del visor (motorvista s_hideEd), no lo saca.
+    const bool wantPlayer = s_uiPlayer.load(std::memory_order_relaxed) || anyPj;
+    if (wantPlayer != s_uiPlayerShown) {
+        static double askT = -1.0;
+        if (wantPlayer) {
+            if (askT < 0.0) askT = Now();
+            if (my_ReadyPlayer(win)) { s_uiPlayerShown = true; askT = -1.0; Log("motor (pagina): menu propio: jugador pedido al visor"); }
+            else if (Now() - askT > 4.0) {      // (15/11 f) 4 s sin que el visor lo acepte: se avisa y se deja de pedir
+                askT = -1.0; s_uiPlayer.store(false);
+                MotorErr("El jugador no se pudo cargar: el visor de modelos del Editar no acept\xC3\xB3 el pedido en 4 segundos (no est\xC3\xA1 listo o est\xC3\xA1 cargando otra cosa). Prob\xC3\xA1 de nuevo en unos segundos.");
+            }
+        } else {
+            askT = -1.0;
+            uint8_t* mv = (uint8_t*)g_GetMv();
+            if (Ptr(mv) && Readable(mv, 0x118) && *(uintptr_t*)mv == kVtMv) { g_MvShow(mv, 0); Log("motor (pagina): menu propio: jugador quitado de la vista"); }
+            s_uiPlayerShown = false;
+        }
+    }
+}
+// (15/11 b) las mismas opciones de las filas, para el panel propio (hilo de Present)
+int MotorViewCount(int row) { return row >= 0 && row < kNFilas ? kFilas[row].n : 0; }
+const char* MotorViewName(int row, int op) { if (row < 0 || row >= kNFilas) return ""; return op < 0 ? kFilas[row].nombre : op < kFilas[row].n ? kFilas[row].op[op] : ""; }
+int MotorViewGet(int row) { return row >= 0 && row < kNFilas ? FilaActual(row) : 0; }
+void MotorViewSet(int row, int op) { my_Value(nullptr, 0, row, op); }
+bool MotorUiOn() { return g_cfg.motorOwnMenu != 0 && g_cfg.motorPage != 0 && s_ok && MotorPageActive(); }
+bool MotorUiPanel() { return s_uiPanel.load(std::memory_order_relaxed); }
+bool MotorUiPlayer() { return s_uiPlayer.load(std::memory_order_relaxed); }
+void MotorUiTogglePanel() { s_uiPanel.store(!s_uiPanel.load()); }
+void MotorUiTogglePlayer() { s_uiPlayer.store(!s_uiPlayer.load()); }      // (17/11 07:44) vuelve como en 5F08210D
+void MotorUiBack() { s_uiBack.store(true); }
+bool MotorUiTakeBack() { return s_uiBack.exchange(false); }
+
+// la ventana que esta recibiendo entrada en este cuadro (la pasa menumouse.cpp): si es la del estudio del Motor, sigue viva
+// (15/11 j, Agustin 04:04: "evita que cargue el menu de editar al abrir el menu o que se muestre por un segundo") el menu de
+// Editar (menu::MenuEditMenu, tabla 0x1427012b0) recibe entrada mientras se elige; si la ultima vez que se lo vio tenia el cursor
+// en el boton 12 (fila 11, el del Motor) y deja de recibir entrada sin que otra ventana la reciba, se acepto el Motor: desde ese
+// cuadro se tapa la pantalla (MotorPreCoverDraw en motorgizmo.cpp) hasta que el editor del Motor dibuja su propia entrada. Si a los 0.25 s otra
+// ventana recibe entrada (por ejemplo se volvio atras), se destapa enseguida. Tope 2.5 s.
+static const uintptr_t kVtEditMenu = 0x1427012b0ull;
+static std::atomic<double> s_edSeenT{ -1.0e9 }, s_coverT{ -1.0e9 }; static std::atomic<bool> s_ed12{ false }, s_coverArmed{ false };
+static void EditMenuSeen(void* win) {
+    const uintptr_t vp = *(uintptr_t*)win;
+    if (vp == kVtEditMenu) {
+        uint8_t* I = Readable((uint8_t*)win + 0x88, 8) ? *(uint8_t**)((uint8_t*)win + 0x88) : nullptr;
+        const int row = Readable(I, 0xe0) ? (int)*(uint32_t*)(I + 0xd8) : -1;
+        static int lastRow = -2; if (row != lastRow) { lastRow = row; static int n = 0; if (n++ < 30) Log("motor (pagina): menu de Editar, cursor en la fila %d", row); }
+        s_ed12.store(row == 11); s_edSeenT.store(Now()); s_coverArmed.store(!g_menuOpen.load());
+        if (Now() - s_coverT.load() < 2.8 && Now() - s_coverT.load() > 0.05) { s_coverT.store(-1.0e9); MotorCoverCancel(); }   // el menu de Editar sigue: no era el Motor
+        return;
+    }
+    if (win == s_motorWin.load(std::memory_order_relaxed)) return;
+    s_coverArmed.store(false);                                           // otra ventana: no se acepto el Motor (o ya paso)
+    if (Now() - s_coverT.load() > 0.25 && Now() - s_coverT.load() < 2.5 && !MotorPageActive()) { s_coverT.store(-1.0e9); MotorCoverCancel(); Log("motor (pagina): tapa de entrada sacada (otra ventana)"); }
+}
+// overlay.cpp, cada cuadro, antes del editor del Motor
+// la llama motorgizmo.cpp (MotorPreCoverDraw) en cada cuadro: el menu de Editar dejo de recibir entrada con el cursor en el boton 12?
+void MotorPreCoverPoll() {
+    const double now = Now();
+    if (s_coverArmed.load() && !g_menuOpen.load() && s_ed12.load() && now - s_edSeenT.load() > 0.05 && now - s_edSeenT.load() < 0.5) {
+        s_coverArmed.store(false); s_coverT.store(now); MotorCoverArrive(); Log("motor (pagina): se acepto el boton 12 -> tapa de entrada");
+    }
+}
+double MotorEditMenuSeenT() { return s_edSeenT.load(); }
+
+void MotorPageSeen(void* win) {
+    if (win) EditMenuSeen(win);
+    if (!win || win != s_motorWin.load(std::memory_order_relaxed)) return;
+    const uintptr_t vp = *(uintptr_t*)win;
+    if (vp == (uintptr_t)&s_vt[1] || vp == kVtApp) s_motorT.store(Now(), std::memory_order_relaxed);
+    if (vp == (uintptr_t)&s_vt[1] && g_cfg.motorOwnMenu != 0 && win == s_uiWin) UiTick(win);
+    else s_motorWin.store(nullptr, std::memory_order_relaxed);         // esa memoria ya es de otra ventana
+}
+// el estudio del Motor esta abierto (su pagina recibio entrada hace menos de 0.6 s)
+bool MotorPageIs(void* win) { return win && win == s_motorWin.load(std::memory_order_relaxed); }
+// (15/11 n, Agustin 05:08: "al abrir el menu insert se recarga el motor") con el menu del mod abierto el juego deja de pasar por el
+// gancho que marca la pagina (s_motorT) y a los 0.6 s el Motor parecia cerrado: al cerrar el menu volvia a entrar con transicion,
+// sonido y carga. Si la pagina estaba activa al abrir el menu se la sigue dando por activa mientras este abierto y 1 s despues.
+bool MotorPageActive() {
+    static bool s_hold = false; static double s_closeT = -1.0e9; static bool s_wasOpen = false;
+    const double n = Now(); const bool act = n - s_motorT.load(std::memory_order_relaxed) < 0.6, open = g_menuOpen.load(std::memory_order_relaxed);
+    if (open) { if (act) s_hold = true; s_wasOpen = true; return act || s_hold; }
+    if (s_wasOpen) { s_wasOpen = false; s_closeT = n; }
+    if (act) { s_hold = false; return true; }
+    if (s_hold && n - s_closeT < 1.0) return true;
+    s_hold = false; return false;
+}
+
+void MotorPagePresent() {
+    if (s_panelSave.exchange(false)) {
+        char b[32];
+        snprintf(b, sizeof b, "%.0f", g_cfg.motorPanelX); SaveOption("motor_panel_x", b);
+        snprintf(b, sizeof b, "%.0f", g_cfg.motorPanelY); SaveOption("motor_panel_y", b);
+        Log("motor (pagina): panel soltado en %.0f, %.0f (guardado)", g_cfg.motorPanelX, g_cfg.motorPanelY);
+    }
+    {   // (Agustin 23:33: el Motor "que venga con la camara libre") al abrir el estudio se prende la camara libre (x344 = 2: el juego
+        // sigue viendo el teclado; en el Motor se vuela con el boton derecho) y al salir se apaga si la prendio el Motor
+        static bool s_actWas = false, s_camMine = false;
+        const bool act = MotorPageActive();
+        if (act != s_actWas) {
+            s_actWas = act;
+            int what = 0;
+            {   std::lock_guard<std::mutex> lk(g_cfgMutex);
+                if (act && g_cfg.motorCam != 0 && g_cfg.live[344][0] < 0.5f) { g_cfg.live[344][0] = 2.0f; s_camMine = true; what = 1; }
+                else if (!act && s_camMine) { g_cfg.live[344][0] = 0.0f; s_camMine = false; what = 2; }
+                else if (!act) s_camMine = false; }
+            if (what == 1) Log("motor (pagina): estudio abierto -> camara libre prendida (boton derecho apretado = volar; gizmo arriba a la derecha)");
+            if (what == 2) Log("motor (pagina): estudio cerrado -> camara libre apagada");
+        }
+    }
+    FreeCamMotorTick();                                 // (15/11) sin modelo el visor no pide camara: la camara libre sigue viva igual
+    if (s_tried) return;
+    s_tried = true;
+    if (!g_cfg.motorPatch) { Log("motor (pagina): parches en memoria apagados (motor = 0): el estudio queda con las filas de Apariencia"); return; }
+    if (!g_cfg.motorPage) Log("motor (pagina): motor_pagina = 0: el estudio queda con las filas de Apariencia (el gancho va igual, solo para saber cuando esta abierto)");
+    HMODULE mod = GetModuleHandleW(nullptr);
+    auto dos = (const IMAGE_DOS_HEADER*)mod; auto nt = (const IMAGE_NT_HEADERS64*)((const char*)mod + dos->e_lfanew);
+    if ((uintptr_t)mod != 0x140000000ull || nt->FileHeader.TimeDateStamp != kStamp) { Log("motor (pagina): exe distinto: sin gancho"); return; }
+    if (!Readable((const void*)kFactory, sizeof kFactorySig) || memcmp((const void*)kFactory, kFactorySig, sizeof kFactorySig) != 0 ||
+        !Readable((const void*)0x141f06920ull, sizeof kDressSig) || memcmp((const void*)0x141f06920ull, kDressSig, sizeof kDressSig) != 0) {
+        Log("motor (pagina): firma distinta en 0x140a977d0 o 0x141f06920: se omite"); return;
+    }
+    void** vt = (void**)kVtApp;
+    if (!Readable(vt - 1, sizeof(void*) * (kSlots + 1))) { Log("motor (pagina): no se puede leer la tabla 0x1426edeb8: se omite"); return; }
+    for (const auto& e : kExpect) if ((uintptr_t)vt[e.slot] != e.fn) { Log("motor (pagina): la ranura %d de la tabla no es la esperada (%p): se omite", e.slot, vt[e.slot]); return; }
+    memcpy(s_vt, vt - 1, sizeof(void*) * (kSlots + 1));
+    o_build = (PFN_Page)vt[76]; o_ready = (PFN_Page)vt[75];
+    s_vt[1 + 49] = (void*)&my_Nop; s_vt[1 + 52] = (void*)&my_Nop; s_vt[1 + 63] = (void*)&my_Value; s_vt[1 + 75] = (void*)&my_Ready;
+    s_vt[1 + 76] = (void*)&my_Build; s_vt[1 + 78] = (void*)&my_Count; s_vt[1 + 85] = (void*)&my_RowTextId; s_vt[1 + 86] = (void*)&my_RowText;
+    if (MH_CreateHook((void*)kFactory, (void*)&hk_Factory, (void**)&o_factory) != MH_OK || MH_EnableHook((void*)kFactory) != MH_OK) {
+        MH_RemoveHook((void*)kFactory); Log("motor (pagina): MinHook no pudo poner el gancho en 0x140a977d0: se omite"); return;
+    }
+    s_ok = true;
+    Log("motor (pagina): lista (fabrica de paginas del Editar 0x140a977d0; el estudio del Motor lleva filas nativas Vista / Alambre / Pantalla partida; vestir = %d)", g_cfg.motorDress);
+}
+
+}   // namespace fx

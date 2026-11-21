@@ -1201,10 +1201,24 @@ static void WrinkleCapture(ID3D11DeviceContext* c, FaceMesh* m) {   // con s_mx 
     b->Release();
 }
 static int s_wrLogs = 0; static double s_wrLogT = 0;
+// (11/11, Agustin: "cambios rapidos en las expresiones, que sigan el gameclock") RELOJ DE LAS ARRUGAS = el de los gestos (exprbones.cpp
+// AnimT): si el reloj del juego (fila 157.x) avanzo desde el cuadro anterior se toma ese paso (la camara lenta de las repeticiones frena
+// tambien las arrugas, antes iban a tiempo real y llegaban antes que la cara); si esta quieto o en cero (editor, menus) el reloj real
+static double WrClock() {   // una vez por Present
+    static double t = 0.0, lastGame = -1.0, lastReal = -1.0;
+    const double real = Now(), game = (double)g_cfg.live[157][0];
+    double dG = lastGame < 0.0 ? 0.0 : game - lastGame; const double dR = lastReal < 0.0 ? 0.0 : real - lastReal;
+    if (dG < -50000.0) dG += 100000.0;
+    lastGame = game; lastReal = real;
+    // en partido con el reloj del juego reconocido manda solo ese reloj (pausa = 0), igual que AnimT (exprbones.cpp)
+    if (g_cfg.live[157][3] >= 0.5f && g_cfg.live[93][3] >= 0.5f) t += dG < 0.0 ? 0.0 : dG > 0.1 ? 0.1 : dG;
+    else t += (dG > 1e-5 && dG < 0.5) ? dG : (dR < 0.0 ? 0.0 : dR > 1.0 / 15.0 ? 1.0 / 15.0 : dR);
+    return t;
+}
 static void WrinklePresent(ID3D11DeviceContext* imm) {   // con s_mx tomado (Present)
     const bool on = g_cfg.live[397][2] > 0.0f;
     const float x = g_cfg.live[397][0]; const float tau = x > 0.0f ? 0.10f * x : 0.05f;   // mismo tiempo que los huesos (397.x); sin suavizado de huesos, 50 ms
-    const double now = Now(); int nUp = 0;
+    const double now = WrClock(), nowReal = Now(); int nUp = 0;
     for (auto& kv : s_meshes) {
         FaceMesh* m = kv.second;
         if (m->wrStI == 0) continue;
@@ -1222,8 +1236,8 @@ static void WrinklePresent(ID3D11DeviceContext* imm) {   // con s_mx tomado (Pre
         bool bad = false; for (float v : tgt) if (!(v == v) || fabsf(v) > 64.0f) bad = true;
         if (bad) continue;
         float dt = (float)(now - m->wrT); m->wrT = now;
-        if (!m->wrHave || dt > 1.0f || dt <= 0.0f) { memcpy(m->wrW, tgt, sizeof tgt); memset(m->wrV, 0, sizeof m->wrV); m->wrHave = true; }
-        else {
+        if (!m->wrHave || dt > 1.0f) { memcpy(m->wrW, tgt, sizeof tgt); memset(m->wrV, 0, sizeof m->wrV); m->wrHave = true; }
+        else if (dt > 0.0f) {   // dt = 0: reloj del juego en pausa, las arrugas quedan como estan
             if (dt > 1.0f / 15.0f) dt = 1.0f / 15.0f;
             // resorte criticamente amortiguado (SmoothDamp), igual que Damp() de exprbones.cpp
             const float om = 2.0f / (tau > 0.001f ? tau : 0.001f), xx = om * dt, e = 1.0f / (1.0f + xx + 0.48f * xx * xx + 0.235f * xx * xx * xx);
@@ -1232,7 +1246,7 @@ static void WrinklePresent(ID3D11DeviceContext* imm) {   // con s_mx tomado (Pre
         if (!m->wrCb) { D3D11_BUFFER_DESC d{}; d.ByteWidth = 48; d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_CONSTANT_BUFFER; if (FAILED(g_dev.dev->CreateBuffer(&d, nullptr, &m->wrCb))) { m->wrCb = nullptr; continue; } }
         const float up[12] = { m->wrW[0], 1.0f, tau, 0.0f, m->wrW[1], m->wrW[2], m->wrW[3], m->wrW[4], m->wrW[5], m->wrW[6], m->wrW[7], m->wrW[8] };
         imm->UpdateSubresource(m->wrCb, 0, nullptr, up, 0, 0); nUp++;
-        if (s_wrLogs < 6 && now - s_wrLogT > 10.0) { s_wrLogT = now; s_wrLogs++;
+        if (s_wrLogs < 6 && nowReal - s_wrLogT > 10.0) { s_wrLogT = nowReal; s_wrLogs++;
             Log("arrugas: malla %d pesos del juego (0.y %.2f | 3 %.2f %.2f %.2f %.2f | 4 %.2f %.2f %.2f %.2f) suavizados tau %.3f s", m->id, tgt[0], tgt[1], tgt[2], tgt[3], tgt[4], tgt[5], tgt[6], tgt[7], tgt[8], tau); }
     }
     (void)nUp;

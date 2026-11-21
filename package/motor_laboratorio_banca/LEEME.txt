@@ -1,0 +1,5 @@
+Laboratorio de animaciones en el Motor del Editar (21/11/2026): banco de st024 (Maracana) para la escena del Editar.
+zfx_banca_center1_target.fmdl / zfx_banca_center1_probe.fmdl = center1_target / center1_probe de st024.fpk sin el suelo de afuera
+ni el anillo del techo (tools/motor/banca_fmdl.py). La escena se arma en la PC con tools/fox/escena_objetos.py sobre el Default de
+UltraGraphicsConfig (ver el comando en el hilo) y va a Dream Patch Sider\content\motor-tiempo-real\escena_banca\ (+ tex\ con las
+texturas del banco). La entrega MotorTiempoReal.lua 0.5.2 solo con content\motor-tiempo-real\banca.txt (lo pone la ventana F8).

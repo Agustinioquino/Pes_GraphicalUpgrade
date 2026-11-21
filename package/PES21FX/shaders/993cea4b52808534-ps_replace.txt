@@ -91,7 +91,8 @@ void main(
   // PES21 DOF v2 (16/10): x41 escala el desenfoque del fondo (1 = original, <1 = el plano medio queda mas nitido),
   // y41 curva (>1 = el fondo cercano casi nitido y el lejano igual de borroso). w41 on/off [Alt+Shift+8]
   { float4 DF = IniParams.Load(int2(41,0));
-    if (DF.w > 0.5 && r0.x > 0) r0.x = pow(saturate(r0.x), max(DF.y, 0.5)) * max(DF.x, 0.0); }
+    if (DF.w > 0.5 && r0.x > 0) r0.x = pow(saturate(r0.x), max(DF.y, 0.5)) * max(DF.x, 0.0);
+    if (DF.w > 1.5) r0.x = 0; }   // (14/11 h) w41 = 2: sin desenfoque (lo pone la DLL con la camara libre, [PES21FX] camara_sin_dof)
   r0.x = max(-1, r0.x);
   r0.x = min(1, r0.x);
   o0.w = r0.x * 0.5 + 0.5;
