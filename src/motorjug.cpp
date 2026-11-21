@@ -227,7 +227,8 @@ static uint64_t __fastcall hk_Tick(uintptr_t impl, uintptr_t a, uintptr_t b, uin
     // (17/11 etapa 2) reloj de los jugadores propios del Motor (motorpj.cpp): una vez por cuadro, con el tick del visor del Editar
     {   uintptr_t mv = 0, task = 0, im = 0; static ULONGLONG s_pjT = 0; const ULONGLONG nowMs = GetTickCount64();
         const bool vis = RdP(kMV, &mv) && PtrOk(mv) && RdP(mv + 0x78, &task) && PtrOk(task) && RdP(task + 0x90, &im) && PtrOk(im);
-        if (vis ? im == impl : nowMs - s_pjT >= 8) { s_pjT = nowMs; MotorPjTick(s_on.load(std::memory_order_relaxed), vis ? im : 0); }
+        // (21/11) con el laboratorio de animaciones en un partido los jugadores del Motor son suyos (los mueve el reloj del partido)
+        if (!MotorLabOwnsPlayers() && (vis ? im == impl : nowMs - s_pjT >= 8)) { s_pjT = nowMs; MotorPjTick(s_on.load(std::memory_order_relaxed), vis ? im : 0); }
     }
     return r;
 }

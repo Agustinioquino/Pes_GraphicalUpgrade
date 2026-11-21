@@ -245,7 +245,7 @@ static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         }
         if (wd != 0) { if (MotorUiWheel(wd)) {} else if (FreeCamActive()) FreeCamWheel(wd); else MenuMouseWheel(wd); }   // (15/11 h) sobre un panel del editor del Motor la rueda es del panel
     }
-    if ((g_menuOpen || g_inspectOn) && s_init) {
+    if ((g_menuOpen || g_inspectOn || MotorLabWantsInput()) && s_init) {      // (21/11) laboratorio de animaciones: su ventana usa el mouse
         ImGui_ImplWin32_WndProcHandler(h, m, w, l);
         ImGuiIO& io = ImGui::GetIO();
         bool mouse = m >= WM_MOUSEFIRST && m <= WM_MOUSELAST;
@@ -1928,6 +1928,10 @@ static void DrawCards(const std::vector<int>& ids, bool labels) {
 static void DrawToolsPage() {
     PageTitle(kIcoTools, TRS("Herramientas"), TRS("Para ver que hace el mod y pasarle datos a Claude; no hacen falta para jugar."));
     ImGui::Spacing();
+    if (ImGui::CollapsingHeader(TRS("Laboratorio de animaciones"), ImGuiTreeNodeFlags_DefaultOpen)) {      // (21/11 3icxbh) motorlab.cpp
+        if (ImGui::Button(TRS(MotorLabWantsInput() ? "Cerrar el laboratorio (F8)" : "Abrir el laboratorio (F8)"), ImVec2(240 * UIK(), 0))) MotorLabToggle();
+        ImGui::TextWrapped("%s", TRS("En un partido: banca real del estadio con jugadores del Motor sentados, cambiar sus animaciones y ver nombres, cuadros, esqueleto y valores encima de cada uno. Necesita Estadio > Banco de suplentes = Si."));
+    }
     if (ImGui::CollapsingHeader(TRS("Inspector y catalogo de shaders"), ImGuiTreeNodeFlags_DefaultOpen)) {
         { bool ins = g_inspectOn.load(); if (ins) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.2f, 1));
           if (ImGui::Button(ins ? "Inspector: ON" : "Inspector", ImVec2(130 * UIK(), 0))) { g_inspectOn = !ins; s_status = TRS(ins ? "Inspector apagado" : "Inspector visual: flechas sobre cada parte conocida; clic en una ficha para ver sus texturas"); }
@@ -2987,7 +2991,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         const bool want = mmCur && g_cfg.mouseHint && g_cfg.menuCursor != 0;
         s_mh = std::clamp(s_mh + (want ? dt / 0.20f : -dt / 0.40f), 0.0f, 1.0f); mouseHintA = s_mh * s_mh * (3.0f - 2.0f * s_mh);
     }
-    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo && !curToast && mouseHintA <= 0.0f && !repe) {
+    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo && !curToast && mouseHintA <= 0.0f && !repe && !MotorLabWantsInput() && !MotorLabOwnsPlayers()) {
         g_blockGamePad = false;   // (14/11) sin menu ni camara libre no se dibuja nada (ni se lee el mando): el juego vuelve a ver el mando
         return;
     }
@@ -3285,9 +3289,10 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (repe) RepeticionDraw(mmCur);   // (14/11 n) solo la marca y el minuto al pasar el mouse sobre la barra DEL JUEGO, con o sin camara libre (antes no se dibujaba nada con la camara libre)
     if (keyHud) KeyHudDraw();
     InspectDrawOverlay();
+    MotorLabDraw();      // (21/11 3icxbh) laboratorio de animaciones (motorlab.cpp)
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
     g_menuTyping = g_menuOpen && ImGui::GetIO().WantTextInput;
-    g_blockGameKeys = (g_menuOpen && (g_cfg.blockKeys == 2 || (g_cfg.blockKeys == 1 && ImGui::GetIO().WantTextInput))) || FreeCamBlocksKeys();
+    g_blockGameKeys = (g_menuOpen && (g_cfg.blockKeys == 2 || (g_cfg.blockKeys == 1 && ImGui::GetIO().WantTextInput))) || FreeCamBlocksKeys() || (MotorLabWantsInput() && ImGui::GetIO().WantTextInput);
     if (!s_btnPending.empty()) {
         std::string a = s_btnPending; s_btnPending.clear();
         if (a == "repe_libre_lenta") {   // (14/11, Agustin: "camara libre con camara lenta en repeticion") las dos solas durante la repeticion

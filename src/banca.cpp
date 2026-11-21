@@ -59,6 +59,11 @@ extern "C" { volatile unsigned char pes21fx_banca_ropa = 0; }
 
 namespace fx {
 
+// (21/11 3icxbh) laboratorio de animaciones (motorlab.cpp): banco que usa (bit 0 local, bit 1 visitante; sus suplentes reales no se
+// muestran) y su reloj (los jugadores del Motor corren con el del partido y se sueltan al terminar)
+std::atomic<int> g_labHideSide{0};
+void MotorLabGameTick(); void MotorLabMatchEnd();
+
 namespace {
 const unsigned kStamp = 0x62787C6A;
 const int kRow = 516;
@@ -1299,7 +1304,8 @@ __declspec(noinline) int SubUpdate(LiveSub& u, float T, bool moved) {
         void* h = nullptr; memcpy(&h, fd + 0x48, 8);
         void* face = FaceEnsure(u);                       // (2c) cara y manos en pose neutra, como match::Player::vf10
         if (h && face) ((FaceNeutralFn)kFaceNeutral)(h, face, 0);
-        if (h && *((const uint8_t*)h + 0x5a) == 0) ((HumanShowFn)kHumanShow)(h, 1);   // si algo lo escondio, se vuelve a mostrar
+        if ((g_labHideSide.load(std::memory_order_relaxed) >> (u.side & 1)) & 1) { if (h && *((const uint8_t*)h + 0x5a) != 0) ((HumanShowFn)kHumanShow)(h, 0); }   // (21/11) banco del laboratorio
+        else if (h && *((const uint8_t*)h + 0x5a) == 0) ((HumanShowFn)kHumanShow)(h, 1);   // si algo lo escondio, se vuelve a mostrar
         void* ctl = nullptr; memcpy(&ctl, fd + 0x50, 8);
         if (ctl) {
             const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1), cur = ((ClipTimeFn)kClipTime)(ctl, 0, 1);
@@ -1646,6 +1652,7 @@ void __fastcall hk_HumanDtor(void* self, void* a2, void* a3, void* a4) {
     if (s_okSubs) {
         std::lock_guard<std::recursive_mutex> lk(s_subMx);
         if (s_live.load() || !s_okLoad) {
+            MotorLabMatchEnd();                          // (21/11) los del laboratorio tambien, antes de que se vaya la escena
             if (s_subs.phase != kIdle) SubsDestroyAll("termino el partido");
             s_live.store(false); s_ended.store(true);
             s_matchEnd.store(GetTickCount64());
@@ -1667,6 +1674,7 @@ void __fastcall hk_ModeUpd(void* self, void* p2, void* p3) {
         std::lock_guard<std::recursive_mutex> lk(s_subMx);
         SubsTick(nullptr);
     }
+    MotorLabGameTick();                                  // (21/11) jugadores del laboratorio de animaciones (motorlab.cpp)
     o_modeUpd(self, p2, p3);
 }
 
@@ -1778,6 +1786,41 @@ void Install() {
         !s_okHide ? "NO (firma de 0x1419055f0 distinta)" : s_okVisHook ? (s_okApply ? "listo (SetVisible y al aplicar)" : "solo por SetVisible") : "solo en cinematicas (gancho de SetVisible fallo)", Live(0, 0.0f));
 }
 } // namespace
+
+// (21/11 3icxbh) para el laboratorio de animaciones (motorlab.cpp): asientos del banco de un lado (mundo: x, y, z, giro en grados, como
+// fd+8..0x14), los mismos que usan los suplentes reales (BuildSpots con la altura y el adelante / atras de la fila 517)
+int BancaLabSpots(int side, int want, float (*out)[4], int max, char* why, size_t wn) {
+    if (why && wn) why[0] = 0;
+    if (!(Live(0, 0.0f) > 0.5f && Live(1, 1.0f) > 0.5f)) { if (why) sprintf_s(why, wn, "Prende Estadio > Banco de suplentes (con Esconder el banco de Konami = Si) y entra de nuevo al partido: asi se leen los asientos del banco"); return 0; }
+    SeatSet ss; { std::lock_guard<std::mutex> lk(s_seatMx); ss = s_seats; }
+    if (ss.n <= 0) { if (why) sprintf_s(why, wn, "%s", kPrepWhy[2]); return 0; }
+    if (ss.t <= s_matchEnd.load()) {
+        uintptr_t bm = 0, bb = 0, be = 0, bs = 0; char nm[64] = {};
+        if (!FindBench(bm, bb, be, bs, nm, sizeof nm) || strncmp(nm, ss.pre, 5)) { if (why) sprintf_s(why, wn, "%s", kPrepWhy[4]); return 0; }
+    }
+    Spot sp[40]; int seats = 0, rows = 0;
+    const int got = BuildSpots(ss, side & 1, std::min(want, 40), Live2(2, 0.0f), Live2(3, 0.0f), sp, 40, &seats, &rows);
+    if (got <= 0 && why) sprintf_s(why, wn, "el banco %s no tiene asientos en este estadio (%d de %s)", side ? "visitante" : "local", ss.n, ss.pre);
+    const int n = std::min(got, max);
+    for (int k = 0; k < n; k++) { out[k][0] = sp[k].x; out[k][1] = sp[k].y; out[k][2] = sp[k].z; out[k][3] = sp[k].yaw; }
+    return n;
+}
+// los suplentes de un lado del partido (convocados despues de los 11): id para la base (motorpj.cpp DbFind) y nombre
+int BancaLabRealSubs(int side, uint32_t* ids, char (*names)[40], int max) {
+    uintptr_t m = 0, team = 0; uint8_t conv = 0;
+    if (!Rd(kMatchPtr, m) || !Heap(m) || !Rd(m + 0x1978 + (uintptr_t)(side & 1) * 0x28, team) || !Heap(team) || !Rd(team + 0x2eec, conv) || conv < 11 || conv > 40) return 0;
+    int n = 0;
+    for (int i = 11; i < conv && n < max; i++) {
+        uint32_t idx = 0xff; if (!Rd(team + 4 + (uintptr_t)i * 4, idx) || idx >= 40) continue;
+        uint8_t pl[0xF0] = {}; if (!SafeCopy(pl, (const void*)(team + 0xa8 + (uintptr_t)idx * 0x128 + 0x30), sizeof pl)) continue;
+        uint64_t id = 0; memcpy(&id, pl, 8); if (!id || (uint32_t)id == 0xffffu || (uint32_t)id == 0xffffffffu) continue;
+        ids[n] = (uint32_t)(id >> 32) ? (uint32_t)(id >> 32) : (uint32_t)(uint16_t)id;
+        for (int c = 0; c < 39; c++) { const char ch = (char)pl[0x9c + c]; names[n][c] = ch && (unsigned char)ch < 0x20 ? '?' : ch; if (!ch) break; } names[n][39] = 0;
+        n++;
+    }
+    return n;
+}
+bool BancaLabInMatch() { return s_okLoad && Now() - s_modeT.load(std::memory_order_relaxed) < 1.0; }
 
 // (17/11 3icxbh) para motorpj.cpp: frenar la descarga de un .gani (hash del gestor) y reproducir un clip con vf1 sin pasar por la sonda
 bool BancaGaniKeep(uint64_t h, bool on) {
