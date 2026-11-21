@@ -370,7 +370,7 @@ extern std::atomic<bool> g_autoDumpAny; void InspectAutoDump(ID3D11DeviceContext
 bool InspectBegin(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEntry* vs, int kind, UINT verts, UINT inst);
 void InspectEnd(ID3D11DeviceContext* c); void InspectPresent(); void InspectDrawOverlay(); void InspectReload();
 // (21/11 3icxbh) laboratorio de animaciones en el partido (motorlab.cpp): ventana F8, banca con jugadores del Motor
-void MotorLabDraw(); void MotorLabToggle(); bool MotorLabWantsInput(); bool MotorLabOwnsPlayers(); void MotorLabGameTick(); void MotorLabMatchEnd();
+void MotorLabDraw(); void MotorLabToggle(); bool MotorLabWantsInput(); bool MotorLabShowing(); bool MotorLabOwnsPlayers(); void MotorLabGameTick(); void MotorLabMatchEnd();
 // capas editables (ventana "Capas" del inspector; PES21FX_capas.ini): por hash de pixel shader, textura por slot y "oculta"
 struct LayerOv { std::map<int, std::string> slot; bool hidden = false; bool highlight = false; };   // highlight: dibujar con PS magenta plano   // slot -> "file:ruta" | "none"
 extern std::atomic<bool> g_layersAny;   // hay alguna capa definida (evita el costo cuando no se usa)

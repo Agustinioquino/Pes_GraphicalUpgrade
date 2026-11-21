@@ -2991,7 +2991,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         const bool want = mmCur && g_cfg.mouseHint && g_cfg.menuCursor != 0;
         s_mh = std::clamp(s_mh + (want ? dt / 0.20f : -dt / 0.40f), 0.0f, 1.0f); mouseHintA = s_mh * s_mh * (3.0f - 2.0f * s_mh);
     }
-    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo && !curToast && mouseHintA <= 0.0f && !repe && !MotorLabWantsInput() && !MotorLabOwnsPlayers()) {
+    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo && !curToast && mouseHintA <= 0.0f && !repe && !MotorLabShowing() && !MotorLabOwnsPlayers()) {
         g_blockGamePad = false;   // (14/11) sin menu ni camara libre no se dibuja nada (ni se lee el mando): el juego vuelve a ver el mando
         return;
     }

@@ -13,6 +13,14 @@
 // Jugadores: "genericos del Editar" = el jugador base de Konami (id 0xffff, el del LoadId del visor del Editar; INFERIDO que el juego lo
 // arma con el registro vacio, sin cara de nadie) o "suplentes reales" (los convocados del lado elegido, por su id en la base).
 // Mientras el laboratorio usa un banco, los suplentes reales de la banca de ese lado se esconden (banca.cpp SubUpdate).
+// (21/11 20:43, Agustin: "yo no queria en un partido real queria en el modo editar motor real"; 20:46: "que al momento de cargar la banca
+// tambien carguen los jugadores genericos del modo editar") TAMBIEN EN EL MOTOR DEL EDITAR: ahi el banco es un modelo del estadio st024 puesto
+// en la escena del Motor (escena\Default.fpkd, StadiumModel, MotorTiempoReal.lua): el banco de la izquierda (center1_target + center1_probe)
+// corrido (+11.40, 0, -40.99) para que quede centrado en x = 0 con el borde del foso en z = +1 (los suplentes miran a -z, al centro del
+// estudio, donde apuntan los focos). Asientos medidos del fmdl (tools/fox/fmdl.py): asiento a y = 0.13, piso del foso y = -0.46, respaldo
+// z = 44.95 del estadio (cadera a 44.83 -> 3.84 en el Editar). Los jugadores los mueve el reloj del visor del Editar (motorjug.cpp hk_Tick),
+// como a los del Motor. Pasto real = el pasto del mod en el editor (fila 393, grass.cpp GrassEditorAfterFace) cortado en el borde del foso
+// (g_grassEdCutZ -> pes_grass_cull_cs gPad[4].zw).
 // Lo que se ve encima de los modelos se proyecta con la camara con la que el juego dibujo la escena (SceneCB m_projectionView, como
 // motorgrid.cpp); con la camara libre prendida, si no coincide con ella, con la de la camara libre.
 #include "core.h"
@@ -32,6 +40,7 @@ int BancaLabSpots(int side, int want, float (*out)[4], int max, char* why, size_
 int BancaLabRealSubs(int side, uint32_t* ids, char (*names)[40], int max);              // banca.cpp
 bool BancaLabInMatch();                                                                  // banca.cpp: el reloj del partido corre
 extern std::atomic<int> g_labHideSide;                                                   // banca.cpp: bit 0 local, bit 1 visitante
+extern std::atomic<float> g_grassEdCutZ;                                                 // grass.cpp: corte del pasto del editor
 
 namespace {
 
@@ -40,6 +49,12 @@ std::atomic<bool> s_win{false};          // ventana a la vista
 std::atomic<bool> s_session{false};      // el laboratorio tiene jugadores (el reloj del partido los mueve)
 std::atomic<double> s_tickT{-1.0e9};     // ultima vez que corrio el reloj del partido
 bool s_hadGame = false;                   // solo el hilo del juego
+std::atomic<int> s_where{0};             // donde se cargo la banca: 0 nada, 1 partido, 2 Motor del Editar
+// (Editar) banco st024 en la escena del Motor: ver arriba. Raiz del clip sentado = asiento - 0.40 m (como la banca del partido: asiento
+// 0.40 m sobre los pies de las figuras de Konami); con este asiento alto los pies quedan 19 cm sobre el piso del foso (Altura los baja)
+constexpr float kEdSeatY = 0.13f - 0.40f, kEdHipZ = 3.84f, kEdYaw = 180.0f, kEdPitchZ = 1.0f, kEdStep = 0.60f;
+bool s_grassMine = false; float s_grassWas[2] = {};      // el pasto del editor lo prendio el laboratorio (se devuelve como estaba)
+float s_grassR = 14.0f;
 
 // lo de la interfaz (Present)
 struct LabPj { int slot = -1; float seat[4] = {}; float off[4] = {}; };   // off: x costado, y altura, z adelante (m), w giro (grados)
@@ -129,12 +144,50 @@ void Apply(int k) {      // lugar del jugador k = asiento + desplazamiento (en e
     const float p[3] = { L.seat[0] + L.off[2] * fx_ + L.off[0] * fz, L.seat[1] + L.off[1], L.seat[2] + L.off[2] * fz - L.off[0] * fx_ };
     MotorPjSet(L.slot, p, L.seat[3] + L.off[3], 1.0f);
 }
+void GrassOff() {
+    g_grassEdCutZ.store(1.0e9f);
+    if (!s_grassMine) return; s_grassMine = false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[393][0] = s_grassWas[0]; g_cfg.live[393][1] = s_grassWas[1];
+}
+void GrassOn() {
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (!s_grassMine) { s_grassWas[0] = g_cfg.live[393][0]; s_grassWas[1] = g_cfg.live[393][1]; s_grassMine = true; }
+    g_cfg.live[393][0] = 1.0f; g_cfg.live[393][1] = s_grassR;        // x393 nunca se guarda (kDebugParams)
+    g_grassEdCutZ.store(kEdPitchZ);
+}
 void RemoveAll(const char* why) {
     for (int k = 0; k < s_n; k++) if (s_pj[k].slot >= 0) MotorPjRemove(s_pj[k].slot);
     s_n = 0; g_labHideSide.store(0);
+    if (s_where.exchange(0) == 2) GrassOff();
     if (why) { snprintf(s_status, sizeof s_status, "%s", why); Log("motor (laboratorio): %s", why); }
 }
+int EdSpots(int want, float (*out)[4]) {      // del medio hacia afuera, cada 0.60 m (el banco tiene 11.5 m: entran los 16)
+    float xs[kLabMax]; want = std::clamp(want, 1, kLabMax);
+    for (int k = 0; k < want; k++) xs[k] = (k & 1 ? -1.0f : 1.0f) * (0.5f + (float)(k / 2)) * kEdStep - (want & 1 ? 0.5f * kEdStep : 0.0f);
+    std::sort(xs, xs + want);       // de izquierda a derecha (la tabla y los numeros siguen el banco)
+    for (int k = 0; k < want; k++) { out[k][0] = xs[k]; out[k][1] = kEdSeatY; out[k][2] = kEdHipZ; out[k][3] = kEdYaw; }
+    return want;
+}
+void LoadBenchEd() {
+    float sp[kLabMax][4]; const int n = EdSpots(std::clamp(s_count, 1, kLabMax), sp);
+    RemoveAll(nullptr);
+    int made = 0;
+    for (int k = 0; k < n; k++) {
+        const int slot = MotorPjAdd(s_kind == 1 ? 2 : 1, 0);      // 1 = jugador base (generico), 2 = como el del visor del Editar
+        if (slot < 0) break;
+        LabPj& L = s_pj[s_n++]; L = LabPj{}; L.slot = slot; memcpy(L.seat, sp[k], sizeof L.seat);
+        Apply(s_n - 1);
+        MotorPjAnimSet(slot, ClipOf(kSitClips[k % 3]), 1.0f, false);
+        MotorPjSeek(slot, 0.83f * (float)k);
+        made++;
+    }
+    s_where.store(2); GrassOn();
+    MotorPjSelect(s_n ? s_pj[0].slot : -1);
+    snprintf(s_status, sizeof s_status, "Cargando %d jugadores en el banco del Motor...", made);
+    Log("motor (laboratorio): banca en el Motor del Editar: %d jugadores %s, pasto del editor a %.0f m cortado en z %.2f", made, s_kind == 1 ? "(como el del Editar)" : "(jugador base generico)", s_grassR, kEdPitchZ);
+}
 void LoadBench() {
+    if (!BancaLabInMatch() && MotorPageActive()) { LoadBenchEd(); return; }
     float sp[kLabMax][4]; char why[200] = "";
     const int want = std::clamp(s_count, 1, kLabMax);
     const int n = BancaLabSpots(s_side, want, sp, kLabMax, why, sizeof why);
@@ -156,7 +209,7 @@ void LoadBench() {
         MotorPjSeek(slot, 0.83f * (float)k);    // cada uno arranca en otro punto del clip (no se mueven juntos); se acota al largo
         made++;
     }
-    g_labHideSide.store(1 << s_side);
+    g_labHideSide.store(1 << s_side); s_where.store(1);
     MotorPjSelect(s_n ? s_pj[0].slot : -1);
     snprintf(s_status, sizeof s_status, "Cargando %d jugadores en el banco %s...", made, s_side ? "visitante" : "local");
     Log("motor (laboratorio): banca %s: %d asientos, %d jugadores %s", s_side ? "visitante" : "local", n, made, s_kind == 1 ? "(suplentes reales)" : "(jugador base del Editar)");
@@ -247,7 +300,7 @@ void Window() {
     static MotorPjInfo PI; MotorPjInfoGet(&PI);
     // los del laboratorio que ya no existen (fallaron o se sacaron desde otro lado) salen de la lista
     { int w = 0; for (int q = 0; q < s_n; q++) { const int i = s_pj[q].slot; if (i >= 0 && (PI.st[i] == 0 || PI.st[i] == 4)) continue; s_pj[w++] = s_pj[q]; } s_n = w; }
-    const bool inMatch = BancaLabInMatch();
+    const bool inMatch = BancaLabInMatch(), inEd = !inMatch && MotorPageActive();
     const float K = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);
     ImGui::SetNextWindowSize(ImVec2(460 * K, 780 * K), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 480 * K, 60 * K), ImGuiCond_FirstUseEver);
@@ -255,13 +308,16 @@ void Window() {
     if (!ImGui::Begin("Laboratorio de animaciones", &open, ImGuiWindowFlags_NoCollapse)) { ImGui::End(); if (!open) s_win.store(false); return; }
     if (!open) s_win.store(false);
     // --- banca
-    ImGui::TextDisabled("%s", inMatch ? "Partido: el reloj del juego corre" : "Entra a un partido (o a su repeticion) para usar la banca");
+    ImGui::TextDisabled("%s", inMatch ? "Partido: el reloj del juego corre" : inEd ? "Motor del Editar: banco del estadio en la escena del Motor" : "Abri el Motor en tiempo real del Editar (o entra a un partido) para usar la banca");
     ImGui::SeparatorText("Banca");
-    ImGui::RadioButton("Banco local", &s_side, 0); ImGui::SameLine(); ImGui::RadioButton("Banco visitante", &s_side, 1);
-    ImGui::RadioButton("Genericos del Editar", &s_kind, 0); ImGui::SameLine(); ImGui::RadioButton("Suplentes reales", &s_kind, 1);
+    if (inEd) { ImGui::RadioButton("Genericos del Editar", &s_kind, 0); ImGui::SameLine(); ImGui::RadioButton("Como el del Editar", &s_kind, 1); }
+    else { ImGui::RadioButton("Banco local", &s_side, 0); ImGui::SameLine(); ImGui::RadioButton("Banco visitante", &s_side, 1);
+        ImGui::RadioButton("Genericos del Editar", &s_kind, 0); ImGui::SameLine(); ImGui::RadioButton("Suplentes reales", &s_kind, 1); }
     ImGui::SetNextItemWidth(160 * K); ImGui::SliderInt("Jugadores", &s_count, 1, kLabMax);
-    ImGui::BeginDisabled(!inMatch); if (ImGui::Button(s_n ? "Volver a cargar la banca" : "Cargar la banca", ImVec2(200 * K, 0))) LoadBench(); ImGui::EndDisabled();
+    if (inEd) { ImGui::SetNextItemWidth(160 * K); if (ImGui::SliderFloat("Pasto real (m)", &s_grassR, 4.0f, 40.0f, "%.0f") && s_where.load() == 2) GrassOn(); }
+    ImGui::BeginDisabled(!inMatch && !inEd); if (ImGui::Button(s_n ? "Volver a cargar la banca" : "Cargar la banca", ImVec2(200 * K, 0))) LoadBench(); ImGui::EndDisabled();
     ImGui::SameLine(); if (ImGui::Button("Sacar todos", ImVec2(110 * K, 0))) { RemoveAll("Jugadores del laboratorio sacados"); s_session.store(false); }
+    if (inEd) ImGui::TextDisabled("Los asientos son los del banco st024 de la escena del Motor (escena\\Default.fpkd)");
     if (ImGui::Button("Camara a la banca", ImVec2(200 * K, 0))) CamToBench();
     ImGui::SameLine(); if (ImGui::Button(FreeCamActive() ? "Apagar camara libre" : "Prender camara libre", ImVec2(160 * K, 0))) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[344][0] = FreeCamActive() ? 0.0f : 1.0f; }
     if (s_status[0]) ImGui::TextWrapped("%s", s_status);
@@ -355,21 +411,25 @@ void MotorLabGameTick() {
 // el partido termina (banca.cpp hk_HumanDtor, hilo del juego): soltar antes de que se vaya la escena
 void MotorLabMatchEnd() {
     if (!s_session.exchange(false) && !s_hadGame) return;
-    MotorPjTick(false, 0); s_hadGame = false; g_labHideSide.store(0);
+    MotorPjTick(false, 0); s_hadGame = false; g_labHideSide.store(0); if (s_where.load() == 1) s_where.store(0);
     Log("motor (laboratorio): termino el partido: se sueltan los jugadores del laboratorio");
 }
 // el laboratorio tiene los jugadores del Motor (motorjug.cpp no los toca con el reloj del Editar)
 bool MotorLabOwnsPlayers() { return s_session.load(std::memory_order_relaxed) || Now() - s_tickT.load(std::memory_order_relaxed) < 1.0; }
 bool MotorLabWantsInput() { return s_win.load(std::memory_order_relaxed); }
+// (21/11) algo del laboratorio se dibuja (ventana, o banca cargada en un partido o en el Motor del Editar)
+bool MotorLabShowing() { return s_win.load(std::memory_order_relaxed) || s_session.load(std::memory_order_relaxed) || s_where.load(std::memory_order_relaxed) != 0; }
 void MotorLabToggle() { s_win.store(!s_win.load()); Log("motor (laboratorio): ventana %s", s_win.load() ? "abierta" : "cerrada"); }
 // Present (overlay.cpp)
 void MotorLabDraw() {
     const bool f8 = Foreground() && (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
     if (f8 && !s_f8Was) MotorLabToggle(); s_f8Was = f8;
-    if (!s_win.load() && !s_session.load()) return;
-    if (!s_session.load() && s_n) { s_n = 0; g_labHideSide.store(0); }      // el partido termino: la lista queda vacia
+    if (!s_win.load() && !s_session.load() && s_where.load() == 0) return;
+    const int wh = s_where.load();
+    if (wh == 1 && !s_session.load() && s_n) { s_n = 0; g_labHideSide.store(0); s_where.store(0); }      // el partido termino: la lista queda vacia
+    if (wh == 2 && !MotorPageActive()) { s_n = 0; s_where.store(0); GrassOff(); Log("motor (laboratorio): se cerro el Motor: banca del Editar vacia"); }   // el Motor suelta a sus jugadores al cerrarse
     CamUpdate();
-    if (s_session.load()) { static MotorPjInfo PI; MotorPjInfoGet(&PI); DrawOverlay(PI); }
+    if (s_session.load() || s_where.load() == 2) { static MotorPjInfo PI; MotorPjInfoGet(&PI); DrawOverlay(PI); }
     if (s_win.load()) { ImGui::GetIO().MouseDrawCursor = true; Window(); }
 }
 
