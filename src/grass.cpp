@@ -27,7 +27,7 @@
 namespace fx {
 std::atomic<int> g_grassLevelOff{0};   // (13/11) prueba automatica (menutest.cpp): bits 0..2 niveles, bit 3 hojas 3D
 std::atomic<int> g_grassSeenFrame{-1000000};   // (13/11 sk9ema) ultimo cuadro con el pasto de la cancha (wind.cpp: bajo techo)
-// (21/11 3icxbh) laboratorio de animaciones en el Editar (motorlab.cpp): el pasto del editor (x393) llega hasta este z (m) y no entra al
+// (21/11 3icxbh) laboratorio de animaciones en el Editar (motorlab.cpp): el pasto del editor (x393) empieza en este z (m) y no entra al
 // foso del banco del estadio puesto en la escena. 1e9 = sin corte
 std::atomic<float> g_grassEdCutZ{1.0e9f};
 
@@ -1324,7 +1324,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         // pasa de 1000 px/m (T0, donde empieza el pasto del juego) y el nivel 0 no emitia nada: en el editor no hay pasto del juego, asi
         // que el nivel 0 va sin tope; y el alcance se mide desde el jugador (origen), no desde la camara, que con zoom queda a 15-40 m
         if (t_editor) cull[36] = 1.0f;
-        // (21/11) gPad[4].z = 1: corte en z (gPad[4].w): celdas que pasan de ese z no se emiten (laboratorio: el borde del foso del banco)
+        // (21/11) gPad[4].z = 1: corte en z (gPad[4].w): celdas por debajo de ese z no se emiten (laboratorio: el borde del foso del banco)
         if (t_editor) { const float zc = g_grassEdCutZ.load(std::memory_order_relaxed); if (zc < 1.0e8f) { cull[38] = 1.0f; cull[39] = zc; } }
         // (11/11 m) gPad[4].y: relleno del atlas bajo las hojas 3D (y403); gPad[5] (hojas 3D) ya en los niveles 0..2: el nivel 0 cuenta sus
         // tarjetas con el alto del relleno donde hay hojas 3D (antes gPad[5] se llenaba despues y en los niveles 0..2 valia 0)

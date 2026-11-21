@@ -36,7 +36,7 @@
 --
 -- Offsets leidos en el exe decompilado (PES2021.exe 1.07.02): ver memoria del proyecto motor-tiempo-real-exe.
 
-local m = { version = "0.5.1" }
+local m = { version = "0.5.2" }
 local VERSION = m.version
 local DIR
 -- lo que hay que recordar aunque Sider recargue el modulo con el juego abierto (queda en ctx)
@@ -74,8 +74,31 @@ local function cual(filename)
     return ARCH[b]
 end
 
+-- (21/11, 0.5.2) BANCO DEL ESTADIO EN EL EDITAR (laboratorio de animaciones de la DLL grafica, F8): con content\motor-tiempo-real\banca.txt
+-- (lo pone y lo saca la DLL) y la escena escena_banca\Default.fpkd / .fpk (la de UltraGraphicsConfig + el banco de st024, armada con
+-- tools/fox/escena_objetos.py) se entrega esa escena en vez de escena\. Las texturas del banco (st024_*.ftex) salen de escena_banca\tex\
+-- solo con el banco prendido y solo las que estan ahi; sin banca.txt todo queda como antes.
+local BANCA = { pedidos = 0, tex = 0 }
+function BANCA.on()
+    return existe(DIR .. "banca.txt") and existe(DIR .. "escena_banca\\Default.fpkd") and existe(DIR .. "escena_banca\\Default.fpk")
+end
+function BANCA.textura(filename)
+    local f = string.lower(filename)
+    if not string.find(f, "st024", 1, true) or string.sub(f, -5) ~= ".ftex" then return end
+    local b = string.match(filename, "([^\\/]+)$")
+    if b and existe(DIR .. "escena_banca\\tex\\" .. b) and BANCA.on() then return b end
+end
+
 function m.make_key(ctx, filename)
     if PE.es(filename, PE.ARCH) then return PE.pedido(ctx, filename) end
+    do
+        local t = BANCA.textura(filename)
+        if t then
+            BANCA.tex = BANCA.tex + 1
+            if BANCA.tex <= 30 then log("MotorTiempoReal: banco: textura " .. filename .. " -> escena_banca\\tex\\" .. t) end
+            return "mtr01|tex|" .. t
+        end
+    end
     if PE.es(filename, PE.ARCH_SALIDA) then PE.salida(filename) end
     local nodo = PE.nodo_de(filename)
     if nodo then return PE.pedido_estudio(filename, nodo) end
@@ -90,6 +113,11 @@ function m.make_key(ctx, filename)
         log("MotorTiempoReal: " .. (a and "ENTREGANDO" or "sin entregar") .. " (" .. mot .. ")")
     end
     if pedidos[n] <= 3 then log("MotorTiempoReal: el juego pidio " .. filename .. " (pedido " .. pedidos[n] .. ")") end
+    if BANCA.on() then
+        BANCA.pedidos = BANCA.pedidos + 1
+        if BANCA.pedidos <= 6 then log("MotorTiempoReal: banca.txt presente: entrego escena_banca\\" .. n .. " (banco del estadio)") end
+        return "mtr01|banca|" .. n
+    end
     if not activo then return end
     return "mtr01|" .. n
 end
@@ -98,6 +126,8 @@ function m.get_filepath(ctx, filename, key)
     if type(key) == "string" and string.sub(key, 1, #PE.CLAVE) == PE.CLAVE then return PE.entrega(filename, key) end
     if not key or string.sub(key, 1, 6) ~= "mtr01|" then return end
     local n = string.sub(key, 7)
+    if string.sub(n, 1, 6) == "banca|" then return DIR .. "escena_banca\\" .. string.sub(n, 7) end
+    if string.sub(n, 1, 4) == "tex|" then return DIR .. "escena_banca\\tex\\" .. string.sub(n, 5) end
     local p = DIR .. "escena\\" .. n
     entregas[n] = (entregas[n] or 0) + 1
     if entregas[n] <= 3 then log("MotorTiempoReal: entrego " .. p .. " por " .. filename) end

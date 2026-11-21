@@ -15,10 +15,12 @@
 // Mientras el laboratorio usa un banco, los suplentes reales de la banca de ese lado se esconden (banca.cpp SubUpdate).
 // (21/11 20:43, Agustin: "yo no queria en un partido real queria en el modo editar motor real"; 20:46: "que al momento de cargar la banca
 // tambien carguen los jugadores genericos del modo editar") TAMBIEN EN EL MOTOR DEL EDITAR: ahi el banco es un modelo del estadio st024 puesto
-// en la escena del Motor (escena\Default.fpkd, StadiumModel, MotorTiempoReal.lua): el banco de la izquierda (center1_target + center1_probe)
-// corrido (+11.40, 0, -40.99) para que quede centrado en x = 0 con el borde del foso en z = +1 (los suplentes miran a -z, al centro del
-// estudio, donde apuntan los focos). Asientos medidos del fmdl (tools/fox/fmdl.py): asiento a y = 0.13, piso del foso y = -0.46, respaldo
-// z = 44.95 del estadio (cadera a 44.83 -> 3.84 en el Editar). Los jugadores los mueve el reloj del visor del Editar (motorjug.cpp hk_Tick),
+// en una escena propia del Motor (content\motor-tiempo-real\escena_banca\Default.fpkd, StadiumModel; la entrega MotorTiempoReal.lua solo si
+// existe content\motor-tiempo-real\banca.txt, que prende y apaga esta ventana). Banco de la izquierda de st024 (center1_target + center1_probe
+// sin el suelo de afuera ni el anillo del techo: tools/motor/banca_fmdl.py) girado 180 grados y corrido (-11.40, 0, +40.99): queda detras
+// del jugador del Editar, centrado en x = 0, con el borde del foso en z = -1, y los suplentes miran a +z (a la camara del estudio).
+// Asientos medidos del fmdl (tools/fox/fmdl.py): asiento a y = 0.13, piso del foso y = -0.46, respaldo z = 44.95 del estadio (cadera a
+// 44.83 -> -3.84 en el Editar). Los jugadores los mueve el reloj del visor del Editar (motorjug.cpp hk_Tick),
 // como a los del Motor. Pasto real = el pasto del mod en el editor (fila 393, grass.cpp GrassEditorAfterFace) cortado en el borde del foso
 // (g_grassEdCutZ -> pes_grass_cull_cs gPad[4].zw).
 // Lo que se ve encima de los modelos se proyecta con la camara con la que el juego dibujo la escena (SceneCB m_projectionView, como
@@ -52,9 +54,27 @@ bool s_hadGame = false;                   // solo el hilo del juego
 std::atomic<int> s_where{0};             // donde se cargo la banca: 0 nada, 1 partido, 2 Motor del Editar
 // (Editar) banco st024 en la escena del Motor: ver arriba. Raiz del clip sentado = asiento - 0.40 m (como la banca del partido: asiento
 // 0.40 m sobre los pies de las figuras de Konami); con este asiento alto los pies quedan 19 cm sobre el piso del foso (Altura los baja)
-constexpr float kEdSeatY = 0.13f - 0.40f, kEdHipZ = 3.84f, kEdYaw = 180.0f, kEdPitchZ = 1.0f, kEdStep = 0.60f;
+constexpr float kEdSeatY = 0.13f - 0.40f, kEdHipZ = -3.84f, kEdYaw = 0.0f, kEdPitchZ = -1.0f, kEdStep = 0.60f;
 bool s_grassMine = false; float s_grassWas[2] = {};      // el pasto del editor lo prendio el laboratorio (se devuelve como estaba)
 float s_grassR = 14.0f;
+// content\motor-tiempo-real\banca.txt (al lado de sider.dll): con el archivo, MotorTiempoReal.lua entrega la escena del Editar con el banco
+std::wstring BancaFlagPath() {
+    HMODULE h = GetModuleHandleW(L"sider.dll"); if (!h) return L"";
+    wchar_t p[MAX_PATH] = {}; const DWORD n = GetModuleFileNameW(h, p, MAX_PATH); if (!n || n >= MAX_PATH) return L"";
+    std::wstring s(p); const size_t k = s.find_last_of(L"\\/"); if (k == std::wstring::npos) return L"";
+    return s.substr(0, k + 1) + L"content\\motor-tiempo-real\\banca.txt";
+}
+int s_flag = -1;      // -1 sin mirar, 0 no, 1 si (se mira al abrir la ventana)
+bool FlagRead() { const std::wstring p = BancaFlagPath(); return !p.empty() && GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; }
+bool FlagWrite(bool on) {
+    const std::wstring p = BancaFlagPath(); if (p.empty()) return false;
+    if (!on) { const bool ok = DeleteFileW(p.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND; Log("motor (laboratorio): banco del Editar apagado (banca.txt %s)", ok ? "borrado" : "NO se pudo borrar"); return ok; }
+    HANDLE f = CreateFileW(p.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) { Log("motor (laboratorio): no pude crear banca.txt (error %lu)", GetLastError()); return false; }
+    const char t[] = "PES21 FX: con este archivo MotorTiempoReal.lua entrega escena_banca (banco del estadio en el Editar). Lo pone y lo saca el laboratorio de animaciones (F8).\r\n";
+    DWORD w = 0; WriteFile(f, t, sizeof t - 1, &w, nullptr); CloseHandle(f);
+    Log("motor (laboratorio): banco del Editar prendido (banca.txt creado): se ve al volver a entrar al jugador del Editar"); return true;
+}
 
 // lo de la interfaz (Present)
 struct LabPj { int slot = -1; float seat[4] = {}; float off[4] = {}; };   // off: x costado, y altura, z adelante (m), w giro (grados)
@@ -315,9 +335,15 @@ void Window() {
         ImGui::RadioButton("Genericos del Editar", &s_kind, 0); ImGui::SameLine(); ImGui::RadioButton("Suplentes reales", &s_kind, 1); }
     ImGui::SetNextItemWidth(160 * K); ImGui::SliderInt("Jugadores", &s_count, 1, kLabMax);
     if (inEd) { ImGui::SetNextItemWidth(160 * K); if (ImGui::SliderFloat("Pasto real (m)", &s_grassR, 4.0f, 40.0f, "%.0f") && s_where.load() == 2) GrassOn(); }
+    if (!inMatch) {
+        if (s_flag < 0) s_flag = FlagRead() ? 1 : 0;
+        bool fl = s_flag == 1;
+        if (ImGui::Checkbox("Banco del estadio en el Editar", &fl)) { if (FlagWrite(fl)) s_flag = fl ? 1 : 0; else s_flag = -1; }
+        ImGui::TextDisabled("%s", s_flag == 1 ? "Si no lo ves, sali del jugador y volve a entrar: la escena se carga al entrar" : "Apagado: el Editar usa su escena de siempre");
+    }
     ImGui::BeginDisabled(!inMatch && !inEd); if (ImGui::Button(s_n ? "Volver a cargar la banca" : "Cargar la banca", ImVec2(200 * K, 0))) LoadBench(); ImGui::EndDisabled();
     ImGui::SameLine(); if (ImGui::Button("Sacar todos", ImVec2(110 * K, 0))) { RemoveAll("Jugadores del laboratorio sacados"); s_session.store(false); }
-    if (inEd) ImGui::TextDisabled("Los asientos son los del banco st024 de la escena del Motor (escena\\Default.fpkd)");
+    if (inEd) ImGui::TextDisabled("Asientos del banco de st024 (escena del Editar con el banco prendido)");
     if (ImGui::Button("Camara a la banca", ImVec2(200 * K, 0))) CamToBench();
     ImGui::SameLine(); if (ImGui::Button(FreeCamActive() ? "Apagar camara libre" : "Prender camara libre", ImVec2(160 * K, 0))) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.live[344][0] = FreeCamActive() ? 0.0f : 1.0f; }
     if (s_status[0]) ImGui::TextWrapped("%s", s_status);
@@ -419,7 +445,7 @@ bool MotorLabOwnsPlayers() { return s_session.load(std::memory_order_relaxed) ||
 bool MotorLabWantsInput() { return s_win.load(std::memory_order_relaxed); }
 // (21/11) algo del laboratorio se dibuja (ventana, o banca cargada en un partido o en el Motor del Editar)
 bool MotorLabShowing() { return s_win.load(std::memory_order_relaxed) || s_session.load(std::memory_order_relaxed) || s_where.load(std::memory_order_relaxed) != 0; }
-void MotorLabToggle() { s_win.store(!s_win.load()); Log("motor (laboratorio): ventana %s", s_win.load() ? "abierta" : "cerrada"); }
+void MotorLabToggle() { s_win.store(!s_win.load()); s_flag = -1; Log("motor (laboratorio): ventana %s", s_win.load() ? "abierta" : "cerrada"); }
 // Present (overlay.cpp)
 void MotorLabDraw() {
     const bool f8 = Foreground() && (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
