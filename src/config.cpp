@@ -7,6 +7,8 @@
 #include <fstream>
 #include <sstream>
 #include <iterator>
+// (23/11 8z607v v7d) camara (vista x proyeccion de SceneCB) para esconder a los suplentes que no entran en cuadro; secuencia par = lista
+std::atomic<unsigned> g_camSeq{0}; std::atomic<float> g_camPV[16]; std::atomic<double> g_camT{-1.0};
 // (23/11 8z607v v7d) relojes del juego para los suplentes (los escribe Present, los lee el hilo del juego)
 std::atomic<float> g_clkComp{0.0f}, g_clkPlayer{0.0f}; std::atomic<unsigned> g_clkCompN{0}, g_clkPlayerN{0}; static int g_clkCompF = -1, g_clkPlayerF = -1;
 
@@ -1028,6 +1030,8 @@ static void CamaraFrame(float (*p)[4], double t) {
     if (!ok || age < 0 || age > 3) { o[0] = o[1] = o[2] = o[3] = 0.0f; havePrev = false; lastSf = -1; if (pendT >= 0.0) TaaVelProbeCancel(); pendT = -1.0; return; }
     if (sf != lastSf) {   // copia nueva de SceneCB (si es la misma, queda lo de antes)
         const float* PV = &S[0]; const float* P = &S[16];
+        { g_camSeq.fetch_add(1, std::memory_order_acq_rel); for (int i = 0; i < 16; i++) g_camPV[i].store(PV[i], std::memory_order_relaxed);   // (23/11 8z607v) para la banca
+          g_camT.store(t, std::memory_order_relaxed); g_camSeq.fetch_add(1, std::memory_order_acq_rel); }
         float VV[3][4];
         for (int i = 0; i < 4; i++) {
             VV[2][i] = PV[12 + i];

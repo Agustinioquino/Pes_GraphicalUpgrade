@@ -1129,6 +1129,7 @@ struct LiveSub {
     uint32_t teamIdx = 0; uint64_t id = 0; char name[40] = {}; Spot spot{}; bool bib = false, gk = false;
     float t0 = 0, start = 0, tCreateT = 0, phase0 = 0; double tCreate = 0; int endTicks = 0; bool faceTried = false; uint8_t player[0xF0] = {};
     float heightCm = 0, dyCm = 0;                      // (2d) estatura del modelo (h+0x10) y lo que se bajo la base por ella
+    float offT = 0; bool off = false; uint8_t skip = 0;   // (v7d) fuera de cuadro: cuanto hace, escondido, cuadros salteados
     uint8_t bibByte = 0;                               // (2e) pechera del LoadId si le toca: 1 pieza 0, 2 pieza 8
     uint8_t kindOv = 0;                                // (2e) campera entera (lluvia / nieve): tipo del LoadId 0x16 / 0x17, sin pechera
     int shown = -1;                                    // (2e) clip que tiene puesto (el suyo o el de "probar clips")
@@ -1488,7 +1489,7 @@ __declspec(noinline) int SubUpdate(LiveSub& u, float T, bool moved) {
             FaceEval(face);
             ((HumanFaceFn)kHumanFace)(h, face, 3);        // la cara del animador (modo 3: manos neutras)
         }
-        if ((g_labHideSide.load(std::memory_order_relaxed) >> (u.side & 1)) & 1) { if (h && *((const uint8_t*)h + 0x5a) != 0) ((HumanShowFn)kHumanShow)(h, 0); }   // (21/11) banco del laboratorio
+        if (((g_labHideSide.load(std::memory_order_relaxed) >> (u.side & 1)) & 1) || u.off) { if (h && *((const uint8_t*)h + 0x5a) != 0) { ((HumanShowFn)kHumanShow)(h, 0); if (u.off) s_offHidden.fetch_add(1, std::memory_order_relaxed); } }   // (21/11) banco del laboratorio; (v7d) fuera de cuadro
         else if (h && *((const uint8_t*)h + 0x5a) == 0) ((HumanShowFn)kHumanShow)(h, 1);   // si algo lo escondio, se vuelve a mostrar
         void* ctl = nullptr; memcpy(&ctl, fd + 0x50, 8);
         if (ctl) {
@@ -1623,6 +1624,29 @@ void LogRealSubs() {
     for (int sd = 0; sd < 2; sd++) Log("banca: suplentes de verdad del %s (%d convocados, %d suplentes): %s", sd ? "visitante" : "local", (int)conv[sd], cnt[sd], line[sd]);
 }
 
+// (23/11 v7d, Agustin: "otra forma de optimizar"; log: el hilo que arma los dibujos 23-72 ms por cuadro, la placa espera < 1 ms).
+// Fila 521: x esconder al suplente que no entra en cuadro (y sus sombras: no se dibuja), y animar menos al escondido (1 de cada 3
+// cuadros). Cuadro = vista x proyeccion de SceneCB (config.cpp, cuadro anterior); se prueban los pies y la cabeza con 25 % de margen.
+// Se muestra en el acto al entrar y se esconde recien a los 0.6 s fuera. Sin camara reciente (SceneCB viejo), todos a la vista.
+float Live521(int k, float def) { return (!g_cfg.info[521][k].defined && g_cfg.live[521][k] == 0.0f) ? def : g_cfg.live[521][k]; }
+std::atomic<unsigned> s_offHidden{0}, s_offSkipped{0};
+bool CamPV(float M[16]) {
+    extern std::atomic<unsigned> g_camSeq; extern std::atomic<float> g_camPV[16]; extern std::atomic<double> g_camT;
+    for (int tries = 0; tries < 3; tries++) {
+        const unsigned a = g_camSeq.load(std::memory_order_acquire); if (a & 1u) continue;
+        for (int i = 0; i < 16; i++) M[i] = g_camPV[i].load(std::memory_order_relaxed);
+        if (g_camSeq.load(std::memory_order_acquire) == a) return a != 0 && Now() - g_camT.load(std::memory_order_relaxed) < 0.5;
+    }
+    return false;
+}
+bool InView(const float M[16], float x, float y, float z) {
+    for (int k = 0; k < 2; k++) {
+        const float yy = y + (k ? 1.45f : 0.05f);
+        const float cx = M[0] * x + M[1] * yy + M[2] * z + M[3], cy = M[4] * x + M[5] * yy + M[6] * z + M[7], cw = M[12] * x + M[13] * yy + M[14] * z + M[15];
+        if (cw > 0.05f && fabsf(cx) <= cw * 1.25f && fabsf(cy) <= cw * 1.25f) return true;
+    }
+    return false;
+}
 void SubsTick(void* host) {
     if (s_subsDead.load(std::memory_order_relaxed)) return;   // (los sentados se sueltan igual cuando el juego borra a sus jugadores)
     Subs& S = s_subs;
@@ -1828,6 +1852,7 @@ void SubsTick(void* host) {
     }
     // mover a los sentados
     void* resE = nullptr; bool resEAsked = false;
+    float camM[16]; const bool camOk = CamPV(camM);
     for (int k = 0; k < S.n; k++) {
         LiveSub& u = S.s[k]; if (u.state != 2 || !u.fd) continue;
         const ClipDef& cd_ = kClipDef[u.shown >= 0 ? u.shown : u.clip];
@@ -1837,6 +1862,10 @@ void SubsTick(void* host) {
             if (r < 0) { u.state = 5; Log("banca: suplentes reales: ERROR dentro del juego al dar la vuelta la escena de %s: no se toca nada mas en esta sesion", u.name); return; }
             if (r > 0 && s_escFades.load(std::memory_order_relaxed) <= 2) Log("banca: %s %d: %s da la vuelta con fundido de %.1f s", cd_.esc ? "escena" : "vivo", cd_.esc ? cd_.esc : cd_.vivo, u.name, kEscFade);
         }
+        if (Live521(0, 1.0f) > 0.5f && camOk) {             // (v7d) fuera de cuadro
+            if (InView(camM, u.spot.x, u.spot.y, u.spot.z)) { u.offT = 0.0f; u.off = false; } else { u.offT += dt; if (u.offT > 0.6f) u.off = true; }
+        } else u.off = false;
+        if (u.off && Live521(1, 1.0f) > 0.5f && (++u.skip % 3) != 0) { s_offSkipped.fetch_add(1, std::memory_order_relaxed); continue; }
         const int r = SubUpdate(u, S.A, adt > 0.0f);
         if (r < 0) { u.state = 5; Log("banca: suplentes reales: ERROR dentro del juego al mover a %s: no se toca nada mas en esta sesion", u.name); return; }
         if (r == 2 && !S.seekSaid) { S.seekSaid = true; Log("banca: suplentes reales: el clip no da la vuelta solo; se lo vuelve al principio a mano"); }
@@ -2112,10 +2141,10 @@ void BancaPresent() {
             static unsigned lastSub = 0; const unsigned st = s_subTicks.load(std::memory_order_relaxed);
             LogRealSubs();
             static unsigned lastMode = 0; const unsigned md = s_modeCalls.load(std::memory_order_relaxed);
-            Log("banca: suplentes reales %s: %d sentados, reloj %.1f por segundo (modo partido %.1f por segundo hilo %lu, estado del partido %d; jugadores hilo %lu, %u cambios de hilo, %u llamadas en total), %u descargas de clips frenadas; cara y manos: %u creados, %u fallos;  parpadeos %u, cambios de cara %u; LOD por distancia %u%s",
+            Log("banca: suplentes reales %s: %d sentados, reloj %.1f por segundo (modo partido %.1f por segundo hilo %lu, estado del partido %d; jugadores hilo %lu, %u cambios de hilo, %u llamadas en total), %u descargas de clips frenadas; cara y manos: %u creados, %u fallos;  parpadeos %u, cambios de cara %u; LOD por distancia %u; fuera de cuadro: escondidos %u veces, cuadros salteados %u%s",
                 Live2(0, 1.0f) > 0.5f ? "prendido" : "apagado", s_subActive.load(), nextT > 0 ? (st - lastSub) / 10.0 : 0.0, nextT > 0 ? (md - lastMode) / 10.0 : 0.0,
                 s_modeThread.load(), s_matchState.load(), s_srcThread.load(), s_threadChanges.load(), s_pushCalls.load(), s_unloadBlocked.load(),
-                s_faceMade.load(), s_faceFail.load(), s_blinks.load(), s_faceChanges.load(), s_lodSet.load(), s_subsDead.load() ? "; APAGADO por un error dentro del juego" : "");
+                s_faceMade.load(), s_faceFail.load(), s_blinks.load(), s_faceChanges.load(), s_lodSet.load(), s_offHidden.load(), s_offSkipped.load(), s_subsDead.load() ? "; APAGADO por un error dentro del juego" : "");
             {   // (2d) cuanto avanzo la animacion de los sentados contra el tiempo real (pausa = 0, camara lenta < 1)
                 const float a = s_animSum.exchange(0.0f), r = s_realSum.exchange(0.0f);
                 if (r > 0.5f) Log("banca: animacion de los suplentes: %.1f s en %.1f s reales (%.2f; con el reloj %s)", a, r, a / r,
