@@ -1127,6 +1127,7 @@ struct LiveSub {
     uint8_t kindOv = 0;                                // (2e) campera entera (lluvia / nieve): tipo del LoadId 0x16 / 0x17, sin pechera
     int shown = -1;                                    // (2e) clip que tiene puesto (el suyo o el de "probar clips")
     int esc = 0; float fadeA = -1000.0f;               // (23/11) escena horneada (0 = clip de siempre) y ultimo fundido de vuelta
+    float blinkNext = -1.0f, blinkStart = -1000.0f; void* blinkFace = nullptr;   // (23/11) parpadeo: proximo, ultimo y animador donde se puso el clip
 };
 enum { kIdle = 0, kWait, kClips, kRun, kOff };
 struct Subs {
@@ -1348,6 +1349,54 @@ __declspec(noinline) int EscLoop(LiveSub& u, void* res, float A) {
         return 1;
     } __except (EXCEPTION_EXECUTE_HANDLER) { s_subsDead.store(true); return -1; }
 }
+// (23/11, Agustin: "agregales blink animations") parpadeo. El controlador de cara y manos (fd+0x58, el mismo tipo que usan los
+// jugadores: [0] animador de cara, [1] [2] manos) tiene en el animador de cara 4 capas base (0..3) y 4 sumadas (4..7). Asi las llena
+// FUN_141ec3170 en el partido: capa sumada 4 + n = clip 0xa6 + n (los 166 base van primero) con la mascara de zona FUN_141ee0870(&m, n),
+// FUN_141b04020(anim, capa, clip, 0, 0, 0.0f, mascara) si cambio el clip, FUN_141b04e20(anim, capa, tiempo s) (x 300, da la vuelta sola)
+// y FUN_141b04fb0(anim, capa, peso). Despues FUN_141ec7b10 (lo de siempre) evalua el animador (vf +0x38) y manda la pose al modelo.
+// add_eyeblink_single = sumado n 2 (8 cuadros, parpados 25 grados; el que usa Konami en 262 de 308 tramos de Faceadd.bin) -> clip 0xa8.
+// Aca solo se toca la capa sumada 4 del animador de cara: las capas base y las manos quedan como estaban (pose neutra).
+const uintptr_t kAnimSetClip = 0x141b04020ull, kAnimSetTime = 0x141b04e20ull, kAnimSetWeight = 0x141b04fb0ull, kFaceMask = 0x141ee0870ull;
+typedef void(__fastcall* AnimSetClipFn)(void*, uint32_t, uint32_t, char, char, float, uint64_t);
+typedef void(__fastcall* AnimSetTimeFn)(void*, uint32_t, float);
+typedef void(__fastcall* AnimSetWeightFn)(void*, uint32_t, float);   // (desensamblado: movss [rax+r8*4], xmm2 -> float en xmm2)
+typedef uint64_t*(__fastcall* FaceMaskFn)(uint64_t*, uint32_t);
+const uint32_t kBlinkLayer = 4, kBlinkAdd = 2, kBlinkClip = 0xa6 + kBlinkAdd;
+const float kBlinkLen = 8.0f / 30.0f;
+std::atomic<unsigned> s_blinks{0};
+void SubBlink(LiveSub& u, void* face, float T) {
+    void* fa = nullptr; memcpy(&fa, face, 8); if (!fa) return;
+    if (fa != u.blinkFace) {                           // controlador nuevo (al crear o despues de "probar clips"): poner el clip una vez
+        uint64_t m = 0; ((FaceMaskFn)kFaceMask)(&m, kBlinkAdd);
+        ((AnimSetClipFn)kAnimSetClip)(fa, kBlinkLayer, kBlinkClip, 0, 0, 0.0f, m);
+        u.blinkFace = fa; u.blinkNext = T + 0.4f + (float)(Rnd() % 1000) * 0.004f; u.blinkStart = -1000.0f;
+    }
+    if (T < u.blinkStart || u.blinkNext - T > 12.0f) { u.blinkStart = -1000.0f; u.blinkNext = T + 1.0f; }   // el reloj volvio atras
+    if (T >= u.blinkNext) {                            // cada 1.8-6 s, a veces doble (0.38 s despues)
+        const bool dbl = u.blinkStart < T - 1.0f && Rnd() % 6 == 0;
+        u.blinkStart = T; u.blinkNext = T + (dbl ? 0.38f : 1.8f + (float)(Rnd() % 1000) * 0.0042f);
+        s_blinks.fetch_add(1, std::memory_order_relaxed);
+    }
+    const float bt = T - u.blinkStart, w = bt >= 0.0f && bt < kBlinkLen ? 1.0f : 0.0f;
+    ((AnimSetTimeFn)kAnimSetTime)(fa, kBlinkLayer, w > 0.0f ? bt : 0.0f);
+    ((AnimSetWeightFn)kAnimSetWeight)(fa, kBlinkLayer, w);
+}
+// (23/11, Agustin: "agregar el lod ... asi mi juego no anda a 10 fps"; prueba: 14-30 FPS con la placa al 96 %). El suplente se dibujaba
+// siempre con el modelo completo: draw::util::Human+0xc = modo de LOD (0 / 1 / 2 = nivel fijo, 3 = por tamano en pantalla) y nadie lo
+// ponia. La cinematica lo pone al activar a cada persona (FUN_141f458c0 segun FixDemoHumanData.lod): LOD_AUTO = FUN_141ec83e0(h, 1.25f,
+// 0.2f) (modo 3: FUN_1419e1b20(modelo, 3) + FUN_1419e1b70 con los cortes 2.747 / 1.25 y 2.747 / 0.2, 2.747 = 1 / tan(20 grados));
+// LOD_A / B / D = FUN_141ec8490(h, 0 / 1 / 2, 0, 0). FUN_141ec83e0 solo aplica si el modelo ya cargo (vf +0x10): se llama al sentarlo.
+const uintptr_t kHumanLodAuto = 0x141ec83e0ull;
+typedef void(__fastcall* HumanLodAutoFn)(void*, float, float);
+std::atomic<unsigned> s_lodSet{0};
+void SubLod(LiveSub& u) {
+    __try {
+        void* h = nullptr; memcpy(&h, (uint8_t*)u.fd + 0x48, 8); if (!h) return;
+        ((HumanLodAutoFn)kHumanLodAuto)(h, 1.25f, 0.2f);
+        if (*(const int32_t*)((const uint8_t*)h + 0xc) == 3) s_lodSet.fetch_add(1, std::memory_order_relaxed);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) { static int said = 0; if (said++ < 2) Log("banca: suplentes reales: error al poner el LOD de %s (sin LOD)", u.name); }
+}
 // avanza y manda la pose; devuelve 2 si tuvo que volver el clip al principio a mano
 __declspec(noinline) int SubUpdate(LiveSub& u, float T, bool moved) {
     __try {
@@ -1356,7 +1405,7 @@ __declspec(noinline) int SubUpdate(LiveSub& u, float T, bool moved) {
         ((FdPushFn)kFdPush)(fd);
         void* h = nullptr; memcpy(&h, fd + 0x48, 8);
         void* face = FaceEnsure(u);                       // (2c) cara y manos en pose neutra, como match::Player::vf10
-        if (h && face) ((FaceNeutralFn)kFaceNeutral)(h, face, 0);
+        if (h && face) { SubBlink(u, face, T); ((FaceNeutralFn)kFaceNeutral)(h, face, 0); }   // (23/11) + parpadeo
         if ((g_labHideSide.load(std::memory_order_relaxed) >> (u.side & 1)) & 1) { if (h && *((const uint8_t*)h + 0x5a) != 0) ((HumanShowFn)kHumanShow)(h, 0); }   // (21/11) banco del laboratorio
         else if (h && *((const uint8_t*)h + 0x5a) == 0) ((HumanShowFn)kHumanShow)(h, 1);   // si algo lo escondio, se vuelve a mostrar
         void* ctl = nullptr; memcpy(&ctl, fd + 0x50, 8);
@@ -1628,6 +1677,7 @@ void SubsTick(void* host) {
                 void* res = FixdemoRes();
                 if (res && SubStart(u, res, S.A)) {
                     u.state = 2; s_subActive.fetch_add(1); S.tProgress = now;
+                    SubLod(u);                                // (23/11) LOD por distancia, como LOD_AUTO de las cinematicas
                     void* face = nullptr; memcpy(&face, (uint8_t*)u.fd + 0x58, 8);
                     Log("banca: suplente %d sentado: %s (cargo en %.1f s; cara y manos %s; estatura %.0f cm, base %+.1f cm)", k + 1, u.name, now - u.tCreate,
                         face ? "con controlador" : u.faceTried ? "SIN controlador (fallo vf3)" : "esperando los recursos del juego", u.heightCm, u.dyCm);
@@ -1950,10 +2000,10 @@ void BancaPresent() {
             static unsigned lastSub = 0; const unsigned st = s_subTicks.load(std::memory_order_relaxed);
             LogRealSubs();
             static unsigned lastMode = 0; const unsigned md = s_modeCalls.load(std::memory_order_relaxed);
-            Log("banca: suplentes reales %s: %d sentados, reloj %.1f por segundo (modo partido %.1f por segundo hilo %lu, estado del partido %d; jugadores hilo %lu, %u cambios de hilo, %u llamadas en total), %u descargas de clips frenadas; cara y manos: %u creados, %u fallos%s",
+            Log("banca: suplentes reales %s: %d sentados, reloj %.1f por segundo (modo partido %.1f por segundo hilo %lu, estado del partido %d; jugadores hilo %lu, %u cambios de hilo, %u llamadas en total), %u descargas de clips frenadas; cara y manos: %u creados, %u fallos; parpadeos %u; LOD por distancia %u%s",
                 Live2(0, 1.0f) > 0.5f ? "prendido" : "apagado", s_subActive.load(), nextT > 0 ? (st - lastSub) / 10.0 : 0.0, nextT > 0 ? (md - lastMode) / 10.0 : 0.0,
                 s_modeThread.load(), s_matchState.load(), s_srcThread.load(), s_threadChanges.load(), s_pushCalls.load(), s_unloadBlocked.load(),
-                s_faceMade.load(), s_faceFail.load(), s_subsDead.load() ? "; APAGADO por un error dentro del juego" : "");
+                s_faceMade.load(), s_faceFail.load(), s_blinks.load(), s_lodSet.load(), s_subsDead.load() ? "; APAGADO por un error dentro del juego" : "");
             {   // (2d) cuanto avanzo la animacion de los sentados contra el tiempo real (pausa = 0, camara lenta < 1)
                 const float a = s_animSum.exchange(0.0f), r = s_realSum.exchange(0.0f);
                 if (r > 0.5f) Log("banca: animacion de los suplentes: %.1f s en %.1f s reales (%.2f; con el reloj %s)", a, r, a / r,
