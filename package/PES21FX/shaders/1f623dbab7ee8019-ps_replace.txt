@@ -82,6 +82,7 @@ Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_common.hlsli"
 #include "pes_headshadow.hlsli"   // (27/10 c) sombra propia de la cabeza (t30)   // PES21 (18/10): curva del dia, transmision de piel, tamano del sol
+#include "pes_contact3.hlsli"   // (23/11 ru34vc) sombras de contacto v3 (x526)
 
 
 // === PES21 SOL: color del sol segun su altura (calido al atardecer, blanco calido al mediodia) ===
@@ -454,7 +455,8 @@ void main(
     // solo donde hay sol que quitar: pixel de frente a la luz y fuera de la sombra plena del shadow map
     // 18/10 c: z de vista negativa hacia adelante (ver a748): todo con el signo de zC
     float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
-    if (CS.w > 0.5 && csK > 0 && zA > 0.1 && zA < 60.0 && rawNdotL > 0.02 && r6.x > 0.03) {
+    bool pesCS3 = IniParams.Load(int2(526,0)).x > 0.5;   // (23/11 ru34vc) v3 reemplaza a esta
+    if (!pesCS3 && CS.w > 0.5 && csK > 0 && zA > 0.1 && zA < 60.0 && rawNdotL > 0.02 && r6.x > 0.03) {
       float3 Pv = float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zC, zC);
       float3 Lc = normalize(pesLDir.xyz);
       float ign = frac(52.9829189 * frac(dot(v2.xy, float2(0.06711056, 0.00583715))));   // sin reloj en esta variante
@@ -497,6 +499,20 @@ void main(
       r6.xyz *= cs;
     }
   }
+  // (23/11 ru34vc) SOMBRAS DE CONTACTO v3 (x526 = 1, pes_contact3.hlsli): rayo medido en pixeles, profundidad correcta con la perspectiva,
+  // la oclusion mas fuerte del recorrido y borde suave del grosor. Misma fila 52 (fuerza, largo, suavidad, on)
+  { float2 sC3 = v0.xy / v0.ww, uC3 = v1.xy / v1.ww;
+    float2 dS3 = float2(ddx(sC3.x), ddy(sC3.y)), dU3 = float2(ddx(uC3.x), ddy(uC3.y));
+    float2 pxU3 = abs(dU3);
+    dS3 = (abs(dS3) < 1e-9) ? 1e-9 : dS3;
+    float2 Am3 = dU3 / dS3, Bm3 = uC3 - Am3 * sC3;
+    if (IniParams.Load(int2(526,0)).x > 0.5 && IniParams.Load(int2(52,0)).w > 0.5 && rawNdotL > 0.02 && r6.x > 0.03) {
+      float jit3 = frac(52.9829189 * frac(dot(v2.xy, float2(0.06711056, 0.00583715))));
+      float cs3 = PESContactShadow3(sC3, uC3, Am3, Bm3, pxU3, normalize(pesLDir.xyz), matType, skinTag, jit3);
+      csDbg = cs3;
+      if (isSkin) cs3 = lerp(1.0, cs3, 0.85);       // en la piel la luz se difunde: sombra mas suave (como la v2)
+      r6.xyz *= cs3;
+    } }
   // (27/10 c) sombra propia de la cabeza: el atlas de alta resolucion de las cabezas cercanas (t30) multiplica la sombra del sol
   { float2 hsS = v0.xy / v0.ww, hsU = v1.xy / v1.ww;
     float hsD = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, hsU, 0).x;
