@@ -1371,6 +1371,14 @@ typedef uint64_t*(__fastcall* FaceMaskFn)(uint64_t*, uint32_t);
 const uint32_t kBlinkLayer = 4, kBlinkAdd = 2, kBlinkClip = 0xa6 + kBlinkAdd;
 const float kBlinkLen = 8.0f / 30.0f;
 std::atomic<unsigned> s_blinks{0};
+typedef void(__fastcall* AnimSpeedFn)(void*, float);
+typedef void(__fastcall* AnimEvalFn)(void*);
+const uintptr_t kAnimSpeed = 0x141afd270ull;
+void FaceEval(void* face) {                            // FUN_141ec1240 sin el envio: velocidad 0 y vf +0x38 de cara y manos
+    void* a[3] = {}; memcpy(a, face, sizeof a);
+    for (int i = 0; i < 3; i++) if (a[i]) ((AnimSpeedFn)kAnimSpeed)(a[i], 0.0f);
+    for (int i = 0; i < 3; i++) if (a[i]) { uintptr_t vt = 0; memcpy(&vt, a[i], 8); AnimEvalFn f = nullptr; memcpy(&f, (void*)(vt + 0x38), 8); f(a[i]); }
+}
 void SubBlink(LiveSub& u, void* face, float T) {
     void* fa = nullptr; memcpy(&fa, face, 8); if (!fa) return;
     if (fa != u.blinkFace) {                           // controlador nuevo (al crear o despues de "probar clips"): poner el clip una vez
@@ -1473,8 +1481,12 @@ __declspec(noinline) int SubUpdate(LiveSub& u, float T, bool moved) {
         if (h && face) {                                  // (23/11) cara (escena / tranquila) + parpadeo; la pose de cara sale del animador
             float clipT = -1.0f; { void* c_ = nullptr; memcpy(&c_, fd + 0x50, 8); if (c_) clipT = ((ClipTimeFn)kClipTime)(c_, 0, 1); }
             SubFace(u, face, T, clipT); SubBlink(u, face, T);
-            ((FaceNeutralFn)kFaceNeutral)(h, face, 0);    // evalua el animador (FUN_141ec1240) y manda cara / manos neutras
-            ((HumanFaceFn)kHumanFace)(h, face, 3);        // y encima la cara del animador (modo 3: manos siguen neutras)
+            // (23/11 v7d, Agustin: "las expresiones ... vibran") antes: FaceNeutral (FUN_141ec1240: evalua y MANDA la pose neutra con
+            // FUN_141ec4970 modo 1) y despues el modo 3. Cada envio pide un bufer (FUN_141962b00) y lo entrega al modelo (FUN_1419e1a40):
+            // con dos envios por cuadro el dibujo tomaba a veces el neutro y a veces la cara -> la cara titilaba cuadro a cuadro. Ahora
+            // se evalua igual que FUN_141ec1240 (velocidad 0 + vf +0x38 de los 3 animadores) y se manda UNA vez, en modo 3.
+            FaceEval(face);
+            ((HumanFaceFn)kHumanFace)(h, face, 3);        // la cara del animador (modo 3: manos neutras)
         }
         if ((g_labHideSide.load(std::memory_order_relaxed) >> (u.side & 1)) & 1) { if (h && *((const uint8_t*)h + 0x5a) != 0) ((HumanShowFn)kHumanShow)(h, 0); }   // (21/11) banco del laboratorio
         else if (h && *((const uint8_t*)h + 0x5a) == 0) ((HumanShowFn)kHumanShow)(h, 1);   // si algo lo escondio, se vuelve a mostrar
@@ -1627,7 +1639,11 @@ void SubsTick(void* host) {
     if (g_cfg.live[157][3] >= 0.5f) {
         const double g = (double)g_cfg.live[157][0];
         double dG = S.lastG < 0.0 ? 0.0 : g - S.lastG; if (dG < -50000.0) dG += 100000.0;   // vuelta del reloj (100000 s)
-        S.lastG = g; adt = (float)std::clamp(dG, 0.0, 0.1); s_animGame.store(true, std::memory_order_relaxed);
+        S.lastG = g; s_animGame.store(true, std::memory_order_relaxed);
+        // (23/11 v7d, Agustin con la repeticion / camara libre: "las animaciones no se ejecutan ... vibran"). En las dos pruebas del 23/11
+        // la fila 157 anduvo a 0-0.4 por segundo con el partido en estado 29 y a saltos sueltos (0.1-0.7 s cada 10 s): con ese reloj
+        // quedaban quietos o a los tirones. Ahora van SIEMPRE con el tiempo real (como la vista previa); la fila 157 solo se anota.
+        (void)dG;
     } else { S.lastG = -1.0; s_animGame.store(false, std::memory_order_relaxed); }
     S.A += adt;                                        // (vf4 recibe A - t0: los dos del mismo reloj; sin vuelta, como S.T)
     if (s_subActive.load(std::memory_order_relaxed) > 0) { s_animSum.store(s_animSum.load(std::memory_order_relaxed) + adt, std::memory_order_relaxed); s_realSum.store(s_realSum.load(std::memory_order_relaxed) + dt, std::memory_order_relaxed); }
@@ -2082,7 +2098,7 @@ void BancaPresent() {
             {   // (2d) cuanto avanzo la animacion de los sentados contra el tiempo real (pausa = 0, camara lenta < 1)
                 const float a = s_animSum.exchange(0.0f), r = s_realSum.exchange(0.0f);
                 if (r > 0.5f) Log("banca: animacion de los suplentes: %.1f s en %.1f s reales (%.2f; con el reloj %s)", a, r, a / r,
-                                  s_animGame.load() ? "del juego, como la ropa" : "real: el del juego todavia no se reconocio");
+                                  s_animGame.load() ? "real (v7d; el del juego solo se anota)" : "real: el del juego todavia no se reconocio");
             }
             lastSub = st; lastMode = md;
         }
