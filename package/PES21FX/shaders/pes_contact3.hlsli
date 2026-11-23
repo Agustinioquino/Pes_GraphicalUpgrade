@@ -35,6 +35,21 @@ float PESContactShadow3(float2 sC, float2 uvC, float2 Am, float2 Bm, float2 pxUV
   float len = cloth ? min(lenM, 0.10) : lenM;
   if (longT) { len = max(len, clamp(C8.y > 0.1 ? C8.y : 2.0, 0.3, 6.0)); maxPx = max(maxPx, clamp(C8.z > 8.0 ? C8.z : 160.0, 16.0, 400.0)); }
   float thBase = (cloth ? 0.05 : (longT ? 0.25 : 0.12)) * thkK;   // un jugador visto de frente tiene ~25 cm de grueso detras de lo que se ve
+  // (23/11 19:20 ru34vc g) 539 LA CARA. Agustin: "que no sean manchas negras sobre el rostro". En la piel el rayo de 35 cm y el grosor de 12 cm
+  // hacian que la nariz, la ceja, el pelo y la oreja dejaran parches enteros a la sombra (la v3 toma lo MAS oscuro del recorrido). En la piel:
+  // rayo corto (y539 cm, 3), grosor de 2.5 cm (solo tapan rasgos finos pegados), penumbra ancha y como mucho x539 de oscuridad (0.4): el
+  // shadow map y la sombra propia de la cabeza ya hacen las sombras grandes de la cara; esto solo marca el contacto.
+  bool skinR = (matType == 0) && (abs(skinTag - 0.98039) < 0.003);
+  float4 C9 = IniParams.Load(int2(539,0));
+  if (all(C9 == 0.0)) C9 = float4(0.4, 3.0, 0.0, 1.0);   // fila sin cargar (DLL anterior): el ajuste igual va, con sus valores de fabrica
+  float skinK = 1.0;
+  if (skinR && C9.w > 0.5) {
+    len = min(len, clamp(C9.y > 0.2 ? C9.y : 3.0, 0.5, 15.0) * 0.01);
+    thBase = 0.025 * thkK;
+    soft = max(soft, 0.8);
+    skinK = saturate(C9.x >= 0.0 ? C9.x : 0.4);
+    if (skinK <= 0.001) return 1.0;
+  }
   bool turfSkip = matType == 3 && (IniParams.Load(int2(299,0)).w > 0.5 || longT);
   float3 Pv = float3((sC - cco) * pp.xy * zC, zC);
   float3 P0 = Pv + Lc * (0.004 + 0.0012 * zA);
@@ -74,5 +89,5 @@ float PESContactShadow3(float2 sC, float2 uvC, float2 Am, float2 Bm, float2 pxUV
   }
   float fade = saturate((farZ - zA) / (0.25 * farZ));
   float2 eM = saturate(min(uvC, 1.0 - uvC) * 10.0);
-  return 1.0 - saturate(occ * fade * csK * eM.x * eM.y);
+  return 1.0 - saturate(occ * fade * csK * skinK * eM.x * eM.y);
 }
