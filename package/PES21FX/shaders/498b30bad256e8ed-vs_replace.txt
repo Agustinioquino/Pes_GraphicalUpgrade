@@ -1164,8 +1164,11 @@ void main(
   // del juego mide la capsula entre la pelota de este cuadro y la del anterior y su radio crece con el recorrido (0.3 x L^2): el juego lo pensaba
   // a 60 FPS. A 20-24 FPS la pelota rapida recorre 2-3 veces mas por cuadro: el radio llegaba a 17-20 cm y el empuje (d x exceso x 160) tiraba los
   // vertices hasta 30 cm afuera: una franja vacia detras de cada pase, que en las tarjetas grandes de lejos se veia como pasto que desaparece.
-  // Ahora la capsula es la de 1/60 s (la punta vieja se acerca a la pelota) y el corrimiento tiene tope de 12 cm (el maximo a 60 FPS)
-  float pesCapK = min(1.0, 0.016667 / max(pesDtR, 0.016667));
+  // Ahora la capsula es la de 1/60 s (la punta vieja se acerca a la pelota) y el corrimiento tiene tope de 12 cm (el maximo a 60 FPS).
+  // Agustin: "sin tocar lo demas del pasto, solo eso": solo las tarjetas del mod de vista media / lejana (< 400 px/m); de cerca (hojas 3D,
+  // tarjetas pegadas a la camara, pasto del juego) queda todo como estaba
+  bool pesFarFix = pesIsExt && !pesBlade && pesPx > 0.0 && pesPx < 400.0;
+  float pesCapK = pesFarFix ? min(1.0, 0.016667 / max(pesDtR, 0.016667)) : 1.0;
   float3 pesBBp = pesBA - (pesBA - pesBB) * pesCapK;
   r0.x = v0.y + 10.0;
   r0.yzw = (pesBA - pesBBp) * float3(pesIS, 1.0, pesIS);
@@ -1263,7 +1266,7 @@ void main(
   r0.yz = pesBA.xz + pesBBp.xz;
   r0.yz = -r0.yz * 0.5 + (pesKV2 > 0.5 ? pesR1n : r1.xz);   // (13/11 tanda 2) y446: el empuje del juego desde la hoja sin la pelota (no se apila)
   r0.xz = r0.yz * r0.xx;
-  { float pesPushL = length(r0.xz); if (pesPushL > 0.12) r0.xz *= 0.12 / pesPushL; }   // (23/11) tope del empuje del juego
+  if (pesFarFix) { float pesPushL = length(r0.xz); if (pesPushL > 0.12) r0.xz *= 0.12 / pesPushL; }   // (23/11) tope del empuje del juego
   r2.xy = r1.xz * cb4[1].xy + cb4[1].zw;
   float2 pesUV = r2.xy;   // PES21: uv de la cancha en este vertice (la misma v1.xy de la base)
   r3 = g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);
