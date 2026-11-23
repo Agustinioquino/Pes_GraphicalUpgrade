@@ -23,11 +23,19 @@ float PESContactShadow3(float2 sC, float2 uvC, float2 Am, float2 Bm, float2 pxUV
   float dC = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uvC, 0).x;
   float zC = pp.z / (dC - pp.w);
   float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
-  if (zA < 0.1 || zA > 80.0) return 1.0;
+  // (23/11 ru34vc f) 538 SOMBRA LARGA EN EL PASTO (Agustin: la sombra de los jugadores en el pasto "un poco borrosa, dentada, se pierde
+  // a lo lejos el detalle"): de lejos el shadow map tiene pocos texeles por jugador. En el pasto el rayo se alarga a y538 metros (toda la
+  // sombra de un jugador, no solo el contacto) y hasta z538 px en pantalla, con las hojas sin tapar: la sombra de lo que se ve en pantalla
+  // sale con el detalle de la pantalla y se suma (la mas oscura de las dos) a la del shadow map. Se apaga a w538 metros de la camara.
+  float4 C8 = IniParams.Load(int2(538,0));
+  bool longT = matType == 3 && C8.x > 0.5;
+  float farZ = longT ? clamp(C8.w > 1.0 ? C8.w : 120.0, 20.0, 250.0) : 80.0;
+  if (zA < 0.1 || zA > farZ) return 1.0;
   bool cloth = (matType == 0) && (abs(skinTag - 0.9607843) < 0.002);
   float len = cloth ? min(lenM, 0.10) : lenM;
-  float thBase = (cloth ? 0.05 : 0.12) * thkK;
-  bool turfSkip = matType == 3 && IniParams.Load(int2(299,0)).w > 0.5;
+  if (longT) { len = max(len, clamp(C8.y > 0.1 ? C8.y : 2.0, 0.3, 6.0)); maxPx = max(maxPx, clamp(C8.z > 8.0 ? C8.z : 160.0, 16.0, 400.0)); }
+  float thBase = (cloth ? 0.05 : (longT ? 0.25 : 0.12)) * thkK;   // un jugador visto de frente tiene ~25 cm de grueso detras de lo que se ve
+  bool turfSkip = matType == 3 && (IniParams.Load(int2(299,0)).w > 0.5 || longT);
   float3 Pv = float3((sC - cco) * pp.xy * zC, zC);
   float3 P0 = Pv + Lc * (0.004 + 0.0012 * zA);
   float3 P1 = P0 + Lc * len;
@@ -59,11 +67,12 @@ float PESContactShadow3(float2 sC, float2 uvC, float2 Am, float2 Bm, float2 pxUV
       float inA = saturate((dz - bias) / max(0.2 * thick, 1e-4));     // entra suave detras del borde visible
       float outA = saturate((thick - dz) / max(0.35 * thick, 1e-4));  // y se va suave al final del grosor (sin silueta fantasma)
       float pen = 1.0 - soft * saturate(t / max(tMax, 1e-4));        // lejos del pixel = penumbra
+      if (longT) pen = 1.0 - 0.45 * soft * saturate(t / max(tMax, 1e-4));   // (538) la sombra larga: mas firme, el borde lo suaviza el TAA
       occ = max(occ, inA * outA * pen);
       if (occ > 0.98) break;
     }
   }
-  float fade = saturate((80.0 - zA) / 20.0);
+  float fade = saturate((farZ - zA) / (0.25 * farZ));
   float2 eM = saturate(min(uvC, 1.0 - uvC) * 10.0);
   return 1.0 - saturate(occ * fade * csK * eM.x * eM.y);
 }
