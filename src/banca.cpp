@@ -1060,13 +1060,28 @@ struct GStr { union { char buf[16]; char* ptr; }; size_t size, cap; };   // std:
 // (el clip es de una mesa redonda): giro = lo contrario del giro medio de la cadera (pista 2) contra la raiz, para que miren a la cancha.
 // La raiz del FixDemoHuman gira con FUN_141afccc0(ctl, fd+0x14 en radianes): cuaternion (0, sin(a/2), 0, cos(a/2)), adelante +z ->
 // (sin a, 0, cos a), la misma cuenta que se uso para medir la cadera.
-struct ClipDef { const char* name; float yaw; bool sala; };
+// (23/11, banca v7b2 al juego, Agustin: "podemos incorporarlo al juego", "todo esto es agregar no sacar") ESCENAS: lo que hace cada
+// suplente en la vista previa (posturas con cuerpo vivo, charlas, molestar, rascarse, dedos...), horneado en un .gani por jugador y
+// escena (zfx_banca_eE_jJ, 60 s, hornear.py): esc = escena 1..4 (0 = clip de Konami de siempre), jug = jugador de la vista (0..8).
+// Los de una escena se sientan juntos, en el orden de la vista a lo largo del banco y con el mismo reloj, asi los toques entre
+// vecinos (molestar, charla) pasan a la vez. Los clips de siempre se quedan (el resto del banco y algunos bancos enteros).
+struct ClipDef { const char* name; float yaw; bool sala; int esc, jug; };
+#define ESC_J(e, j) { "zfx_banca_e" #e "_j" #j, 0.0f, false, e, j }
+#define ESC(e) ESC_J(e, 0), ESC_J(e, 1), ESC_J(e, 2), ESC_J(e, 3), ESC_J(e, 4), ESC_J(e, 5), ESC_J(e, 6), ESC_J(e, 7), ESC_J(e, 8)
 const ClipDef kClipDef[] = {
-    { "dml_md_lockerSpeech_001_sit_002", 2.7f, false }, { "dml_md_lockerSpeech_001_sit_003", -0.1f, false },
-    { "dml_md_lockerSpeech_001_sit_005", -0.1f, false },
-    { "dml_md_meeting_waiting_01_sub1", -96.7f, true }, { "dml_md_meeting_waiting_01_sub2", 110.5f, true },
-    { "dml_md_meeting_waiting_01_sub3", 96.2f, true }, { "dml_md_meeting_waiting_03a", 2.1f, true }, { "dml_md_meeting_waiting_03c", -1.7f, true },
+    { "dml_md_lockerSpeech_001_sit_002", 2.7f, false, 0, 0 }, { "dml_md_lockerSpeech_001_sit_003", -0.1f, false, 0, 0 },
+    { "dml_md_lockerSpeech_001_sit_005", -0.1f, false, 0, 0 },
+    { "dml_md_meeting_waiting_01_sub1", -96.7f, true, 0, 0 }, { "dml_md_meeting_waiting_01_sub2", 110.5f, true, 0, 0 },
+    { "dml_md_meeting_waiting_01_sub3", 96.2f, true, 0, 0 }, { "dml_md_meeting_waiting_03a", 2.1f, true, 0, 0 }, { "dml_md_meeting_waiting_03c", -1.7f, true, 0, 0 },
+    ESC(1), ESC(2), ESC(3), ESC(4),
 };
+#undef ESC
+#undef ESC_J
+const int kNumEsc = 4, kEscJug = 9;
+// orden de los jugadores de la vista a lo largo del banco: de +x a -x en el marco del clip (hornear.py, escena st009)
+const int kEscOrden[kEscJug] = { 0, 1, 2, 3, 4, 5, 6, 7, 8 };   // x de la cadera: 2.54 1.90 1.27 0.64 0 -0.63 -1.27 -1.90 -2.54 m
+const float kEscFade = 0.9f;                             // fundido al dar la vuelta la escena (s)
+int EscClip(int e, int j) { for (int i = 0; i < (int)(sizeof kClipDef / sizeof kClipDef[0]); i++) if (kClipDef[i].esc == e && kClipDef[i].jug == j) return i; return -1; }
 const int kNumClips = (int)(sizeof kClipDef / sizeof kClipDef[0]);
 struct Clip { char path[112]; uint64_t slot[2]; bool ok, asked; };
 Clip s_clip[kNumClips];
@@ -1111,6 +1126,7 @@ struct LiveSub {
     uint8_t bibByte = 0;                               // (2e) pechera del LoadId si le toca: 1 pieza 0, 2 pieza 8
     uint8_t kindOv = 0;                                // (2e) campera entera (lluvia / nieve): tipo del LoadId 0x16 / 0x17, sin pechera
     int shown = -1;                                    // (2e) clip que tiene puesto (el suyo o el de "probar clips")
+    int esc = 0; float fadeA = -1000.0f;               // (23/11) escena horneada (0 = clip de siempre) y ultimo fundido de vuelta
 };
 enum { kIdle = 0, kWait, kClips, kRun, kOff };
 struct Subs {
@@ -1118,6 +1134,7 @@ struct Subs {
     float T = 0; double tPhase = 0, lastTick = 0, lastCheck = 0, tSpawn = 0, tRetry = 0, tProgress = 0; bool pumpOwn = false, seekSaid = false, sheetSaid = false, doneSaid = false, resSaid = false;
     float A = 0; double lastG = -1.0;                  // (2d) reloj de la animacion (el del juego: pausa = quieto) y la ultima lectura de la fila 157
     int test = 0;                                      // (2e) "probar clips" que se aplico (0 = cada uno el suyo)
+    float escT0[2] = {}; bool escT0Set[2] = {};        // (23/11) reloj comun de la escena de cada banco (todos en el mismo cuadro)
 };
 Subs s_subs;                                           // solo el hilo del juego (y el destructor, con s_subMx)
 std::recursive_mutex s_subMx;
@@ -1268,6 +1285,11 @@ __declspec(noinline) bool SubStart(LiveSub& u, void* res, float T) {
         if (ctl) { const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1); u.phase0 = len > 1.5f ? fmodf(u.phase0, len - 0.5f) : 0.0f; }
         else u.phase0 = 0.0f;
         u.t0 = T - u.phase0; u.endTicks = 0;
+        if (u.esc) {                                      // (23/11) escena: el reloj comun del banco (los que cargan despues saltan al mismo cuadro)
+            Subs& S = s_subs; const int sd = u.side & 1;
+            if (!S.escT0Set[sd]) { S.escT0[sd] = u.t0; S.escT0Set[sd] = true; }
+            u.t0 = S.escT0[sd]; u.fadeA = -1000.0f;
+        }
         void* h = nullptr; memcpy(&h, fd + 0x48, 8);
         if (h) ((HumanShowFn)kHumanShow)(h, 1);
         u.shown = u.clip;
@@ -1292,8 +1314,39 @@ __declspec(noinline) bool SubSwitch(LiveSub& u, void* res, int clip, float T) {
         float ph = u.phase0;
         if (ctl) { const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1); ph = len > 1.5f ? fmodf(ph, len - 0.5f) : 0.0f; }
         u.t0 = T - ph; u.endTicks = 0; u.shown = clip;
+        if (kClipDef[clip].esc && s_subs.escT0Set[u.side & 1]) u.t0 = s_subs.escT0[u.side & 1];   // (23/11) vuelve al reloj comun de la escena
+        u.fadeA = -1000.0f;
         return ctl != nullptr;
     } __except (EXCEPTION_EXECUTE_HANDLER) { s_subsDead.store(true); return false; }
+}
+// (23/11) VUELTA CON FUNDIDO de una escena horneada (60 s): poco antes del final se vuelve a pedir el mismo clip desde 0 con
+// FUN_141afb9a0(control, &pedido, &fundido, capa 0, curva 0), lo mismo que arma FixDemoHuman::vf2 (0x141f87af0) pero con duracion:
+// pedido = el de vf2 (+8 indice del clip en el recurso, +0xc arranque s, +0x14 velocidad 1.0, +0x34 -1, el resto 0), fundido =
+// { modo 0, banderas 0, duracion s } (capa 0: local_b4 = duracion * 300 tics). El controlador no se destruye (vf1 / vf2 si y cortan) y
+// vf4 sigue con el mismo reloj absoluto: todos los de la escena dan la vuelta en el mismo cuadro y siguen juntos.
+struct ClipPlay { uint64_t r0; uint32_t idx; float start; uint8_t p10, pad11[3]; float speed; uint32_t z18; uint64_t z20, z28; uint8_t z30, pad31[3]; int32_t m34; };
+static_assert(sizeof(ClipPlay) == 0x38, "pedido de clip de FixDemoHuman::vf2");
+struct ClipBlend { int32_t mode; uint8_t flags, pad[3]; float dur; };
+static_assert(sizeof(ClipBlend) == 12, "fundido de FixDemoHuman::vf2");
+typedef void(__fastcall* ClipPlayFn)(void*, void*, void*, uint32_t, uint32_t);
+const uintptr_t kClipPlay = 0x141afb9a0ull;
+std::atomic<unsigned> s_escFades{0};
+// 1 = dio la vuelta con fundido, 0 = todavia no, -1 = error
+__declspec(noinline) int EscLoop(LiveSub& u, void* res, float A) {
+    __try {
+        uint8_t* fd = (uint8_t*)u.fd; void* ctl = nullptr; memcpy(&ctl, fd + 0x50, 8);
+        if (!ctl || !res || A - u.fadeA < 5.0f) return 0;
+        const float len = ((ClipTimeFn)kClipLen)(ctl, 0, 1), cur = ((ClipTimeFn)kClipTime)(ctl, 0, 1);
+        if (len < 5.0f || cur < len - kEscFade - 0.05f) return 0;
+        uint32_t saved = 0, id = 0x19;
+        ((HeapPushFn)kHeapPush)(&saved, &id);
+        ClipPlay pl; memset(&pl, 0, sizeof pl); pl.idx = ((ClipIdxFn)kClipIdx)(res, s_clip[u.shown].path); pl.start = 0.0f; pl.speed = 1.0f; pl.m34 = -1;
+        ClipBlend bl; memset(&bl, 0, sizeof bl); bl.dur = kEscFade;
+        ((ClipPlayFn)kClipPlay)(ctl, &pl, &bl, 0, 0);
+        ((HeapPopFn)kHeapPop)(&saved);
+        u.fadeA = A; s_escFades.fetch_add(1, std::memory_order_relaxed);
+        return 1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { s_subsDead.store(true); return -1; }
 }
 // avanza y manda la pose; devuelve 2 si tuvo que volver el clip al principio a mano
 __declspec(noinline) int SubUpdate(LiveSub& u, float T, bool moved) {
@@ -1335,6 +1388,8 @@ int SubsPrepare() {
     for (int sd = 0; sd < 2; sd++)
         if (!Rd(m + 0x1978 + (uintptr_t)sd * 0x28, team[sd]) || !Heap(team[sd]) || !Rd(team[sd] + 0x2eec, conv[sd]) || conv[sd] < 11 || conv[sd] > 40) return 5;
     S.n = 0; S.cur = 0; S.match = m; S.team[0] = team[0]; S.team[1] = team[1]; S.doneSaid = false; S.resSaid = false; S.test = 0;
+    S.escT0Set[0] = S.escT0Set[1] = false;
+    int escUsada = 0;
     const int cap = (int)(Live(3, 0.0f) + 0.5f);
     const float pct = std::min(100.0f, std::max(0.0f, Live2(1, 50.0f))), up = Live2(2, 0.0f), fwd = Live2(3, 0.0f);
     // (2e, Agustin 17/11: "mostrar las pecheras de suplente en verano y las camperas en invierno", "solo la pechera de la campera y no el
@@ -1356,7 +1411,7 @@ int SubsPrepare() {
         full ? ": tipo 0x16 el local, 0x17 el visitante" : bb[0] == 1 ? ": local pieza 0, visitante pieza 8" : ": las dos pieza 8");
     // (2e) clips que se reparten: los de la sala de reunion solo con w518 = 1
     int allow[kNumClips], na = 0; const bool sala = Live3(3, 1.0f) > 0.5f;
-    for (int i = 0; i < kNumClips; i++) if (sala || !kClipDef[i].sala) allow[na++] = i;
+    for (int i = 0; i < kNumClips; i++) if (!kClipDef[i].esc && (sala || !kClipDef[i].sala)) allow[na++] = i;
     for (int sd = 0; sd < 2; sd++) {
         static LiveSub tmp[40]; int ns = 0;
         for (int i = 11; i < conv[sd] && ns < 40; i++) {
@@ -1381,12 +1436,29 @@ int SubsPrepare() {
         // clip (phase0, se acota al largo real en SubStart), asi los que repiten clip no se mueven juntos.
         int perm[kNumClips]; for (int k = 0; k < na; k++) perm[k] = allow[k];
         for (int k = 0; k < na - 1; k++) std::swap(perm[k], perm[k + (int)(Rnd() % (uint32_t)(na - k))]);
+        for (int k = 0; k < got; k++) { tmp[k].clip = perm[k % na]; tmp[k].esc = 0; tmp[k].phase0 = (float)(Rnd() % 9000u) / 1000.0f; }
+        // (23/11) escena horneada: 4 de cada 5 bancos. Los asientos se ordenan a lo largo del banco (eje x de la raiz: con el giro a,
+        // (cos a, 0, -sin a), el mismo marco del clip) y el k-esimo toma el jugador k (desde un corrimiento al azar) del orden de la
+        // vista; todos con el mismo punto de arranque. Los que sobran (mas de 9) siguen con los clips de siempre.
+        char escDiag[64] = "sin escena (clips de siempre)";
+        if (got > 0 && (Rnd() % 5u) != 0u) {
+            int e = 1 + (int)(Rnd() % (uint32_t)kNumEsc); if (e == escUsada) e = 1 + (e % kNumEsc);
+            float lx[40]; int byx[40];
+            for (int k = 0; k < got; k++) { const float a = sp[k].yaw * 0.017453292f; lx[k] = sp[k].x * cosf(a) - sp[k].z * sinf(a); byx[k] = k; }
+            std::sort(byx, byx + got, [&](int a, int b) { return lx[a] > lx[b]; });
+            const int nE = std::min(got, kEscJug), off = (int)(Rnd() % (uint32_t)(kEscJug - nE + 1));
+            const float ph = (float)(Rnd() % 50000u) / 1000.0f;
+            int puestos = 0;
+            for (int r = 0; r < nE; r++) { const int c = EscClip(e, kEscOrden[off + r]); if (c < 0) continue; LiveSub& u = tmp[byx[r]]; u.clip = c; u.esc = e; u.phase0 = ph; puestos++; }
+            escUsada = e;
+            sprintf_s(escDiag, "escena %d en %d de %d (jugadores %d..%d de la vista)", e, puestos, got, off, off + nE - 1);
+        }
         for (int k = 0; k < got && S.n < 48; k++) {
-            LiveSub& u = tmp[k]; u.spot = sp[k]; u.order = S.n; u.clip = perm[k % na]; u.start = 0.0f; u.phase0 = (float)(Rnd() % 9000u) / 1000.0f;
+            LiveSub& u = tmp[k]; u.spot = sp[k]; u.order = S.n; u.start = 0.0f;
             S.s[S.n++] = u;
         }
-        Log("banca: %s: %d convocados, %d suplentes, %d asientos en %d fila(s) (%s); se sientan %d, %d con pechera (%.0f %%); %s", sd ? "visitante" : "local", (int)conv[sd], ns,
-            seats, rows, ss.pre, got, nb, pct, rowDiag);
+        Log("banca: %s: %d convocados, %d suplentes, %d asientos en %d fila(s) (%s); se sientan %d, %d con pechera (%.0f %%); %s; %s", sd ? "visitante" : "local", (int)conv[sd], ns,
+            seats, rows, ss.pre, got, nb, pct, rowDiag, escDiag);
     }
     return 0;
 }
@@ -1493,7 +1565,13 @@ void SubsTick(void* host) {
         }
         if (ready < kNumClips && w < 20.0) return;
         if (!ready) { S.phase = kOff; Log("banca: suplentes reales: ningun clip de sentado cargo en 20 s: no se sienta a nadie en este partido"); return; }
-        if (ready < kNumClips) for (int k = 0; k < S.n; k++) { int c = S.s[k].clip; for (int t = 0; t < kNumClips && !s_clip[c].ok; t++) c = (c + 1) % kNumClips; S.s[k].clip = c; }
+        if (ready < kNumClips) for (int k = 0; k < S.n; k++) {
+            LiveSub& u = S.s[k]; if (s_clip[u.clip].ok) continue;
+            // (23/11) un clip de escena que no cargo (no esta instalado): vuelve a uno de los de siempre (no a otro jugador de la escena)
+            int c = u.esc ? (int)(Rnd() % 3u) : u.clip;
+            for (int t = 0; t < kNumClips && (!s_clip[c].ok || (u.esc && kClipDef[c].esc)); t++) c = (c + 1) % kNumClips;
+            u.clip = c; u.esc = 0; u.phase0 = (float)(Rnd() % 9000u) / 1000.0f;
+        }
         if (!FixdemoRes()) {                                            // (2b) en la carga puede faltar todavia: se espera
             if (!S.resSaid) { S.resSaid = true; Log("banca: suplentes reales: esperando el recurso de clips \"fixdemo\""); }
             if (w < 60.0) return;
@@ -1588,8 +1666,15 @@ void SubsTick(void* host) {
         }
     }
     // mover a los sentados
+    void* resE = nullptr; bool resEAsked = false;
     for (int k = 0; k < S.n; k++) {
         LiveSub& u = S.s[k]; if (u.state != 2 || !u.fd) continue;
+        if (kClipDef[u.shown >= 0 ? u.shown : u.clip].esc && adt > 0.0f) {       // (23/11) escena: vuelta con fundido
+            if (!resEAsked) { resEAsked = true; resE = FixdemoRes(); }
+            const int r = EscLoop(u, resE, S.A);
+            if (r < 0) { u.state = 5; Log("banca: suplentes reales: ERROR dentro del juego al dar la vuelta la escena de %s: no se toca nada mas en esta sesion", u.name); return; }
+            if (r > 0 && s_escFades.load(std::memory_order_relaxed) <= 2) Log("banca: escena %d: %s da la vuelta con fundido de %.1f s", kClipDef[u.shown].esc, u.name, kEscFade);
+        }
         const int r = SubUpdate(u, S.A, adt > 0.0f);
         if (r < 0) { u.state = 5; Log("banca: suplentes reales: ERROR dentro del juego al mover a %s: no se toca nada mas en esta sesion", u.name); return; }
         if (r == 2 && !S.seekSaid) { S.seekSaid = true; Log("banca: suplentes reales: el clip no da la vuelta solo; se lo vuelve al principio a mano"); }
