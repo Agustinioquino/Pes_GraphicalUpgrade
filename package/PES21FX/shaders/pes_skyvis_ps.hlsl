@@ -45,7 +45,53 @@ float4 main(float4 pos : SV_Position, float2 uvH : TEXCOORD0) : SV_Target0 {
   float z0 = LinZ(uv);
   if (z0 < 0.05 || z0 > 400.0) return kNone;
   uint ty = ((uint)(inNrm.SampleLevel(sPoint, uv, 0).z * 1023.0 + 0.5)) & 15u;
-  if (ty == 3u) return kNone;   // el pasto queda como esta (lo maneja su hilo)
+  if (ty == 3u) {
+    // (23/11 ru34vc d) 536 SOMBRA DE LOS PIES EN EL PASTO. Agustin: "no tienen sombra en los pies sobre el cesped". En el pasto la
+    // oclusion de pantalla se alivia a proposito (x108: entre las hojas apagaba la cancha) y con eso se iba tambien lo oscuro debajo
+    // del botin. Aca, para el pasto, se mide SOLO lo que tapan los jugadores, la pelota y lo que no es pasto (las hojas no cuentan):
+    // horizontes de 4 direcciones dentro de y536 metros. Va en .a (rgb sin normal doblada); la composicion la aplica despues del alivio.
+    float4 PF = IniParams.Load(int2(536, 0));
+    if (PF.x < 0.5) return kNone;
+    float z0f = LinZ(uv);
+    if (z0f < 0.05 || z0f > 120.0) return kNone;
+    float3 Pf = PosV(uv, z0f); float3 Vf = -normalize(Pf);
+    float rM = clamp(PF.y > 0.05 ? PF.y : 0.5, 0.1, 2.0);
+    float pxmF = 1.0 / max(2.0 * abs(m_projectionParam.x) * z0f * m_renderBuffer.z, 1e-5);
+    float rPxF = clamp(rM * pxmF, 3.0, 0.25 * m_renderInfo.y);
+    float2 ipF = floor(pos.xy);
+    float nD = frac(52.9829189 * frac(dot(ipF, float2(0.06711056, 0.00583715))));
+    float nO = frac(dot(ipF, float2(0.25, 0.5)));
+    // la cancha se toma plana hacia arriba del mundo (las hojas no tienen una normal util a esta escala)
+    float4 U435 = IniParams.Load(int2(435, 0));   // "arriba" del mundo en la vista del juego (la DLL); a la convencion de PosV: z al reves
+    float3 upF = U435.w > 0.5 ? normalize(float3(U435.x, U435.y, -U435.z)) : normalize(float3(m_view._m10, m_view._m11, -m_view._m12));
+    if (dot(upF, Vf) < 0) upF = -upF;
+    float occF = 0.0;
+    [unroll] for (int sF = 0; sF < 4; sF++) {
+      float ph = (sF + nD) * (6.2831853 / 4.0);
+      float2 dr = float2(cos(ph), sin(ph));
+      float best = 0.0;
+      [loop] for (int k = 0; k < 6; k++) {
+        float t = (k + 0.3 + 0.7 * nO) / 6.0;
+        float2 uvS = uv + dr * (t * rPxF) * m_renderBuffer.zw;
+        if (any(uvS < 0.0) || any(uvS > 1.0)) break;
+        float dS = inDepth.SampleLevel(sPoint, uvS, 0).x; if (dS < 1e-6) continue;
+        float zS = m_projectionParam.z / (dS - m_projectionParam.w);
+        if (z0f - zS < 0.01) continue;   // solo lo que esta delante (encima) del suelo visto
+        uint tyS = ((uint)(inNrm.SampleLevel(sPoint, uvS, 0).z * 1023.0 + 0.5)) & 15u;
+        if (tyS == 3u) continue;   // las hojas no tapan
+        float3 dV = PosV(uvS, zS) - Pf; float L = length(dV); if (L < 1e-3) continue;
+        float hgt = dot(dV, upF);        // cuanto sobresale del suelo
+        if (hgt < 0.005) continue;
+        float sinE = saturate(hgt / L);  // angulo de elevacion de lo que tapa
+        float w = saturate(1.0 - (L / rM) * (L / rM));
+        best = max(best, sinE * w);
+      }
+      occF += best;
+    }
+    occF = saturate(occF / 4.0 * 1.6);
+    return float4(0.5, 0.5, 0.5, 1.0 - occF);
+  }
+  if (P.x < 0.5) return kNone;   // 534 apagada (puede correr solo por la sombra de los pies, 536)
   float3 Pc = PosV(uv, z0);
   float3 V = -normalize(Pc);
   // normal geometrica de la profundidad (como el GTAO: sin el relieve de los mapas de normales), si no la del G-buffer

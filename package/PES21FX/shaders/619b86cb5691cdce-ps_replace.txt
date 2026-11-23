@@ -121,7 +121,7 @@ float3 PESSkySH(float3 n, float3 up, float3 Ld) {
 // (23/11 ru34vc) 534 visibilidad del cielo de lejos: techos, gradas, el fondo del banco de suplentes (gtao.cpp, pes_skyvis_ps).
 // Subida de media resolucion con 4 vecinos pesados por profundidad (sin halos en los bordes). xyz = normal doblada (0 si no hay), w = visibilidad.
 float4 PESSkyVisAt(float2 uv, float zc) {
-  if (IniParams.Load(int2(534,0)).x < 0.5) return float4(0, 0, 0, 1);
+  if (IniParams.Load(int2(534,0)).x < 0.5 && IniParams.Load(int2(536,0)).x < 0.5) return float4(0, 0, 0, 1);
   float W, H; PESSkyVis.GetDimensions(W, H);
   if (W < 2.0) return float4(0, 0, 0, 1);
   float2 tc = uv * float2(W, H) - 0.5; float2 f = frac(tc); float2 b0 = (floor(tc) + 0.5) / float2(W, H); float2 tx = 1.0 / float2(W, H);
@@ -1421,6 +1421,15 @@ void main(
         r3D = on3D ? kZ * smoothstep(0.8 * w410c, 1.2 * w410c, pxM) * smoothstep(0.003, 0.0015, pxA) : 0.0; }
       float k = saturate(1.0 - GA.x * lerp(1.0, 0.5, r3D));   // solo la mitad del SSAO del motor vuelve, y solo en la zona de hojas 3D
       aoRaw = lerp(1.0, aoRaw, k); occRGB = lerp(float3(1,1,1), occRGB, k); }
+  }
+  { // (23/11 ru34vc d) 536 SOMBRA DE LOS PIES EN EL PASTO: despues del alivio de x108, lo que tapan solo los jugadores, la pelota y lo que
+    // no es pasto (pes_skyvis_ps, .a del pasto en t50). Oscurece toda la luz ahi (debajo del botin tampoco entra el sol). z536 fuerza
+    float4 PF = IniParams.Load(int2(536,0));
+    [branch] if (cmpOn && tyC == 3 && PF.x > 0.5 && PF.z > 0.001) {
+      float vF = PESSkyVisAt(uvC, PESLinZ(uvC)).w;
+      vF = lerp(1.0, vF, saturate(PF.z));
+      aoRaw *= vF; occRGB *= vF;
+    }
   }
   { // === PES21 piel en la sombra (02/11, 259) ===
     // Agustin (02/11): con parche 0 o 1 la piel en sombra salia casi negra, gris y plana (cuello bajo el menton). Dos cosas reales

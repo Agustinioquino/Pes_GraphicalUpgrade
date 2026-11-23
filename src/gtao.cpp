@@ -89,7 +89,7 @@ static bool EnsureFarTargets(UINT w, UINT h) {
 }
 // (23/11 ru34vc) t50 de la composicion y la luz global: la del cuadro, o una neutra (1x1: sin normal doblada, cielo entero)
 ID3D11ShaderResourceView* SkyVisSRV(int frame) {
-    if (g_cfg.live[534][0] > 0.5f && s_fFrame.load() == frame && s_fLast) return s_fLast;
+    if ((g_cfg.live[534][0] > 0.5f || g_cfg.live[536][0] > 0.5f) && s_fFrame.load() == frame && s_fLast) return s_fLast;
     static ID3D11ShaderResourceView* s_v = nullptr; static bool tried = false;
     if (!tried && g_dev.dev) { tried = true;
         D3D11_TEXTURE2D_DESC td{}; td.Width = 1; td.Height = 1; td.MipLevels = 1; td.ArraySize = 1; td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -175,7 +175,7 @@ ID3D11ShaderResourceView* GTAOBeforeComposition(ID3D11DeviceContext* c, int fram
     c->PSSetShader(s_bv, nullptr, 0); c->Draw(3, 0);
     c->PSSetShaderResources(0, 2, nulls);
     // 3b) (23/11 ru34vc) visibilidad del cielo de lejos a media resolucion: skyvis -> f0, H f0 -> f1, V f1 -> f0
-    if (g_cfg.live[534][0] > 0.5f && s_fps && s_fbh && s_fbv && EnsureFarTargets((td.Width + 1) / 2, (td.Height + 1) / 2)) {
+    if ((g_cfg.live[534][0] > 0.5f || g_cfg.live[536][0] > 0.5f) && s_fps && s_fbh && s_fbv && EnsureFarTargets((td.Width + 1) / 2, (td.Height + 1) / 2)) {
         D3D11_VIEWPORT vh{ 0, 0, (float)s_fw, (float)s_fh, 0, 1 }; c->RSSetViewports(1, &vh);
         c->OMSetRenderTargets(1, &s_fRTV[0], nullptr);
         c->PSSetShaderResources(0, 2, sv0); c->PSSetShader(s_fps, nullptr, 0); c->Draw(3, 0);
