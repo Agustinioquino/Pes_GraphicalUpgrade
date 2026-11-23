@@ -1160,8 +1160,15 @@ void main(
   // --- posicion en el mundo y doblado por jugador / pelota ---
   // (13/11 tanda 2) la pelota es pesBA / pesBB (cb4[3] / cb4[4], extrapolada si la copia del mod es vieja, arriba); x446 agranda tambien el
   // empuje del juego (solo en xz: el alto que alcanza no cambia). S = 1: la misma cuenta
+  // (23/11, Agustin: "en la vista lejana el pasto sigue desapareciendo con el movimiento del balon, solo en la vista lejana o media") el empuje
+  // del juego mide la capsula entre la pelota de este cuadro y la del anterior y su radio crece con el recorrido (0.3 x L^2): el juego lo pensaba
+  // a 60 FPS. A 20-24 FPS la pelota rapida recorre 2-3 veces mas por cuadro: el radio llegaba a 17-20 cm y el empuje (d x exceso x 160) tiraba los
+  // vertices hasta 30 cm afuera: una franja vacia detras de cada pase, que en las tarjetas grandes de lejos se veia como pasto que desaparece.
+  // Ahora la capsula es la de 1/60 s (la punta vieja se acerca a la pelota) y el corrimiento tiene tope de 12 cm (el maximo a 60 FPS)
+  float pesCapK = min(1.0, 0.016667 / max(pesDtR, 0.016667));
+  float3 pesBBp = pesBA - (pesBA - pesBB) * pesCapK;
   r0.x = v0.y + 10.0;
-  r0.yzw = (pesBA - pesBB) * float3(pesIS, 1.0, pesIS);
+  r0.yzw = (pesBA - pesBBp) * float3(pesIS, 1.0, pesIS);
   r0.y = dot(r0.yzw, r0.yzw);
   r0.y = r0.y * 0.3 + 0.012544;
   r1.y = dot(v0, cb5[5]);
@@ -1178,7 +1185,7 @@ void main(
   r1.xz += pesLean * v0.y * saturate(v0.y * 25.0);   // PES21 pasto v3: la hoja se curva (mas en la punta) por el corte y el viento
   r2.xyz = (r1.xyz - pesBA) * float3(pesIS, 1.0, pesIS);
   r0.z = dot(r2.xyz, r2.xyz);
-  r2.xyz = (r1.xyz - pesBB) * float3(pesIS, 1.0, pesIS);
+  r2.xyz = (r1.xyz - pesBBp) * float3(pesIS, 1.0, pesIS);
   r0.w = dot(r2.xyz, r2.xyz);
   r0.z = r0.w + r0.z;
   r0.y = -r0.z * 0.5 + r0.y;
@@ -1253,9 +1260,10 @@ void main(
       pesBallD += offP - offN;
     }
   }
-  r0.yz = pesBA.xz + pesBB.xz;
+  r0.yz = pesBA.xz + pesBBp.xz;
   r0.yz = -r0.yz * 0.5 + (pesKV2 > 0.5 ? pesR1n : r1.xz);   // (13/11 tanda 2) y446: el empuje del juego desde la hoja sin la pelota (no se apila)
   r0.xz = r0.yz * r0.xx;
+  { float pesPushL = length(r0.xz); if (pesPushL > 0.12) r0.xz *= 0.12 / pesPushL; }   // (23/11) tope del empuje del juego
   r2.xy = r1.xz * cb4[1].xy + cb4[1].zw;
   float2 pesUV = r2.xy;   // PES21: uv de la cancha en este vertice (la misma v1.xy de la base)
   r3 = g_tex_diffuse.SampleLevel(g_samplerLinear_Clamp_s, r2.xy, 0);
