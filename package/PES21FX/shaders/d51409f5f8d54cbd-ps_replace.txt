@@ -83,6 +83,7 @@ Texture2D<float4> StereoParams : register(t125);
 #include "pes_common.hlsli"   // PES21 (18/10): curva del dia, transmision de piel, tamano del sol
 #include "pes_sunturf.hlsli"   // (27/10) el sol sobre el pasto (313)
 #include "pes_headshadow.hlsli"   // (27/10 c) sombra propia de la cabeza (t30)
+#include "pes_contact3.hlsli"   // (23/11 ru34vc) sombras de contacto v3 (x526)
 #include "pes_skinthick.hlsli"   // (04/11) grosor real de la piel con el atlas de la cabeza (t30)
 
 
@@ -651,7 +652,8 @@ void main(
     // 18/10 c: el espacio de vista del motor tiene z NEGATIVA hacia adelante: con "zC > 0.1" el trazado no corria nunca
     // (por eso el interruptor "no hacia nada"). Ahora todo va con el signo de zC.
     float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
-    if (CS.w > 0.5 && csK > 0 && zA > 0.1 && zA < 60.0 && rawNdotL > 0.02 && r0.x > 0.03) {
+    bool pesCS3 = IniParams.Load(int2(526,0)).x > 0.5;   // (23/11 ru34vc) v3 reemplaza a esta
+    if (!pesCS3 && CS.w > 0.5 && csK > 0 && zA > 0.1 && zA < 60.0 && rawNdotL > 0.02 && r0.x > 0.03) {
       float3 Pv = float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zC, zC);
       float3 Lc = normalize(pesLDir.xyz);
       float ign = frac(52.9829189 * frac(dot(v2.xy, float2(0.06711056, 0.00583715))) + frac(g_psSystem.m_timeParam.z * 7.31));
@@ -694,6 +696,20 @@ void main(
       r0.xyz *= cs;
     }
   }
+  // (23/11 ru34vc) SOMBRAS DE CONTACTO v3 (x526 = 1, pes_contact3.hlsli): rayo medido en pixeles, profundidad correcta con la perspectiva,
+  // la oclusion mas fuerte del recorrido y borde suave del grosor. Misma fila 52 (fuerza, largo, suavidad, on)
+  { float2 sC3 = v0.xy / v0.ww, uC3 = v1.xy / v1.ww;
+    float2 dS3 = float2(ddx(sC3.x), ddy(sC3.y)), dU3 = float2(ddx(uC3.x), ddy(uC3.y));
+    float2 pxU3 = abs(dU3);
+    dS3 = (abs(dS3) < 1e-9) ? 1e-9 : dS3;
+    float2 Am3 = dU3 / dS3, Bm3 = uC3 - Am3 * sC3;
+    if (IniParams.Load(int2(526,0)).x > 0.5 && IniParams.Load(int2(52,0)).w > 0.5 && rawNdotL > 0.02 && r0.x > 0.03) {
+      float jit3 = frac(52.9829189 * frac(dot(v2.xy, float2(0.06711056, 0.00583715))) + frac(g_psSystem.m_timeParam.z * 7.31));
+      float cs3 = PESContactShadow3(sC3, uC3, Am3, Bm3, pxU3, normalize(pesLDir.xyz), matType, skinTag, jit3);
+      csDbg = cs3;
+      if (isSkin) cs3 = lerp(1.0, cs3, 0.85);       // en la piel la luz se difunde: sombra mas suave (como la v2)
+      r0.xyz *= cs3;
+    } }
   // (27/10) sombras entre hojas (x313): la sombra de cada hoja sobre las de atras, hacia el sol
   { float2 sT = v0.xy / v0.ww, uT = v1.xy / v1.ww;
     float2 dST = float2(ddx(sT.x), ddy(sT.y)), dUT = float2(ddx(uT.x), ddy(uT.y));
