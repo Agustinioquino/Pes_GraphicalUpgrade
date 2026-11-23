@@ -57,6 +57,9 @@
 // entera (lluvia o nieve: la pieza 7 = la campera del visitante).
 extern "C" { volatile unsigned char pes21fx_banca_ropa = 0; }
 
+// (v7d) publicados por config.cpp (espacio global, fuera de fx)
+extern std::atomic<unsigned> g_camSeq; extern std::atomic<float> g_camPV[16]; extern std::atomic<double> g_camT;
+extern std::atomic<float> g_clkComp, g_clkPlayer; extern std::atomic<unsigned> g_clkCompN, g_clkPlayerN;
 namespace fx {
 
 // (21/11 3icxbh) laboratorio de animaciones (motorlab.cpp): banco que usa (bit 0 local, bit 1 visitante; sus suplentes reales no se
@@ -1631,7 +1634,6 @@ void LogRealSubs() {
 // Se muestra en el acto al entrar y se esconde recien a los 0.6 s fuera. Sin camara reciente (SceneCB viejo), todos a la vista.
 float Live521(int k, float def) { return (!g_cfg.info[521][k].defined && g_cfg.live[521][k] == 0.0f) ? def : g_cfg.live[521][k]; }
 bool CamPV(float M[16]) {
-    extern std::atomic<unsigned> g_camSeq; extern std::atomic<float> g_camPV[16]; extern std::atomic<double> g_camT;
     for (int tries = 0; tries < 3; tries++) {
         const unsigned a = g_camSeq.load(std::memory_order_acquire); if (a & 1u) continue;
         for (int i = 0; i < 16; i++) M[i] = g_camPV[i].load(std::memory_order_relaxed);
@@ -1672,7 +1674,6 @@ void SubsTick(void* host) {
         // pocos FPS el juego avanza su reloj 1/60 por cuadro aunque el cuadro dure mas (por eso iban a 0.25-0.4: el mod de ropa
         // tambien lo corrige) -> el ritmo es avance / min(cuadro real, 1/60), suavizado 0.3 s, tope 1. Pausa = 0, camara lenta < 1.
         // Hasta que llegue algun reloj del juego, el tiempo real.
-        extern std::atomic<float> g_clkComp, g_clkPlayer; extern std::atomic<unsigned> g_clkCompN, g_clkPlayerN;
         static float lc = -1.0f, lp = -1.0f; static unsigned nc = 0, np = 0; static float rateS = 1.0f, tAcc = 0.0f;
         const unsigned nc2 = g_clkCompN.load(std::memory_order_relaxed), np2 = g_clkPlayerN.load(std::memory_order_relaxed);
         const float c = g_clkComp.load(std::memory_order_relaxed), pl = g_clkPlayer.load(std::memory_order_relaxed);
