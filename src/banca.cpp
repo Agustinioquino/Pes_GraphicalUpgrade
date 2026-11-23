@@ -1065,7 +1065,7 @@ struct GStr { union { char buf[16]; char* ptr; }; size_t size, cap; };   // std:
 // escena (zfx_banca_eE_jJ, 60 s, hornear.py): esc = escena 1..4 (0 = clip de Konami de siempre), jug = jugador de la vista (0..8).
 // Los de una escena se sientan juntos, en el orden de la vista a lo largo del banco y con el mismo reloj, asi los toques entre
 // vecinos (molestar, charla) pasan a la vez. Los clips de siempre se quedan (el resto del banco y algunos bancos enteros).
-struct ClipDef { const char* name; float yaw; bool sala; int esc, jug; };
+struct ClipDef { const char* name; float yaw; bool sala; int esc, jug; int vivo = -1; };   // vivo: version viva (zfx_banca_vivo_*) del clip de siempre n
 #define ESC_J(e, j) { "zfx_banca_e" #e "_j" #j, 0.0f, false, e, j }
 #define ESC(e) ESC_J(e, 0), ESC_J(e, 1), ESC_J(e, 2), ESC_J(e, 3), ESC_J(e, 4), ESC_J(e, 5), ESC_J(e, 6), ESC_J(e, 7), ESC_J(e, 8)
 const ClipDef kClipDef[] = {
@@ -1074,6 +1074,12 @@ const ClipDef kClipDef[] = {
     { "dml_md_meeting_waiting_01_sub1", -96.7f, true, 0, 0 }, { "dml_md_meeting_waiting_01_sub2", 110.5f, true, 0, 0 },
     { "dml_md_meeting_waiting_01_sub3", 96.2f, true, 0, 0 }, { "dml_md_meeting_waiting_03a", 2.1f, true, 0, 0 }, { "dml_md_meeting_waiting_03c", -1.7f, true, 0, 0 },
     ESC(1), ESC(2), ESC(3), ESC(4),
+    // (23/11, Agustin: "esos 6 suplentes podes darle mas movimiento pero manteniendo sus poses?") los clips de siempre, horneados con
+    // la vista previa SIN cambios de postura ni charlas: la misma pose con respiracion, cuerpo vivo, miradas al partido, rascarse,
+    // pierna, tamborileo, dedos y pies en el piso. Ya miran a la cancha (giro 0). Si cargo, reemplaza a su clip de siempre; si no, queda el de siempre.
+    { "zfx_banca_vivo_sit_002", 0.0f, false, 0, 0, 0 }, { "zfx_banca_vivo_sit_003", 0.0f, false, 0, 0, 1 }, { "zfx_banca_vivo_sit_005", 0.0f, false, 0, 0, 2 },
+    { "zfx_banca_vivo_waiting_01_sub1", 0.0f, true, 0, 0, 3 }, { "zfx_banca_vivo_waiting_01_sub2", 0.0f, true, 0, 0, 4 },
+    { "zfx_banca_vivo_waiting_01_sub3", 0.0f, true, 0, 0, 5 }, { "zfx_banca_vivo_waiting_03a", 0.0f, true, 0, 0, 6 }, { "zfx_banca_vivo_waiting_03c", 0.0f, true, 0, 0, 7 },
 };
 #undef ESC
 #undef ESC_J
@@ -1128,6 +1134,7 @@ struct LiveSub {
     int shown = -1;                                    // (2e) clip que tiene puesto (el suyo o el de "probar clips")
     int esc = 0; float fadeA = -1000.0f;               // (23/11) escena horneada (0 = clip de siempre) y ultimo fundido de vuelta
     float blinkNext = -1.0f, blinkStart = -1000.0f; void* blinkFace = nullptr;   // (23/11) parpadeo: proximo, ultimo y animador donde se puso el clip
+    int fcClip = -1, fcPrev = -1, fcLayer = 1; float fcW = 0, fcPrevW = 0, fcT0 = -1000.0f, fcPrevT0 = -1000.0f, fcNext = -1.0f;   // (23/11) cara: actual / anterior (fundido)
 };
 enum { kIdle = 0, kWait, kClips, kRun, kOff };
 struct Subs {
@@ -1381,6 +1388,61 @@ void SubBlink(LiveSub& u, void* face, float T) {
     ((AnimSetTimeFn)kAnimSetTime)(fa, kBlinkLayer, w > 0.0f ? bt : 0.0f);
     ((AnimSetWeightFn)kAnimSetWeight)(fa, kBlinkLayer, w);
 }
+// (23/11, Agustin: "y darles expresiones a todos") caras. Mismo animador de cara que el parpadeo: capas base 0..3 con un clip de los 166
+// de la lista fija del exe (indice = byte que FUN_141ec3170 pasa a FUN_141b03f60(anim, capa, clip, 0, 0, 0.0f, 0)). Capa 0 = base_normal
+// (67) con lo que sobra del peso, capas 1 / 2 = la cara actual y la anterior, que se cruzan en kFaceFade s (el juego tampoco cambia la
+// emocion antes de 0.2 s). Los de la escena siguen la linea de tiempo de la vista previa (banca_caras.inc: cuadro del clip horneado ->
+// clip y peso, sacado de acciones.json; los zfx_ de la vista que no existen en el juego van a su par de Konami); los de los clips de
+// siempre, caras tranquilas al azar cada 6-14 s. La pose de cara sale despues con FUN_141ec7b70(h, controlador, 3): FUN_141ec4970 con
+// modo 3 toma la CARA del animador (modo 1 / 2 = tablas neutras) y las MANOS de las tablas neutras (modo 1 / 3), como hasta ahora.
+// Solo huesos de la cara del rig (skf_): nada del modelo ni del interior de la boca.
+struct FaceKey { uint16_t f; uint8_t clip, w; };     // cuadro (30 por s) del clip horneado, clip base, peso x 100
+#include "banca_caras.inc"                           // kEscCara[e][j] / kEscCaraN[e][j] (generado por tools/banca/caras_inc.py)
+const uintptr_t kAnimSetBase = 0x141b03f60ull, kHumanFace = 0x141ec7b70ull;
+typedef void(__fastcall* HumanFaceFn)(void*, void*, uint32_t);
+const uint32_t kFaceBaseNormal = 67;
+const float kFaceFade = 0.45f;
+const uint8_t kCalmFace[][2] = { { 67, 0 }, { 107, 60 }, { 155, 35 }, { 71, 70 }, { 114, 40 }, { 119, 45 }, { 155, 25 }, { 67, 0 } };
+std::atomic<unsigned> s_faceChanges{0};
+void SubFace(LiveSub& u, void* face, float T, float clipT) {
+    void* fa = nullptr; memcpy(&fa, face, 8); if (!fa) return;
+    if (u.fcT0 > T + 1.0f) { u.fcT0 = u.fcPrevT0 = -1000.0f; u.fcNext = T; }       // el reloj volvio atras
+    int clip = (int)kFaceBaseNormal; float w = 0.0f;
+    const int e = kClipDef[u.shown >= 0 ? u.shown : u.clip].esc, j = kClipDef[u.shown >= 0 ? u.shown : u.clip].jug;
+    if (e >= 1 && e <= kNumEsc && j >= 0 && j < kEscJug && clipT >= 0.0f) {          // escena: la cara de la vista en ese cuadro
+        const FaceKey* k = kEscCara[e - 1][j]; const int n = kEscCaraN[e - 1][j]; const int f = (int)(clipT * 30.0f);
+        for (int i = 0; i < n && k[i].f <= f; i++) { clip = k[i].clip; w = k[i].w * 0.01f; }
+        if (w > 0.0f) u.fcNext = T;                                                     // al terminar la cara de la escena sale una tranquila
+    }
+    if (w <= 0.0f) {                                                                    // clips de siempre (y la escena entre caras): tranquilas al azar
+        if (T >= u.fcNext) { const int r = (int)(Rnd() % (sizeof kCalmFace / sizeof kCalmFace[0])); u.fcNext = T + 6.0f + (float)(Rnd() % 800) * 0.01f;
+                             clip = kCalmFace[r][0]; w = kCalmFace[r][1] * 0.01f; if (clip == u.fcClip) { w = u.fcW; } }
+        else { clip = u.fcClip >= 0 ? u.fcClip : (int)kFaceBaseNormal; w = u.fcW; }
+    }
+    if (w <= 0.0f) clip = (int)kFaceBaseNormal;
+    if (fa != u.blinkFace || u.fcClip < 0) {                                           // animador nuevo: capa 0 = base_normal
+        ((AnimSetClipFn)kAnimSetBase)(fa, 0, kFaceBaseNormal, 0, 0, 0.0f, 0);
+        u.fcClip = -2; u.fcPrev = -1; u.fcW = u.fcPrevW = 0.0f;
+    }
+    if (clip != u.fcClip || std::fabs(w - u.fcW) > 0.01f) {                            // cara nueva: la actual pasa a "anterior" y se cruza
+        const float k0 = std::clamp((T - u.fcT0) / kFaceFade, 0.0f, 1.0f);
+        u.fcPrev = u.fcClip; u.fcPrevW = u.fcW * k0; u.fcPrevT0 = u.fcT0;   // lo que pesaba la cara actual en este momento
+        u.fcLayer = u.fcLayer == 1 ? 2 : 1; u.fcClip = clip; u.fcW = w; u.fcT0 = T;
+        if (clip != (int)kFaceBaseNormal) ((AnimSetClipFn)kAnimSetBase)(fa, (uint32_t)u.fcLayer, (uint32_t)clip, 0, 0, 0.0f, 0);
+        s_faceChanges.fetch_add(1, std::memory_order_relaxed);
+    }
+    float k = std::clamp((T - u.fcT0) / kFaceFade, 0.0f, 1.0f); k = k * k * (3.0f - 2.0f * k);
+    const float wn = u.fcClip == (int)kFaceBaseNormal ? 0.0f : u.fcW * k;
+    const float wo = (u.fcPrev < 0 || u.fcPrev == (int)kFaceBaseNormal) ? 0.0f : u.fcPrevW * (1.0f - k);
+    const uint32_t ln = (uint32_t)u.fcLayer, lo = ln == 1 ? 2u : 1u;
+    ((AnimSetTimeFn)kAnimSetTime)(fa, ln, std::max(0.0f, T - u.fcT0));
+    ((AnimSetTimeFn)kAnimSetTime)(fa, lo, std::max(0.0f, T - u.fcPrevT0));
+    ((AnimSetTimeFn)kAnimSetTime)(fa, 0, 0.0f);
+    ((AnimSetWeightFn)kAnimSetWeight)(fa, ln, wn);
+    ((AnimSetWeightFn)kAnimSetWeight)(fa, lo, wo);
+    ((AnimSetWeightFn)kAnimSetWeight)(fa, 0, std::max(0.0f, 1.0f - wn - wo));
+    ((AnimSetWeightFn)kAnimSetWeight)(fa, 3, 0.0f);
+}
 // (23/11, Agustin: "agregar el lod ... asi mi juego no anda a 10 fps"; prueba: 14-30 FPS con la placa al 96 %). El suplente se dibujaba
 // siempre con el modelo completo: draw::util::Human+0xc = modo de LOD (0 / 1 / 2 = nivel fijo, 3 = por tamano en pantalla) y nadie lo
 // ponia. La cinematica lo pone al activar a cada persona (FUN_141f458c0 segun FixDemoHumanData.lod): LOD_AUTO = FUN_141ec83e0(h, 1.25f,
@@ -1391,8 +1453,11 @@ typedef void(__fastcall* HumanLodAutoFn)(void*, float, float);
 std::atomic<unsigned> s_lodSet{0};
 void SubLod(LiveSub& u) {
     __try {
+        // x520 = distancia del detalle: los cortes son 2.747 / parametro, asi que dividir los parametros por k aleja los cortes k veces
+        const float k = (!g_cfg.info[520][0].defined && g_cfg.live[520][0] == 0.0f) ? 1.0f : g_cfg.live[520][0];
+        if (k <= 0.01f) return;                                   // 0 = sin LOD (modelo completo, como antes)
         void* h = nullptr; memcpy(&h, (uint8_t*)u.fd + 0x48, 8); if (!h) return;
-        ((HumanLodAutoFn)kHumanLodAuto)(h, 1.25f, 0.2f);
+        ((HumanLodAutoFn)kHumanLodAuto)(h, 1.25f / k, 0.2f / k);
         if (*(const int32_t*)((const uint8_t*)h + 0xc) == 3) s_lodSet.fetch_add(1, std::memory_order_relaxed);
     }
     __except (EXCEPTION_EXECUTE_HANDLER) { static int said = 0; if (said++ < 2) Log("banca: suplentes reales: error al poner el LOD de %s (sin LOD)", u.name); }
@@ -1405,7 +1470,12 @@ __declspec(noinline) int SubUpdate(LiveSub& u, float T, bool moved) {
         ((FdPushFn)kFdPush)(fd);
         void* h = nullptr; memcpy(&h, fd + 0x48, 8);
         void* face = FaceEnsure(u);                       // (2c) cara y manos en pose neutra, como match::Player::vf10
-        if (h && face) { SubBlink(u, face, T); ((FaceNeutralFn)kFaceNeutral)(h, face, 0); }   // (23/11) + parpadeo
+        if (h && face) {                                  // (23/11) cara (escena / tranquila) + parpadeo; la pose de cara sale del animador
+            float clipT = -1.0f; { void* c_ = nullptr; memcpy(&c_, fd + 0x50, 8); if (c_) clipT = ((ClipTimeFn)kClipTime)(c_, 0, 1); }
+            SubFace(u, face, T, clipT); SubBlink(u, face, T);
+            ((FaceNeutralFn)kFaceNeutral)(h, face, 0);    // evalua el animador (FUN_141ec1240) y manda cara / manos neutras
+            ((HumanFaceFn)kHumanFace)(h, face, 3);        // y encima la cara del animador (modo 3: manos siguen neutras)
+        }
         if ((g_labHideSide.load(std::memory_order_relaxed) >> (u.side & 1)) & 1) { if (h && *((const uint8_t*)h + 0x5a) != 0) ((HumanShowFn)kHumanShow)(h, 0); }   // (21/11) banco del laboratorio
         else if (h && *((const uint8_t*)h + 0x5a) == 0) ((HumanShowFn)kHumanShow)(h, 1);   // si algo lo escondio, se vuelve a mostrar
         void* ctl = nullptr; memcpy(&ctl, fd + 0x50, 8);
@@ -1460,7 +1530,7 @@ int SubsPrepare() {
         full ? ": tipo 0x16 el local, 0x17 el visitante" : bb[0] == 1 ? ": local pieza 0, visitante pieza 8" : ": las dos pieza 8");
     // (2e) clips que se reparten: los de la sala de reunion solo con w518 = 1
     int allow[kNumClips], na = 0; const bool sala = Live3(3, 1.0f) > 0.5f;
-    for (int i = 0; i < kNumClips; i++) if (!kClipDef[i].esc && (sala || !kClipDef[i].sala)) allow[na++] = i;
+    for (int i = 0; i < kNumClips; i++) if (!kClipDef[i].esc && kClipDef[i].vivo < 0 && (sala || !kClipDef[i].sala)) allow[na++] = i;
     for (int sd = 0; sd < 2; sd++) {
         static LiveSub tmp[40]; int ns = 0;
         for (int i = 11; i < conv[sd] && ns < 40; i++) {
@@ -1621,6 +1691,10 @@ void SubsTick(void* host) {
             for (int t = 0; t < kNumClips && (!s_clip[c].ok || (u.esc && kClipDef[c].esc)); t++) c = (c + 1) % kNumClips;
             u.clip = c; u.esc = 0; u.phase0 = (float)(Rnd() % 9000u) / 1000.0f;
         }
+        for (int k = 0; k < S.n; k++) {                                // (23/11) clip de siempre -> su version viva, si cargo
+            LiveSub& u = S.s[k]; if (u.esc || u.clip < 0 || kClipDef[u.clip].vivo >= 0) continue;
+            for (int i = 0; i < kNumClips; i++) if (kClipDef[i].vivo == u.clip && s_clip[i].ok) { u.clip = i; u.phase0 = (float)(Rnd() % 50000u) / 1000.0f; break; }
+        }
         if (!FixdemoRes()) {                                            // (2b) en la carga puede faltar todavia: se espera
             if (!S.resSaid) { S.resSaid = true; Log("banca: suplentes reales: esperando el recurso de clips \"fixdemo\""); }
             if (w < 60.0) return;
@@ -1719,11 +1793,12 @@ void SubsTick(void* host) {
     void* resE = nullptr; bool resEAsked = false;
     for (int k = 0; k < S.n; k++) {
         LiveSub& u = S.s[k]; if (u.state != 2 || !u.fd) continue;
-        if (kClipDef[u.shown >= 0 ? u.shown : u.clip].esc && adt > 0.0f) {       // (23/11) escena: vuelta con fundido
+        const ClipDef& cd_ = kClipDef[u.shown >= 0 ? u.shown : u.clip];
+        if ((cd_.esc || cd_.vivo >= 0) && adt > 0.0f) {       // (23/11) escena o version viva: vuelta con fundido
             if (!resEAsked) { resEAsked = true; resE = FixdemoRes(); }
             const int r = EscLoop(u, resE, S.A);
             if (r < 0) { u.state = 5; Log("banca: suplentes reales: ERROR dentro del juego al dar la vuelta la escena de %s: no se toca nada mas en esta sesion", u.name); return; }
-            if (r > 0 && s_escFades.load(std::memory_order_relaxed) <= 2) Log("banca: escena %d: %s da la vuelta con fundido de %.1f s", kClipDef[u.shown].esc, u.name, kEscFade);
+            if (r > 0 && s_escFades.load(std::memory_order_relaxed) <= 2) Log("banca: %s %d: %s da la vuelta con fundido de %.1f s", cd_.esc ? "escena" : "vivo", cd_.esc ? cd_.esc : cd_.vivo, u.name, kEscFade);
         }
         const int r = SubUpdate(u, S.A, adt > 0.0f);
         if (r < 0) { u.state = 5; Log("banca: suplentes reales: ERROR dentro del juego al mover a %s: no se toca nada mas en esta sesion", u.name); return; }
@@ -2000,10 +2075,10 @@ void BancaPresent() {
             static unsigned lastSub = 0; const unsigned st = s_subTicks.load(std::memory_order_relaxed);
             LogRealSubs();
             static unsigned lastMode = 0; const unsigned md = s_modeCalls.load(std::memory_order_relaxed);
-            Log("banca: suplentes reales %s: %d sentados, reloj %.1f por segundo (modo partido %.1f por segundo hilo %lu, estado del partido %d; jugadores hilo %lu, %u cambios de hilo, %u llamadas en total), %u descargas de clips frenadas; cara y manos: %u creados, %u fallos; parpadeos %u; LOD por distancia %u%s",
+            Log("banca: suplentes reales %s: %d sentados, reloj %.1f por segundo (modo partido %.1f por segundo hilo %lu, estado del partido %d; jugadores hilo %lu, %u cambios de hilo, %u llamadas en total), %u descargas de clips frenadas; cara y manos: %u creados, %u fallos;  parpadeos %u, cambios de cara %u; LOD por distancia %u%s",
                 Live2(0, 1.0f) > 0.5f ? "prendido" : "apagado", s_subActive.load(), nextT > 0 ? (st - lastSub) / 10.0 : 0.0, nextT > 0 ? (md - lastMode) / 10.0 : 0.0,
                 s_modeThread.load(), s_matchState.load(), s_srcThread.load(), s_threadChanges.load(), s_pushCalls.load(), s_unloadBlocked.load(),
-                s_faceMade.load(), s_faceFail.load(), s_blinks.load(), s_lodSet.load(), s_subsDead.load() ? "; APAGADO por un error dentro del juego" : "");
+                s_faceMade.load(), s_faceFail.load(), s_blinks.load(), s_faceChanges.load(), s_lodSet.load(), s_subsDead.load() ? "; APAGADO por un error dentro del juego" : "");
             {   // (2d) cuanto avanzo la animacion de los sentados contra el tiempo real (pausa = 0, camara lenta < 1)
                 const float a = s_animSum.exchange(0.0f), r = s_realSum.exchange(0.0f);
                 if (r > 0.5f) Log("banca: animacion de los suplentes: %.1f s en %.1f s reales (%.2f; con el reloj %s)", a, r, a / r,
