@@ -16,6 +16,12 @@ static ID3D11SamplerState* s_sampP = nullptr; static ID3D11SamplerState* s_sampL
 static ID3D11RasterizerState* s_rs = nullptr; static ID3D11DepthStencilState* s_dss = nullptr; static ID3D11BlendState* s_bs = nullptr;
 static std::atomic<int> s_lastFrame{-1}; static ID3D11ShaderResourceView* s_last = nullptr;
 std::atomic<int> g_gtaoDraws{0};
+// (23/11 ru34vc) 534 VISIBILIDAD DEL CIELO DE LEJOS: pes_skyvis_ps a media resolucion (RGBA8: normal doblada + visibilidad) y su
+// desenfoque H/V; la composicion (619b) y la luz global (fda6) la leen en t50. Techos, gradas, banco de suplentes, tunel.
+static ID3D11PixelShader* s_fps = nullptr; static ID3D11PixelShader* s_fbh = nullptr; static ID3D11PixelShader* s_fbv = nullptr;
+static ID3D11Texture2D* s_fTex[2] = {}; static ID3D11RenderTargetView* s_fRTV[2] = {}; static ID3D11ShaderResourceView* s_fSRV[2] = {};
+static UINT s_fw = 0, s_fh = 0; static std::atomic<int> s_fFrame{-1}; static ID3D11ShaderResourceView* s_fLast = nullptr;
+std::atomic<int> g_skyVisDraws{0};
 
 static void EnsureShaders() {
     if (s_tried || !g_dev.dev) return; s_tried = true;
@@ -25,6 +31,11 @@ static void EnsureShaders() {
     ID3DBlob* vb2 = CompileNamedShader(L"pes_gtao_bv_ps.hlsl", "ps_5_0");
     ID3DBlob* tpb = CompileNamedShader(L"pes_gtao_tp_ps.hlsl", "ps_5_0");
     if (tpb) { g_dev.dev->CreatePixelShader(tpb->GetBufferPointer(), tpb->GetBufferSize(), nullptr, &s_tp); tpb->Release(); }
+    { ID3DBlob* f0 = CompileNamedShader(L"pes_skyvis_ps.hlsl", "ps_5_0"); ID3DBlob* f1 = CompileNamedShader(L"pes_skyvis_bh_ps.hlsl", "ps_5_0"); ID3DBlob* f2 = CompileNamedShader(L"pes_skyvis_bv_ps.hlsl", "ps_5_0");
+      if (f0) { g_dev.dev->CreatePixelShader(f0->GetBufferPointer(), f0->GetBufferSize(), nullptr, &s_fps); f0->Release(); }
+      if (f1) { g_dev.dev->CreatePixelShader(f1->GetBufferPointer(), f1->GetBufferSize(), nullptr, &s_fbh); f1->Release(); }
+      if (f2) { g_dev.dev->CreatePixelShader(f2->GetBufferPointer(), f2->GetBufferSize(), nullptr, &s_fbv); f2->Release(); }
+      Log("cielo de lejos: shaders %s", (s_fps && s_fbh && s_fbv) ? "listos" : "NO compilaron (ver errores)"); }
     if (vb) { g_dev.dev->CreateVertexShader(vb->GetBufferPointer(), vb->GetBufferSize(), nullptr, &s_vs); vb->Release(); }
     if (pb) { g_dev.dev->CreatePixelShader(pb->GetBufferPointer(), pb->GetBufferSize(), nullptr, &s_ps); pb->Release(); }
     if (hb) { g_dev.dev->CreatePixelShader(hb->GetBufferPointer(), hb->GetBufferSize(), nullptr, &s_bh); hb->Release(); }
@@ -40,6 +51,7 @@ static void EnsureShaders() {
 }
 void GTAOReloadShaders() {
     if (s_vs) { s_vs->Release(); s_vs = nullptr; } if (s_ps) { s_ps->Release(); s_ps = nullptr; } if (s_bh) { s_bh->Release(); s_bh = nullptr; } if (s_bv) { s_bv->Release(); s_bv = nullptr; } if (s_tp) { s_tp->Release(); s_tp = nullptr; }
+    if (s_fps) { s_fps->Release(); s_fps = nullptr; } if (s_fbh) { s_fbh->Release(); s_fbh = nullptr; } if (s_fbv) { s_fbv->Release(); s_fbv = nullptr; }
     s_tried = false;
 }
 static bool EnsureTargets(UINT w, UINT h) {
@@ -63,6 +75,30 @@ static bool EnsureTargets(UINT w, UINT h) {
     return true;
 }
 
+static bool EnsureFarTargets(UINT w, UINT h) {
+    if (s_fTex[0] && s_fw == w && s_fh == h) return true;
+    for (int i = 0; i < 2; i++) { if (s_fSRV[i]) s_fSRV[i]->Release(); if (s_fRTV[i]) s_fRTV[i]->Release(); if (s_fTex[i]) s_fTex[i]->Release(); s_fSRV[i] = nullptr; s_fRTV[i] = nullptr; s_fTex[i] = nullptr; }
+    D3D11_TEXTURE2D_DESC td{}; td.Width = w; td.Height = h; td.MipLevels = 1; td.ArraySize = 1; td.Format = DXGI_FORMAT_R8G8B8A8_UNORM; td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    for (int i = 0; i < 2; i++) {
+        if (FAILED(g_dev.dev->CreateTexture2D(&td, nullptr, &s_fTex[i]))) return false;
+        if (FAILED(g_dev.dev->CreateRenderTargetView(s_fTex[i], nullptr, &s_fRTV[i]))) return false;
+        if (FAILED(g_dev.dev->CreateShaderResourceView(s_fTex[i], nullptr, &s_fSRV[i]))) return false;
+    }
+    s_fw = w; s_fh = h; Log("cielo de lejos: targets %ux%u RGBA8", w, h);
+    return true;
+}
+// (23/11 ru34vc) t50 de la composicion y la luz global: la del cuadro, o una neutra (1x1: sin normal doblada, cielo entero)
+ID3D11ShaderResourceView* SkyVisSRV(int frame) {
+    if (g_cfg.live[534][0] > 0.5f && s_fFrame.load() == frame && s_fLast) return s_fLast;
+    static ID3D11ShaderResourceView* s_v = nullptr; static bool tried = false;
+    if (!tried && g_dev.dev) { tried = true;
+        D3D11_TEXTURE2D_DESC td{}; td.Width = 1; td.Height = 1; td.MipLevels = 1; td.ArraySize = 1; td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_IMMUTABLE; td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        const uint8_t v[4] = { 128, 128, 128, 255 }; D3D11_SUBRESOURCE_DATA sd{}; sd.pSysMem = v; sd.SysMemPitch = 4;
+        ID3D11Texture2D* t = nullptr;
+        if (SUCCEEDED(g_dev.dev->CreateTexture2D(&td, &sd, &t)) && t) { g_dev.dev->CreateShaderResourceView(t, nullptr, &s_v); t->Release(); } }
+    return s_v;
+}
 // (24/10 g) textura neutra (1x1, 1 = sin oclusion) para t27 cuando el GTAO no se calcula en esta escena (editor, menus: la
 // escena es mas chica que la pantalla): la composicion lo pide igual si el GTAO esta prendido y sin nada enlazado leia 0
 ID3D11ShaderResourceView* GTAONeutralSRV() {
@@ -138,6 +174,21 @@ ID3D11ShaderResourceView* GTAOBeforeComposition(ID3D11DeviceContext* c, int fram
     ID3D11ShaderResourceView* sv2[2] = { s_srv[1], depth }; c->PSSetShaderResources(0, 2, sv2);
     c->PSSetShader(s_bv, nullptr, 0); c->Draw(3, 0);
     c->PSSetShaderResources(0, 2, nulls);
+    // 3b) (23/11 ru34vc) visibilidad del cielo de lejos a media resolucion: skyvis -> f0, H f0 -> f1, V f1 -> f0
+    if (g_cfg.live[534][0] > 0.5f && s_fps && s_fbh && s_fbv && EnsureFarTargets((td.Width + 1) / 2, (td.Height + 1) / 2)) {
+        D3D11_VIEWPORT vh{ 0, 0, (float)s_fw, (float)s_fh, 0, 1 }; c->RSSetViewports(1, &vh);
+        c->OMSetRenderTargets(1, &s_fRTV[0], nullptr);
+        c->PSSetShaderResources(0, 2, sv0); c->PSSetShader(s_fps, nullptr, 0); c->Draw(3, 0);
+        c->PSSetShaderResources(0, 2, nulls); c->OMSetRenderTargets(1, &s_fRTV[1], nullptr);
+        { ID3D11ShaderResourceView* f[2] = { s_fSRV[0], depth }; c->PSSetShaderResources(0, 2, f); }
+        c->PSSetShader(s_fbh, nullptr, 0); c->Draw(3, 0);
+        c->PSSetShaderResources(0, 2, nulls); c->OMSetRenderTargets(1, &s_fRTV[0], nullptr);
+        { ID3D11ShaderResourceView* f[2] = { s_fSRV[1], depth }; c->PSSetShaderResources(0, 2, f); }
+        c->PSSetShader(s_fbv, nullptr, 0); c->Draw(3, 0);
+        c->PSSetShaderResources(0, 2, nulls);
+        c->RSSetViewports(1, &vp);
+        s_fLast = s_fSRV[0]; s_fFrame = frame; g_skyVisDraws++;
+    }
     // 4) (21/10) acumulacion temporal: tex0 + historia anterior -> historia nueva (la que se usa)
     ID3D11ShaderResourceView* outSRV = s_srv[0];
     bool temporal = s_tp && s_hRTV[0] && s_hRTV[1];

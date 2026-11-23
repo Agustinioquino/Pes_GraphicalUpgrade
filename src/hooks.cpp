@@ -1703,6 +1703,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         int gz_ = GpuZoneBegin(c, kGzGTAO); ID3D11ShaderResourceView* v = GTAOBeforeComposition(c, s_presentNo.load()); GpuZoneEnd(c, gz_);
         if (!v && g_cfg.live[132][0] > 0.5f) v = GTAONeutralSRV();   // (24/10 g) escena sin GTAO (editor): sin oclusion, no 0
         if (v) { Remember(c, d, true, true, 27); c->PSSetShaderResources(27, 1, &v); }
+        // (23/11 ru34vc) 534: visibilidad del cielo de lejos (gtao.cpp) en t50 de la composicion y la luz global (neutra si no corrio)
+        if (ps->hash != 0xf807e74d5b900a15ULL) if (ID3D11ShaderResourceView* fv = SkyVisSRV(s_presentNo.load())) { Remember(c, d, true, true, 50); c->PSSetShaderResources(50, 1, &fv); }
     }
     // 21/10: SSGI temporal para la composicion: t26 (media resolucion, acumulado en el tiempo)
     // (08/11 0qtsss, Agustin: "el ssgi en el modo editar deberia cargar por completo") tambien la composicion del editor (f807) con x411
