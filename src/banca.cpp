@@ -1132,7 +1132,7 @@ struct LiveSub {
     uint32_t teamIdx = 0; uint64_t id = 0; char name[40] = {}; Spot spot{}; bool bib = false, gk = false;
     float t0 = 0, start = 0, tCreateT = 0, phase0 = 0; double tCreate = 0; int endTicks = 0; bool faceTried = false; uint8_t player[0xF0] = {};
     float heightCm = 0, dyCm = 0;                      // (2d) estatura del modelo (h+0x10) y lo que se bajo la base por ella
-    float offT = 0; bool off = false; uint8_t skip = 0;   // (v7d) fuera de cuadro: cuanto hace, escondido, cuadros salteados
+    float offT = 0; bool off = false; uint8_t skip = 0; float back = 0;   // (v7d) fuera de cuadro: cuanto hace, escondido, cuadros salteados
     uint8_t bibByte = 0;                               // (2e) pechera del LoadId si le toca: 1 pieza 0, 2 pieza 8
     uint8_t kindOv = 0;                                // (2e) campera entera (lluvia / nieve): tipo del LoadId 0x16 / 0x17, sin pechera
     int shown = -1;                                    // (2e) clip que tiene puesto (el suyo o el de "probar clips")
@@ -1476,9 +1476,19 @@ void SubLod(LiveSub& u) {
 }
 // avanza y manda la pose; devuelve 2 si tuvo que volver el clip al principio a mano
 std::atomic<unsigned> s_offHidden{0}, s_offSkipped{0};
+std::atomic<unsigned> s_backSeeks{0};
 __declspec(noinline) int SubUpdate(LiveSub& u, float T, bool moved) {
     __try {
         uint8_t* fd = (uint8_t*)u.fd;
+        if (u.back < 0.0f) {                              // (v7e) repeticion para atras: el clip va para atras (al llegar a 0, desde el final)
+            void* c0 = nullptr; memcpy(&c0, fd + 0x50, 8);
+            if (c0) {
+                const float len = ((ClipTimeFn)kClipLen)(c0, 0, 1), cur = ((ClipTimeFn)kClipTime)(c0, 0, 1);
+                float nt = cur + u.back; if (len > 1.0f) { while (nt < 0.0f) nt += len; } else nt = std::max(0.0f, nt);
+                ((ClipSeekFn)kClipSeek)(c0, 0, 0, nt, 1, 1); s_backSeeks.fetch_add(1, std::memory_order_relaxed);
+            }
+            u.back = 0.0f;
+        }
         ((FdVf4Fn)kFdVf4)(fd, T - u.t0);
         ((FdPushFn)kFdPush)(fd);
         void* h = nullptr; memcpy(&h, fd + 0x48, 8);
@@ -1680,10 +1690,13 @@ void SubsTick(void* host) {
         tAcc += dt;
         if (nc2 != nc || np2 != np) {                    // llego una copia nueva de algun reloj
             float dc = (lc >= 0.0f && nc2 != nc) ? c - lc : 0.0f, dp = (lp >= 0.0f && np2 != np) ? pl - lp : 0.0f;
-            if (dc < 0.0f || dc > 0.5f) dc = 0.0f; if (dp < 0.0f || dp > 0.5f) dp = 0.0f;   // saltos (empieza la repeticion, vuelta)
+            if (fabsf(dc) > 0.5f) dc = 0.0f; if (fabsf(dp) > 0.5f) dp = 0.0f;   // saltos (empieza la repeticion, vuelta); (v7e) hacia atras vale
+            // (v7e, Agustin: "al retroceder no se ejecutan las animaciones al reves") el que se movio: en la repeticion la composicion
+            // queda quieta (0) y el de los jugadores va para atras (negativo); antes max() lo tapaba con el 0 y el tope era 0..1
+
             const unsigned fr = std::max(nc2 - nc, np2 - np);                                  // cuadros del juego desde la ultima copia
-            const float d = std::max(dc, dp), norm = std::max(1e-4f, std::min(tAcc, (float)fr / 60.0f));   // el juego avanza a lo sumo 1/60 por cuadro
-            const float r = std::clamp(d / norm, 0.0f, 1.0f), k = std::min(1.0f, tAcc / 0.3f);
+            const float d = fabsf(dc) >= fabsf(dp) ? dc : dp, norm = std::max(1e-4f, std::min(tAcc, (float)fr / 60.0f));   // el juego avanza a lo sumo 1/60 por cuadro
+            const float r = std::clamp(d / norm, -4.0f, 4.0f), k = std::min(1.0f, tAcc / 0.3f);
             rateS += (r - rateS) * k; tAcc = 0.0f;
             if (nc2 != nc) lc = c; if (np2 != np) lp = pl; nc = nc2; np = np2;
         }
@@ -1691,7 +1704,10 @@ void SubsTick(void* host) {
         adt = known ? dt * rateS : dt;
         s_animGame.store(known, std::memory_order_relaxed);
     }
-    S.A += adt;                                        // (vf4 recibe A - t0: los dos del mismo reloj; sin vuelta, como S.T)
+    // (v7e) S.A sigue solo para adelante (vf4, vueltas de escena, esperas y sorteos van con el); lo de ir para atras (retroceder la
+    // repeticion) se junta por suplente en u.back y SubUpdate lleva el clip para atras con FUN_141afa7b0 (vf4 ve avance 0)
+    const float back = std::min(0.0f, adt);
+    S.A += std::max(0.0f, adt);                        // (vf4 recibe A - t0: los dos del mismo reloj; sin vuelta, como S.T)
     if (s_subActive.load(std::memory_order_relaxed) > 0) { s_animSum.store(s_animSum.load(std::memory_order_relaxed) + adt, std::memory_order_relaxed); s_realSum.store(s_realSum.load(std::memory_order_relaxed) + dt, std::memory_order_relaxed); }
     s_subTicks.fetch_add(1, std::memory_order_relaxed);
     const bool on = Live(0, 0.0f) > 0.5f && Live(1, 1.0f) > 0.5f && Live2(0, 1.0f) > 0.5f;
@@ -1813,7 +1829,9 @@ void SubsTick(void* host) {
                 void* res = FixdemoRes();
                 if (res && SubStart(u, res, S.A)) {
                     u.state = 2; s_subActive.fetch_add(1); S.tProgress = now;
-                    SubLod(u);                                // (23/11) LOD por distancia, como LOD_AUTO de las cinematicas
+                    // (v7e, Agustin 23/11 19:22: "los lods provocan que no se carguen correctamente las animaciones": de lejos no se
+                    // animaban) y no daban FPS (el cuello es la CPU de dibujos): SubLod ya no se llama, modelo completo como antes de v7c
+                    // SubLod(u);
                     void* face = nullptr; memcpy(&face, (uint8_t*)u.fd + 0x58, 8);
                     Log("banca: suplente %d sentado: %s (cargo en %.1f s; cara y manos %s; estatura %.0f cm, base %+.1f cm)", k + 1, u.name, now - u.tCreate,
                         face ? "con controlador" : u.faceTried ? "SIN controlador (fallo vf3)" : "esperando los recursos del juego", u.heightCm, u.dyCm);
@@ -1866,6 +1884,7 @@ void SubsTick(void* host) {
         if (Live521(0, 1.0f) > 0.5f && camOk) {             // (v7d) fuera de cuadro
             if (InView(camM, u.spot.x, u.spot.y, u.spot.z)) { u.offT = 0.0f; u.off = false; } else { u.offT += dt; if (u.offT > 0.6f) u.off = true; }
         } else u.off = false;
+        u.back += back;                                       // (v7e) retroceso pendiente (los salteados lo juntan)
         if (u.off && Live521(1, 1.0f) > 0.5f && (++u.skip % 3) != 0) { s_offSkipped.fetch_add(1, std::memory_order_relaxed); continue; }
         const int r = SubUpdate(u, S.A, adt > 0.0f);
         if (r < 0) { u.state = 5; Log("banca: suplentes reales: ERROR dentro del juego al mover a %s: no se toca nada mas en esta sesion", u.name); return; }
@@ -2142,10 +2161,10 @@ void BancaPresent() {
             static unsigned lastSub = 0; const unsigned st = s_subTicks.load(std::memory_order_relaxed);
             LogRealSubs();
             static unsigned lastMode = 0; const unsigned md = s_modeCalls.load(std::memory_order_relaxed);
-            Log("banca: suplentes reales %s: %d sentados, reloj %.1f por segundo (modo partido %.1f por segundo hilo %lu, estado del partido %d; jugadores hilo %lu, %u cambios de hilo, %u llamadas en total), %u descargas de clips frenadas; cara y manos: %u creados, %u fallos;  parpadeos %u, cambios de cara %u; LOD por distancia %u; fuera de cuadro: escondidos %u veces, cuadros salteados %u%s",
+            Log("banca: suplentes reales %s: %d sentados, reloj %.1f por segundo (modo partido %.1f por segundo hilo %lu, estado del partido %d; jugadores hilo %lu, %u cambios de hilo, %u llamadas en total), %u descargas de clips frenadas; cara y manos: %u creados, %u fallos;  parpadeos %u, cambios de cara %u; LOD por distancia %u; fuera de cuadro: escondidos %u veces, cuadros salteados %u; para atras %u%s",
                 Live2(0, 1.0f) > 0.5f ? "prendido" : "apagado", s_subActive.load(), nextT > 0 ? (st - lastSub) / 10.0 : 0.0, nextT > 0 ? (md - lastMode) / 10.0 : 0.0,
                 s_modeThread.load(), s_matchState.load(), s_srcThread.load(), s_threadChanges.load(), s_pushCalls.load(), s_unloadBlocked.load(),
-                s_faceMade.load(), s_faceFail.load(), s_blinks.load(), s_faceChanges.load(), s_lodSet.load(), s_offHidden.load(), s_offSkipped.load(), s_subsDead.load() ? "; APAGADO por un error dentro del juego" : "");
+                s_faceMade.load(), s_faceFail.load(), s_blinks.load(), s_faceChanges.load(), s_lodSet.load(), s_offHidden.load(), s_offSkipped.load(), s_backSeeks.load(), s_subsDead.load() ? "; APAGADO por un error dentro del juego" : "");
             {   // (2d) cuanto avanzo la animacion de los sentados contra el tiempo real (pausa = 0, camara lenta < 1)
                 const float a = s_animSum.exchange(0.0f), r = s_realSum.exchange(0.0f);
                 if (r > 0.5f) Log("banca: animacion de los suplentes: %.1f s en %.1f s reales (%.2f; con el reloj %s)", a, r, a / r,
