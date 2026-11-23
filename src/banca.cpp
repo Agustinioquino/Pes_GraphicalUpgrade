@@ -1472,6 +1472,7 @@ void SubLod(LiveSub& u) {
     __except (EXCEPTION_EXECUTE_HANDLER) { static int said = 0; if (said++ < 2) Log("banca: suplentes reales: error al poner el LOD de %s (sin LOD)", u.name); }
 }
 // avanza y manda la pose; devuelve 2 si tuvo que volver el clip al principio a mano
+std::atomic<unsigned> s_offHidden{0}, s_offSkipped{0};
 __declspec(noinline) int SubUpdate(LiveSub& u, float T, bool moved) {
     __try {
         uint8_t* fd = (uint8_t*)u.fd;
@@ -1629,7 +1630,6 @@ void LogRealSubs() {
 // cuadros). Cuadro = vista x proyeccion de SceneCB (config.cpp, cuadro anterior); se prueban los pies y la cabeza con 25 % de margen.
 // Se muestra en el acto al entrar y se esconde recien a los 0.6 s fuera. Sin camara reciente (SceneCB viejo), todos a la vista.
 float Live521(int k, float def) { return (!g_cfg.info[521][k].defined && g_cfg.live[521][k] == 0.0f) ? def : g_cfg.live[521][k]; }
-std::atomic<unsigned> s_offHidden{0}, s_offSkipped{0};
 bool CamPV(float M[16]) {
     extern std::atomic<unsigned> g_camSeq; extern std::atomic<float> g_camPV[16]; extern std::atomic<double> g_camT;
     for (int tries = 0; tries < 3; tries++) {
