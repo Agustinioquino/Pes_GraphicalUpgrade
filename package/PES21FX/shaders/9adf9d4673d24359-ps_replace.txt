@@ -64,6 +64,7 @@ Texture2D<float4> inInscattering : register(t3);
 Texture2D<float4> inMesh : register(t4);
 Texture2D<float4> inFogVolume : register(t12);
 Texture1D<float4> IniParams : register(t120);
+Texture2DArray<float4> PESSkyEnv : register(t28);   // PES21 (23/11 ru34vc h) panorama del cielo fisico de la DLL (el mismo de la luz y los reflejos; sin enlazar = 0)
 #include "pes_common.hlsli"
 
 void main(
@@ -122,6 +123,29 @@ void main(
   float3 sky = max(mie * phM + (ins.xyz * phR * (1.0 - M4.y) + tv), 0.0);
   sky *= expo * M3.w;
   float3 skyA = expo * M7.x * float3(0.003284, 0.004110, 0.006240) + sky;   // cielo despejado
+  // (23/11 ru34vc h) 540 CIELO ACORDE A LA LUZ. Agustin: mejorar el cielo. La tabla del juego es la del archivo de cada estadio (fija): el color
+  // del cielo dibujado no seguia a la luz que reciben jugadores y estadio (cielo fisico de la DLL, 150 / 525). Aca el COLOR y la forma
+  // del degrade (horizonte mas blanco, cenit mas azul, mas claro alrededor del sol, rojizo al atardecer) salen del mismo cielo fisico;
+  // el BRILLO promedio queda el del juego (la exposicion no cambia). x540 cuanto, w540 on. Solo de dia con sol.
+  { float4 Q540 = IniParams.Load(int2(540, 0));
+    if (all(Q540 == 0.0)) Q540 = float4(0.6, 1.0, 0.0, 1.0);   // fila sin cargar: valores de fabrica
+    float Wp, Hp, Ep; PESSkyEnv.GetDimensions(Wp, Hp, Ep);
+    if (own && Q540.w > 0.5 && Q540.x > 0.001 && Wp > 1.0 && sunny && haveL && sunW.y > -0.05) {
+      float3 dP = normalize(float3(dir.x, max(dir.y, 0.002), dir.z));
+      float uP = atan2(dP.z, dP.x) * 0.15915494 + 0.5;
+      float vP = clamp(sqrt(saturate(asin(saturate(dP.y)) / 1.5707963)), 0.5 / Hp, 1.0 - 0.5 / Hp);
+      float3 ph = max(PESSkyEnv.SampleLevel(g_samplerLinear_Wrap_s, float3(uP, vP, 0), 0).xyz, 0.0);
+      // el mismo cielo en el cenit y en el horizonte opuesto al sol: referencia para pasar el degrade fisico al brillo del juego
+      float3 phZ = max(PESSkyEnv.SampleLevel(g_samplerLinear_Wrap_s, float3(0.5, 1.0 - 0.5 / Hp, 0), 0).xyz, 1e-6);
+      const float3 LW = float3(0.2126, 0.7152, 0.0722);
+      float lG = dot(skyA, LW), lP = dot(ph, LW), lZ = dot(phZ, LW);
+      // brillo del juego en esta direccion, con el degrade relativo del cielo fisico (cuanto mas claro que el cenit) sumado suave
+      float rel = clamp(lP / max(lZ, 1e-6), 0.4, 6.0);
+      float lT = lG * lerp(1.0, pow(rel, 0.35), saturate(Q540.y) * 0.5);
+      float3 cP = ph / max(lP, 1e-6);
+      float3 tgt = cP * lT;
+      skyA = lerp(skyA, tgt, saturate(Q540.x) * saturate((sunW.y + 0.05) / 0.1));
+    } }
 
   // ---------------- nubes pintadas del juego (pegadas a la malla del domo)
   float gS = M1.y;
@@ -185,6 +209,7 @@ void main(
       float T = 1.0; float3 C = 0.0;
       float sunK = Q85.x > 0 ? Q85.x : 1.0, ambK = Q85.y > 0 ? Q85.y : 1.0;
       float sigma = 0.006 * dt;
+      float4 Q540c = IniParams.Load(int2(540, 0)); float msK540 = all(Q540c == 0.0) ? 1.0 : (Q540c.w > 0.5 ? Q540c.z : 0.0);   // (23/11) z540
       [loop] for (int i = 0; i < steps && T > 0.02; i++) {
         float3 pW = eyeW + dir * (t0 + (i + jit) * dt);
         float d = PESCloudDensity(pW, CP, 4);
@@ -195,7 +220,12 @@ void main(
         float powder = 1.0 - exp(-d * 2.0);
         float hN = saturate((pW.y - CP.hBase) / CP.thick);
         float3 amb = ambC * lerp(0.18, 0.95, hN) * ambK;
-        float3 S = colN * Tsun * ph * 2.4 * sunK * lerp(0.5, 1.0, powder) + amb;
+        // (23/11 ru34vc h) z540 DISPERSION MULTIPLE (Wrenninge 2013, octavas): una nube real no es negra por dentro del lado de la sombra:
+        // la luz rebota muchas veces adentro. Dos octavas mas con menos extincion y fase cada vez mas pareja: nubes blancas, suaves y con
+        // volumen en vez de manchas grises; el borde a contraluz sigue brillando por la primera octava. 0 = como antes
+        float msK = saturate(msK540);
+        float phMS = Tsun * ph + msK * (0.5 * exp(-dl * 0.1375) * lerp(ph, 0.318, 0.5) + 0.25 * exp(-dl * 0.034) * 0.318);
+        float3 S = colN * phMS * 2.4 * sunK * lerp(0.5, 1.0, powder) + amb;
         float a = 1.0 - exp(-d * sigma);
         C += T * S * a; T *= 1.0 - a;
       }

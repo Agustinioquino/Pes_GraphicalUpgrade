@@ -1007,6 +1007,7 @@ static void UpdatePhysSky(float (*p)[4]) {
     for (int r = 0; r < 7; r++) for (int k = 0; k < 4; k++) p[527 + r][k] = s_shRow[r][k];
 }
 } // namespace
+ID3D11ShaderResourceView* SkyEnvSRV() { return s_envSRV; }   // (23/11 ru34vc h) tambien para el cielo dibujado (domo 9adf, t28)
 
 // ---------------------------------------------------------------- (13/11 tanda 2) fila 498: movimiento de la CAMARA (no va al ini)
 // Cuanto se corre la imagen por la camara entre dos cuadros, en px por cuadro a 1080 lineas: x / y = el centro de la pantalla (ndc: x a la

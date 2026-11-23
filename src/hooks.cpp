@@ -1697,6 +1697,8 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         if (ID3D11ShaderResourceView* v = v0_) { Remember(c, d, true, true, 9); c->PSSetShaderResources(9, 1, &v);
             if (ID3D11ShaderResourceView* sp = SSSSSpecSRV()) { Remember(c, d, true, true, 10); c->PSSetShaderResources(10, 1, &sp); } }   // (27/10 b) brillo con la luz de prueba del editor
     }
+    // (23/11 ru34vc h) 540: el cielo dibujado (domo 9adf) recibe el panorama del cielo fisico en t28 (el mismo de la luz)
+    if (ps && ps->hash == 0x9adf9d4673d24359ULL && ps->repl) if (ID3D11ShaderResourceView* ev = SkyEnvSRV()) { Remember(c, d, true, true, 28); c->PSSetShaderResources(28, 1, &ev); }
     // 20/10: GTAO (HBAO actual) para la luz global y la composicion: t27 (se calcula una vez por cuadro)
     // (08/11 b) tambien la composicion del editor (f807): ahi no habia GTAO y la oclusion de corto alcance de la boca no se veia
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xfda6da09737592b1ULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl) {
