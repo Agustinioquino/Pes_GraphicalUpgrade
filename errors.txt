@@ -1,0 +1,2 @@
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\banca.cpp(1634,110): error C7631: 'fx::`anonymous-namespace'::g_camT': variable with internal linkage declared but not defined [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\menuvisual.cpp(18,9): warning C4005: 'WIN32_LEAN_AND_MEAN': macro redefinition [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]

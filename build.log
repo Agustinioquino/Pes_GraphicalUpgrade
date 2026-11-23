@@ -1,0 +1,121 @@
+MSBuild version 18.12.2-1.26514.2+04f6ca984 for .NET Framework
+
+  1>Checking Build System
+  Building Custom Rule D:/a/Pes_GraphicalUpgrade/Pes_GraphicalUpgrade/CMakeLists.txt
+  buffer.c
+  hook.c
+  trampoline.c
+  hde64.c
+  Generating Code...
+  minhook.vcxproj -> D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\Release\minhook.lib
+  Building Custom Rule D:/a/Pes_GraphicalUpgrade/Pes_GraphicalUpgrade/CMakeLists.txt
+  Assembling D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\d3d11_exports.asm...
+  main.cpp
+  d3d11_proxy.cpp
+  config.cpp
+  hooks.cpp
+  overlay.cpp
+  siderui.cpp
+  lang.cpp
+  presets.cpp
+  catalog.cpp
+  grass.cpp
+  statecache.cpp
+  menutest.cpp
+  facegen.cpp
+  inspect.cpp
+  ssss.cpp
+  headshadow.cpp
+  pitchwear.cpp
+  wind.cpp
+  redes.cpp
+  banderin.cpp
+  Generating Code...
+  Compiling...
+  banca.cpp
+  lod.cpp
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\banca.cpp(1634,110): error C7631: 'fx::`anonymous-namespace'::g_camT': variable with internal linkage declared but not defined [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+  lightmeter.cpp
+  gtao.cpp
+  ssgi.cpp
+  exedump.cpp
+  asyncshot.cpp
+  exepatch.cpp
+  camhook.cpp
+  soleditor.cpp
+  solibre.cpp
+  sudor.cpp
+  musculo.cpp
+  musculo_ui.cpp
+  personajes.cpp
+  fisico.cpp
+  codewatch.cpp
+  memwatch.cpp
+  skintone.cpp
+  glass.cpp
+  Generating Code...
+  Compiling...
+  ring.cpp
+  cuerpo.cpp
+  manos.cpp
+  sunwatch.cpp
+  solreloj.cpp
+  grassdist.cpp
+  brazos.cpp
+  inflate.cpp
+  keyblock.cpp
+  expr.cpp
+  exprbones.cpp
+  faceinject.cpp
+  facetess.cpp
+  arrugasjug.cpp
+  bocajug.cpp
+  tiempo.cpp
+  freecam.cpp
+  caras_hd.cpp
+  caramalla.cpp
+  mouthmask.cpp
+  Generating Code...
+  Compiling...
+  gpumeter.cpp
+  gani.cpp
+  panel.cpp
+  cmdlistguard.cpp
+  relwatch.cpp
+  cobertura.cpp
+  rastro.cpp
+  rastro_v4.cpp
+  publico.cpp
+  solluz.cpp
+  motorlink.cpp
+  menumouse.cpp
+  motorpage.cpp
+  motorgizmo.cpp
+  motorgrid.cpp
+  motorextra.cpp
+  motorsound.cpp
+  borderless.cpp
+  motorscene.cpp
+  motorvista.cpp
+  Generating Code...
+  Compiling...
+  motorjug.cpp
+  motorpj.cpp
+  motorlab.cpp
+  perfrec.cpp
+  menuvisual.cpp
+D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\menuvisual.cpp(18,9): warning C4005: 'WIN32_LEAN_AND_MEAN': macro redefinition [D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\build\PES21FX.vcxproj]
+      D:\a\Pes_GraphicalUpgrade\Pes_GraphicalUpgrade\src\menuvisual.cpp(18,9):
+      'WIN32_LEAN_AND_MEAN' previously declared on the command line
+  
+  repeticion.cpp
+  imgui.cpp
+  imgui_draw.cpp
+  imgui_tables.cpp
+  imgui_widgets.cpp
+  imgui_impl_dx11.cpp
+  imgui_impl_win32.cpp
+  DDSTextureLoader.cpp
+  ScreenGrab.cpp
+  WICTextureLoader.cpp
+  Generating Code...
