@@ -1839,6 +1839,29 @@ void main(
       soK *= pesSVk * pesSVk;   // (23/11 ru34vc) 534: bajo el techo / la grada el cielo que se refleja es mucho menos
       float sunLe = max(dot(max(pLc_color.xyz, 0.0), float3(0.2126, 0.7152, 0.0722)), 0.0) * g_psScene.m_exposure.z;
       r0.xyw += env * sunLe * specE * soK * (skinC ? 0.1 : max(RS.y, 0.0)) * (tyC == 1 ? min(pesBallSkyK, 1.0) : 1.0);
+      // (23/11 ru34vc) 535 LACA DE LA PELOTA: una pelota de partido tiene una capa de poliuretano brillante encima del panel impreso.
+      // Esa capa refleja el cielo nitido (capa nitida del panorama) con su propio Fresnel (F0 0.04), sin importar lo aspero del panel
+      float4 BC = IniParams.Load(int2(535,0));
+      if (BC.w > 0.5 && tyC == 1 && gmC.w > 0.85 && BC.z > 0.001) {
+        float Fc = 0.04 + 0.96 * pow(1.0 - NdVe, 5.0);
+        float3 envC = lerp(eS, gnd, saturate(-Rw.y * 10.0));
+        r0.xyw += envC * sunLe * Fc * soK * saturate(BC.z) * saturate(BC.x) * 0.5;
+      }
+    }
+  }
+  { // (23/11 ru34vc) 535 LACA DE LA PELOTA, el sol: brillo chico y nitido del sol sobre la capa (GGX con la rugosidad de la laca, y535),
+    // ademas del brillo ancho del panel que ya pone el juego. Solo en la pelota (la marca la DLL: RT2.w = 1), solo donde le da el sol.
+    float4 BC = IniParams.Load(int2(535,0));
+    if (cmpOn && geoOk && BC.w > 0.5 && BC.x > 0.001 && tyC == 1 && gmC.w > 0.85 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+      float3 LdB = normalize(pLc_dir.xyz);
+      float3 HB = normalize(LdB - Vsk);
+      float nlB = saturate(dot(Nsk, LdB)), nhB = saturate(dot(Nsk, HB)), lhB = saturate(dot(LdB, HB));
+      float rB = clamp(BC.y > 0.0 ? BC.y : 0.07, 0.03, 0.4); float aB = rB * rB;
+      float dB = aB * aB / (3.14159265 * pow(nhB * nhB * (aB * aB - 1.0) + 1.0, 2.0));
+      float FB = 0.04 + 0.96 * pow(1.0 - lhB, 5.0);
+      float specB = dB * FB * 0.25 / max(lhB * lhB, 0.1);   // Kelemen: visibilidad simple de una capa lisa
+      float3 sunB = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
+      r0.xyw += sunB * min(specB, 60.0) * nlB * pesShMn * saturate(BC.x);
     }
   }
   { // === PES21 (12/11) y436 b) BRILLO DEL CIELO EN EL CESPED: 151 salta el pasto (tipo 3). La cera de las hojas refleja el cielo en angulo
