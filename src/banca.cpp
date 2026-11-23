@@ -1640,11 +1640,32 @@ void SubsTick(void* host) {
         const double g = (double)g_cfg.live[157][0];
         double dG = S.lastG < 0.0 ? 0.0 : g - S.lastG; if (dG < -50000.0) dG += 100000.0;   // vuelta del reloj (100000 s)
         S.lastG = g; s_animGame.store(true, std::memory_order_relaxed);
-        // (23/11 v7d, Agustin con la repeticion / camara libre: "las animaciones no se ejecutan ... vibran"). En las dos pruebas del 23/11
-        // la fila 157 anduvo a 0-0.4 por segundo con el partido en estado 29 y a saltos sueltos (0.1-0.7 s cada 10 s): con ese reloj
-        // quedaban quietos o a los tirones. Ahora van SIEMPRE con el tiempo real (como la vista previa); la fila 157 solo se anota.
         (void)dG;
     } else { S.lastG = -1.0; s_animGame.store(false, std::memory_order_relaxed); }
+    {   // (23/11 v7d, Agustin: "la idea es que vaya como la fisica de la ropa con el game clock"; probo moviendo la repeticion y no se
+        // animaban). Lo que se vio en su log: (1) en la repeticion el reloj de la composicion (fila 157) queda QUIETO (21.039 durante
+        // minutos) -> ahora tambien se lee el de los jugadores (cPSSystem de la piel de la cara, SysCBP) y vale el que avance; (2) con
+        // pocos FPS el juego avanza su reloj 1/60 por cuadro aunque el cuadro dure mas (por eso iban a 0.25-0.4: el mod de ropa
+        // tambien lo corrige) -> el ritmo es avance / min(cuadro real, 1/60), suavizado 0.3 s, tope 1. Pausa = 0, camara lenta < 1.
+        // Hasta que llegue algun reloj del juego, el tiempo real.
+        extern std::atomic<float> g_clkComp, g_clkPlayer; extern std::atomic<unsigned> g_clkCompN, g_clkPlayerN;
+        static float lc = -1.0f, lp = -1.0f; static unsigned nc = 0, np = 0; static float rateS = 1.0f, tAcc = 0.0f;
+        const unsigned nc2 = g_clkCompN.load(std::memory_order_relaxed), np2 = g_clkPlayerN.load(std::memory_order_relaxed);
+        const float c = g_clkComp.load(std::memory_order_relaxed), pl = g_clkPlayer.load(std::memory_order_relaxed);
+        tAcc += dt;
+        if (nc2 != nc || np2 != np) {                    // llego una copia nueva de algun reloj
+            float dc = (lc >= 0.0f && nc2 != nc) ? c - lc : 0.0f, dp = (lp >= 0.0f && np2 != np) ? pl - lp : 0.0f;
+            if (dc < 0.0f || dc > 0.5f) dc = 0.0f; if (dp < 0.0f || dp > 0.5f) dp = 0.0f;   // saltos (empieza la repeticion, vuelta)
+            const unsigned fr = std::max(nc2 - nc, np2 - np);                                  // cuadros del juego desde la ultima copia
+            const float d = std::max(dc, dp), norm = std::max(1e-4f, std::min(tAcc, (float)fr / 60.0f));   // el juego avanza a lo sumo 1/60 por cuadro
+            const float r = std::clamp(d / norm, 0.0f, 1.0f), k = std::min(1.0f, tAcc / 0.3f);
+            rateS += (r - rateS) * k; tAcc = 0.0f;
+            if (nc2 != nc) lc = c; if (np2 != np) lp = pl; nc = nc2; np = np2;
+        }
+        const bool known = nc2 > 60 || np2 > 60;          // algun reloj del juego ya llego (pausa: rateS -> 0, quietos como la ropa)
+        adt = known ? dt * rateS : dt;
+        s_animGame.store(known, std::memory_order_relaxed);
+    }
     S.A += adt;                                        // (vf4 recibe A - t0: los dos del mismo reloj; sin vuelta, como S.T)
     if (s_subActive.load(std::memory_order_relaxed) > 0) { s_animSum.store(s_animSum.load(std::memory_order_relaxed) + adt, std::memory_order_relaxed); s_realSum.store(s_realSum.load(std::memory_order_relaxed) + dt, std::memory_order_relaxed); }
     s_subTicks.fetch_add(1, std::memory_order_relaxed);
@@ -2098,7 +2119,7 @@ void BancaPresent() {
             {   // (2d) cuanto avanzo la animacion de los sentados contra el tiempo real (pausa = 0, camara lenta < 1)
                 const float a = s_animSum.exchange(0.0f), r = s_realSum.exchange(0.0f);
                 if (r > 0.5f) Log("banca: animacion de los suplentes: %.1f s en %.1f s reales (%.2f; con el reloj %s)", a, r, a / r,
-                                  s_animGame.load() ? "real (v7d; el del juego solo se anota)" : "real: el del juego todavia no se reconocio");
+                                  s_animGame.load() ? "del juego (composicion o jugadores, corregido por FPS), como la ropa" : "real: el del juego todavia no se reconocio");
             }
             lastSub = st; lastMode = md;
         }

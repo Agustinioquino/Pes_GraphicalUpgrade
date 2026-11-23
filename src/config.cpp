@@ -7,6 +7,8 @@
 #include <fstream>
 #include <sstream>
 #include <iterator>
+// (23/11 8z607v v7d) relojes del juego para los suplentes (los escribe Present, los lee el hilo del juego)
+std::atomic<float> g_clkComp{0.0f}, g_clkPlayer{0.0f}; std::atomic<unsigned> g_clkCompN{0}, g_clkPlayerN{0}; static int g_clkCompF = -1, g_clkPlayerF = -1;
 
 namespace fx {
 
@@ -1175,6 +1177,14 @@ void UpdateTimeParams() {
               float ang = (na > 1e-4f && nb > 1e-4f) ? acosf(std::clamp((ax * bx + ay * by + az * bz) / (na * nb), -1.0f, 1.0f)) * 57.2958f : -1.0f;
               Log("cielo: sol del archivo del cielo (%.3f, %.3f, %.3f) | sol de la luz (%.3f, %.3f, %.3f) | diferencia %.1f grados", ax, ay, az, bx, by, bz, ang);
           } } }
+      // (23/11 8z607v v7d) relojes crudos para los suplentes (banca.cpp, hilo del juego): x de la composicion y x de la piel de la cara
+      // (SysCBP), con el numero de cuadro de la copia; en la repeticion el de la composicion quedo quieto (log 23/11 06:50)
+      if (ok) { g_clkComp.store(Y[16], std::memory_order_relaxed); g_clkCompN.fetch_add(fr != g_clkCompF ? 1u : 0u, std::memory_order_relaxed); g_clkCompF = fr; }
+      { std::vector<float> P; int pf = -1;
+        if (NamedCBRead("SysCBP", P, &pf) && P.size() >= 20) {
+            g_clkPlayer.store(P[16], std::memory_order_relaxed); if (pf != g_clkPlayerF) g_clkPlayerN.fetch_add(1u, std::memory_order_relaxed); g_clkPlayerF = pf;
+            static double plog = 0.0; if (t - plog >= 30.0) { plog = t; Log("reloj de los jugadores (piel de la cara): m_timeParam = (%.3f, %.3f, %.3f, %.3f)", P[16], P[17], P[18], P[19]); }
+        } }
       cloudT += adv; if (cloudT > 100000.0) cloudT -= 100000.0;
       p[157][0] = (float)cloudT; p[157][1] = 1.0f; p[157][2] = (good > 120) ? rateS : 1.0f; p[157][3] = (good > 120) ? 1.0f : 0.0f; }
     CamaraFrame(p, t);   // (13/11 tanda 2) fila 498: movimiento de la camara (x436 de 18afff, w454 de la pasada final)
