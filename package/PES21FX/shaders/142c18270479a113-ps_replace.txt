@@ -69,6 +69,8 @@ float3 PESSunColor() { return g_psLight.m_lightSourceColor.xyz; }   // para pes_
 Texture2D<float> pesMouthMask : register(t43);   // (10/11) mascara del interior de la boca (mouthmask.cpp): sin sombra nueva ahi
 #define PES_SK_FACESHADOW 1
 #include "pes_skinlight.hlsli"
+#define PES_FOCO_PUNTO 1
+#include "pes_foco_noche.hlsli"   // (23/11 ru34vc j) 542 noche: sombra por torre y haz en la bruma
 
 void main(
   float4 i_texcoord0 : TEXCOORD0,
@@ -236,6 +238,7 @@ void main(
   o0.w = (float4(1.000000, 1.000000, 1.000000, 1.000000)).w;
   o1.w = (float4(1.000000, 1.000000, 1.000000, 1.000000)).w;
   o2.xyzw = (float4(1.000000, 1.000000, 1.000000, 1.000000)).xyzw;
+  PesFocoNight(v0, v1, v2.xy, skMat, skTag, o0.xyz, o1.xyz);   // (23/11 ru34vc j) 542: sombra de esta torre (contacto v3 hacia el foco) y haz en la bruma
   { float skMS = PesSkMouthShadow(skAB, v0, v2.xy, skZ, skL); o0.xyz *= skMS; o1.xyz *= skMS; }   // (10/11 e) sombra de esta luz dentro de la boca (w388)
   return;
 }
