@@ -146,6 +146,10 @@ float4 main(float4 pos : SV_Position, float2 uvH : TEXCOORD0) : SV_Target0 {
         if (dot(dS, N) < depthEps) continue;
         float cosS = dot(dS, V) / lenS;
         float w = saturate(1.0 - (lenS / radiusM) * (lenS / radiusM));
+        // (24/11 ru34vc l) Agustin 05:49 "las sombras en el rostro siguen fallando": lo que esta a menos de ~60 cm del punto (la nariz,
+        // la ceja, el pelo, el hombro sobre la propia cara; el pliegue de la ropa) lo cubre ya el GTAO de 60 cm. Aca contaba DOS veces y
+        // con media resolucion dejaba parches oscuros en la cara. Este pase es para techos y gradas: lo cercano no tapa.
+        w *= smoothstep(0.5, 0.9, lenS);
         // lo fino delante (mas cerca de la camara que el punto mas alla del grosor) tapa menos
         float front = z0 - zS;
         w *= saturate(1.0 - (front - thick) / max(thick, 0.1));
