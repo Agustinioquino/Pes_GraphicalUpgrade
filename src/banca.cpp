@@ -1684,10 +1684,10 @@ void SubsTick(void* host) {
         // pocos FPS el juego avanza su reloj 1/60 por cuadro aunque el cuadro dure mas (por eso iban a 0.25-0.4: el mod de ropa
         // tambien lo corrige) -> el ritmo es avance / min(cuadro real, 1/60), suavizado 0.3 s, tope 1. Pausa = 0, camara lenta < 1.
         // Hasta que llegue algun reloj del juego, el tiempo real.
-        static float lc = -1.0f, lp = -1.0f; static unsigned nc = 0, np = 0; static float rateS = 1.0f, tAcc = 0.0f;
+        static float lc = -1.0f, lp = -1.0f; static unsigned nc = 0, np = 0; static float rateS = 1.0f, tAcc = 0.0f, sinCopia = 0.0f;
         const unsigned nc2 = g_clkCompN.load(std::memory_order_relaxed), np2 = g_clkPlayerN.load(std::memory_order_relaxed);
         const float c = g_clkComp.load(std::memory_order_relaxed), pl = g_clkPlayer.load(std::memory_order_relaxed);
-        tAcc += dt;
+        tAcc += dt; sinCopia += dt;
         if (nc2 != nc || np2 != np) {                    // llego una copia nueva de algun reloj
             float dc = (lc >= 0.0f && nc2 != nc) ? c - lc : 0.0f, dp = (lp >= 0.0f && np2 != np) ? pl - lp : 0.0f;
             if (fabsf(dc) > 0.5f) dc = 0.0f; if (fabsf(dp) > 0.5f) dp = 0.0f;   // saltos (empieza la repeticion, vuelta); (v7e) hacia atras vale
@@ -1696,11 +1696,19 @@ void SubsTick(void* host) {
 
             const unsigned fr = std::max(nc2 - nc, np2 - np);                                  // cuadros del juego desde la ultima copia
             const float d = fabsf(dc) >= fabsf(dp) ? dc : dp, norm = std::max(1e-4f, std::min(tAcc, (float)fr / 60.0f));   // el juego avanza a lo sumo 1/60 por cuadro
-            const float r = std::clamp(d / norm, -4.0f, 4.0f), k = std::min(1.0f, tAcc / 0.3f);
+            // (v7f, Agustin 24/11: "las animaciones se ven toscas y raras") con tope 4 el ritmo saltaba 0.4 / 1.3 / -0.2 entre copias
+            // (log 02:45-02:47): tope -1..1 otra vez, zona muerta chica (el ruido alrededor de 0 ya no las mueve para atras y
+            // adelante) y suavizado mas largo (0.6 s)
+            float r = std::clamp(d / norm, -1.0f, 1.0f); if (fabsf(r) < 0.06f) r = 0.0f;
+            const float k = std::min(1.0f, tAcc / 0.6f); sinCopia = 0.0f;
             rateS += (r - rateS) * k; tAcc = 0.0f;
             if (nc2 != nc) lc = c; if (np2 != np) lp = pl; nc = nc2; np = np2;
         }
-        const bool known = nc2 > 60 || np2 > 60;          // algun reloj del juego ya llego (pausa: rateS -> 0, quietos como la ropa)
+        // (v7f, Agustin 24/11: "los modelos no estan animados fuera de la vista del shader ... como antes") los dos relojes los copian
+        // las reglas de shaders (SysCB / SysCBP): con los shaders apagados (vista original) no llega ninguna copia y el ritmo quedaba
+        // con el ultimo valor (quietos). Sin copia nueva en 0.3 s: tiempo real, como antes de v7d
+        const bool known = (nc2 > 60 || np2 > 60) && sinCopia < 0.3f;   // algun reloj del juego llega (pausa: rateS -> 0, quietos como la ropa)
+        if (!known) rateS = 1.0f;
         adt = known ? dt * rateS : dt;
         s_animGame.store(known, std::memory_order_relaxed);
     }
