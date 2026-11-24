@@ -98,8 +98,8 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   // un resplandor rojo suave alrededor de los bordes de sombra (nariz sobre la mejilla, menton sobre el cuello) y en las orejas, que la
   // capa de arriba sola no da. Pesa 22 % del rojo (z544, 0.22); el verde y el azul no cambian.
   if (sssV3) {
-    float deepK = (P544.z > 0.0 ? saturate(P544.z) : 0.22);
-    float dR = dmm.r * 3.0 * capS;
+    float deepK = (P544.z > 0.0 ? saturate(P544.z) : 0.15);   // (24/11 q) 0.22 -> 0.15
+    float dR = dmm.r * 2.0 * capS;   // (24/11 q) 3 -> 2 veces: la capa profunda no arrastra la sombra de la nariz al labio
     float aR = 0.0, wR = 0.0;
     { float wc = PesSssR(rC, dR.xxx).x; aR = wc * c0.r; wR = wc; }
     [unroll] for (int j = 0; j < 6; j++) {

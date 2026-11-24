@@ -1497,9 +1497,9 @@ void main(
     }
   }
   if (skinC) {
-    // (24/11 ru34vc m) 544 PIEL v3: la oclusion de la cara (pliegue de la nariz, comisura, parpado) se difunde ENTERA bajo la piel, como
-    // la luz directa: sin parches grises de borde duro debajo de la nariz. z11 vale solo con v3 apagada. Fila sin cargar = v3 on
-    { float4 P544c = IniParams.Load(int2(544,0)); if (all(P544c == 0.0) || P544c.x > 0.5) P11.z = 1.0; }
+    // (24/11 ru34vc q) DESHECHO el 'z11 = 1' de la v3 (ru34vc m): Agustin 06:34, capturas con y sin SSS: la sombra del pliegue de la
+    // nariz se corria como un manchon sobre el bigote y el labio. La oclusion difundida entera arrastraba lo oscuro de la fosa nasal y
+    // del pliegue ~1 cm sobre la piel al sol. Vuelve su z11 tal cual; el alcance ahora sale del color de la piel (abajo).
     // la luz ambiente del estadio es gris/verdosa: en la piel se calienta un poco
     r2.xyz *= lerp(float3(1,1,1), float3(1.07, 0.985, 0.93), saturate(P11.y));
     // oclusion de la piel con tinte rojizo (la luz rebota dentro del tejido en los pliegues)
@@ -1512,7 +1512,11 @@ void main(
     if (IniParams.Load(int2(95,0)).w > 0.5 && P11.z > 0.0 && !mouthM) {
       float zo = PESLinZ(uvC), zoA = abs(zo);
       float mmPx = 2000.0 * abs(g_psScene.m_projectionParam.x) * zoA * g_psSystem.m_renderBuffer.z;   // mm por pixel
-      float3 dmm = float3(1.5, 0.75, 0.40) * max(IniParams.Load(int2(95,0)).x, 0.3);
+      // (24/11 ru34vc q) alcance como la pasada de SSS real (Christensen-Burley desde el albedo: piel oscura difunde menos) y sin la cola
+      // larga (hasta 3.9 en vez de 5.5 veces): el oscuro de un pliegue no cruza al labio
+      float3 albO = saturate(r7.xyz);
+      float3 sAo = 1.85 - albO + 7.0 * pow(abs(albO - 0.8), 3.0);
+      float3 dmm = ((dot(albO, 1.0) > 0.012) ? float3(1.66, 1.17, 0.80) / max(sAo, 0.5) : float3(1.5, 0.75, 0.40)) * clamp(IniParams.Load(int2(95,0)).x, 0.3, 1.5);
       float nearK = saturate((dmm.r * 3.0 / max(mmPx, 1e-6) - 1.5) / 3.0);
       if (zoA > 0.1 && nearK > 0.0) {
         float4 GTo = IniParams.Load(int2(132,0));
@@ -1523,7 +1527,7 @@ void main(
         float3 ws = 0.2 * dmm.r / dmm;          // centro: el disco de radio 0.1 (2 / d por unidad de radio)
         float3 acc = r0.xxx * ws;
         float rot = 6.2831853 * frac(52.9829189 * frac(dot(v0.xy, float2(0.06711056, 0.00583715))));
-        [loop] for (int oi = 0; oi < 8; oi++) {
+        [loop] for (int oi = 0; oi < 7; oi++) {
           float rmm = kR[oi] * dmm.r;
           float ang = oi * 2.39996323 + rot;
           float2 uvS = uvC + float2(cos(ang), sin(ang)) * (rmm / max(mmPx, 1e-6)) * g_psSystem.m_renderBuffer.zw;
