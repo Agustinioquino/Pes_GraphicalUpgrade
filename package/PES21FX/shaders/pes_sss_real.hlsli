@@ -48,8 +48,23 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
   dmm = max(dmm * widthScale, 0.05);
   float mmToPx = 0.001 * pxm;
   float reach = dmm.r * 3.0 * mmToPx;
-  if (reach < 0.6) return float4(c0, 1);   // de lejos el disco no llega a un pixel: lo resuelve la piel pre-integrada de las luces
-  float nearK = smoothstep(0.6, 1.6, reach);
+  float4 P544 = IniParams.Load(int2(544,0));
+  bool sssV3 = all(P544 == 0.0) || P544.x > 0.5;
+  // (24/11 ru34vc o) v3: arranca antes (media distancia: la cara de la tele ya tiene SSS, antes salia plastica hasta ocupar el doble)
+  float reachMin = sssV3 ? 0.4 : 0.6;
+  if (reach < reachMin) return float4(c0, 1);   // de lejos el disco no llega a un pixel: lo resuelve la piel pre-integrada de las luces
+  float nearK = smoothstep(reachMin, sssV3 ? 1.2 : 1.6, reach);
+  // (24/11 ru34vc o) v3 FUNCIONAMIENTO: donde la luz que llega es pareja alrededor (mejilla al sol, frente a la sombra entera) difundir no
+  // cambia nada (los pesos conservan la energia): 4 lecturas al alcance del rojo y, si nada se aparta mas de 2 %, se sale. Las 21 + 6
+  // lecturas quedan para los bordes de sombra, los pliegues y los rasgos: la mayor parte de la piel en pantalla no paga el disco.
+  if (sssV3) {
+    float l0 = Lum(c0), dv = 0.0; float rr = dmm.r * 1.5 * mmToPx;
+    [unroll] for (int e = 0; e < 4; e++) {
+      float2 o = float2(e == 0 ? 1 : (e == 1 ? -1 : 0), e == 2 ? 1 : (e == 3 ? -1 : 0)) * rr * rb;
+      dv = max(dv, abs(Lum(inLight.SampleLevel(sPoint, saturate(uv + o), 0).xyz) - l0));
+    }
+    if (dv <= 0.02 * max(l0, 1e-4)) return float4(c0, 1);
+  }
   float3 P0 = PesSssPos(uv, z0);
   float rot = 6.2831853 * frac(52.9829189 * frac(dot(pos.xy, float2(0.06711056, 0.00583715))) + (IniParams.Load(int2(331, 0)).x > 0.5 ? frac(m_timeParam.z * 7.31) : 0.0));
   // el pixel del centro: una muestra a la distancia de medio pixel (el perfil diverge en 0)
@@ -78,11 +93,33 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
     wsum += w;
   }
   float3 sss = acc / max(wsum, 1e-6);
+  // (24/11 ru34vc o) v3 VISUAL: SEGUNDA CAPA, la dermis profunda (d'Eon y Luebke 2007: la piel son varias capas; la profunda, con
+  // sangre, solo devuelve rojo y lo lleva ~3 veces mas lejos). Seis lecturas mas, solo para el rojo, con el perfil a 3 veces el alcance:
+  // un resplandor rojo suave alrededor de los bordes de sombra (nariz sobre la mejilla, menton sobre el cuello) y en las orejas, que la
+  // capa de arriba sola no da. Pesa 22 % del rojo (z544, 0.22); el verde y el azul no cambian.
+  if (sssV3) {
+    float deepK = (P544.z > 0.0 ? saturate(P544.z) : 0.22);
+    float dR = dmm.r * 3.0 * capS;
+    float aR = 0.0, wR = 0.0;
+    { float wc = PesSssR(rC, dR.xxx).x; aR = wc * c0.r; wR = wc; }
+    [unroll] for (int j = 0; j < 6; j++) {
+      float rmm = kSssX[j] * dR;
+      float a = rot + 1.0471976 + j * 2.3999632;
+      float2 uvS = uv + float2(cos(a), sin(a)) * (rmm * mmToPx) * rb;
+      if (any(uvS < 0.0) || any(uvS > 1.0) || !IsSkin(uvS)) continue;
+      float skS = PesSkinK(uvS); if (skS <= 0.0) continue;
+      float dRaw = inDepth.SampleLevel(sPoint, uvS, 0).x;
+      if (mmW2 > 0) { float mz = inMouth.Load(int3(min((uint2)(uvS / rb), uint2(mmW2 - 1, mmH2 - 1)), 0)); if (mz > 0.0 && abs(mz - dRaw) <= 1e-6 + 2e-4 * abs(dRaw)) continue; }
+      float3 Ps = PesSssPos(uvS, m_projectionParam.z / (dRaw - m_projectionParam.w));
+      float r3 = max(length(Ps - P0) * 1000.0, rmm);
+      float w = PesSssR(r3, dR.xxx).x / max(PesSssR(rmm, dR.xxx).x, 1e-9) * skS;
+      aR += w * inLight.SampleLevel(sPoint, uvS, 0).r; wR += w;
+    }
+    sss.r = lerp(sss.r, aR / max(wR, 1e-6), deepK * saturate(wR / max(wR + 1e-3, 1e-6)));
+  }
   // (24/11 ru34vc m) 544 PIEL v3. Agustin 05:53: "mejora el sss y el trabajo de las sombras de la cara, un 200%". Con y95 < 1 quedaba
   // mezclada la luz sin difundir (borde de sombra nitido y gris encima del difuso): con v3 la dispersion va ENTERA, como la piel real
   // (los pesos ya conservan la energia: no aclara ni oscurece, solo mueve la luz). y95 vale solo con v3 apagada. Fila sin cargar = v3 on
-  float4 P544 = IniParams.Load(int2(544,0));
-  bool sssV3 = all(P544 == 0.0) || P544.x > 0.5;
   float k = (sssV3 ? 1.0 : saturate(P.y)) * nearK * skin0;
   float3 o = lerp(c0, sss, k);
   if (any(isnan(o)) || any(isinf(o))) o = c0;
