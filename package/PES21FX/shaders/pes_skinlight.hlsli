@@ -75,7 +75,7 @@ float3 PesSkTransThick(float thickM, float3 n, float3 L, float rawNdotL, float t
   float dens = (P64.w > 0 ? P64.w : 30.0) * (1.25 - thin);
   float3 Tt = PESTransColor(PESSkinTransmittance(thickM * dens), IniParams.Load(int2(34, 0)).z);
   float backL = smoothstep(0.0, 0.35, dot(L, -n)) * (1.0 - saturate(rawNdotL * 3.0)) * lerp(0.35, 1.0, smoothstep(0.25, 0.75, thin));
-  return Tt * backL * P64.z * 0.8;
+  return Tt * backL * PesV3Trans(P64.z) * 0.8;   // (24/11 ru34vc p) 544 v3: contraluz real
 }
 
 // (04/11 entrecejo) curvatura CONVEXA para el grosor de la contraluz: Agustin vio una linea dura del entrecejo por la nariz, en el

@@ -992,7 +992,7 @@ void main(
       // la piel de frente en la sombra de la nariz / ceja / pelo, donde el 'grosor' medido es el aire entre los dos -> manchas
       // naranjas con el borde de esa sombra. Las zonas gruesas (mejilla, frente) pesan menos segun el mapa de SSS del juego.
       float backL = smoothstep(0.0, 0.35, dot(L, -n)) * (1.0 - saturate(rawNdotL * 3.0)) * lerp(0.35, 1.0, smoothstep(0.25, 0.75, thin));
-      float3 transSM = Tt * backL * P64.z * 0.8;
+      float3 transSM = Tt * backL * PesV3Trans(P64.z) * 0.8;   // (24/11 ru34vc p) 544 v3: contraluz real
       float3 pesTrM = max(transSM, transm * visT * 0.5);   // sin perder el contraluz direccional cuando el mapa no alcanza
       o0.xyz += (pesSmOK ? pesTrM : lerp(transm * visT, pesTrM, pesHsIn)) * lightC;   // borde de la caja del atlas: fundido con la direccional
       // diagnostico w12 = 3: rojo = grosor medido (10 cm = 1), verde = de espaldas al sol, azul = en sombra segun el shadow map

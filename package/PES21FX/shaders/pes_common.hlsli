@@ -342,3 +342,7 @@ float3 PESShadowAlign(float3 p, float4x4 mv, float on) {
   q.z = (V0.z * V0.x + V1.z * V0.y + V2.z * V0.z) * p.x + (V0.z * V1.x + V1.z * V1.y + V2.z * V1.z) * p.y + (V0.z * V2.x + V1.z * V2.y + V2.z * V2.z) * p.z;
   return sgn * q;
 }
+// (24/11 ru34vc p) 544 PIEL v3: contraluz con fuerza real. Agustin 05:56: "falta el detalle de contraluz con el sss tambien". Con z64 bajo
+// la luz que cruza orejas, nariz y dedos casi no se veia; con v3 la transmision por el grosor medido va al menos a 1 (la real) y, como
+// se suma a la luz difusa antes de la pasada de SSS, sale difundida con las dos capas (roja profunda incluida). Sin v3: z64 tal cual
+float PesV3Trans(float z64) { float4 p = IniParams.Load(int2(544,0)); return (all(p == 0.0) || p.x > 0.5) ? max(z64, 1.0) : z64; }
