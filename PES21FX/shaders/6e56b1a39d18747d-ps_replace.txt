@@ -1,0 +1,59 @@
+// PES 2021 - bloom: escalado [hash 6e56b1a39d18747d] - bloom v2 (w40)
+// ---- Created with 3Dmigoto v1.3.16 on Thu Oct 08 21:08:15 2026
+
+cbuffer cPSObject : register(b5)
+{
+
+  struct
+  {
+    float4x4 m_viewWorld;
+    float4x4 m_world;
+    float4 m_useWeightCount;
+    float4 m_localParam[9];
+  } g_psObject : packoffset(c0);
+
+}
+
+SamplerState g_samplerLinear_Clamp_s : register(s11);
+Texture2D<float4> inImage : register(t0);
+
+
+// 3Dmigoto declarations
+#define cmp -
+Texture1D<float4> IniParams : register(t120);
+Texture2D<float4> StereoParams : register(t125);
+
+
+// PES21 bloom v2 (16/10): esta pasada escalaba el bloom con una sola muestra (bordes en escalera);
+// ahora usa un filtro en carpa de 9 muestras (mismo brillo total, borde suave). w40 on/off
+void main(
+  float2 v0 : TEXCOORD0,
+  float4 v1 : SV_Position0,
+  out float4 o0 : SV_Target0)
+{
+  float4 r0;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+  float4 BL = IniParams.Load(int2(40,0));
+  if (BL.w > 0.5) {
+    uint sw, sh; inImage.GetDimensions(sw, sh);
+    float2 tx = 1.0 / float2(max(sw, 1u), max(sh, 1u));
+    float2 uv = g_psObject.m_localParam[3].xy * v1.xy;
+    float2 hi = g_psObject.m_localParam[2].zw;
+    float3 s = inImage.SampleLevel(g_samplerLinear_Clamp_s, clamp(uv, 0, hi), 0).xyz * 4.0;
+    s += (inImage.SampleLevel(g_samplerLinear_Clamp_s, clamp(uv + float2(tx.x, 0), 0, hi), 0).xyz + inImage.SampleLevel(g_samplerLinear_Clamp_s, clamp(uv - float2(tx.x, 0), 0, hi), 0).xyz
+        + inImage.SampleLevel(g_samplerLinear_Clamp_s, clamp(uv + float2(0, tx.y), 0, hi), 0).xyz + inImage.SampleLevel(g_samplerLinear_Clamp_s, clamp(uv - float2(0, tx.y), 0, hi), 0).xyz) * 2.0;
+    s += inImage.SampleLevel(g_samplerLinear_Clamp_s, clamp(uv + tx, 0, hi), 0).xyz + inImage.SampleLevel(g_samplerLinear_Clamp_s, clamp(uv - tx, 0, hi), 0).xyz
+       + inImage.SampleLevel(g_samplerLinear_Clamp_s, clamp(uv + float2(tx.x, -tx.y), 0, hi), 0).xyz + inImage.SampleLevel(g_samplerLinear_Clamp_s, clamp(uv + float2(-tx.x, tx.y), 0, hi), 0).xyz;
+    o0.xyz = g_psObject.m_localParam[3].www * (s / 16.0);
+    o0.w = 1;
+    return;
+  }
+  r0.xy = g_psObject.m_localParam[3].xy * v1.xy;
+  r0.xy = max(float2(0,0), r0.xy);
+  r0.xy = min(g_psObject.m_localParam[2].zw, r0.xy);
+  r0.xyz = inImage.Sample(g_samplerLinear_Clamp_s, r0.xy).xyz;
+  o0.xyz = g_psObject.m_localParam[3].www * r0.xyz;
+  o0.w = 1;
+  return;
+}
