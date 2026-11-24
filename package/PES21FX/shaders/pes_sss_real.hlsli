@@ -78,7 +78,12 @@ float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0 {
     wsum += w;
   }
   float3 sss = acc / max(wsum, 1e-6);
-  float k = saturate(P.y) * nearK * skin0;
+  // (24/11 ru34vc m) 544 PIEL v3. Agustin 05:53: "mejora el sss y el trabajo de las sombras de la cara, un 200%". Con y95 < 1 quedaba
+  // mezclada la luz sin difundir (borde de sombra nitido y gris encima del difuso): con v3 la dispersion va ENTERA, como la piel real
+  // (los pesos ya conservan la energia: no aclara ni oscurece, solo mueve la luz). y95 vale solo con v3 apagada. Fila sin cargar = v3 on
+  float4 P544 = IniParams.Load(int2(544,0));
+  bool sssV3 = all(P544 == 0.0) || P544.x > 0.5;
+  float k = (sssV3 ? 1.0 : saturate(P.y)) * nearK * skin0;
   float3 o = lerp(c0, sss, k);
   if (any(isnan(o)) || any(isinf(o))) o = c0;
   return float4(o, 1);

@@ -9,6 +9,7 @@
 //  - se queda con la oclusion MAS FUERTE del recorrido y con un borde suave del grosor (sin siluetas fantasma)
 //  - grosor que crece con la distancia (w526 escala), arranque separado segun la precision de la profundidad
 // Devuelve 1 = al sol, 0 = sombra plena. Am / Bm (ndc -> uv) y pxUV (tamano de un pixel en uv) los calcula quien llama FUERA de ramas.
+static float g_cs3Steps = 0.0;   // (24/11 ru34vc n) > 0: pasos fijos para quien llama (focos de noche: 8, barato)
 float PESContactShadow3(float2 sC, float2 uvC, float2 Am, float2 Bm, float2 pxUV, float3 Lc, int matType, float skinTag, float jit)
 {
   float4 CS = IniParams.Load(int2(52,0)), C3 = IniParams.Load(int2(526,0));
@@ -16,7 +17,7 @@ float PESContactShadow3(float2 sC, float2 uvC, float2 Am, float2 Bm, float2 pxUV
   if (csK <= 0.0) return 1.0;
   float lenM = clamp(CS.y > 0 ? CS.y : 0.35, 0.05, 1.5);
   float soft = saturate(CS.z);
-  float nSt = clamp(C3.y > 0 ? C3.y : 16.0, 8.0, 32.0);
+  float nSt = g_cs3Steps > 0.0 ? g_cs3Steps : clamp(C3.y > 0 ? C3.y : 16.0, 8.0, 32.0);
   float maxPx = clamp(C3.z > 0 ? C3.z : 96.0, 16.0, 256.0);
   float thkK = C3.w > 0 ? C3.w : 1.0;
   float4 pp = g_psScene.m_projectionParam; float2 cco = g_psScene.m_cameraCenterOffset.xy;

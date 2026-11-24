@@ -78,30 +78,34 @@ void PesFocoNight(float4 v0, float4 v1, float2 px, int mat, float tag, inout flo
   dS = (abs(dS) < 1e-9) ? 1e-9 : dS;
   float2 Am = dU / dS, Bm = uC - Am * sC;
   float4 N2 = IniParams.Load(int2(542,0));
-  if (all(N2 == 0.0)) N2 = float4(1.0, 12.0, 1.0, 1.0);
+  if (all(N2 == 0.0)) N2 = float4(1.0, 25.0, 1.0, 1.0);
   float3 Ls = g_psLight.m_lightSourcePos.xyz;
-  if (length(Ls) < clamp(N2.y, 0.0, 200.0)) return;    // luz cerca de la camara (estudio del Editar): como antes
+  // (24/11 ru34vc n) Agustin: perdida de FPS. Hay hasta 76 focos por cuadro: solo las TORRES (luces a mas de y542 m, 25) y solo cerca
+  // de la camara (40 m) para la sombra; 8 pasos en vez de 16; el haz con 4 pasos y solo en focos con cono.
+  if (length(Ls) < clamp(N2.y, 0.0, 200.0)) return;    // luz cerca (estudio del Editar, carteles, luces chicas): como antes
   float jit = frac(52.9829189 * frac(dot(floor(px), float2(0.06711056, 0.00583715))));
   float4 pp = g_psScene.m_projectionParam;
   float dC = g_DepthTexture.SampleLevel(g_samplerPoint_Wrap_s, uC, 0).x;
   float zC = pp.z / (dC - pp.w);
   float3 P = float3((sC - g_psScene.m_cameraCenterOffset.xy) * pp.xy * zC, zC);
   // 1) sombra de esta torre
-  [branch] if (N2.x > 0.0 && IniParams.Load(int2(526,0)).x > 0.5 && IniParams.Load(int2(52,0)).w > 0.5 && max(dif.r, max(dif.g, dif.b)) + max(spe.r, max(spe.g, spe.b)) > 1e-5) {
+  [branch] if (N2.x > 0.0 && abs(zC) < 40.0 && IniParams.Load(int2(526,0)).x > 0.5 && IniParams.Load(int2(52,0)).w > 0.5 && max(dif.r, max(dif.g, dif.b)) + max(spe.r, max(spe.g, spe.b)) > 1e-5) {
     float3 Lc = normalize(Ls - P);
+    g_cs3Steps = 8.0;
     float cs = PESContactShadow3(sC, uC, Am, Bm, pxU, Lc, mat, tag, jit);
     cs = lerp(1.0, cs, saturate(N2.x));
     dif *= cs; spe *= cs;
   }
   // 2) haz en la bruma
+#ifndef PES_FOCO_PUNTO
   [branch] if (N2.w > 0.5 && N2.z > 0.0) {
     float D = length(P);
     D = (D > 0.0 && D < 1e6) ? min(D, 200.0) : 200.0;
     float3 V = (length(P) > 1e-4 && length(P) < 1e6) ? P / length(P) : float3(0, 0, zC < 0.0 ? -1.0 : 1.0);
     float3 acc = 0.0;
     const float g = 0.45, g2 = g * g;
-    [loop] for (int i = 0; i < 8; i++) {
-      float t = (i + jit) / 8.0 * D;
+    [loop] for (int i = 0; i < 4; i++) {
+      float t = (i + jit) / 4.0 * D;
       float3 S = V * t, l;
       float a = PesFocoAtt(S, l);
       if (a <= 0.0) continue;
@@ -121,7 +125,8 @@ void PesFocoNight(float4 v0, float4 v1, float2 px, int mat, float tag, inout flo
       acc += a * ph * lit;
     }
     float sig = 0.0008 * clamp(N2.z, 0.0, 4.0);
-    float3 hz = acc * (D / 8.0) * sig * g_psLight.m_lightSourceColor.xyz * g_psScene.m_exposure.z * g_psLight.m_lightSourceParam3.x;
+    float3 hz = acc * (D / 4.0) * sig * g_psLight.m_lightSourceColor.xyz * g_psScene.m_exposure.z * g_psLight.m_lightSourceParam3.x;
     spe = min(spe + max(hz, 0.0), 10000.0);
   }
+#endif
 }

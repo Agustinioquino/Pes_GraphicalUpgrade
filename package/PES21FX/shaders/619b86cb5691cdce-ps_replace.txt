@@ -1497,6 +1497,9 @@ void main(
     }
   }
   if (skinC) {
+    // (24/11 ru34vc m) 544 PIEL v3: la oclusion de la cara (pliegue de la nariz, comisura, parpado) se difunde ENTERA bajo la piel, como
+    // la luz directa: sin parches grises de borde duro debajo de la nariz. z11 vale solo con v3 apagada. Fila sin cargar = v3 on
+    { float4 P544c = IniParams.Load(int2(544,0)); if (all(P544c == 0.0) || P544c.x > 0.5) P11.z = 1.0; }
     // la luz ambiente del estadio es gris/verdosa: en la piel se calienta un poco
     r2.xyz *= lerp(float3(1,1,1), float3(1.07, 0.985, 0.93), saturate(P11.y));
     // oclusion de la piel con tinte rojizo (la luz rebota dentro del tejido en los pliegues)
@@ -1682,7 +1685,10 @@ void main(
     float3 alb = saturate(r7.xyz);
     float3 ma = 2.0404 * alb - 0.3324, mb = -4.7951 * alb + 0.6417, mc = 2.7552 * alb + 0.6903;
     float3 multi = max(aoK.xxx, ((aoK * ma + mb) * aoK + mc) * aoK);
-    float3 aoD = lerp(occRGB, occRGB * multi / max(aoRaw, 1e-3), saturate(AOP.x) * (1.0 - faceK));
+    // (24/11 ru34vc m) 544 PIEL v3: en la piel el multirebote vuelve, con el color de la piel (Jimenez 2016 por canal): el pliegue
+    // de la nariz y la comisura quedan hondos (x124 los sigue ahondando) pero rojizos, no gris sucio. Sin v3: como antes
+    float4 P544a = IniParams.Load(int2(544,0)); bool v3Skin = skinC && (all(P544a == 0.0) || P544a.x > 0.5);
+    float3 aoD = lerp(occRGB, occRGB * multi / max(aoRaw, 1e-3), saturate(AOP.x) * (v3Skin ? 1.0 : 1.0 - faceK));
     aoD = min(aoD, 1.0);
     float aoS = aoK;
     if (geoOk) {
