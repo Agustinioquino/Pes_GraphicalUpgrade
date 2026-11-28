@@ -425,7 +425,7 @@ void main(
         if (P329.w > 0.001 || P448f.x > 0.001) pesFl = PESFlatMap.Sample(g_samplerLinear_Clamp_s, v1.xy).xyz;
         if (P329.w > 0.001) { float2 f2 = pesFl.xy;
           float Bp = (P448f.z > 0.0) ? saturate((pesFl.z - 0.012) / 0.988) : 0.0; f2.x = max(f2.x, 0.55 * Bp);   // (13/11 tanda 2) z448: la pisada lenta (B) tambien
-          float tr = saturate(max(f2.y, 0.5 * f2.x) * 1.5) * clamp(P329.w, 0.0, 2.0);
+          float tr = saturate(max(0.35 * f2.y, 0.5 * f2.x) * 1.5) * clamp(P329.w, 0.0, 2.0);   // (28/11, Agustin: "de lejos alrededor de la pelota el pasto desaparece") el rastro de la pelota aclara el suelo un tercio de antes: dejaba una mancha palida
           o0.xyz = saturate(o0.xyz * lerp(float3(1.0, 1.0, 1.0), float3(1.12, 1.08, 0.94), tr)); o2.y = saturate(o2.y + 0.08 * tr); } }
       { float3 cg = o0.xyz; float sp = o2.y, rg = o2.x; PESGroundLook(cg, sp, rg, PESGround()); o0.xyz = cg; o2.y = sp; o2.x = rg; }   // suelo humedo / seco
       if (Q7.w > 1.5 && Q7.w < 2.5) o0.xyz = float3(wr.x, wr.y, 0.0);   // depuracion: desgaste

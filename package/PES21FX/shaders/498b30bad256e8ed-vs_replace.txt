@@ -1650,7 +1650,7 @@ void main(
       if (P329v.w > 0.001 || P448v.x > 0.001) f3 = PESFlatMap.SampleLevel(g_samplerLinear_Clamp_s, pesRoot * cb4[1].xy + cb4[1].zw, 0).xyz;
       float crR = P448v.z > 0.0 ? max(f3.x, 0.55 * saturate((f3.z - 0.012) / 0.988)) : f3.x;   // pisadas: max(R, 0.55 B')
       if (P329v.w > 0.001) { float2 f2 = float2(crR, f3.y);
-        float tr = saturate(max(f2.y, 0.5 * f2.x) * 1.5) * clamp(P329v.w, 0.0, 2.0);
+        float tr = saturate(max(0.35 * f2.y, 0.5 * f2.x) * 1.5) * clamp(P329v.w, 0.0, 2.0);   // (28/11, Agustin: "de lejos alrededor de la pelota el pasto desaparece") el rastro de la pelota aclara el suelo un tercio de antes: dejaba una mancha palida
         o3.xyz = saturate(o3.xyz * lerp(float3(1.0, 1.0, 1.0), float3(1.12, 1.08, 0.94), tr)); }
       if (P448v.x > 0.001) { float3 cL = o3.xyz; float sL = o1.w; float3 Vc = normalize(cb2[20].xyz - r6.xyz);
         PESCrushLook(cL, sL, crR, abs(o4.w), 1.0 - abs(Vc.y), saturate(PESGround().x + 0.4 * IniParams.Load(int2(407, 0)).y));   // px/m del vertice (o4.w), rasante, mojado
