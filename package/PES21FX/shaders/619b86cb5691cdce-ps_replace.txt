@@ -605,7 +605,7 @@ void main(
       float3 ind = (wU > 1e-4 ? accU / wU : nearU) * giK * saturate((zMaxG - zg) / (zMaxG / 3.0));
       if (pesNskOk && wR > 1e-4) ind = lerp(ind, accR / wR * giK * saturate((zMaxG - zg) / (zMaxG / 3.0)), float3(0.85, 0.5, 0.2));   // (04/11 piel)
       { float sat = Q336.w > 0.0 ? Q336.w : 1.0; float lg = dot(ind, float3(0.2126, 0.7152, 0.0722)); ind = max(lerp(lg.xxx, ind, sat), 0.0); }
-      if (skinC) ind *= 1.0 - 0.5 * saturate(IniParams.Load(int2(124,0)).x);
+      if (skinC && !PesSkinV3On()) ind *= 1.0 - 0.5 * saturate(IniParams.Load(int2(124,0)).x);   // (28/11 s) v4: sin recorte extra
       if (skinC) ind *= Q337.x > 0.0 ? Q337.x : 1.0;
       r2.xyz += ind * PESAmbGain();
       giDbg = ind;
@@ -639,7 +639,7 @@ void main(
           acc += Ls * (cosC * cosS * fall);
         }
         float3 ind = acc * (2.2 / 16.0) * giK * saturate((90.0 - zg) / 30.0);
-        if (skinC) ind *= 1.0 - 0.5 * saturate(IniParams.Load(int2(124,0)).x);   // PES21 rasgos (20/10): menos relleno en las cuencas de la cara
+        if (skinC && !PesSkinV3On()) ind *= 1.0 - 0.5 * saturate(IniParams.Load(int2(124,0)).x);   // (28/11 s) v4: sin recorte extra. PES21 rasgos (20/10): menos relleno en las cuencas de la cara
         r2.xyz += ind * PESAmbGain();   // (20/10) luz calibrada
         giDbg = ind;
       }
@@ -1677,6 +1677,12 @@ void main(
   // el multirebote del GTAO aclara la oclusion en superficies claras (en la piel una cuenca de 0.5 pasaba a 0.72), y el SSGI
   // rellena las cuencas. En la piel: oclusion mas honda (potencia) y sin multirebote, segun x124 (0 = como antes).
   float faceK = (cmpOn && skinC) ? saturate(IniParams.Load(int2(124,0)).x) : 0.0;
+  // (28/11 ru34vc s) PIEL v4, UNA SOLA OCLUSION. Agustin: "si la mejora de piel esta mal rehacela" (eligio rehacer todo). En la cara la
+  // oclusion se apilaba 4 veces: SSAO/GTAO x potencia de x124 x el recorte del relleno (SSGI) por x124 x micro sombras, y quedaban
+  // cuencas y costados de la nariz casi negros (capturas 24/11 contra 'sin el mod'). Con v3/v4: la oclusion es la geometrica una
+  // sola vez, difundida bajo la piel (Burley, arriba) y con el multirebote del color de la piel; x124 ya no la ahonda ni recorta el
+  // relleno, y la luz de ambiente en la piel no baja de ~0.4 (rojo) / 0.3: la piel siempre deja entrar algo de luz por los costados.
+  if (skinC && PesSkinV3On()) faceK = 0.0;
   if (faceK > 0.0) { aoRaw = pow(aoRaw, 1.0 + 0.8 * faceK); occRGB = pow(max(occRGB, 1e-4), 1.0 + 0.8 * faceK); }
   if (cmpOn && AOP.w > 0.5) {
     float3 diffC = r7.xyz * r2.xyz;
@@ -1694,6 +1700,7 @@ void main(
     float4 P544a = IniParams.Load(int2(544,0)); bool v3Skin = skinC && (all(P544a == 0.0) || P544a.x > 0.5);
     float3 aoD = lerp(occRGB, occRGB * multi / max(aoRaw, 1e-3), saturate(AOP.x) * (v3Skin ? 1.0 : 1.0 - faceK));
     aoD = min(aoD, 1.0);
+    if (v3Skin) aoD = max(aoD, float3(0.42, 0.32, 0.30));   // (28/11 s) piel v4: piso de la oclusion (ver arriba)
     float aoS = aoK;
     if (geoOk) {
       float ndvS = saturate(dot(Nsk, -Vsk));

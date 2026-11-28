@@ -345,4 +345,6 @@ float3 PESShadowAlign(float3 p, float4x4 mv, float on) {
 // (24/11 ru34vc p) 544 PIEL v3: contraluz con fuerza real. Agustin 05:56: "falta el detalle de contraluz con el sss tambien". Con z64 bajo
 // la luz que cruza orejas, nariz y dedos casi no se veia; con v3 la transmision por el grosor medido va al menos a 1 (la real) y, como
 // se suma a la luz difusa antes de la pasada de SSS, sale difundida con las dos capas (roja profunda incluida). Sin v3: z64 tal cual
+// (28/11 ru34vc s) 544 piel v3/v4 prendida (fila sin cargar = si)
+bool PesSkinV3On() { float4 p = IniParams.Load(int2(544,0)); return all(p == 0.0) || p.x > 0.5; }
 float PesV3Trans(float z64) { float4 p = IniParams.Load(int2(544,0)); return (all(p == 0.0) || p.x > 0.5) ? max(z64, 0.6) : z64; }   // (28/11 r) 1 -> 0.6: con 1 las manchas naranjas de grosor mal medido (sien bajo el pelo) se triplicaban
