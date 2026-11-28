@@ -7,6 +7,10 @@
 #include <fstream>
 #include <sstream>
 #include <iterator>
+// (23/11 8z607v v7d) camara (vista x proyeccion de SceneCB) para esconder a los suplentes que no entran en cuadro; secuencia par = lista
+std::atomic<unsigned> g_camSeq{0}; std::atomic<float> g_camPV[16]; std::atomic<double> g_camT{-1.0};
+// (23/11 8z607v v7d) relojes del juego para los suplentes (los escribe Present, los lee el hilo del juego)
+std::atomic<float> g_clkComp{0.0f}, g_clkPlayer{0.0f}; std::atomic<unsigned> g_clkCompN{0}, g_clkPlayerN{0}; static int g_clkCompF = -1, g_clkPlayerF = -1;
 
 namespace fx {
 
@@ -142,6 +146,7 @@ static bool LoadConfigLocked() {
             else if (kl == "bloquear_mando") c.blockPad = std::clamp(atoi(v.c_str()), 0, 1);       // (14/11) el juego no ve el mando con el menu abierto
             else if (kl == "camara_hud") c.camHud = std::clamp(atoi(v.c_str()), 0, 2);              // (14/11) HUD de la camara libre / modo foto
             else if (kl == "camara_mando") c.camPad = std::clamp(atoi(v.c_str()), 0, 1);           // (14/11) el mando mueve la camara libre (modo foto)
+            else if (kl == "cursor_tamano") c.cursorScale = std::clamp((float)atof(v.c_str()), 0.75f, 2.0f);   // (15/11 p) tamano del cursor (menu Insert)
             else if (kl == "menu_cursor") { const int cv = std::clamp(atoi(v.c_str()), 0, 3); c.menuCursor = cv == 3 ? 1 : cv; }   // 0 no, 1 dardo + mano, 2 Windows           // (14/11) cursor del menu
             else if (kl == "menu_mando_abrir") c.menuPadOpen = atoi(v.c_str()) != 0;             // (14/11) L3 + R3 abre / cierra el menu
             else if (kl == "repeticion_barra") c.replayBar = atoi(v.c_str()) != 0 ? 1 : 0;      // (14/11 9vcq5h) barra propia de la repeticion
@@ -154,9 +159,15 @@ static bool LoadConfigLocked() {
             else if (kl == "mouse_menus_dibujo") c.menuMouseDrawn = atoi(v.c_str()) != 0 ? 1 : 0;        // (14/11 e)
             else if (kl == "mouse_elegir_equipo") c.menuMouseTeamSel = atoi(v.c_str()) != 0 ? 1 : 0;
             else if (kl == "mouse_oculta_botones") c.menuMouseHideGuide = atoi(v.c_str()) != 0 ? 1 : 0;
+            else if (kl == "mouse_mando_reinicia") c.menuMousePadReset = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 g)
+            else if (kl == "mouse_puntero_propio") c.menuMouseOwnPtr = atoi(v.c_str()) != 0 ? 1 : 0;   // (15/11)
+            else if (kl == "mouse_camara_editar") c.menuViewCam = atoi(v.c_str()) != 0 ? 1 : 0;   // (15/11)
+            else if (kl == "mouse_boton_salir") c.menuExitBtn = atoi(v.c_str()) != 0 ? 1 : 0;   // (15/11)
             else if (kl == "ayuda_mouse") c.mouseHint = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 d) botones del mouse abajo a la derecha
             else if (kl == "camara_share") c.camShareHold = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 j)
             else if (kl == "camara_sin_dof") c.camNoDof = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 h)
+            else if (kl == "camara_sin_desenfoque_mov") c.camNoMblur = atoi(v.c_str()) != 0 ? 1 : 0;   // (15/11)
+            else if (kl == "camara_vertical") c.camVert = std::clamp((float)atof(v.c_str()), 0.1f, 5.0f);   // (15/11)
             else if (kl == "repeticion_lenta") c.replaySlow = atoi(v.c_str()) != 0 ? 1 : 0;   // (14/11 g)
             else if (kl == "tecla_cursor") c.cursorKey = (v == "0" || v.empty()) ? 0 : VkFromName(v);   // (14/11 c) F1 de fabrica
             else if (kl == "tecla_mouse_menus") c.menuMouseKey = (v == "0" || v.empty()) ? 0 : VkFromName(v);
@@ -164,8 +175,42 @@ static bool LoadConfigLocked() {
             else if (kl == "motor_pagina") c.motorPage = atoi(v.c_str()) != 0 ? 1 : 0;   // (11/11) filas nativas del Motor en el estudio
             else if (kl == "motor_panel_x") c.motorPanelX = (float)atof(v.c_str());   // (11/11) panel del Motor corrido con el mouse (escenario 1920 x 1080)
             else if (kl == "motor_panel_y") c.motorPanelY = (float)atof(v.c_str());
+            else if (kl == "motor_interfaz_juego") c.motorGameUi = atoi(v.c_str()) != 0;      // (15/11 b) 1 = con el menu propio del Motor igual se ve la interfaz del juego
+            else if (kl == "motor_menu_propio") c.motorOwnMenu = atoi(v.c_str()) != 0;        // (15/11) 1 = el Motor abre con su barra de iconos, sin la lista del Editar
+            else if (kl == "motor_escala") c.motorScale = std::clamp((float)atof(v.c_str()), 0.8f, 2.0f);   // (15/11 h) tamano de la interfaz del editor del Motor
+            else if (kl == "motor_panel_izq") c.motorPanelLW = std::clamp((float)atof(v.c_str()), 160.0f, 900.0f);   // (15/11 o) ancho del panel Escena (en puntos de 1080p)
+            else if (kl == "motor_panel_der") c.motorPanelRW = std::clamp((float)atof(v.c_str()), 200.0f, 900.0f);   // (15/11 o) ancho del panel Inspector
+            else if (kl == "motor_panel_izq_abierto") c.motorPanelLOn = atoi(v.c_str()) != 0 ? 1 : 0;
+            else if (kl == "motor_panel_der_abierto") c.motorPanelROn = atoi(v.c_str()) != 0 ? 1 : 0;
+            else if (kl == "motor_grilla_intensidad") c.motorGridAlpha = std::clamp(atoi(v.c_str()), 0, 200);   // (15/11 o) opciones de la grilla
+            else if (kl == "motor_grilla_celda") c.motorGridCell = std::clamp((float)atof(v.c_str()), 0.1f, 10.0f);
+            else if (kl == "motor_grilla_linea_fuerte") c.motorGridMajor = std::clamp(atoi(v.c_str()), 0, 50);
+            else if (kl == "motor_cerca") c.motorNear = std::clamp((float)atof(v.c_str()), 0.0f, 10.0f);      // (15/11 o) plano cercano de la camara del visor en el Motor (0 = como el juego)
+            else if (kl == "motor_lejos") c.motorFar = std::clamp((float)atof(v.c_str()), 0.0f, 100000.0f);   // (15/11 o) plano lejano (0 = como el juego)
+            // (15/11 p) segunda cadena: MSVC no acepta mas de ~128 "else if" seguidos (C1061)
+            if (kl == "motor_deshacer_pasos") c.motorUndoSteps = std::clamp(atoi(v.c_str()), 10, 200);   // (15/11 p) Editar > Preferencias: pasos de Ctrl+Z
+            else if (kl == "motor_panel_lugar") { int d0 = 0, d1 = 1; if (sscanf(v.c_str(), "%d,%d", &d0, &d1) == 2) { c.motorDock[0] = std::clamp(d0, 0, 2); c.motorDock[1] = std::clamp(d1, 0, 2); } }   // (15/11 q) 0 izquierda, 1 derecha, 2 flotante
+            else if (kl == "motor_resolucion") c.motorRes = std::clamp(atoi(v.c_str()), 0, 200);   // (15/11 q) visor del Motor: % de la pantalla (0 = como el Editar)
+            else if (kl == "motor_panel_division") c.motorSplit = std::clamp((float)atof(v.c_str()), 0.15f, 0.85f);
+            else if (kl == "motor_panel_arriba") c.motorStackTop = atoi(v.c_str()) != 0 ? 1 : 0;
+            else if (kl == "motor_panel_flotante") { float f[8]; if (sscanf(v.c_str(), "%f,%f,%f,%f,%f,%f,%f,%f", &f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6], &f[7]) == 8) for (int q = 0; q < 8; q++) c.motorFloat[q / 4][q % 4] = f[q]; }
+            else if (kl == "motor_autoguardado") c.motorAutoSave = atoi(v.c_str()) != 0 ? 1 : 0;                 // (15/11 p) guarda la escena sola (escena_autoguardado.txt)
+            else if (kl == "motor_autoguardado_minutos") c.motorAutoSaveMin = std::clamp(atoi(v.c_str()), 1, 60);
+            else if (kl == "motor_texto") c.motorText = std::clamp((float)atof(v.c_str()), 0.8f, 1.5f);            // (15/11 p) tamano del texto del editor (x el tamano de la interfaz)
+            else if (kl == "motor_camara_velocidad") c.motorCamSpeed = std::clamp((float)atof(v.c_str()), 0.0f, 50.0f);   // (15/11 p) 0 = la de la camara libre
+            else if (kl == "motor_camara_sensibilidad") c.motorCamSens = std::clamp((float)atof(v.c_str()), 0.0f, 10.0f);
+            else if (kl == "motor_grilla_ejes") c.motorGridAxes = atoi(v.c_str()) != 0 ? 1 : 0;
+            else if (kl == "motor_grilla_tamano") { const int gs = atoi(v.c_str()); c.motorGridSize = (gs <= 0 || gs >= 200) ? 0 : std::clamp(gs, 10, 400); }   // (15/11 r) 200 (lo que guardaban las DLL viejas) o mas = Maxima   // (15/11 q) 0 = maxima (hasta el horizonte)   // (15/11) lado de la grilla en metros
+            else if (kl == "motor_sonido") c.motorSound = atoi(v.c_str()) != 0 ? 1 : 0;                     // (15/11 m) motorsound.cpp: sonido de la transicion
+            else if (kl == "motor_sonido_volumen") c.motorSoundVol = std::clamp(atoi(v.c_str()), 0, 100);
+            else if (kl == "motor_carga_tiempos") c.motorLoadTimes = v;                                       // (15/11 n) tiempos aprendidos de la barra de carga
+            else if (kl == "motor_letra") c.motorFont = atoi(v.c_str()) != 0 ? 1 : 0;                       // (15/11 m) letra Lack UA del editor (textures\pes_motor*.ttf)
+            else if (kl == "motor_grilla") c.motorGrid = atoi(v.c_str()) != 0;               // (15/11) 1 = fondo con grilla de piso
+            else if (kl == "motor_jugador_al_abrir") c.motorStartPlayer = atoi(v.c_str()) != 0;   // (15/11) 1 = carga al jugador al abrir (0 = solo el menu)
             else if (kl == "motor_teclado") c.motorKeys = atoi(v.c_str()) != 0;      // (12/11) 1 = en el Motor el juego no ve el teclado (Esc = salir)
-            else if (kl == "motor_fondo") c.motorBg = atoi(v.c_str()) != 0;          // (11/11) 1 = fondo negro en el estudio del Motor
+            else if (kl == "motor_fondo") c.motorBg = atoi(v.c_str()) != 0;
+            else if (kl == "motor_escena") c.motorScene = atoi(v.c_str());
+            else if (kl == "motor_jugador_mover") c.motorJug = atoi(v.c_str());   // (17/11) 1 = mover / girar / animar al jugador del Motor (motorjug.cpp)   // (16/11) 1 = el jugador del Motor en la escena principal (como en el partido)          // (11/11) 1 = fondo negro en el estudio del Motor
             else if (kl == "motor_camara") c.motorCam = atoi(v.c_str()) != 0;        // (11/11) 1 = el Motor abre con la camara libre
             else if (kl == "motor_gizmo") c.motorGizmo = atoi(v.c_str()) != 0;       // (11/11) 1 = gizmo de ejes arriba a la derecha
             else if (kl == "motor_botones") c.motorHelpBar = atoi(v.c_str()) != 0;   // (11/11) 1 = deja la barra de botones del mando en la pagina del Motor
@@ -188,6 +233,8 @@ static bool LoadConfigLocked() {
             else if (kl == "menu_autoguardar") c.menuAutoSave = std::clamp(atoi(v.c_str()), 0, 2);    // (08/11) guardado automatico de los cambios del menu
             else if (kl == "menu_letra") c.menuFont = atoi(v.c_str()) != 0;                       // (08/11) letra Saira (textures\pes_ui.ttf)
             else if (kl == "language" || kl == "idioma") { const std::string lv = Lower(v); c.lang = (lv == "en" || lv == "english" || v == "1") ? 1 : (lv == "pt" || lv == "portugues" || lv == "portuguese" || v == "2") ? 2 : 0; }
+            else if (kl == "idioma_auto") c.langAuto = atoi(v.c_str()) != 0;                     // (15/11) el menu sigue el idioma de textos del juego
+            else if (kl == "idioma_juego_ids") { int a = -1, b = -1, d = -1; if (sscanf(v.c_str(), "%d , %d , %d", &a, &b, &d) >= 1) { c.langGame[0] = a; c.langGame[1] = b; c.langGame[2] = d; } }   // (15/11) numeros del juego para es, en, pt
             else if (kl == "auto_captura") c.autoCap = atoi(v.c_str()) != 0;
             else if (kl == "auto_captura_seg") c.autoCapSec = std::clamp((float)atof(v.c_str()), 3.0f, 600.0f);
             else if (kl == "auto_captura_max") c.autoCapMax = std::clamp(atoi(v.c_str()), 1, 2000);
@@ -211,6 +258,7 @@ static bool LoadConfigLocked() {
             else if (kl == "expr_paleta_blindaje") c.optExprBlindaje = atoi(v.c_str()) != 0;
             else if (kl == "expr_paleta_error") c.optExprPaletteErr = (float)atof(v.c_str());
             else if (kl == "congelado_seg") c.optHangSec = atoi(v.c_str());
+            else if (kl == "ventana_sin_bordes") c.borderless = atoi(v.c_str()) != 0 ? 1 : 0;   // (15/11) borderless.cpp
             else if (kl == "vigia_estados") c.relWatch = atoi(v.c_str()) != 0;
             else if (kl == "cobertura") c.coverOn = atoi(v.c_str()) != 0;
             else if (kl == "rastro") c.rastroOn = atoi(v.c_str()) != 0;
@@ -550,20 +598,23 @@ bool SaveCloth() {
 }
 
 // (02/11) fila 353: el viento cambia de partido a partido (pedido de Agustin: segun la hora, el clima, la estacion). Al leer un
-// match.ini nuevo (modulo de Sider PES21FX_match.lua: dia/noche, despejado/lluvia, verano/invierno) se escribe en cloth.ini
-// [sim] wind_x / wind_y / wind_z / wind_gust a partir del viento base del usuario (el de cloth.ini al abrir el juego):
-// rumbo al azar, fuerza x de noche 0.7, lluvia 1.6, invierno 1.25, verano 0.9, y un azar de partido (y353 = cuanto, 0..1).
-// x353 escala total, w353 on. El pelo toma la misma direccion (SaveCloth). wind_response (cuanto reacciona la tela) no se toca.
+// match.ini nuevo (modulo de Sider PES21FX_match.lua: dia/noche, despejado/lluvia, verano/invierno) sale la fuerza y el rumbo del
+// partido: rumbo al azar, fuerza x de noche 0.7, lluvia 1.6, invierno 1.25, verano 0.9, y un azar de partido (y353 = cuanto, 0..1).
+// x353 escala total, w353 on. wind_response (cuanto reacciona la tela) no se toca.
+// (15/11 sk9ema, Agustin: "el viento en la ropa ... se rompio un poco") ARREGLO DE UNA REALIMENTACION: antes el viento base se leia
+// de cloth.ini al abrir el juego y el resultado (base x fuerza del partido) se guardaba en las MISMAS claves, asi que la sesion
+// siguiente partia del valor ya multiplicado. Con la fuerza general alta (fuerza >= 2) wind_y se duplicaba en cada arranque: en su
+// PC llego a 296.96 m/s (2.32 x 2^7) y las rafagas se fueron a 0.02. Ahora:
+//  - la base es fija (2 m/s de costado, rafagas 3: lo que trae el cloth.ini del paquete) y nunca se lee de lo que se escribio;
+//  - wind_y (viento vertical) no se escribe nunca mas; si quedo en un valor imposible (> 3 m/s) se repara a 0.02 (el de fabrica);
+//  - con el viento unico prendido (z353) no se escribe nada en cloth.ini: la tela, el pasto, el pelo, las redes y los banderines
+//    leen la fila 494, que sale de g_matchWind (fuerza y rumbo) en wind.cpp. Solo sin viento unico se escribe wind_x / wind_z /
+//    wind_gust, como el 02/11.
 MatchWindOut g_matchWind;
 void MatchWind(const MatchInfo& m, unsigned long long seed) {
     Config& c = g_cfg;
     if (c.live[353][3] < 0.5f) return;
-    static bool haveBase = false; static float bx = 2.0f, by = 1.5f, bz = 0.0f, bg = 3.0f;
-    if (!haveBase) {
-        auto get = [&](const char* k, float d) { auto it = c.clothLoaded.find(k); return it != c.clothLoaded.end() ? it->second : d; };
-        bx = get("sim.wind_x", 2.0f); by = get("sim.wind_y", 1.5f); bz = get("sim.wind_z", 0.0f); bg = get("sim.wind_gust", 3.0f);
-        haveBase = true;
-    }
+    constexpr float kBaseSpeed = 2.0f, kBaseGust = 3.0f;
     unsigned long long h = seed ^ (0x9E3779B97F4A7C15ull * (unsigned long long)(m.stadium + 7)) ^ ((unsigned long long)(m.timeofday + 3) << 40) ^ ((unsigned long long)(m.weather + 5) << 48);
     auto rnd = [&]() { h ^= h >> 33; h *= 0xff51afd7ed558ccdull; h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ull; h ^= h >> 33; return (double)(h >> 11) * (1.0 / 9007199254740992.0); };
     const float var = std::clamp(c.live[353][1], 0.0f, 1.0f), sc = std::clamp(c.live[353][0], 0.0f, 3.0f);
@@ -571,19 +622,32 @@ void MatchWind(const MatchInfo& m, unsigned long long seed) {
     const double r1 = rnd(), r2 = rnd(), r3 = rnd();
     k *= (float)(1.0 + var * (r1 * 1.3 - 0.55));   // 0.45 .. 1.75 con var = 1
     k *= sc;
-    const float sp = sqrtf(bx * bx + bz * bz) * k, ang = (float)(r2 * 6.283185307);
-    // (13/11 sk9ema) el viento unico usa esto aunque no haya mod de ropa o su viento base sea 0 (PC de Agustin: base 0 -> todo en 0)
+    const float sp = kBaseSpeed * k, ang = (float)(r2 * 6.283185307);
+    // (13/11 sk9ema) el viento unico usa esto (wind.cpp)
     g_matchWind.valid = true; g_matchWind.k = k; g_matchWind.ang = ang;
     if (!c.clothFound) { Log("viento del partido (sin mod de ropa): fuerza x%.2f, rumbo %.0f grados", k, ang * 57.2958f); return; }
-    const float gust = bg * (m.weather == 1 ? 1.4f : 1.0f) * (float)(1.0 + var * (r3 * 0.6 - 0.3));
+    // reparacion del viento vertical que dejo la realimentacion (una vez: despues queda en 0.02 y no se vuelve a escribir)
+    bool repaired = false;
+    { auto it = c.clothVals.find("sim.wind_y");
+      if (it != c.clothVals.end() && !(fabsf(it->second) <= 3.0f)) {
+          Log("viento del partido: cloth.ini traia wind_y = %g m/s (valor imposible, lo dejo la DLL anterior al duplicarlo en cada arranque): reparado a 0.02", it->second);
+          it->second = 0.02f; repaired = true; } }
+    const bool unico = c.live[353][2] > 0.5f;
+    if (unico) {
+        if (repaired) SaveCloth();
+        Log("viento del partido: estadio %d, %s, %s, %s -> fuerza x%.2f, rumbo %.0f grados, %.2f m/s (viento unico: cloth.ini no se toca)",
+            m.stadium, m.timeofday == 1 ? "noche" : m.timeofday == 0 ? "dia" : "hora ?", m.weather == 1 ? "lluvia" : m.weather == 0 ? "despejado" : "clima ?",
+            m.season == 1 ? "invierno" : m.season == 0 ? "verano" : "estacion ?", k, ang * 57.2958f, sp);
+        return;
+    }
+    const float gust = kBaseGust * (m.weather == 1 ? 1.4f : 1.0f) * (float)(1.0 + var * (r3 * 0.6 - 0.3));
     c.clothVals["sim.wind_x"] = roundf(sp * cosf(ang) * 100.0f) / 100.0f;
     c.clothVals["sim.wind_z"] = roundf(sp * sinf(ang) * 100.0f) / 100.0f;
-    c.clothVals["sim.wind_y"] = roundf(by * std::clamp(k, 0.3f, 2.0f) * 100.0f) / 100.0f;
     c.clothVals["sim.wind_gust"] = roundf(gust * 100.0f) / 100.0f;
     SaveCloth();
-    Log("viento del partido: estadio %d, %s, %s, %s -> fuerza x%.2f, rumbo %.0f grados (wind_x %.2f, wind_z %.2f, wind_y %.2f, rafagas %.2f)",
+    Log("viento del partido: estadio %d, %s, %s, %s -> fuerza x%.2f, rumbo %.0f grados (wind_x %.2f, wind_z %.2f, rafagas %.2f; wind_y no se toca)",
         m.stadium, m.timeofday == 1 ? "noche" : m.timeofday == 0 ? "dia" : "hora ?", m.weather == 1 ? "lluvia" : m.weather == 0 ? "despejado" : "clima ?",
-        m.season == 1 ? "invierno" : m.season == 0 ? "verano" : "estacion ?", k, ang * 57.2958f, c.clothVals["sim.wind_x"], c.clothVals["sim.wind_z"], c.clothVals["sim.wind_y"], c.clothVals["sim.wind_gust"]);
+        m.season == 1 ? "invierno" : m.season == 0 ? "verano" : "estacion ?", k, ang * 57.2958f, c.clothVals["sim.wind_x"], c.clothVals["sim.wind_z"], c.clothVals["sim.wind_gust"]);
 }
 
 // (08/11) vistas de depuracion: Agustin: "opciones de diagnostico y debug de opciones avanzadas, sombras, efectos". Se juntan aca
@@ -615,6 +679,8 @@ static const DebugParam kDebugParams[] = {
     { 147, 1, 0.5f, 0.0f, "Borde de la mascara de la cara", "Piel", kV1, 1 },
     { 322, 3, 0.5f, 0.0f, "Franja de la union cuello / cuerpo", "Piel", kV1, 1 },
     { 360, 0, 0.5f, 0.0f, "Teselacion: inflar cara y cuerpo / ver teselacion del cuerpo", "Piel", kV27, 2 },
+    { 519, 0, 0.5f, 0.0f, "Cuerpo: ver a traves del torso", "Piel", kV1, 1 },   // (16/11 d9ybe2) pes_debug_cuerpo.hlsli
+    { 519, 2, 0.5f, 0.0f, "Cuerpo: cuadricula de costuras / solo la textura", "Piel", kV27, 2 },
 };
 static const int kDebugN = (int)(sizeof(kDebugParams) / sizeof(kDebugParams[0]));
 int DebugParamCount() { return kDebugN; }
@@ -842,16 +908,77 @@ static void BuildSkyEnv(const V3& s, float turb, float skyRatio) {
     g_dev.imm->UpdateSubresource(s_envTex, 0, nullptr, sharp, W * 16, W * H * 16);
     g_dev.imm->UpdateSubresource(s_envTex, 1, nullptr, blur, W * 16, W * H * 16);
 }
+// (23/11 ru34vc) CIELO COMO LUZ (filas 525..533): la luz que el cielo le da a una superficie segun hacia donde mira, como 9
+// armonicos esfericos (L2, Ramamoorthi y Hanrahan 2001) ya convolucionados con el coseno: E(n) = sum c_i Y_i(n). Sale del mismo
+// modelo de atmosfera (SkyPhys) + el pasto de abajo (el sol y el cielo rebotando en la cancha) + las tribunas que tapan el
+// horizonte (y525 grados). Se arma en un marco atado al sol: y arriba, x hacia el sol por el piso, z al costado (el cielo es
+// simetrico respecto del plano vertical del sol, asi el shader no necesita el rumbo del mundo). Colores RELATIVOS al sol
+// (como 150): el shader multiplica por el color del sol del juego. Se recalcula solo cuando el sol se mueve (junto con 150).
+// 527..533 = 27 coeficientes (rgb de c0..c8 seguidos), w de 533 = 1 valido. 0 = sin dato (noche, nublado: el shader usa lo de antes).
+static float s_shRow[7][4] = {};
+static void BuildSkySH(const V3& s, float turb, float skyRatio, const float sgE[3], const float sgZ[3], float atmo, float standDeg, float groundK) {
+    float c[9][3] = {};
+    const int NT = 12, NP = 24;               // hemisferio de arriba: 288 direcciones con el modelo de atmosfera
+    float cosEl = sqrtf((std::max)(1.0f - s.y * s.y, 0.0f));
+    V3 sf = V(cosEl, s.y, 0.0f);              // el sol en el marco del sol
+    float hb = std::clamp(standDeg, 0.0f, 40.0f) * 0.01745329f;   // tribunas: tapan desde el horizonte hasta hb
+    float gk = std::clamp(groundK, 0.0f, 2.0f);
+    // luz que llega al piso (sol + cielo), relativa al sol normal: el pasto la devuelve con su albedo (verde) y las tribunas con un gris oscuro
+    float Eg = (std::max)(s.y, 0.0f) + skyRatio;   // skyRatio = iluminancia horizontal del cielo / sol normal (res[3])
+    const float turfA[3] = { 0.10f, 0.17f, 0.05f }, standA[3] = { 0.12f, 0.12f, 0.13f };
+    auto add = [&](const V3& d, const float L[3], float dw) {
+        float x = d.x, y = d.y, z = d.z;
+        float Y[9] = { 0.282095f, 0.488603f * y, 0.488603f * z, 0.488603f * x, 1.092548f * x * y, 1.092548f * y * z,
+                       0.315392f * (3.0f * y * y - 1.0f), 1.092548f * x * z, 0.546274f * (x * x - z * z) };
+        for (int i = 0; i < 9; i++) for (int k = 0; k < 3; k++) c[i][k] += L[k] * Y[i] * dw;
+    };
+    for (int hemi = 0; hemi < 2; hemi++)
+        for (int i = 0; i < NT; i++) {
+            float th = (i + 0.5f) / NT * 1.5707963f, st = sinf(th), ct = cosf(th);   // th desde el cenit (o el nadir)
+            float dw = st * (1.5707963f / NT) * (6.2831853f / NP);
+            for (int j = 0; j < NP; j++) {
+                float ph = (j + 0.5f) / NP * 6.2831853f;
+                V3 d = V(st * cosf(ph), hemi == 0 ? ct : -ct, st * sinf(ph));
+                float L[3];
+                if (hemi == 0) {
+                    float el = 1.5707963f - th;
+                    if (el < hb) { for (int k = 0; k < 3; k++) L[k] = standA[k] * Eg / 3.14159265f * 0.6f; }   // tribuna (parte en su propia sombra)
+                    else { SkyPhys(d, sf, turb, 12, L); for (int k = 0; k < 3; k++) L[k] *= 0.31830989f; }   // SkyPhys trae pi x radiancia (ver acc / pi en 150)
+                } else {
+                    for (int k = 0; k < 3; k++) L[k] = turfA[k] * Eg / 3.14159265f * gk;   // la cancha
+                }
+                add(d, L, dw);
+            }
+        }
+    const float A[9] = { 3.14159265f, 2.0943951f, 2.0943951f, 2.0943951f, 0.785398f, 0.785398f, 0.785398f, 0.785398f, 0.785398f };
+    float out[28] = {};
+    for (int i = 0; i < 9; i++) for (int k = 0; k < 3; k++) {
+        float sref = sgE[k] + (sgZ[k] - sgE[k]) * atmo;               // relativo al color del sol (como 150)
+        out[i * 3 + k] = c[i][k] * A[i] / (std::max)(sref, 1e-6f);
+    }
+    out[27] = 1.0f;
+    for (int r = 0; r < 7; r++) for (int k = 0; k < 4; k++) s_shRow[r][k] = out[r * 4 + k];
+    static double lastLog = -1e9; double now = (double)GetTickCount64() * 0.001;
+    if (now - lastLog > 60.0) { lastLog = now;
+        auto E = [&](float x, float y, float z) {   // luminancia de E(n)
+            float Y[9] = { 0.282095f, 0.488603f * y, 0.488603f * z, 0.488603f * x, 1.092548f * x * y, 1.092548f * y * z,
+                           0.315392f * (3.0f * y * y - 1.0f), 1.092548f * x * z, 0.546274f * (x * x - z * z) };
+            float e[3] = {}; for (int i = 0; i < 9; i++) for (int k = 0; k < 3; k++) e[k] += out[i * 3 + k] * Y[i];
+            return 0.2126f * e[0] + 0.7152f * e[1] + 0.0722f * e[2]; };
+        Log("cielo como luz: sol a %.1f grados, tribunas %.0f grados, E arriba %.3f, de costado hacia el sol %.3f, de espaldas al sol %.3f, al costado %.3f, abajo %.3f (relativo al sol)",
+            asinf(std::clamp(s.y, -1.0f, 1.0f)) * 57.29578f, hb * 57.29578f, E(0, 1, 0), E(1, 0, 0), E(-1, 0, 0), E(0, 0, 1), E(0, -1, 0)); }
+}
 // p150: x y z = color del cielo relativo al sol (luminancia 1), w = cielo horizontal / sol normal. 0 = sin dato
 static void UpdatePhysSky(float (*p)[4]) {
-    static float last[5] = { -9, -9, -9, -9, -9 }; static float res[4] = {};
+    static float last[7] = { -9, -9, -9, -9, -9, -9, -9 }; static float res[4] = {};
     bool sunny = p[114][3] > 0.5f; const float* SW = p[312][3] > 0.5f ? p[312] : p[111];   // (26/10) sol estable (no gira en las repeticiones)
     float sx = SW[0], sy = SW[1], sz = SW[2];
-    if (!sunny || sy < 0.017f) { for (int k = 0; k < 4; k++) p[150][k] = 0.0f; return; }
+    if (!sunny || sy < 0.017f) { for (int k = 0; k < 4; k++) p[150][k] = 0.0f; for (int r = 0; r < 7; r++) for (int k = 0; k < 4; k++) p[527 + r][k] = 0.0f; return; }
     float turb = p[121][1] > 0.5f ? p[121][1] : 2.5f;
     float atmo = p[121][0] > 0.5f ? std::clamp(p[121][2] > 0.0f ? p[121][2] : 1.0f, 0.0f, 1.0f) : 0.0f;   // con el color fisico del sol (x121) prendido
-    if (fabsf(sx - last[0]) + fabsf(sy - last[1]) + fabsf(sz - last[2]) > 0.002f || fabsf(turb - last[3]) > 0.01f || fabsf(atmo - last[4]) > 0.01f) {
-        last[0] = sx; last[1] = sy; last[2] = sz; last[3] = turb; last[4] = atmo;
+    if (fabsf(sx - last[0]) + fabsf(sy - last[1]) + fabsf(sz - last[2]) > 0.002f || fabsf(turb - last[3]) > 0.01f || fabsf(atmo - last[4]) > 0.01f
+        || fabsf(p[525][1] - last[5]) > 0.01f || fabsf(p[525][2] - last[6]) > 0.01f) {
+        last[0] = sx; last[1] = sy; last[2] = sz; last[3] = turb; last[4] = atmo; last[5] = p[525][1]; last[6] = p[525][2];
         V3 s = V(sx, sy, sz);
         float acc[3] = {}; const int NT = 8, NP = 16;
         for (int i = 0; i < NT; i++) {
@@ -874,10 +1001,13 @@ static void UpdatePhysSky(float (*p)[4]) {
         for (int k = 0; k < 3; k++) res[k] = rel[k] / (std::max)(rl, 1e-6f);
         res[3] = skyL / 3.14159265f;   // iluminancia del cielo / del sol
         BuildSkyEnv(s, turb, res[3]);
+        BuildSkySH(s, turb, res[3], sgE, sgZ, atmo, p[525][1], p[525][2]);
     }
     for (int k = 0; k < 4; k++) p[150][k] = res[k];
+    for (int r = 0; r < 7; r++) for (int k = 0; k < 4; k++) p[527 + r][k] = s_shRow[r][k];
 }
 } // namespace
+ID3D11ShaderResourceView* SkyEnvSRV() { return s_envSRV; }   // (23/11 ru34vc h) tambien para el cielo dibujado (domo 9adf, t28)
 
 // ---------------------------------------------------------------- (13/11 tanda 2) fila 498: movimiento de la CAMARA (no va al ini)
 // Cuanto se corre la imagen por la camara entre dos cuadros, en px por cuadro a 1080 lineas: x / y = el centro de la pantalla (ndc: x a la
@@ -901,6 +1031,8 @@ static void CamaraFrame(float (*p)[4], double t) {
     if (!ok || age < 0 || age > 3) { o[0] = o[1] = o[2] = o[3] = 0.0f; havePrev = false; lastSf = -1; if (pendT >= 0.0) TaaVelProbeCancel(); pendT = -1.0; return; }
     if (sf != lastSf) {   // copia nueva de SceneCB (si es la misma, queda lo de antes)
         const float* PV = &S[0]; const float* P = &S[16];
+        { g_camSeq.fetch_add(1, std::memory_order_acq_rel); for (int i = 0; i < 16; i++) g_camPV[i].store(PV[i], std::memory_order_relaxed);   // (23/11 8z607v) para la banca
+          g_camT.store(t, std::memory_order_relaxed); g_camSeq.fetch_add(1, std::memory_order_acq_rel); }
         float VV[3][4];
         for (int i = 0; i < 4; i++) {
             VV[2][i] = PV[12 + i];
@@ -1050,6 +1182,14 @@ void UpdateTimeParams() {
               float ang = (na > 1e-4f && nb > 1e-4f) ? acosf(std::clamp((ax * bx + ay * by + az * bz) / (na * nb), -1.0f, 1.0f)) * 57.2958f : -1.0f;
               Log("cielo: sol del archivo del cielo (%.3f, %.3f, %.3f) | sol de la luz (%.3f, %.3f, %.3f) | diferencia %.1f grados", ax, ay, az, bx, by, bz, ang);
           } } }
+      // (23/11 8z607v v7d) relojes crudos para los suplentes (banca.cpp, hilo del juego): x de la composicion y x de la piel de la cara
+      // (SysCBP), con el numero de cuadro de la copia; en la repeticion el de la composicion quedo quieto (log 23/11 06:50)
+      if (ok) { g_clkComp.store(Y[16], std::memory_order_relaxed); g_clkCompN.fetch_add(fr != g_clkCompF ? 1u : 0u, std::memory_order_relaxed); g_clkCompF = fr; }
+      { std::vector<float> P; int pf = -1;
+        if (NamedCBRead("SysCBP", P, &pf) && P.size() >= 20) {
+            g_clkPlayer.store(P[16], std::memory_order_relaxed); if (pf != g_clkPlayerF) g_clkPlayerN.fetch_add(1u, std::memory_order_relaxed); g_clkPlayerF = pf;
+            static double plog = 0.0; if (t - plog >= 30.0) { plog = t; Log("reloj de los jugadores (piel de la cara): m_timeParam = (%.3f, %.3f, %.3f, %.3f)", P[16], P[17], P[18], P[19]); }
+        } }
       cloudT += adv; if (cloudT > 100000.0) cloudT -= 100000.0;
       p[157][0] = (float)cloudT; p[157][1] = 1.0f; p[157][2] = (good > 120) ? rateS : 1.0f; p[157][3] = (good > 120) ? 1.0f : 0.0f; }
     CamaraFrame(p, t);   // (13/11 tanda 2) fila 498: movimiento de la camara (x436 de 18afff, w454 de la pasada final)

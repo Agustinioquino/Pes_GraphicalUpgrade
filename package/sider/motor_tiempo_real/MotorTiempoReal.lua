@@ -36,7 +36,7 @@
 --
 -- Offsets leidos en el exe decompilado (PES2021.exe 1.07.02): ver memoria del proyecto motor-tiempo-real-exe.
 
-local m = { version = "0.5.1" }
+local m = { version = "0.5.2" }
 local VERSION = m.version
 local DIR
 -- lo que hay que recordar aunque Sider recargue el modulo con el juego abierto (queda en ctx)
@@ -74,8 +74,31 @@ local function cual(filename)
     return ARCH[b]
 end
 
+-- (21/11, 0.5.2) BANCO DEL ESTADIO EN EL EDITAR (laboratorio de animaciones de la DLL grafica, F8): con content\motor-tiempo-real\banca.txt
+-- (lo pone y lo saca la DLL) y la escena escena_banca\Default.fpkd / .fpk (la de UltraGraphicsConfig + el banco de st024, armada con
+-- tools/fox/escena_objetos.py) se entrega esa escena en vez de escena\. Las texturas del banco (st024_*.ftex) salen de escena_banca\tex\
+-- solo con el banco prendido y solo las que estan ahi; sin banca.txt todo queda como antes.
+local BANCA = { pedidos = 0, tex = 0 }
+function BANCA.on()
+    return existe(DIR .. "banca.txt") and existe(DIR .. "escena_banca\\Default.fpkd") and existe(DIR .. "escena_banca\\Default.fpk")
+end
+function BANCA.textura(filename)
+    local f = string.lower(filename)
+    if not string.find(f, "st024", 1, true) or string.sub(f, -5) ~= ".ftex" then return end
+    local b = string.match(filename, "([^\\/]+)$")
+    if b and existe(DIR .. "escena_banca\\tex\\" .. b) and BANCA.on() then return b end
+end
+
 function m.make_key(ctx, filename)
     if PE.es(filename, PE.ARCH) then return PE.pedido(ctx, filename) end
+    do
+        local t = BANCA.textura(filename)
+        if t then
+            BANCA.tex = BANCA.tex + 1
+            if BANCA.tex <= 30 then log("MotorTiempoReal: banco: textura " .. filename .. " -> escena_banca\\tex\\" .. t) end
+            return "mtr01|tex|" .. t
+        end
+    end
     if PE.es(filename, PE.ARCH_SALIDA) then PE.salida(filename) end
     local nodo = PE.nodo_de(filename)
     if nodo then return PE.pedido_estudio(filename, nodo) end
@@ -90,6 +113,11 @@ function m.make_key(ctx, filename)
         log("MotorTiempoReal: " .. (a and "ENTREGANDO" or "sin entregar") .. " (" .. mot .. ")")
     end
     if pedidos[n] <= 3 then log("MotorTiempoReal: el juego pidio " .. filename .. " (pedido " .. pedidos[n] .. ")") end
+    if BANCA.on() then
+        BANCA.pedidos = BANCA.pedidos + 1
+        if BANCA.pedidos <= 6 then log("MotorTiempoReal: banca.txt presente: entrego escena_banca\\" .. n .. " (banco del estadio)") end
+        return "mtr01|banca|" .. n
+    end
     if not activo then return end
     return "mtr01|" .. n
 end
@@ -98,6 +126,8 @@ function m.get_filepath(ctx, filename, key)
     if type(key) == "string" and string.sub(key, 1, #PE.CLAVE) == PE.CLAVE then return PE.entrega(filename, key) end
     if not key or string.sub(key, 1, 6) ~= "mtr01|" then return end
     local n = string.sub(key, 7)
+    if string.sub(n, 1, 6) == "banca|" then return DIR .. "escena_banca\\" .. string.sub(n, 7) end
+    if string.sub(n, 1, 4) == "tex|" then return DIR .. "escena_banca\\tex\\" .. string.sub(n, 5) end
     local p = DIR .. "escena\\" .. n
     entregas[n] = (entregas[n] or 0) + 1
     if entregas[n] <= 3 then log("MotorTiempoReal: entrego " .. p .. " por " .. filename) end
@@ -418,6 +448,16 @@ PE.NOMBRE, PE.NOMBRE_ERA = 0x1434c44f8, 0x142700fd3
 PE.TEXTO, PE.ID = 0x1427011ec, 0x7ffe0001
 PE.SIN_TEXTO, PE.SIN_TEXTO_ERA = 0x14350a9a0, 0x142972e40
 PE.ETIQUETA = "Motor en tiempo real"
+-- (15/11, Agustin: selector de idioma) el nombre de la pestana sigue el idioma del mod grafico (la DLL lo deja en +0x38
+-- de la memoria compartida: 0 castellano, 1 ingles, 2 portugues). Las tres valen como "mi etiqueta".
+PE.ETIQUETAS = { PE.ETIQUETA, "Real-time Engine", "Motor em tempo real" }
+function PE.es_mia(p)
+    for _, t in ipairs(PE.ETIQUETAS) do
+        local n = #t + 1
+        if leer(p, n) and ffi.string(B8, n) == t .. "\0" then return true end
+    end
+    return false
+end
 PE.ARCH, PE.CLAVE = "script\\flow\\edit\\editmenu.json", "mtrpe1|"
 -- el flujo que el juego lee al SALIR del modo Editar (el "return" del menu de Editar): ahi la pestana se saca
 PE.ARCH_SALIDA = "script\\flow\\edit\\editdataautosaveprocess.json"
@@ -452,7 +492,7 @@ function PE.mirar()
     else
         -- no es el de fabrica: solo vale si apunta a mi etiqueta (la puso este modulo, quiza antes de que Sider lo recargara)
         local n = #PE.ETIQUETA + 1
-        if not sin or (sin >= BASE and sin < EXE_FIN) or not leer(sin, n) or ffi.string(B8, n) ~= PE.ETIQUETA .. "\0" then
+        if not sin or (sin >= BASE and sin < EXE_FIN) or not PE.es_mia(sin) then
             return nil, "el texto de reemplazo del juego ('No String') ya lo cambio otro"
         end
         mia = true
@@ -494,7 +534,7 @@ end
 function PE.etiqueta()
     local n = #PE.ETIQUETA + 1
     local p = G.pe_etiqueta
-    if type(p) == "number" and leer(p, n) and ffi.string(B8, n) == PE.ETIQUETA .. "\0" then return p end
+    if type(p) == "number" and PE.es_mia(p) then return p end
     p = tonumber(C.mtr_VirtualAlloc(0, 0x1000, 0x3000, 4))        -- reservar y comprometer, lectura y escritura
     if not p or p < DIR_MIN or p >= DIR_MAX then return nil end
     ffi.copy(W8, PE.ETIQUETA, n - 1)
@@ -503,6 +543,21 @@ function PE.etiqueta()
     if not leer(p, n) or ffi.string(B8, n) ~= PE.ETIQUETA .. "\0" then return nil end
     G.pe_etiqueta = p
     return p
+end
+
+-- pone en mi pagina el nombre en el idioma del mod grafico (solo escribe en la pagina propia, nunca en el exe)
+function PE.idioma()
+    local p = rptr(PE.SIN_TEXTO)
+    if not p or (p >= BASE and p < EXE_FIN) or not PE.es_mia(p) then return end
+    local i = 0
+    if RX.dll_abrir and RX.dll and RX.dll_abrir() then i = RX.dll.u32[14] end
+    if i ~= 1 and i ~= 2 then i = 0 end
+    local t = PE.ETIQUETAS[i + 1]
+    local n = #t + 1
+    if leer(p, n) and ffi.string(B8, n) == t .. "\0" then return end
+    ffi.copy(W8, t, n - 1)
+    W8[n - 1] = 0
+    C.mtr_WriteProcessMemory(PROC, p, W8, n, NR)
 end
 
 -- saca la pestana. v = lo que devolvio PE.mirar(). Primero la cantidad de botones: si no vuelve a 11, el texto se queda
@@ -555,6 +610,7 @@ function PE.asegurar(quiero, motivo)
             return false
         end
     end
+    PE.idioma()
     PE.puesta, PE.estado = true, "puesta (boton 12 del menu de Editar)"
     return true
 end

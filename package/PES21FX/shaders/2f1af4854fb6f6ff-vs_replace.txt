@@ -81,6 +81,7 @@ cbuffer VSBones : register(b6)
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 #include "pes_beard.hlsli"   // (04/11 c) barba por los huesos de la cara
+#include "pes_hairphys.hlsli"   // (28/11) fisica del pelo con resorte (t113)
 
 
 void main(
@@ -185,20 +186,10 @@ void main(
   }
   r0.x = saturate(v2.x);
   r4.w = v0.w;
-  // === PES21 reaccion del pelo (17/10): las puntas se atrasan respecto del movimiento de la cabeza (inercia) ===
-  // Usa la pose del cuadro anterior que el juego ya pasa (g_vsPrevBone): al girar, cabecear o saltar, los mechones
-  // quedan un instante atras. Raiz quieta, puntas libres (peso del mechon en el color del vertice).
+  // === PES21 fisica del pelo (28/11, pes_hairphys.hlsli): resorte por personaje en el mundo (DLL, t113), el mismo en las 4 pasadas del pelo.
+  // Reemplaza la reaccion del 17/10 (corria las puntas segun la pose del cuadro anterior: sin memoria y solo en el G-buffer).
   // x49 inercia, y49 limite en cm, z49 curva raiz->punta (mas alto = solo las puntas), w49 on/off
-  { float4 HR = IniParams.Load(int2(49,0)); float4 HT = IniParams.Load(int2(23,0));
-    if (HR.w > 0.5 && g_vsObject.m_useWeightCount.x != 0) {
-      float dt = clamp(HT.z - HT.w, 1.0 / 240.0, 1.0 / 15.0);
-      float3 dl = r4.xzy - r2.xzy;
-      float wgt = pow(saturate(v2.x), max(HR.z, 0.5));
-      float3 lag = -dl * (max(HR.x, 0.0) * (1.0 / 60.0) / dt) * wgt;
-      float Lg = length(lag), lim = max(HR.y, 0.1) * 0.01;
-      if (Lg > lim) lag *= lim / Lg;
-      r4.xzy += lag; r2.xzy += lag;
-    } }
+  { float3 hp = r4.xzy, hq = r2.xzy; if (PesHairPhysApply(v0.xyz, v2.x, hp, hq)) { r4.xzy = hp; r2.xzy = hq; } }
   r3.x = dot(r4.xzyw, g_vsObject.m_world._m00_m10_m20_m30);
   r3.y = dot(r4.xzyw, g_vsObject.m_world._m01_m11_m21_m31);
   r3.z = dot(r4.xzyw, g_vsObject.m_world._m02_m12_m22_m32);

@@ -577,6 +577,9 @@ static void UploadParams() {
         if (p[139][0] > 0.5f) p[104][0] = 1.0f;   // (20/10) pasto v5: necesita el pasto v3 (x104) prendido en la GPU
         p[258][0] = (g_cfg.motorPatch && g_cfg.motorSunFix && g_cfg.motorShadowFix == 0) ? 1.0f : 0.0f;   // (02/11) x258: la luz esta corregida y el shadow map no (los shaders del sol no miden grosor con el)
         if (g_cfg.camNoDof && FreeCamActive()) { p[41][3] = 2.0f; p[137][0] = 0.0f; }   // (14/11 h) camara libre sin desenfoque: w41 = 2 deja el CoC en 0 (993cea4b), sin bokeh
+        // (15/11, Agustin: "permitirme apagar o prender el desenfoque de movimiento") camara libre sin desenfoque de movimiento: el PS de la
+        // composicion del desenfoque (24943e55, nuestro reemplazo) con x138 = 1 e y138 = 0 escribe cero = nada que mezclar. Solo en la GPU: el ini no cambia
+        if (g_cfg.camNoMblur && FreeCamActive()) { p[138][0] = 1.0f; p[138][1] = 0.0f; }
         p[147][3] = 1.0f;   // (20/10) w147: esta DLL iguala la cabeza de las caras genericas con la cara (reglas PS + VS)
         p[393][3] = g_tlClock;   // (10/11) fase guardada del ciclo (solluz.cpp) x periodo; antes el reloj (s mod 3600)   // (09/11) w393: reloj en segundos (vuelve a 0 cada hora) para el ciclo de dia y noche de la luz del editor (w392)
         p[393][2] = g_solRealActivo;   // (09/11) z393 = 1: el sol real del motor esta prendido en el editor (el shader deja de imitarlo)
@@ -615,9 +618,15 @@ static void UploadParams() {
 struct CtxState { const ShaderEntry* ps = nullptr; const ShaderEntry* vs = nullptr; ID3D11Device* dev = nullptr; bool devKnown = false; ID3D11Buffer* lastHairCB = nullptr; uint64_t lastFace = 0; bool clothCS = false; ID3D11DepthStencilView* shadowDSV = nullptr; bool gameShadow = false; SpCtx sp; };   // shadowDSV: (27/10 c) el DSV puesto es el shadow map del sol del juego (sombra de la cabeza)   // clothCS: el CS puesto es el simulador del mod de ropa (diagnostico en Dispatch)   // lastHairCB: b11 de la ultima cara dibujada en este contexto (la boca la hereda)
 static std::unordered_map<ID3D11DeviceContext*, CtxState> s_ctx;
 static std::shared_mutex s_ctxMutex;
+// (14/11 0kygek) ~30 llamadas por dibujo: el ultimo contexto de cada hilo queda en cache (sin candado ni busqueda). Seguro porque
+// unordered_map no mueve sus nodos al crecer y s_ctx nunca borra entradas: la referencia sigue valida para siempre
 static CtxState& Ctx(ID3D11DeviceContext* c) {
-    { std::shared_lock<std::shared_mutex> lk(s_ctxMutex); auto it = s_ctx.find(c); if (it != s_ctx.end()) return it->second; }
-    std::unique_lock<std::shared_mutex> lk(s_ctxMutex); return s_ctx[c];
+    thread_local ID3D11DeviceContext* t_lastC = nullptr; thread_local CtxState* t_lastS = nullptr;
+    if (c == t_lastC && t_lastS) return *t_lastS;
+    CtxState* s;
+    { std::shared_lock<std::shared_mutex> lk(s_ctxMutex); auto it = s_ctx.find(c); s = it != s_ctx.end() ? &it->second : nullptr; }
+    if (!s) { std::unique_lock<std::shared_mutex> lk(s_ctxMutex); s = &s_ctx[c]; }
+    t_lastC = c; t_lastS = s; return *s;
 }
 
 // ---------------------------------------------------------------- originales
@@ -665,12 +674,12 @@ template<int V> static void STDMETHODCALLTYPE hk_Dispatch(ID3D11DeviceContext* c
 }
 template<int V> static void STDMETHODCALLTYPE hk_OMSetRT(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d) { PerfDrawScope pds_(c, false);
     GrassBaseFlush(c, 1, 0, v ? n : 0, v, d);
-    o_OMSetRT[V](c, n, v, d);
+    o_OMSetRT[V](c, n, v, d); MotorDepthDiagRT(n, v, d);
     Ctx(c).shadowDSV = HeadShadowBind(n, v, d); Ctx(c).gameShadow = HeadShadowIsGameRes(d);
 }
 template<int V> static void STDMETHODCALLTYPE hk_OMSetRTU(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d, UINT us, UINT un, ID3D11UnorderedAccessView* const* u, const UINT* ic) { PerfDrawScope pds_(c, false);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) GrassBaseFlush(c, 1, 0, v ? n : 0, v, d);   // solo UAVs: los targets no cambian
-    o_OMSetRTU[V](c, n, v, d, us, un, u, ic);
+    o_OMSetRTU[V](c, n, v, d, us, un, u, ic); if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) MotorDepthDiagRT(n, v, d);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) { Ctx(c).shadowDSV = HeadShadowBind(n, v, d); Ctx(c).gameShadow = HeadShadowIsGameRes(d); }
 }
 template<int V> static void STDMETHODCALLTYPE hk_ClearState(ID3D11DeviceContext* c) { PerfDrawScope pds_(c, false);
@@ -892,6 +901,7 @@ std::atomic<int> g_depthClearZero{0}, g_depthClearOne{0};
 template<int V> static void STDMETHODCALLTYPE hk_ClearDSV(ID3D11DeviceContext* c, ID3D11DepthStencilView* v, UINT f, FLOAT d, UINT8 st) { PerfDrawScope pds_(c, false);
     if (f & D3D11_CLEAR_DEPTH) { if (d < 0.5f) g_depthClearZero++; else g_depthClearOne++; HeadShadowOnClear(c, v, d); }   // (27/10 c) el atlas de la cabeza se limpia con el shadow map del juego
     GrassBaseFlush(c, 2, 0);   // (26/10 g) antes de borrar la profundidad de la pasada
+    if (f & D3D11_CLEAR_DEPTH) MotorDepthDiagClear(v, d);
     o_ClearDSV[V](c, v, f, d, st);
 }
 
@@ -1427,6 +1437,7 @@ static ID3D11ComputeShader* s_mbCS = nullptr; static ID3D11Texture2D* s_mbTex = 
 static ID3D11UnorderedAccessView* s_mbUAV = nullptr; static ID3D11ShaderResourceView* s_mbSRV = nullptr;
 static ID3D11ShaderResourceView* MBFitBeforeDraw(ID3D11DeviceContext* c) {
     if (!g_dev.dev || g_cfg.live[138][0] < 0.5f || g_cfg.live[138][1] <= 0.0f || (GrassLive(449, 1) <= 0.0f && GrassLive(449, 2) <= 0.0f)) return nullptr;
+    if (g_cfg.camNoMblur && FreeCamActive()) return nullptr;   // (15/11) camara libre sin desenfoque de movimiento: el PS escribe cero (y138 = 0 en la GPU)
     {
         std::lock_guard<std::mutex> lk(s_mbMx);
         if (s_mbDev != g_dev.dev) {
@@ -1486,7 +1497,7 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
         s.devKnown = true;
     }
     if (s.dev != g_dev.dev) return false;
-    if (g_motorWire.load(std::memory_order_relaxed)) d.wire = MotorWireBegin(c, &d.wireRS);   // (11/11 3icxbh) Motor en tiempo real: geometria del G-buffer en alambre (y429); se devuelve en FX_DRAW
+    if (g_motorWire.load(std::memory_order_relaxed)) d.wire = MotorWireBegin(c, &d.wireRS, (s.vs ? s.vs->hash : 0) ^ ((uint64_t)t_drawVerts << 20) ^ ((uint64_t)t_drawStart << 40) ^ (uint64_t)(uint32_t)t_drawBase);   // (11/11 3icxbh) Motor en tiempo real: geometria del G-buffer en alambre (y429); se devuelve en FX_DRAW
     const ShaderEntry *ps = s.ps, *vs = s.vs;
     GpuShaderProfDraw(c, ps, vs, s.sp);   // (13/11) perfil por shader del medidor (solo con x375, 120 cuadros por minuto; v3 tambien en las listas diferidas)
     // (27/10 b) brazos, manos, muslos y torso de TorsoBody del tono de la cara (brazos.cpp, filas 321 / 327): son las texturas
@@ -1494,12 +1505,14 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     LeakCheck(c, ps, vs);
     MouthDrawDiag(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawKind == 1 ? t_drawVerts : 0u);   // (09/11) diagnostico del recuadro de la boca
     if (vs) if (ID3D11ShaderResourceView* at = ArmsTextureFor(c, vs->hash, t_drawVerts)) { ArmSwapNote(ps, t_drawVerts); Remember(c, d, true, true, 0); c->PSSetShaderResources(0, 1, &at); }
+    if (vs) if (ID3D11ShaderResourceView* tt = ArmsTorsoForArm()) { Remember(c, d, true, true, 46); c->PSSetShaderResources(46, 1, &tt); }   // (16/11) franja alta del brazo de cara real: tono del torso (PS aa7d t46)
     if (g_cfg.bypass) return d.n > 0;
     if (g_skinDiagArmed.load(std::memory_order_relaxed)) SkinDiagDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts);   // (24/10) skintone.cpp
     if (g_toneChkArmed.load(std::memory_order_relaxed)) SkinToneCheckDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0);   // (24/10 c) punto de los dibujos de piel
     if (UiHideShouldSkip(c, ps ? ps->hash : 0)) { d.skip = true; return d.n > 0; }   // (08/11 e) x392: menus del juego ocultos (sin vidrio ni aro)
     { ID3D11PixelShader* edge_ = nullptr;
       if (ID3D11ShaderResourceView* bg_ = EditorBgFor(c, ps ? ps->hash : 0, &edge_)) { Remember(c, d, true, true, 8); c->PSSetShaderResources(8, 1, &bg_); }
+      else if (!edge_ && MotorUiSkipGameDraw(c, ps ? ps->hash : 0)) { d.skip = true; return d.n > 0; }   // (15/11 b) menu propio del Motor: sin la interfaz del juego
       if (edge_ && !d.restorePS) { c->PSGetShader(&d.restorePS, nullptr, nullptr); c->PSSetShader(edge_, nullptr, 0); } }   // (10/11 m042wp) borde del jugador sin el gris del fondo del juego   // (08/11 qk2yxa) x424: fondo del visor del editor negro / imagen propia
     GlassBeforeDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, t_drawVerts, d.glass);   // (24/10) vidrio de los menus: GS + PS propios (se devuelven en FX_DRAW)
     RingBeforeDraw(c, ps ? ps->hash : 0, vs ? vs->hash : 0, d.ring);   // (24/10 c) aro del musculo: variante de la piel / dibujo extra encima del jugador
@@ -1670,23 +1683,30 @@ static inline bool BeforeDraw(ID3D11DeviceContext* c, DrawScope& d) {
     // (07/11) Agustin: de lejos el torso atraviesa la camiseta. El catalogo tiene otras 3 variantes del G-buffer del kit con las
     // mismas texturas (patron + marking / badge) pero sin SV_IsFrontFace (no se dibujaron en la captura del menu): candidatas a la
     // camiseta de lejos / del arbitro. Sin ellas el personaje no entra en la lista y su torso queda entero (sin x320).
-    if (const int sk = ps ? ShirtPSKind(ps->hash) : -1; sk >= 0) {
+    if (const int sk = ps ? ShirtPSKind(ps->hash) : -1; sk >= 0 && KitDrawIsShirt(c, t_drawVerts, t_drawBase)) {   // (16/11) el short y las medias no cuentan
         g_shirtSeen.store(true, std::memory_order_relaxed);
         if (sk >= 8) ShirtPSNoteNew(ps->hash, t_drawVerts);
-        TorsoShirtNote(c, (sk & 3) | ((t_drawVerts == 7284 || t_drawVerts == 6006 || t_drawVerts == 7512 || t_drawVerts == 5550) ? 4 : 0));   // (01/11) +4 = camiseta ajustada (indices de [shirt_tight] detect de cloth.ini)   // (31/10 b) camiseta por jugador
+        TorsoShirtNote(c, (sk & 3) | ((t_drawVerts == 7284 || t_drawVerts == 6006 || t_drawVerts == 7512 || t_drawVerts == 5550) ? 4 : 0) | (int)((t_drawVerts & 0x7fffffu) << 8));   // (16/11) + indices del dibujo en los bits altos (registro)   // (01/11) +4 = camiseta ajustada (indices de [shirt_tight] detect de cloth.ini)   // (31/10 b) camiseta por jugador
     }
+    // (17/11 07:08) grilla del piso del Motor en t49 de la composicion: el shader la mezcla donde el z buffer esta vacio (motorgrid.cpp)
+    if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl)
+        if (ID3D11ShaderResourceView* gv = MotorGridCompSRV()) { Remember(c, d, true, true, 49); c->PSSetShaderResources(49, 1, &gv); gv->Release(); }
     // 19/10: SSS separable en pantalla antes de la composicion: la irradiancia (t9) llega ya difundida sobre la piel
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl) {
         int gz_ = GpuZoneBegin(c, kGzSSSS); ID3D11ShaderResourceView* v0_ = SSSSBeforeComposition(c); GpuZoneEnd(c, gz_);
         if (ID3D11ShaderResourceView* v = v0_) { Remember(c, d, true, true, 9); c->PSSetShaderResources(9, 1, &v);
             if (ID3D11ShaderResourceView* sp = SSSSSpecSRV()) { Remember(c, d, true, true, 10); c->PSSetShaderResources(10, 1, &sp); } }   // (27/10 b) brillo con la luz de prueba del editor
     }
+    // (23/11 ru34vc h) 540: el cielo dibujado (domo 9adf) recibe el panorama del cielo fisico en t28 (el mismo de la luz)
+    if (ps && ps->hash == 0x9adf9d4673d24359ULL && ps->repl) if (ID3D11ShaderResourceView* ev = SkyEnvSRV()) { Remember(c, d, true, true, 28); c->PSSetShaderResources(28, 1, &ev); }
     // 20/10: GTAO (HBAO actual) para la luz global y la composicion: t27 (se calcula una vez por cuadro)
     // (08/11 b) tambien la composicion del editor (f807): ahi no habia GTAO y la oclusion de corto alcance de la boca no se veia
     if (ps && (ps->hash == 0x619b86cb5691cdceULL || ps->hash == 0xfda6da09737592b1ULL || ps->hash == 0xf807e74d5b900a15ULL) && ps->repl) {
         int gz_ = GpuZoneBegin(c, kGzGTAO); ID3D11ShaderResourceView* v = GTAOBeforeComposition(c, s_presentNo.load()); GpuZoneEnd(c, gz_);
         if (!v && g_cfg.live[132][0] > 0.5f) v = GTAONeutralSRV();   // (24/10 g) escena sin GTAO (editor): sin oclusion, no 0
         if (v) { Remember(c, d, true, true, 27); c->PSSetShaderResources(27, 1, &v); }
+        // (23/11 ru34vc) 534: visibilidad del cielo de lejos (gtao.cpp) en t50 de la composicion y la luz global (neutra si no corrio)
+        if (ps->hash != 0xf807e74d5b900a15ULL) if (ID3D11ShaderResourceView* fv = SkyVisSRV(s_presentNo.load())) { Remember(c, d, true, true, 50); c->PSSetShaderResources(50, 1, &fv); }
     }
     // 21/10: SSGI temporal para la composicion: t26 (media resolucion, acumulado en el tiempo)
     // (08/11 0qtsss, Agustin: "el ssgi en el modo editar deberia cargar por completo") tambien la composicion del editor (f807) con x411
@@ -2145,6 +2165,7 @@ static void OnSwapChain(IUnknown* devUnk, IDXGISwapChain* sc) {
     if (g_cfg.optPresent) HookSwapChain(sc);
     DXGI_SWAP_CHAIN_DESC sd{}; sc->GetDesc(&sd);
     Log("cadena de intercambio del juego: %ux%u", sd.BufferDesc.Width, sd.BufferDesc.Height);
+    BorderlessEnsure(sd.OutputWindow, sd.Windowed != FALSE, sd.BufferDesc.Width, sd.BufferDesc.Height);   // (15/11) borderless.cpp
 }
 static HRESULT STDMETHODCALLTYPE hk_CreateSC(IDXGIFactory* f, IUnknown* dev, DXGI_SWAP_CHAIN_DESC* d, IDXGISwapChain** sc) {
     HRESULT hr = o_CreateSC(f, dev, d, sc);
@@ -2367,6 +2388,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     { static ULONGLONG t = 0; ULONGLONG n = GetTickCount64(); if (n - t > 10000) { t = n; RastroFlush(false); } }
     FaceInjectPresent();   // (09/11) matrices del rig: donde se arma la cara (solo mide, expr_inyeccion)
     SolEditorPresent();   // (09/11) sol real del editor: ganchos (primer Present), aplicar pendiente, log cada 10 s
+    BancaPresent();     // (16/11 8z607v) banco de suplentes paso 1: ganchos en el primer Present, registro
     RedesPresent();     // (13/11 sk9ema) redes de los arcos con el viento unico (ganchos en el primer Present)
     BanderinPresent();  // (14/11 sk9ema) banderin del corner: simula la tela y sube pes_flag (despues de UpdateTimeParams: filas 494 / 157 de este cuadro)
     CamHookPresent();   // (23/10) camara del motor: ganchos (primer Present), cortes de camara -> 160, log
@@ -2422,6 +2444,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDXGISwapChain* sc, UINT sync, UINT 
     PanelPresent(s_frameTex);   // (08/11) panel en vivo: recargas pedidas por HTTP y capturas (panel.cpp)
     FisicoCapturePresent(s_frameTex);   // (26/10 c) paginas del menu Fisico
     MenuTestPresent(sc, s_frameTex);   // (08/11) prueba automatica v2: mide, fotografia y escribe PES21FX/diagnostico/<fecha>/ (OJO: nunca terminar un comentario // con barra invertida: continua la linea y se come la siguiente)
+    MotorExtraPresent(sc);   // (15/11 q) vista extra del Motor: guarda la imagen de la camara extra y deja en pantalla la principal
     { GpuZoneScope gz_(g_dev.imm, kGzOverlay); OverlayPresent(sc); }
     --t_perfDepth;
     const uint64_t pfT1 = __rdtsc();

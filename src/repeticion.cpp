@@ -16,6 +16,7 @@
 //
 // ini [PES21FX]: repeticion_barra = 1 (0 apagada), repeticion_corte = 1 (0 sin desenfoque), repeticion_corte_ms = 300 (100..1000)
 #include "core.h"
+#include "menuvisual.h"
 #include <imgui.h>
 #include <d3d11.h>
 #include <atomic>
@@ -90,6 +91,9 @@ int Wrap(int a, int n) { a %= n; return a < 0 ? a + n : a; }
 } // namespace
 
 bool RepeticionWantsHook() { return g_cfg.replayBar != 0 || g_cfg.replayCut != 0; }
+// (14/11 n) la linea es la del visor de repeticiones (match::Replay o anillo del largo de la repeticion): la camara libre y la repeticion
+// lenta solo tocan esa (rastro.cpp hk_rpl)
+bool RepeticionLineOk(const void* line) { return line && Check() && IsReplayLine(line); }
 
 // hilo del juego, desde hk_rpl (rastro.cpp) ANTES del control del visor
 void RepeticionRplHook(void* line) {
@@ -130,6 +134,60 @@ namespace {
 ID3D11Texture2D* s_tex[2] = {}; ID3D11ShaderResourceView* s_srv[2] = {}; int s_prevI = 0;   // s_prevI = ultimo cuadro, el otro = cuadro viejo
 UINT s_tw = 0, s_th = 0; DXGI_FORMAT s_tf = DXGI_FORMAT_UNKNOWN;
 double s_cutT = -1e9; int s_cutSeen = 0; bool s_haveOld = false, s_copyOk = false;
+// ---- (16/11, Agustin: "que se adapte correctamente aunque la barra este arriba o en otras zonas y con una imagen") ----
+// La pantalla de la repeticion (match2D::Screen::Replay, vtable 0x142bf0760, game2dReplay.bin) cambia de diseno segun el menu de la
+// competicion (Dream Patch / MenuServer): la barra puede estar abajo (diseno original) o arriba (diseno VAR). En vez de la posicion
+// fija se mide la del propio menu: gancho en su vf19 (0x1420f4580, cada cuadro, hilo del juego); la pagina [this+0x10] tiene en +0x98
+// el buscador de nodos por nombre (vf1, como FUN_142104290); cada nodo menusystem da su posicion GLOBAL con vf20 (FUN_140e4d9e0 ->
+// FUN_141f95bd0 = propiedad 0x1008 del clip). La barra queda entre "text_timeStart" y "text_timeEnd" (los tiempos de los extremos);
+// "text_timeCurrent" va debajo del cabezal. Sin esos nodos (o valores raros) se usa la posicion fija de antes.
+const uintptr_t kScrReplayVt = 0x142bf0760ull, kScrReplayVf19 = 0x1420f4580ull;
+using ScrFn = void(*)(void*);
+ScrFn o_scr19 = nullptr; int s_scrHook = 0;          // 0 sin intentar, 1 enganchado, -1 no
+struct UiPos { float x, y; bool ok; };
+std::atomic<float> s_uiS[2]{0.0f, 0.0f}, s_uiE[2]{0.0f, 0.0f}, s_uiC[2]{0.0f, 0.0f};
+std::atomic<int> s_uiOk{0}; std::atomic<unsigned long long> s_uiMs{0};
+UiPos NodePos(void* root, const char* name) {
+    UiPos r{0, 0, false};
+    __try {
+        using FindFn = void*(*)(void*, const char*); using PosFn = int(*)(void*, float*);
+        void* node = (*(FindFn**)root)[1](root, name); if (!node) return r;
+        float v[2] = {0, 0};
+        if ((*(PosFn**)node)[20](node, v) < 0) return r;
+        if (!(fabsf(v[0]) < 20000.0f && fabsf(v[1]) < 20000.0f)) return r;
+        r.x = v[0]; r.y = v[1]; r.ok = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { r.ok = false; }
+    return r;
+}
+void hk_Scr19(void* self) {
+    o_scr19(self);
+    if (!g_cfg.replayBar) return;
+    __try {
+        const uintptr_t page = *(const uintptr_t*)((const unsigned char*)self + 0x10); if (!page) return;
+        void* root = (void*)(page + 0x98);
+        const UiPos a = NodePos(root, "text_timeStart"), b = NodePos(root, "text_timeEnd"), c = NodePos(root, "text_timeCurrent");
+        const bool ok = a.ok && b.ok && b.x - a.x > 40.0f;
+        if (ok) { s_uiS[0] = a.x; s_uiS[1] = a.y; s_uiE[0] = b.x; s_uiE[1] = b.y; s_uiC[0] = c.ok ? c.x : 0.0f; s_uiC[1] = c.ok ? c.y : -1.0f; s_uiMs = GetTickCount64(); }
+        s_uiOk = ok ? 1 : 0;
+        static int s_n = 0; static float s_lx = -1, s_ly = -1;
+        if (s_n < 12 && (fabsf(a.x - s_lx) > 1.0f || fabsf(a.y - s_ly) > 1.0f)) {
+            s_n++; s_lx = a.x; s_ly = a.y;
+            Log("repeticion: menu de la repeticion: inicio %s (%.1f, %.1f), fin %s (%.1f, %.1f), actual %s (%.1f, %.1f) -> %s",
+                a.ok ? "si" : "NO", a.x, a.y, b.ok ? "si" : "NO", b.x, b.y, c.ok ? "si" : "NO", c.x, c.y, ok ? "barra medida en el menu" : "posicion fija");
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { s_uiOk = 0; }
+}
+void HookScr() {
+    if (s_scrHook) return;
+    s_scrHook = -1;
+    void** slot = (void**)(kScrReplayVt + 19 * sizeof(void*));
+    __try { if ((uintptr_t)*slot != kScrReplayVf19) { Log("repeticion: la vtable de la pantalla de repeticion no coincide (%p): barra en posicion fija", *slot); return; } }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return; }
+    DWORD old = 0;
+    if (!VirtualProtect(slot, sizeof(void*), PAGE_READWRITE, &old)) { Log("repeticion: no se pudo cambiar la vtable de la pantalla (%lu)", GetLastError()); return; }
+    o_scr19 = (ScrFn)*slot; InterlockedExchangePointer(slot, (void*)&hk_Scr19); VirtualProtect(slot, sizeof(void*), old, &old);
+    s_scrHook = 1; Log("repeticion: pantalla de repeticion enganchada (vf19 0x1420f4580): la barra sigue al diseno del menu");
+}
 // ---- barra ----
 double s_moveT = -1e9; POINT s_lastP{ -32000, -32000 }; bool s_lWas = false, s_drag = false;
 float s_mx = -1, s_my = -1; bool s_front = false;
@@ -177,18 +235,27 @@ struct BarGeo { float x0, x1, y, h, hit; };
 BarGeo Geo(const ImVec2& ds) {
     const float sx = ds.x / 1920.0f, sy = ds.y / 1080.0f, k = std::max(1.0f, sy);
     const int n = std::max(s_n.load(), 1); const float lenS = (float)Wrap(s_last.load() - s_first.load(), n) / 54.0f;
-    const float grow = std::clamp((lenS - 15.0f) / 105.0f, 0.0f, 1.0f);          // 15 s o menos: como la del juego; 2 min o mas: ancha
+    const float grow = 0.0f * lenS;   // (14/11 l, Agustin: "no hagas que la barra se estire") siempre en el lugar de la del juego          // 15 s o menos: como la del juego; 2 min o mas: ancha
     const float t = (float)std::clamp((Now() - s_openT - 0.25) / 0.45, 0.0, 1.0); const float e = grow * t * t * (3.0f - 2.0f * t);
     BarGeo g;
+    // (16/11) diseno medido en el menu (arriba, abajo o con imagen): de la mitad del tiempo de inicio a la del final. El nodo da su
+    // punto de anclaje (arriba a la izquierda del texto "00:00", ~55 x 24 px a 1080p): la barra va ~22 px mas abajo
+    if (s_uiOk.load() && GetTickCount64() - s_uiMs.load() < 1500) {
+        const float ax = s_uiS[0].load(), ay = s_uiS[1].load(), bx = s_uiE[0].load(), by = s_uiE[1].load();
+        g.x0 = (ax + 27.0f) * sx; g.x1 = (bx + 27.0f) * sx;
+        const float h = 4.0f * k; const float yc = ((ay + by) * 0.5f + 34.0f) * sy;
+        g.h = h; g.y = yc - h * 0.5f; g.hit = 18.0f * k; return g;
+    }
     g.x0 = (860.0f + (104.0f - 860.0f) * e) * sx; g.x1 = (1764.0f + (1816.0f - 1764.0f) * e) * sx;
     const float h = (4.0f + 6.0f * e) * k; const float yc = (973.5f + (836.0f - 973.5f) * e) * sy;
-    g.h = h; g.y = yc - h * 0.5f; g.hit = (14.0f + 10.0f * e) * k; return g;
+    g.h = h; g.y = yc - h * 0.5f; g.hit = (18.0f + 10.0f * e) * k; return g;   // (14/11 n) un poco mas alto para acertarle (era 14)
 }
 } // namespace
 
 // Present, antes del ImGui de la DLL: copia del cuadro (solo en la repeticion) y estado del mouse. true = hay algo que dibujar
 bool RepeticionPresent(IDXGISwapChain* sc) {
     if (!RepeticionWantsHook() || s_ok.load() != 1) { s_drag = false; return false; }
+    if (g_cfg.replayBar && !s_scrHook) HookScr();   // (16/11) una vez: medir la barra en el menu de la repeticion
     const bool live = ReplayLive();
     const double now = Now();
     // mouse (pixeles de la ventana)
@@ -219,7 +286,8 @@ bool RepeticionPresent(IDXGISwapChain* sc) {
     const bool vOpen = live && ViewerOpen();
     const bool open = live && (vOpen || now - s_moveT < 3.0 || s_drag);
     { static int s_vLog = -1; const int st = !live ? 0 : vOpen ? 2 : 1;
-      if (st != s_vLog) { s_vLog = st; Log("repeticion: %s", st == 0 ? "sin repeticion" : st == 2 ? "visor abierto (barra a la vista)" : "repeticion andando, visor no abierto segun el estado (la barra sale al mover el mouse)"); } }
+      static int s_vLogN = 0;   // (14/11 l) en su PC cambiaba cada 5-70 ms: solo los primeros 16 cambios van al log
+      if (st != s_vLog && s_vLogN < 16) { s_vLogN++; s_vLog = st; Log("repeticion: %s", st == 0 ? "sin repeticion" : st == 2 ? "visor abierto (barra a la vista)" : "repeticion andando, visor no abierto segun el estado (la barra sale al mover el mouse)"); } }
     if (open && !s_openWas) s_openT = now;
     s_openWas = open;
     const bool bar = open && g_cfg.replayBar && !g_menuOpen.load();
@@ -228,7 +296,7 @@ bool RepeticionPresent(IDXGISwapChain* sc) {
     if (bar) {
         const ImVec2 ds(1920.0f, 1080.0f); const BarGeo g = Geo(ds);   // en proporcion: Geo escala con ds
         const float mx = s_mx * ds.x, my = s_my * ds.y;
-        const bool over = mx >= g.x0 - 8.0f && mx <= g.x1 + 8.0f && fabsf(my - (g.y + g.h * 0.5f)) <= g.hit;
+        const bool over = mx >= g.x0 - 12.0f && mx <= g.x1 + 12.0f && fabsf(my - (g.y + g.h * 0.5f)) <= g.hit;
         if (lNow && !s_lWas && over) s_drag = true;
         if (!lNow) s_drag = false;
         if (s_drag) {
@@ -249,12 +317,13 @@ bool RepeticionPresent(IDXGISwapChain* sc) {
 }
 
 // dentro del cuadro de ImGui de la DLL (overlay.cpp)
-void RepeticionDraw() {
+void RepeticionDraw(bool cursorShown) {
     const double now = Now();
     const ImVec2 ds = ImGui::GetIO().DisplaySize;
     const float dur = (float)std::clamp(g_cfg.replayCutMs, 100, 1000) / 1000.0f;
     // 1) desenfoque de movimiento del corte: el cuadro nuevo barrido + el viejo que se va barrido para el otro lado
-    if (g_cfg.replayCut && s_haveOld && s_srv[0] && now - s_cutT < dur) {
+    // (15/11) con la camara libre y camara_sin_desenfoque_mov (L3 / M) tampoco: el corte queda seco
+    if (g_cfg.replayCut && s_haveOld && s_srv[0] && now - s_cutT < dur && !(g_cfg.camNoMblur && FreeCamActive())) {
         ImDrawList* bg = ImGui::GetBackgroundDrawList();
         const float t = (float)((now - s_cutT) / dur), e = Ease(t);
         const int N = 8;
@@ -274,51 +343,45 @@ void RepeticionDraw() {
             bg->AddImage(old, ImVec2(o, 0), ImVec2(ds.x + o, ds.y), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, (int)(aj * 255.0f + 0.5f)));
         }
     }
-    // 2) barra propia: casi de borde a borde, con el minuto donde apunta el mouse
+    // 2) (14/11 l, Agustin: "que esta interfaz sea la del propio juego, no una externa; que el tiempo se muestre sobre la barra de
+    // repeticion que se puede ocultar con SHARE") NO se dibuja ninguna barra: el clic / arrastre es sobre la barra DEL JUEGO (mismo
+    // lugar, Geo sin agrandar) y solo se muestra el minuto donde caeria el clic, chico, encima de la barra del juego
     if (!g_cfg.replayBar || !ReplayLive() || g_menuOpen.load() || !s_openWas) return;
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const float k = std::max(1.0f, ds.y / 1080.0f);
     const BarGeo g = Geo(ds);
-    const float a = std::clamp((float)(now - s_openT) * 4.0f, 0.0f, 1.0f);
-    const float ca = std::clamp((float)(3.0 - (now - s_moveT)) * 2.0f, 0.0f, 1.0f);   // la flecha se va si el mouse no se mueve
-    auto A = [&](int v) { return (int)(v * a); };
     const int n = std::max(s_n.load(), 1), f0 = s_first.load(), len = std::max(Wrap(s_last.load() - f0, n), 1);
-    const float pos = std::clamp((float)Wrap(s_cur.load() - f0, n) / (float)len, 0.0f, 1.0f);
     const float mx = s_mx * ds.x, my = s_my * ds.y;
-    const bool over = s_front && mx >= g.x0 - 8.0f && mx <= g.x1 + 8.0f && fabsf(my - (g.y + g.h * 0.5f)) <= g.hit;
-    // fondo
-    // (14/11 07:52, Agustin: "que el fondo de la barra siga eso") fondo con el mismo estilo de los paneles del juego (gris oscuro
-    // translucido, borde fino claro); crece junto con la barra. Sin crecer queda dentro del panel del juego (no se dibuja)
-    { const float grownW = (g.x1 - g.x0) / (ds.x * (1764.0f - 860.0f) / 1920.0f) - 1.0f;   // 0 = como la del juego
-      const float fa = std::clamp(grownW * 4.0f, 0.0f, 1.0f) * a;
-      if (fa > 0.01f) {
-          const ImVec2 b0(g.x0 - 16 * k, g.y - 32 * k), b1(g.x1 + 16 * k, g.y + g.h + 12 * k);
-          dl->AddRectFilled(b0, b1, IM_COL32(28, 30, 34, (int)(205 * fa)));
-          dl->AddRect(b0, b1, IM_COL32(255, 255, 255, (int)(40 * fa)), 0.0f, 0, 1.0f * k);
-      } }
-    dl->AddRectFilled(ImVec2(g.x0, g.y), ImVec2(g.x1, g.y + g.h), IM_COL32(255, 255, 255, A(60)), g.h * 0.5f);
-    const float px = g.x0 + (g.x1 - g.x0) * pos;
-    dl->AddRectFilled(ImVec2(g.x0, g.y), ImVec2(px, g.y + g.h), IM_COL32(120, 210, 90, A(230)), g.h * 0.5f);
-    dl->AddCircleFilled(ImVec2(px, g.y + g.h * 0.5f), g.h * 0.95f, IM_COL32(255, 255, 255, A(255)));
+    const bool over = s_front && mx >= g.x0 - 12.0f && mx <= g.x1 + 12.0f && fabsf(my - (g.y + g.h * 0.5f)) <= g.hit;
+    // (14/11 n, Agustin: "el pasar el mouse por la barra real de repeticion" a veces no andaba) el juego esconde el cursor de Windows y,
+    // con la camara libre prendida, la flecha de mouse en menus no se dibuja: no se veia donde estaba el mouse. Si nadie lo dibuja, la
+    // flecha va aca mientras se use el mouse (3 s), con la mano sobre la barra
+    auto drawCur = [&] {
+        if (!s_front || cursorShown || g_cfg.menuCursor == 0 || !(now - s_moveT < 3.0 || s_drag) || (GetAsyncKeyState(VK_RBUTTON) & 0x8000)) return;   // con el derecho se mira (camara libre)
+        CURSORINFO ci{}; ci.cbSize = sizeof ci;
+        if (GetCursorInfo(&ci) && (ci.flags & CURSOR_SHOWING)) return;   // Windows ya muestra el suyo
+        MvCursorDraw(dl, ImVec2(mx, my), over || s_drag ? 1 : 0, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, k, 1.0f, g_cfg.menuVisual != 0);
+    };
+    if (!over && !s_drag) { drawCur(); return; }
     char buf[16];
-    if (FrameClock(f0, buf, sizeof buf)) dl->AddText(ImVec2(g.x0, g.y - 22 * k), IM_COL32(255, 255, 255, A(200)), buf);
-    if (FrameClock(Wrap(f0 + len, n), buf, sizeof buf)) { const ImVec2 ts = ImGui::CalcTextSize(buf); dl->AddText(ImVec2(g.x1 - ts.x, g.y - 22 * k), IM_COL32(255, 255, 255, A(200)), buf); }
-    if (over || s_drag) {   // donde caeria el clic: linea fina y minuto exacto
-        const float fx = std::clamp(mx, g.x0, g.x1), fr = (fx - g.x0) / (g.x1 - g.x0);
-        dl->AddLine(ImVec2(fx, g.y - 6 * k), ImVec2(fx, g.y + g.h + 6 * k), IM_COL32(255, 230, 120, A(255)), 2.0f * k);
-        if (FrameClock(Wrap(f0 + (int)lroundf(fr * (float)len), n), buf, sizeof buf)) {
-            const ImVec2 ts = ImGui::CalcTextSize(buf);
-            const float bx = std::clamp(fx - ts.x * 0.5f, g.x0, g.x1 - ts.x);
-            dl->AddRectFilled(ImVec2(bx - 6 * k, g.y - 28 * k), ImVec2(bx + ts.x + 6 * k, g.y - 6 * k), IM_COL32(20, 20, 20, A(230)), 4 * k);
-            dl->AddText(ImVec2(bx, g.y - 26 * k), IM_COL32(255, 230, 120, A(255)), buf);
-        }
+    const float fx = std::clamp(mx, g.x0, g.x1), fr = (fx - g.x0) / (g.x1 - g.x0);
+    {   // (14/11 l, Agustin: "que aparezca el icono de donde se va a hacer click sobre la barra, que sea preciso, y que permita
+        // arrastrar") marca fina sobre la barra del juego en el punto exacto + triangulo verde abajo como el cabezal del juego
+        const float yc = g.y + g.h * 0.5f, hh = 9.0f * k;
+        const ImU32 col = s_drag ? IM_COL32(255, 230, 120, 255) : IM_COL32(120, 220, 90, 255);
+        dl->AddLine(ImVec2(fx, yc - hh), ImVec2(fx, yc + hh), IM_COL32(0, 0, 0, 160), 3.0f * k);
+        dl->AddLine(ImVec2(fx, yc - hh), ImVec2(fx, yc + hh), col, 1.5f * k);
+        const float ty = yc + hh + 1.0f * k, tw = 6.0f * k;
+        dl->AddTriangleFilled(ImVec2(fx, ty), ImVec2(fx - tw, ty + tw * 1.4f), ImVec2(fx + tw, ty + tw * 1.4f), col);
+        dl->AddTriangle(ImVec2(fx, ty), ImVec2(fx - tw, ty + tw * 1.4f), ImVec2(fx + tw, ty + tw * 1.4f), IM_COL32(0, 0, 0, 170), 1.0f * k);
     }
-    // flecha del mouse (el juego esconde la de Windows)
-    if (s_front && ca > 0.01f) {
-        const ImVec2 p0(mx, my), b(mx, my + 19.0f * k), c(mx + 5.2f * k, my + 14.6f * k), d(mx + 13.5f * k, my + 13.5f * k);
-        dl->AddTriangleFilled(p0, b, c, IM_COL32(255, 255, 255, (int)(255 * ca))); dl->AddTriangleFilled(p0, c, d, IM_COL32(255, 255, 255, (int)(255 * ca)));
-        const ImVec2 pts[4] = { p0, b, c, d }; dl->AddPolyline(pts, 4, IM_COL32(0, 0, 0, (int)(255 * ca)), ImDrawFlags_Closed, 1.4f * k);
+    if (FrameClock(Wrap(f0 + (int)lroundf(fr * (float)len), n), buf, sizeof buf)) {
+        const ImVec2 ts = ImGui::CalcTextSize(buf);
+        const float bx = std::clamp(fx - ts.x * 0.5f, g.x0, g.x1 - ts.x);
+        dl->AddRectFilled(ImVec2(bx - 5 * k, g.y - 26 * k), ImVec2(bx + ts.x + 5 * k, g.y - 6 * k), IM_COL32(16, 16, 16, 200), 3 * k);
+        dl->AddText(ImVec2(bx, g.y - 24 * k), IM_COL32(255, 255, 255, 240), buf);
     }
+    drawCur();
 }
 
 } // namespace fx

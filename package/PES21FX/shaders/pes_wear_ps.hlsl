@@ -5,6 +5,7 @@ struct VSOut { float4 pos : SV_Position; float2 d : TEXCOORD0; float k : TEXCOOR
 float4 main(VSOut i) : SV_Target0
 {
   float r2 = dot(i.d, i.d);
-  float v = i.k * exp(-r2 * 2.2) * (r2 < 2.25 ? 1.0 : 0.0);
+  // (15/11) el corte en 1.5 x radio llega a 0 suave: saturado (muchas pasadas) el corte duro se veia como un circulo con borde
+  float v = i.k * exp(-r2 * 2.2) * smoothstep(2.25, 1.2, r2);
   return float4(v, v, v, v);
 }

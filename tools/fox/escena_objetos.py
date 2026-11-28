@@ -21,7 +21,7 @@ uso:
   python escena_objetos.py <X.fpkd entrada> <X.fpkd salida> --fpk-entrada X.fpk --fpk-salida X.fpk \\
       --objeto "/Assets/pes16/model/.../scenes/cosa.fmdl=C:\\ruta\\cosa.fmdl@x,y,z" [--objeto ...] \\
       [--ayudas "/Assets/pes16/model/.../scenes/cosa.fmdl=C:\\ruta\\cosa.fmdl"]
-  @x,y,z en metros (opcional; por defecto 0,0,0); despues se puede agregar *escala (un numero) y #nombre.
+  @x,y,z en metros (opcional; por defecto 0,0,0); despues se puede agregar ^giro (grados en Y), *escala (un numero) y #nombre.
   La boca no se toca: no hay mouth.fmdl ni pes_oral_* en estas escenas, y el programa se niega si aparecen.
 """
 import argparse, math, os, sys
@@ -34,17 +34,18 @@ PREFIJO, PREFIJO_GRILLA, PREFIJO_LUZ = 'zfx_Obj_', 'zfx_Grilla_', 'zfx_Luz_'
 SEPARACION_MARCADOR = 0.18        # metros entre el foco y su marcador (hacia afuera): igual que MotorTiempoReal.lua
 
 
-def add_transform(f, owner, addr, pos, escala=(1, 1, 1)):
+def add_transform(f, owner, addr, pos, escala=(1, 1, 1), giro=0.0):
     f.add_string('TransformEntity')
     e = F.Entity(F.strcode('TransformEntity'), 0, 0x60, addr, [])
     f.set(e, 'owner', 'EntityHandle', owner)
     f.set(e, 'transform_scale', 'Vector3', (escala[0], escala[1], escala[2], 0))
-    f.set(e, 'transform_rotation_quat', 'Quat', (0, 0, 0, 1))
+    h = math.radians(giro) * 0.5      # (21/11) giro alrededor de Y (vertical), en grados
+    f.set(e, 'transform_rotation_quat', 'Quat', (0, math.sin(h), 0, math.cos(h)))
     f.set(e, 'transform_translation', 'Vector3', (pos[0], pos[1], pos[2], 0))
     return e
 
 
-def add_objeto(f, nombre, ruta, pos, escala=(1, 1, 1), visible=True):
+def add_objeto(f, nombre, ruta, pos, escala=(1, 1, 1), visible=True, giro=0.0):
     if f.find(name=nombre): raise SystemExit('ya existe %s: usar la escena sin objetos como entrada' % nombre)
     addr = f.free_address(); taddr = addr + 0x100
     f.add_string('StadiumModel')
@@ -66,7 +67,7 @@ def add_objeto(f, nombre, ruta, pos, escala=(1, 1, 1), visible=True):
     f.set(e, 'demoGroup', 'Int32', 0)
     f.set(e, 'customBits', 'UInt32', 0)
     f.ents.append(e)
-    f.ents.append(add_transform(f, addr, taddr, pos, escala))
+    f.ents.append(add_transform(f, addr, taddr, pos, escala, giro))
     f.add_to_dataset(nombre, addr)
     return e
 
@@ -139,9 +140,11 @@ def add_ayudas(f, ruta, caja, medio, paso, grosor, marcador):
 
 
 def partir(o):
-    """RUTA=ARCHIVO[@x,y,z][*escala][#nombre]"""
+    """RUTA=ARCHIVO[@x,y,z][^giro][*escala][#nombre]   (giro en grados alrededor de Y)"""
     ruta, _, resto = o.partition('=')
     resto, _, nombre = resto.partition('#')
+    resto, _, gir = resto.partition('^')
+    giro = float(gir) if gir else 0.0
     resto, _, esc = resto.partition('*')
     archivo, _, p = resto.partition('@')
     pos = [float(x) for x in p.split(',')] if p else [0.0, 0.0, 0.0]
@@ -152,7 +155,7 @@ def partir(o):
     if 'mouth' in low or 'oral' in low: raise SystemExit('la boca no se toca: ' + o)
     blob = open(archivo, 'rb').read()
     if blob[:4] != b'FMDL': raise SystemExit('no es un fmdl: ' + archivo)
-    return ruta, archivo, blob, pos, escala, nombre
+    return ruta, archivo, blob, pos, escala, nombre, giro
 
 
 def main(argv=None):
@@ -178,11 +181,11 @@ def main(argv=None):
     n0 = len(f.ents)
     ef = P.read(open(a.fpk_entrada, 'rb').read())
     for i, o in enumerate(a.objeto, 1):
-        ruta, archivo, blob, pos, escala, nombre = partir(o)
-        add_objeto(f, nombre or '%s%02d' % (PREFIJO, i), ruta, pos, (escala, escala, escala))
+        ruta, archivo, blob, pos, escala, nombre, giro = partir(o)
+        add_objeto(f, nombre or '%s%02d' % (PREFIJO, i), ruta, pos, (escala, escala, escala), giro=giro)
         P.put(ef, ruta, blob)
     if a.ayudas:
-        ruta, archivo, blob, _, _, _ = partir(a.ayudas)
+        ruta, archivo, blob, _, _, _, _ = partir(a.ayudas)
         if a.caja:
             v = [float(x) for x in a.caja.split(',')]
             if len(v) != 6: raise SystemExit('--caja lleva 6 numeros')

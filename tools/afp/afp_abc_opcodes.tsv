@@ -1,0 +1,135 @@
+interno	avm2	nombre	operandos	bandera	manejador
+01	03	throw	-	00	1400f1af0
+02	04	getsuper	u30	01	1400f1b50
+03	05	setsuper	u30	01	1400f2140
+05	08	kill	u30	01	1400f2ab0
+07	0c	ifnlt	s24	10	1400f2dc0
+08	0d	ifnle	s24	10	1400f2ef0
+09	0e	ifngt	s24	10	1400f3020
+0a	0f	ifnge	s24	10	1400f3150
+0b	10	jump	s24	10	1400f31f0
+0c	11	iftrue	s24	10	1400f3230
+0d	12	iffalse	s24	10	1400f32c0
+0e	13	ifeq	s24	10	1400f2ae0
+0f	14	ifne	s24	10	1400f2b70
+10	15	iflt	s24	10	1400f2d30
+11	16	ifle	s24	10	1400f2e60
+12	17	ifgt	s24	10	1400f2f90
+13	18	ifge	s24	10	1400f30c0
+14	19	ifstricteq	s24	10	1400f2c00
+15	1a	ifstrictne	s24	10	1400f2c90
+16	1b	lookupswitch	s24 u30 (+ (n+1) s24 casos)	11	1400f3350
+18	1d	popscope	-	00	1400f3460
+19	1e	nextname	-	00	1400f35d0
+1a	20	pushnull	-	00	1400f3620
+1b	21	pushundefined	-	00	1400f3b00
+1c	23	nextvalue	-	00	1400f3660
+1d	24	pushbyte	u8	08	1400f3ac0
+1e	25	pushshort	u30	01	1400f3b10
+1f	26	pushtrue	-	00	1400f3b50
+20	27	pushfalse	-	00	1400f3b80
+21	28	pushnan	-	00	1400f3bb0
+22	29	pop	-	00	1400f3be0
+23	2a	dup	-	00	1400f3c10
+24	2b	swap	-	00	1400f3c50
+25	2c	pushstring	u30	01	1400f3cc0
+26	2d	pushint	u30	01	1400f3d40
+27	2f	pushdouble	u30	01	1400f3da0
+28	30	pushscope	-	00	1400f3df0
+29	32	hasnext2	u30 u30	03	1400f3fb0
+2a	40	newfunction	u30	01	1400f4cb0
+2b	41	call	u30	01	1400f4d30
+2c	42	construct	u30	01	1400f67b0
+2d	45	callsuper	u30 u30	03	1400f7cd0
+2e	46	callproperty	u30 u30	03	1400f86f0
+2f	47	returnvoid	-	00	1400f6f80
+30	48	returnvalue	-	00	1400f6fa0
+31	49	constructsuper	u30	01	1400f6fe0
+32	4a	constructprop	u30 u30	03	1400f7400
+33	4c	callproplex	u30 u30	03	1400f9000
+34	4e	callsupervoid	u30 u30	03	1400f9910
+35	4f	callpropvoid	u30 u30	03	1400fa330
+36	53	applytype	u30	01	1400fac30
+37	55	newobject	u30	01	1400fadd0
+38	56	newarray	u30	01	1400fae90
+39	57	newactivation	-	00	1400fb6d0
+3a	58	newclass	u30	01	1400fb710
+3b	59	getdescendants	u30	01	1400fb740
+3c	5a	newcatch	u30	01	1400fb920
+3d	5d	findpropstrict	u30	01	1400fb970
+3e	5e	findproperty	u30	01	1400fc820
+3f	60	getlex	u30	01	1400fce10
+40	61	setproperty	u30	01	1400fd550
+41	62	getlocal	u30	01	140100a00
+42	63	setlocal	u30	01	140100b50
+43	64	getglobalscope	-	00	1400ff290
+44	65	getscopeobject	u8	04	1400ff2d0
+45	66	getproperty	u30	01	1400ff330
+46	68	initproperty	u30	01	1401031d0
+47	6a	deleteproperty	u30	01	1400ff880
+48	6c	getslot	u30	01	1400ff9d0
+49	6d	setslot	u30	01	1400ffb70
+4a	70	convert_s	-	00	1400ffd10
+4b	71	esc_xelem	-	00	1400ffd10
+4d	73	convert_i	-	00	1400ffdd0
+4e	74	convert_u	-	00	1400ffe40
+4f	75	convert_d	-	00	1400ffea0
+50	76	convert_b	-	00	1400fff00
+52	80	coerce	u30	01	1400fff60
+54	85	coerce_s	-	00	1400fff70
+55	87	astypelate	-	00	140100010
+56	90	negate	-	00	1401002d0
+57	91	increment	-	00	1401000e0
+58	93	decrement	-	00	140100110
+59	95	typeof	-	00	140100140
+5a	96	not	-	00	140100160
+5b	97	bitnot	-	00	1401001d0
+5c	a0	add	-	00	140100230
+5d	a1	subtract	-	00	140100280
+5e	a2	multiply	-	00	140100300
+5f	a3	divide	-	00	140100350
+60	a4	modulo	-	00	1401003a0
+61	a5	lshift	-	00	1401003f0
+62	a6	rshift	-	00	140100480
+63	a7	urshift	-	00	140100510
+64	a8	bitand	-	00	1401005a0
+65	a9	bitor	-	00	140100630
+66	aa	bitxor	-	00	1401006c0
+67	ab	equals	-	00	140100750
+68	ac	strictequals	-	00	140100770
+69	ad	lessthan	-	00	140100790
+6a	ae	lessequals	-	00	1401007b0
+6b	af	greaterthan	-	00	1401007d0
+6c	b0	greaterequals	-	00	1401007f0
+6d	b3	istypelate	-	00	140100810
+6e	b4	in	-	00	140100830
+6f	c0	increment_i	-	00	1401000e0
+70	c1	decrement_i	-	00	140100110
+71	c2	inclocal_i	u30	01	1401009a0
+73	d0	getlocal_0	-	00	140100a50
+74	d1	getlocal_1	-	00	140100a90
+75	d2	getlocal_2	-	00	140100ad0
+76	d3	getlocal_3	-	00	140100b10
+78	d5	setlocal_1	-	00	140100bb0
+79	d6	setlocal_2	-	00	140100c00
+7a	d7	setlocal_3	-	00	140100c50
+7b	ef	debug	u8 u30 u8 u30	63	140100ca0
+7c	f0	debugline	u30	01	140100cd0
+7d	f1	debugfile	u30	01	140100cf0
+7e	-	K_getlex_u8 (variante de getlex + u8; INFERIDO por el codigo, mismo camino que 3f)	u30 u8	05	140100d20
+7f	-	K_findproperty_u8 (variante de findproperty + u8; INFERIDO, mismo camino que 3e)	u30 u8	05	140101480
+88	b1	instanceof	-	00	140101ad0
+89	-	K_push_int_0 (empuja int 0)	-	00	140101af0
+8a	f8	?f8	u8 u30	21	1400fafb0
+8d	-	K_initlocal (abcop_initlocal)	u30 u8	05	140103ac0
+8e	-	K_setlocal_null (local[a]=null; b sin uso)	u30 u30	03	140103a60
+8f	-	K_convertsetlocal (abcop_convertsetlocal)	u30 u8	05	1400fde50
+90	-	K_setlocal_pop (local[a]=pop; b sin uso)	u30 u30	03	1400fe6e0
+91	-	K_dup_setlocal (local[a]=tope sin sacar)	u30	01	1400fe800
+92	-	K_convertduplocal (abcop_convertduplocal)	u30 u8	05	1400fe250
+93	-	K_dup_setlocal2 (local[a]=tope sin sacar; b sin uso)	u30 u30	03	1400fe750
+94	-	K_local2local (local[b]=local[a])	u30 u30	03	1400fe840
+95	-	K_convertlocal2local (abcop_convertlocal2local)	u30 u30 u8	07	1400fe480
+96	-	K_local2local_b (local[u8]=local[a]; u30 sin uso)	u30 u8 u30	43	1400fe7a0
+97	-	K_astypelatesetlocal (abcop_astypelatesetlocal)	u30 u30 u8	07	1400fe890
+98	31	pushnamespace	u30	01	1400f3f90

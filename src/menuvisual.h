@@ -3,6 +3,7 @@
 // Solo ImGui (sin core.h): overlay.cpp le pasa los valores. Asi tambien compila fuera del juego para sacar capturas de prueba.
 #pragma once
 #include <imgui.h>
+#include <cstdint>
 
 namespace fx {
 
@@ -57,6 +58,11 @@ struct MvWindIn {
     float* shelter = nullptr;     // y503 reparo a mano
     float* grass = nullptr;       // z503 viento en el pasto
     float* cloth = nullptr;       // w503 viento en la ropa
+    // (15/11 sk9ema, Agustin: "la altura en el viento no lo veo como un valor en el menu visual de viento")
+    float* height = nullptr;      // z500 altura del viento (m): a que altura sopla con toda su fuerza (un solo valor; el perfil fino, fila 508, queda en la lista)
+    float* hem = nullptr;         // w508 viento por debajo de la remera (solo el ruedo)
+    float* flag = nullptr;        // y514 viento en los banderines del corner
+    float kGrass = 0.3f, kCloth = 0.9f, kFlag = 0.95f, kHead = 1.0f, kTop = 1.6f;   // viento a 0.08 / 1.2 / 1.4 / 1.8 / 20 m sobre el de la altura del viento
     bool anim = true; float k = 1.0f; double now = 0.0;
 };
 bool MvWindWidget(MvWindIn& in);
@@ -80,8 +86,12 @@ void MvPadSetStyle(int style, unsigned rgb = 0);   // rgb 0xRRGGBB del cuerpo; 0
 int MvPadGetStyle();
 int MvPadDetectStyle(const wchar_t* gameDir);    // mira livecpk\Dream Patch 21 Graphic Controller (PS5 si no esta)
 bool MvPadPoll(MvPad& p);                     // lee el primer mando (solo Windows; afuera devuelve false)
+void MvPadPresses(uint32_t* out);              // (14/11 n) veces que se apreto cada boton (kPadCount cuentas, se leen y se comparan)
+bool MvPadPolling();                           // (14/11 n) este hilo esta adentro de MvPadPoll (la lectura es de la DLL, no del juego)
 void MvPadFeedImGui(const MvPad& p);          // le pasa el mando a ImGui si el backend no lo hizo (joystick de Windows)
 void MvPadGlyph(ImDrawList* dl, ImVec2 c, float r, int btn, float alpha, float lit = 0.0f);   // simbolo del boton (cruz, circulo, ...)
+float MvPadGlyphW(float r, int btn);           // (14/11 n) ancho del simbolo (las pastillas L1 / OPTIONS son mas anchas que 2 r)
+void MvSetPadFont(ImFont* f);                  // (14/11 n) negrita chica para las letras de las pastillas (overlay.cpp BuildFonts)
 // dibujo del mando con lo apretado y los analogicos; 'where' = esquina de arriba a la izquierda; ancho ~ 230 * k
 void MvPadDraw(ImDrawList* dl, ImVec2 where, float k, const MvPad& p, float alpha, bool anim, double now);
 ImVec2 MvPadSize(float k);
@@ -94,6 +104,7 @@ struct MvCamIn {
     float* sens = nullptr;      // w344 mouse
     float* follow = nullptr;    // x346 0 no, 1 fija al rostro, 2 orbitar
     float* smooth = nullptr;    // y346
+    float* vert = nullptr;      // (15/11) camara_vertical: subir / bajar = la velocidad x esto (0.1 .. 5)
     bool active = false, replay = false;   // la camara libre esta volando ahora / hay repeticion
     bool keys[8] = {};          // W A S D Q E Shift Ctrl apretadas (para iluminar el dibujo)
     bool rmb = false;           // boton derecho del mouse
@@ -126,6 +137,7 @@ struct MvHudIn {
     float speed = 1.0f, zoom = 1.0f; bool follow = false;
     float clock = 1.0f; bool photo = false, paused = false, adv = false; int step = -1; const float* steps = nullptr; int nSteps = 0;
     bool replay = false, dofOff = false;       // (14/11 i) ayudas segun lo que hace cada boton de verdad
+    bool mblurOff = false;                      // (15/11) sin desenfoque de movimiento (L3 / M)
     float compact = 0.0f;                       // 0 barra completa, 1 pastilla
     float k = 1.0f, alpha = 1.0f; bool anim = true; double now = 0.0;
 };
@@ -134,8 +146,11 @@ void MvPhotoHud(ImDrawList* dl, ImVec2 scrMin, ImVec2 scrMax, const MvHudIn& in)
 // triangulo = espacio, L1 borra todo, circulo u OPTIONS cierran. Tambien con el mouse.
 // (14/11) cursor propio del menu: flecha con sombra y filo de luz; sobre algo que se toca se pinta con el verde del menu y crece un poco,
 // al hacer clic sale una onda; sobre un campo de texto es una barra I. kind: 0 flecha, 1 sobre algo que se toca, 2 texto
-void MvCursorDraw(ImDrawList* dl, ImVec2 pos, int kind, bool down, float k, float alpha, bool anim, int style = 0);   // kind 0 dardo, 1 mano (se puede tocar), 2 barra I
-float MvMouseHint(ImDrawList* dl, ImVec2 br, float k, float alpha, const char* left, const char* right);   // botones del mouse abajo a la derecha; devuelve el alto
+void MvSetCursorScale(float s); float MvCursorScale();   // (15/11 p) tamano de los cursores dibujados ([PES21FX] cursor_tamano)
+void MvZoomIconDraw(ImDrawList* dl, ImVec2 c, int dir, float k, float age);   // (16/11) lupa + / - al hacer zoom
+void MvCursorDraw(ImDrawList* dl, ImVec2 pos, int kind, bool down, float k, float alpha, bool anim, int style = 0);   // kind 0 dardo, 1 mano (se puede tocar), 2 barra I, 3 cambiar el ancho (<->), 4 cambiar el alto, 5 camara del visor (camarita con flechas)
+float MvMouseHint(ImDrawList* dl, ImVec2 br, float k, float alpha, const char* left, const char* right, const char* keyName = nullptr, const char* keyLabel = nullptr, const char* wheel = nullptr, bool drag = false, const char* dbl = nullptr);
+void MvSetGuideFont(ImFont* f);   // (15/11) letra de la guia del mouse (textures\\pes_guia.ttf)   // botones del mouse abajo a la derecha; devuelve el alto
 void MvVkOpen();
 void MvVkClose();
 bool MvVkIsOpen();

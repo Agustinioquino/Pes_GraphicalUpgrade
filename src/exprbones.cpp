@@ -414,6 +414,7 @@ struct Skel {
     int tkPhrase = -1; float tkT0 = 0.0f, tkDur = 0.0f, tkPause = 0.0f, tkCh[7] = {}, tkT = -1.0f; unsigned tkN = 0; int tkLast = -1;   // (08/11) hablar por palabras: frase en curso, canales suavizados
     float effort = 0.0f, brPh = 0.0f, anT = -1.0f;                 // (08/11) esfuerzo por velocidad (sube ~1 s, baja ~4 s), fase de la respiracion
    // (08/11) velocidad del jugador (cabeza en el mundo, m/s) y cuanto lleva quieto
+    int ptype = -1;   // (14/11 l) tipo de personaje de HumanList: 0 / 2 jugadores local / visitante, 1 / 3 arqueros, 4 arbitro, 5 jueces de linea
     uint32_t pid = 0; bool pKnown = false; int prof = -1; unsigned profGen = 0xffffffffu; unsigned profFrame = 0; bool profLogged = false;
 };
 static const int kMaxSkel = 48;
@@ -1233,6 +1234,10 @@ std::atomic<int> s_hpOk{0}, s_hpFail{0};
 }
 static bool Norm3(float* v) { const float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (!(l > 1e-4f)) return false; v[0] /= l; v[1] /= l; v[2] /= l; return true; }
 static void PublishHead(const Skel& S) {
+    // (14/11 l, Agustin: "seguir rostros detecta cualquier rostro, deberia detectar solo los jugadores, los tecnicos, los jueces de linea")
+    // solo personajes que el juego armo por HumanList con tipo 0..5 (jugadores, arqueros, arbitro, jueces de linea; el log del 14/11 no
+    // mostro tecnicos: si aparece otro tipo con nombre queda en el log). Publico, alcanzapelotas y demas no se siguen
+    if (!S.pKnown || S.ptype < 0 || S.ptype > 5) return;
     if (!S.node || !S.bHead) { s_hpFail.fetch_add(1, std::memory_order_relaxed); return; }
     Xf hc; if (!ReadXf(S.bHead, hc)) { s_hpFail.fetch_add(1, std::memory_order_relaxed); return; }
     // la cabeza de un personaje (de pie, sentado o tirado) nunca esta en el origen del modelo; si lo esta, no es espacio del modelo
@@ -1250,6 +1255,7 @@ static void PublishHead(const Skel& S) {
     if (!CharNodeToWorld(nd, pm, h.c, true) || !CharNodeToWorld(nd, fm, h.fw, false) || !CharNodeToWorld(nd, um, h.up, false) || !Norm3(h.fw) || !Norm3(h.up)) {
         s_hpFail.fetch_add(1, std::memory_order_relaxed); return;
     }
+    for (int i = 0; i < 3; i++) if (!std::isfinite(h.c[i]) || !std::isfinite(h.fw[i]) || !std::isfinite(h.up[i]) || fabsf(h.c[i]) > 500.0f) { s_hpFail.fetch_add(1, std::memory_order_relaxed); return; }   // (14/11 l) nada roto a la camara
     h.t = Now();
     std::lock_guard<std::mutex> lk(s_hpMx);
     int at = 0; double oldest = 1e300;
@@ -1333,7 +1339,9 @@ static void ProfResolve(Skel& S, unsigned fr) {
     if (S.profGen == s_profGen && (S.pKnown || fr - S.profFrame < 60)) return;
     S.profGen = s_profGen; S.profFrame = fr;
     const int slot = CharSlotForSkel(S.skel);
-    CharInfo ci; if (slot < 0 || !CharGet(slot, ci) || !ci.known) { S.pKnown = false; S.prof = -1; return; }
+    CharInfo ci; if (slot < 0 || !CharGet(slot, ci) || !ci.known) { S.pKnown = false; S.prof = -1; S.ptype = -1; return; }
+    if (ci.type != S.ptype && ci.type > 5) { static int s_tl = 0; if (s_tl++ < 12) Log("camara libre: personaje tipo %d id %u '%s': la camara no sigue su cara (solo jugadores, arbitro y jueces de linea)", ci.type, ci.id, ci.name); }
+    S.ptype = ci.type;
     const bool changed = !S.pKnown || S.pid != ci.id;
     S.pKnown = true; S.pid = ci.id;
     const int was = S.prof; S.prof = ProfFind(ci.id, ci.name);
@@ -1633,7 +1641,7 @@ static void FrameBody(const void* skel) {
         if (nt || nb) { s_ganiLid[0] = nt ? -(at / nt - 0.43633f) * gW : 0.0f; s_ganiLid[1] = nb ? -(ab2 / nb + 0.08727f) * gW : 0.0f; s_ganiLidOn = true; }
     }
     s_poseG[0] = pNeu; s_poseG[1] = pAng; s_poseG[2] = pSmi; s_poseG[3] = pSur; s_poseG[4] = pGri; s_poseG[5] = pPuc; s_poseProf = PF;
-    if (FreeCamActive() && g_cfg.live[346][0] > 0.5f) PublishHead(*S);   // (02/11) camara libre "seguir la cara"
+    if ((FreeCamActive() && g_cfg.live[346][0] > 0.5f) || MenuViewCamWantsHead()) PublishHead(*S);   // (02/11) camara libre "seguir la cara"; (15/11) doble clic por zonas del visor de Apariencia (menumouse.cpp)
     float deg = 0.0f; if (JawAngle(*S, jc, &deg)) { S->angMin = (std::min)(S->angMin, deg); S->angMax = (std::max)(S->angMax, deg); S->angN++; }
     // (03/11, Agustin: con x340 = 0 "no cambia nada") al apagar, lo ultimo escrito quedaba puesto: el juego no reescribe todos los
     // huesos de la cara en cada cuadro (editor quieto), asi que la cara seguia deformada. Ahora al apagar se devuelve la base del juego

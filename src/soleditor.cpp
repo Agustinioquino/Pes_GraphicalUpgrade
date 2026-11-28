@@ -505,10 +505,31 @@ static uintptr_t __fastcall hk_spotDtor(void* b, uintptr_t a, uintptr_t c, uintp
     }
     return o_spotDtor(b, a, c, d);
 }
+// (17/11 23:25, Agustin: "la luz normal no se ven luces") desde la tarde los jugadores del Motor van en la ESCENA PRINCIPAL (motorvista.cpp,
+// como en el partido), pero las luces del estudio (SpotLight_*) y el sol de la DLL viven en la escena del visor del Editar: en la vista
+// Normal nada los ilumina (solo lo plano del ambiente). Con el Motor abierto se pone un sol propio en la escena principal: el sol de la
+// DLL si esta prendido, si no uno de dia (alto, adelante a la derecha, 5800 K). Al cerrar el Motor se apaga y queda sin sombra (como
+// KillSun); al volver a entrar se reusa la misma fuente si la escena es la misma. INFERIDO: que la escena principal del menu no tenga sol.
+static void* s_mainSc = nullptr; static void* s_mainSrc = nullptr; static bool s_mainOn = false, s_mainApplied = false; static int s_mainTry = 0;
+void SolEditorMotorScene(void* sc) {   // hilo del cuadro del visor (motorvista.cpp hk_CtxFrame), cada cuadro con el Motor abierto; nullptr al cerrar
+    std::lock_guard<std::mutex> lk(s_dmx);
+    if (!sc) { if (s_mainOn && s_mainSrc) { KillSun(s_mainSrc); if (LogOn()) Log("sol_editor: Motor cerrado: sol de la escena principal %p apagado y sin sombra", s_mainSc); } s_mainOn = false; s_mainTry = 0; return; }
+    if (sc == s_mainSc && s_mainSrc) { if (!s_mainOn) { s_mainOn = true; s_mainApplied = false; if (LogOn()) Log("sol_editor: Motor abierto: vuelve el sol de la escena principal %p", sc); } return; }
+    if (sc != s_mainSc) { if (s_mainSrc && s_mainOn) KillSun(s_mainSrc); s_mainSrc = nullptr; s_mainSc = sc; s_mainTry = 0; }
+    if (s_mainTry >= 3) return;
+    s_mainTry++; s_mainSrc = MakeSunIn(sc); s_mainOn = s_mainSrc != nullptr; s_mainApplied = false;
+    if (LogOn()) Log("sol_editor: Motor: sol propio %s en la escena principal %p (fuente %p, intento %d)", s_mainSrc ? "creado" : "NO se pudo crear", sc, s_mainSrc, s_mainTry);
+}
 static void DllSunFrame() {   // PluginSunlight::vf8 (hilo de render, cada cuadro)
     if (!g_cfg.solEditorDll) return;
     unsigned v = s_dver.load();
     std::lock_guard<std::mutex> lk(s_dmx);
+    if (s_mainOn && s_mainSrc && (!s_mainApplied || v != s_dapplied)) {
+        Pending e = s_dpend;
+        if (!e.on || !(e.lux > 0.0f)) { const float d[3] = { 0.40f, 0.75f, 0.53f }; for (int i = 0; i < 3; i++) { e.dir[i] = d[i]; e.rgb[i] = 1.0f; } e.kelvin = 5800.0f; e.lux = 100000.0f; e.on = true; }
+        const bool ok = ApplySun(s_mainSrc, e, g_cfg.solEditorDirSigno < 0 ? -1.0f : 1.0f); s_mainApplied = true;
+        static int nl = 0; if (nl++ < 6 && LogOn()) Log("sol_editor: Motor: sol de la escena principal aplicado (%s): %s, lux %.0f, %.0f K", ok ? "ok" : "FALLO", s_dpend.on ? "el de la DLL" : "de dia (el de la DLL esta apagado)", e.lux, e.kelvin);
+    }
     if (v == s_dapplied) return;
     s_dapplied = v;
     const float signo = g_cfg.solEditorDirSigno < 0 ? -1.0f : 1.0f;

@@ -30,8 +30,10 @@ static ID3D11RenderTargetView* s_rtv = nullptr;
 static bool s_keyWas = false;
 static std::string s_status;
 static std::string s_btnPending;   // accion de un "button =" del ini (se ejecuta fuera de g_cfgMutex)
-static ImFont* s_fontBig = nullptr; static ImFont* s_fontBold = nullptr;
+static ImFont* s_motorFont[4] = {};   // (15/11 m) letra del editor del Motor (Lack UA): 0 normal, 1 cursiva, 2 de contorno, 3 contorno cursiva (nombre de la barra)
+static ImFont* s_fontBig = nullptr; static ImFont* s_fontBold = nullptr; static ImFont* s_fontPad = nullptr;   // (14/11 n) s_fontPad: letras de los simbolos del mando
 static ID3D11ShaderResourceView* s_logo = nullptr; static float s_logoAspect = 1.0f;
+void* MenuLogoTex(float* aspect) { if (aspect) *aspect = s_logoAspect; return s_logo; }   // (15/11) el editor del Motor lo dibuja en su barra
 // (04/11) el menu se adapta a la resolucion (pedido de Agustin): letras, espacios y anchos crecen con el alto de la pantalla (1080 = 1)
 // y las letras base son mas grandes (19 -> 22 px a 1080). ui_scale queda como ajuste fino encima. Las fuentes se rasterizan al tamano
 // final (nitidas) y se rehacen si cambia la resolucion
@@ -57,7 +59,48 @@ static void BuildFonts(float H) {
         if (!io.Fonts->AddFontFromFileTTF(reg.c_str(), std::round(19.0f * k * up), nullptr, io.Fonts->GetGlyphRangesDefault())) io.Fonts->AddFontDefault();
         s_fontBig = io.Fonts->AddFontFromFileTTF(bold.c_str(), std::round(27.0f * k * up), nullptr, io.Fonts->GetGlyphRangesDefault());
         s_fontBold = io.Fonts->AddFontFromFileTTF(bold.c_str(), std::round((ui ? 20.5f : 19.0f) * k * up), nullptr, io.Fonts->GetGlyphRangesDefault());
+        {   // (14/11 n) negrita chica para L1 / R1 / OPTIONS de los simbolos del mando: a su tamano (antes la letra del menu achicada a la mitad)
+            ImFontConfig pc; pc.OversampleH = 3; pc.OversampleV = 2; pc.PixelSnapH = true;
+            static const ImWchar kPadRanges[] = { 0x0020, 0x007E, 0 };
+            s_fontPad = io.Fonts->AddFontFromFileTTF(bold.c_str(), std::round(19.0f * k * up * 0.70f), &pc, kPadRanges);
+            MvSetPadFont(s_fontPad);
+        }
+        {   // (15/11, Agustin 04:28) letra de la guia del mouse de abajo a la derecha: Lack (la que mando), a su tamano; si no esta, la del menu
+            ImFont* gf = nullptr;
+            if (GetFileAttributesW((g_cfg.baseDir + L"textures\\pes_guia.ttf").c_str()) != INVALID_FILE_ATTRIBUTES) {
+                ImFontConfig gc; gc.OversampleH = 3; gc.OversampleV = 2;
+                gf = io.Fonts->AddFontFromFileTTF((dir + "textures\\pes_guia.ttf").c_str(), std::round(21.0f * k), &gc, io.Fonts->GetGlyphRangesDefault());
+            }
+            MvSetGuideFont(gf);
+            Log("menu: guia del mouse con %s", gf ? "textures\\pes_guia.ttf" : "la letra del menu (falta textures\\pes_guia.ttf)");
+        }
         Log("menu: letra %s", ui ? "Saira Semi Condensed (textures\\pes_ui.ttf)" : "Segoe UI");
+    }
+    {   // (15/11 m) letra del editor del Motor: Lack UA (Agustin 04:29: "para el motor podes usar esta fuente?"), textures\pes_motor*.ttf.
+        // Se arma al tamano de las letras del editor (15 px x escala del editor, como UiK de motorgizmo.cpp) para que quede nitida; la de
+        // contorno al tamano del subtitulo de la transicion (16 x alto / 540). Si falta un archivo, MotorFont da la normal o la del menu.
+        // Cambiar el tamano del editor (Ver > Tamano) rehace las letras (MenuFontsDirty). [PES21FX] motor_letra = 0 la apaga.
+        s_motorFont[0] = s_motorFont[1] = s_motorFont[2] = s_motorFont[3] = nullptr;
+        if (g_cfg.motorFont) {
+            int len = WideCharToMultiByte(CP_UTF8, 0, g_cfg.baseDir.c_str(), -1, nullptr, 0, nullptr, nullptr);
+            std::string dir(len > 0 ? len - 1 : 0, '\0');
+            if (len > 1) WideCharToMultiByte(CP_UTF8, 0, g_cfg.baseDir.c_str(), -1, &dir[0], len, nullptr, nullptr);
+            const float km = std::max(1.0f, H / 1080.0f) * std::clamp(g_cfg.motorScale, 0.8f, 2.0f);
+            static const char* const kFile[4] = { "textures\\pes_motor.ttf", "textures\\pes_motor_italic.ttf", "textures\\pes_motor_line.ttf", "textures\\pes_motor_line_italic.ttf" };
+            const float kt = std::clamp(g_cfg.motorText, 0.8f, 1.5f);   // (15/11 p) Editar > Preferencias > Tamano del texto
+            const float px[4] = { std::round(15.0f * km * kt), std::round(15.0f * km * kt), std::round(16.0f * H / 540.0f), std::round(17.0f * km * kt) };
+            int n = 0;
+            for (int i = 0; i < 4; i++) {
+                const std::string p = dir + kFile[i];
+                int wl = MultiByteToWideChar(CP_UTF8, 0, p.c_str(), -1, nullptr, 0); std::wstring w(wl > 0 ? wl - 1 : 0, L'\0');
+                if (wl > 1) MultiByteToWideChar(CP_UTF8, 0, p.c_str(), -1, &w[0], wl);
+                if (GetFileAttributesW(w.c_str()) == INVALID_FILE_ATTRIBUTES) continue;
+                ImFontConfig fc; fc.OversampleH = 2; fc.OversampleV = 2;
+                s_motorFont[i] = io.Fonts->AddFontFromFileTTF(p.c_str(), std::max(8.0f, px[i]), &fc, io.Fonts->GetGlyphRangesDefault());
+                if (s_motorFont[i]) n++;
+            }
+            Log("motor: letra Lack UA, %d de 4 archivos (textures\\pes_motor*.ttf)%s", n, n ? "" : ": se usa la del menu");
+        }
     }
     {   // (04/11 n) iconos del menu (Font Awesome Free, recortado): se mezclan en la letra normal y en la negrita
         static const ImWchar kIcoRanges[] = { 0xe000, 0xf8ff, 0 };
@@ -83,6 +126,8 @@ static void BuildFonts(float H) {
     s_fontsH = H;
     Log("menu: letras para %.0f px de alto (x%.2f)", H, k);
 }
+ImFont* MotorFont(int i) { i = std::clamp(i, 0, 3); if (s_motorFont[i]) return s_motorFont[i]; if (i == 3 && s_motorFont[2]) return s_motorFont[2]; return s_motorFont[0] ? s_motorFont[0] : ImGui::GetFont(); }
+void MenuFontsDirty() { s_fontsH = -1.0f; }   // (15/11 m) las letras se rehacen en el proximo cuadro (antes del NewFrame)
 
 
 // ---------------------------------------------------------------- (11/11) ultima tecla apretada
@@ -91,7 +136,7 @@ static void BuildFonts(float H) {
 // ventana del juego al frente; no toca lo que recibe el juego.
 // (22:48, Agustin: "me referia que aparezca solo en el motor") solo se ve con el Motor en tiempo real abierto: su estudio 3D
 // (MotorPageActive, motorpage.cpp) o su panel (MotorPanelOpen). Fuera del Motor no se mira el teclado ni se dibuja nada.
-static int s_khVk = 0, s_khN = 0; static double s_khT = -1.0e9; static unsigned char s_khWas[256] = {};
+static int s_khVk = 0, s_khN = 0, s_khMods = 0; static double s_khT = -1.0e9; static unsigned char s_khWas[256] = {};   // (15/11 p) s_khMods: 1 Ctrl, 2 Shift, 4 Alt apretadas junto con la tecla
 static const char* KeyHudName(int vk, char* buf, size_t n) {
     if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) { snprintf(buf, n, "%c", (char)vk); return buf; }
     if (vk >= VK_F1 && vk <= VK_F24) { snprintf(buf, n, "F%d", vk - VK_F1 + 1); return buf; }
@@ -117,7 +162,10 @@ static bool KeyHudPoll() {
         for (int vk = 8; vk < 255; vk++) {
             if (vk >= VK_LSHIFT && vk <= VK_RMENU) continue;            // ya entran como Shift / Ctrl / Alt
             const unsigned char d = (GetAsyncKeyState(vk) & 0x8000) ? 1 : 0;
-            if (d && !s_khWas[vk]) { s_khN = (vk == s_khVk && Now() - s_khT < 1.5) ? s_khN + 1 : 1; s_khVk = vk; s_khT = Now(); }
+            if (d && !s_khWas[vk]) {
+                const bool mod = vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU;
+                const int mods = mod ? 0 : ((GetAsyncKeyState(VK_CONTROL) & 0x8000) ? 1 : 0) | ((GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 2 : 0) | ((GetAsyncKeyState(VK_MENU) & 0x8000) ? 4 : 0);
+                s_khN = (vk == s_khVk && mods == s_khMods && Now() - s_khT < 1.5) ? s_khN + 1 : 1; s_khVk = vk; s_khMods = mods; s_khT = Now(); }
             s_khWas[vk] = d;
         }
     } else memset(s_khWas, 0, sizeof s_khWas);
@@ -125,42 +173,58 @@ static bool KeyHudPoll() {
 }
 // (11/11, Agustin 22:29: "que muestre un icono de la tecla") la tecla se dibuja como una tecla de teclado: base oscura, cara clara
 // con brillo arriba y el nombre adentro; las flechas van con su triangulo y la barra espaciadora ancha.
+// (15/11 p, Agustin 05:37: "que tambien funcione el atajo, y que se muestre el icono abajo a la derecha que ya se muestran las teclas") los
+// atajos se ven enteros: Ctrl / Shift / Alt apretadas con la tecla van como teclas propias unidas con "+" (Ctrl + Z), y si la tecla hizo
+// algo en el editor del Motor, arriba va el nombre de lo que hizo (MotorKeyLabel: "Deshacer", "Preferencias"...).
 static void KeyHudDraw() {
     char nb[64]; const char* nm = KeyHudName(s_khVk, nb, sizeof nb);
     const int arrow = s_khVk == VK_UP ? 1 : s_khVk == VK_DOWN ? 2 : s_khVk == VK_LEFT ? 3 : s_khVk == VK_RIGHT ? 4 : 0;
     ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize;
     const float k = std::max(1.0f, ds.y / 1080.0f), fs = 24.0f * k, mg = 22.0f * k, pad = 8.0f * k;
-    ImFont* f = ImGui::GetFont(); const ImVec2 ts = arrow ? ImVec2(fs, fs) : f->CalcTextSizeA(fs, FLT_MAX, 0.0f, nm);
-    const float kh = 50.0f * k;                                                                   // alto de la tecla
-    float kw = std::max(kh, ts.x + 26.0f * k); if (s_khVk == VK_SPACE) kw = std::max(kw, 170.0f * k);   // ancho: cuadrada si es una letra
+    ImFont* f = ImGui::GetFont(); const float kh = 50.0f * k, fr = 17.0f * k, plusW = 22.0f * k;                    // alto de la tecla
+    const char* modName[3] = { "Ctrl", "Shift", "Alt" }; const char* caps[4]; int nc = 0;
+    for (int i = 0; i < 3; i++) if (s_khMods & (1 << i)) caps[nc++] = modName[i];
+    auto capW = [&](const char* t, int arw, bool space) { const ImVec2 ts = arw ? ImVec2(fs, fs) : f->CalcTextSizeA(fs, FLT_MAX, 0.0f, t);
+        float w2 = std::max(kh, ts.x + 26.0f * k); if (space) w2 = std::max(w2, 170.0f * k); return w2; };   // ancho: cuadrada si es una letra
+    float kwAll = 0.0f; for (int i = 0; i < nc; i++) kwAll += capW(caps[i], 0, false) + plusW;
+    const float kwMain = capW(nm, arrow, s_khVk == VK_SPACE); kwAll += kwMain;
     char rep[16] = ""; if (s_khN > 1) snprintf(rep, sizeof rep, "x%d", s_khN);
-    const float fr = 17.0f * k; const ImVec2 rs = rep[0] ? f->CalcTextSizeA(fr, FLT_MAX, 0.0f, rep) : ImVec2(0, 0);
-    const float w = pad * 2.0f + kw + (rep[0] ? rs.x + 8.0f * k : 0.0f), h = pad * 2.0f + kh; const int c = std::clamp(g_cfg.keyHud, 1, 4);
+    const ImVec2 rs = rep[0] ? f->CalcTextSizeA(fr, FLT_MAX, 0.0f, rep) : ImVec2(0, 0);
+    double lt = -1.0e9; const char* lab = MotorKeyLabel(&lt); const bool hasLab = lab && lab[0] && lt >= s_khT - 0.25 && lt - s_khT < 1.0;
+    const ImVec2 ls = hasLab ? f->CalcTextSizeA(fr, FLT_MAX, 0.0f, lab) : ImVec2(0, 0); const float labH = hasLab ? ls.y + 6.0f * k : 0.0f;
+    const float w = std::max(pad * 2.0f + kwAll + (rep[0] ? rs.x + 8.0f * k : 0.0f), hasLab ? ls.x + pad * 2.0f : 0.0f), h = pad * 2.0f + kh + labH; const int c = std::clamp(g_cfg.keyHud, 1, 4);
     const float x = (c == 1 || c == 3) ? mg : ds.x - mg - w, y = (c <= 2) ? mg : ds.y - mg - h;
     const double age = Now() - s_khT; const float a = age < 1.2 ? 1.0f : (age < 2.0 ? 1.0f - 0.5f * (float)((age - 1.2) / 0.8) : 0.5f);   // recien apretada se ve fuerte; despues queda tenue
     const float push = age < 0.12 ? 2.5f * k : 0.0f;                                              // recien apretada: la tecla baja un poco
     auto A = [a](int v) { return (int)((float)v * a); };
     dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), IM_COL32(8, 12, 20, A(120)), 9.0f * k);                       // fondo semitransparente
-    const float kx = x + pad, ky = y + pad, r = 7.0f * k, lip = 6.0f * k;                         // lip = canto de abajo de la tecla
-    dl->AddRectFilled(ImVec2(kx, ky + push), ImVec2(kx + kw, ky + kh), IM_COL32(38, 42, 52, A(235)), r);                // base (canto)
-    const ImVec2 f0(kx + 2.0f * k, ky + push + 1.0f * k), f1(kx + kw - 2.0f * k, ky + kh - lip + push * 0.6f);         // cara de arriba
-    dl->AddRectFilled(f0, f1, IM_COL32(236, 239, 244, A(240)), r - 1.0f * k);
-    dl->AddRectFilled(f0, ImVec2(f1.x, f0.y + (f1.y - f0.y) * 0.45f), IM_COL32(255, 255, 255, A(70)), r - 1.0f * k);    // brillo
-    dl->AddRect(ImVec2(kx, ky + push), ImVec2(kx + kw, ky + kh), IM_COL32(0, 0, 0, A(170)), r, 0, 1.2f * k);
-    const ImVec2 ctr((f0.x + f1.x) * 0.5f, (f0.y + f1.y) * 0.5f); const ImU32 ink = IM_COL32(22, 26, 34, A(255));
-    if (arrow) {
-        const float q = 9.0f * k; ImVec2 p0, p1, p2;
-        if (arrow == 1) { p0 = ImVec2(ctr.x, ctr.y - q); p1 = ImVec2(ctr.x - q, ctr.y + q * 0.7f); p2 = ImVec2(ctr.x + q, ctr.y + q * 0.7f); }
-        else if (arrow == 2) { p0 = ImVec2(ctr.x, ctr.y + q); p1 = ImVec2(ctr.x + q, ctr.y - q * 0.7f); p2 = ImVec2(ctr.x - q, ctr.y - q * 0.7f); }
-        else if (arrow == 3) { p0 = ImVec2(ctr.x - q, ctr.y); p1 = ImVec2(ctr.x + q * 0.7f, ctr.y + q); p2 = ImVec2(ctr.x + q * 0.7f, ctr.y - q); }
-        else { p0 = ImVec2(ctr.x + q, ctr.y); p1 = ImVec2(ctr.x - q * 0.7f, ctr.y - q); p2 = ImVec2(ctr.x - q * 0.7f, ctr.y + q); }
-        dl->AddTriangleFilled(p0, p1, p2, ink);
-    } else if (s_khVk == VK_SPACE) {
-        dl->AddRectFilled(ImVec2(ctr.x - kw * 0.28f, ctr.y + 5.0f * k), ImVec2(ctr.x + kw * 0.28f, ctr.y + 8.0f * k), ink, 1.5f * k);   // la rayita de la barra
-        const ImVec2 t2 = f->CalcTextSizeA(fr, FLT_MAX, 0.0f, nm);
-        dl->AddText(f, fr, ImVec2(ctr.x - t2.x * 0.5f, ctr.y - t2.y * 0.5f - 6.0f * k), ink, nm);
-    } else dl->AddText(f, fs, ImVec2(ctr.x - ts.x * 0.5f, ctr.y - ts.y * 0.5f), ink, nm);
-    if (rep[0]) dl->AddText(f, fr, ImVec2(kx + kw + 8.0f * k, y + (h - rs.y) * 0.5f), IM_COL32(255, 255, 255, A(230)), rep);
+    if (hasLab) dl->AddText(f, fr, ImVec2(x + pad, y + pad * 0.6f), IM_COL32(120, 236, 160, A(240)), lab);             // lo que hizo el atajo
+    const float r = 7.0f * k, lip = 6.0f * k, ky = y + pad + labH;                                 // lip = canto de abajo de la tecla
+    auto cap = [&](float kx, float kw, const char* t, int arw, bool space) {
+        dl->AddRectFilled(ImVec2(kx, ky + push), ImVec2(kx + kw, ky + kh), IM_COL32(38, 42, 52, A(235)), r);            // base (canto)
+        const ImVec2 f0(kx + 2.0f * k, ky + push + 1.0f * k), f1(kx + kw - 2.0f * k, ky + kh - lip + push * 0.6f);     // cara de arriba
+        dl->AddRectFilled(f0, f1, IM_COL32(236, 239, 244, A(240)), r - 1.0f * k);
+        dl->AddRectFilled(f0, ImVec2(f1.x, f0.y + (f1.y - f0.y) * 0.45f), IM_COL32(255, 255, 255, A(70)), r - 1.0f * k);    // brillo
+        dl->AddRect(ImVec2(kx, ky + push), ImVec2(kx + kw, ky + kh), IM_COL32(0, 0, 0, A(170)), r, 0, 1.2f * k);
+        const ImVec2 ctr((f0.x + f1.x) * 0.5f, (f0.y + f1.y) * 0.5f); const ImU32 ink = IM_COL32(22, 26, 34, A(255));
+        if (arw) {
+            const float q = 9.0f * k; ImVec2 p0, p1, p2;
+            if (arw == 1) { p0 = ImVec2(ctr.x, ctr.y - q); p1 = ImVec2(ctr.x - q, ctr.y + q * 0.7f); p2 = ImVec2(ctr.x + q, ctr.y + q * 0.7f); }
+            else if (arw == 2) { p0 = ImVec2(ctr.x, ctr.y + q); p1 = ImVec2(ctr.x + q, ctr.y - q * 0.7f); p2 = ImVec2(ctr.x - q, ctr.y - q * 0.7f); }
+            else if (arw == 3) { p0 = ImVec2(ctr.x - q, ctr.y); p1 = ImVec2(ctr.x + q * 0.7f, ctr.y + q); p2 = ImVec2(ctr.x + q * 0.7f, ctr.y - q); }
+            else { p0 = ImVec2(ctr.x + q, ctr.y); p1 = ImVec2(ctr.x - q * 0.7f, ctr.y - q); p2 = ImVec2(ctr.x - q * 0.7f, ctr.y + q); }
+            dl->AddTriangleFilled(p0, p1, p2, ink);
+        } else if (space) {
+            dl->AddRectFilled(ImVec2(ctr.x - kw * 0.28f, ctr.y + 5.0f * k), ImVec2(ctr.x + kw * 0.28f, ctr.y + 8.0f * k), ink, 1.5f * k);   // la rayita de la barra
+            const ImVec2 t2 = f->CalcTextSizeA(fr, FLT_MAX, 0.0f, t);
+            dl->AddText(f, fr, ImVec2(ctr.x - t2.x * 0.5f, ctr.y - t2.y * 0.5f - 6.0f * k), ink, t);
+        } else { const ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, t); dl->AddText(f, fs, ImVec2(ctr.x - ts.x * 0.5f, ctr.y - ts.y * 0.5f), ink, t); }
+    };
+    float kx = x + pad;
+    for (int i = 0; i < nc; i++) { const float cw = capW(caps[i], 0, false); cap(kx, cw, caps[i], 0, false); kx += cw;
+        const ImVec2 ps = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, "+"); dl->AddText(f, fs, ImVec2(kx + (plusW - ps.x) * 0.5f, ky + (kh - ps.y) * 0.5f), IM_COL32(255, 255, 255, A(210)), "+"); kx += plusW; }
+    cap(kx, kwMain, nm, arrow, s_khVk == VK_SPACE); kx += kwMain;
+    if (rep[0]) dl->AddText(f, fr, ImVec2(kx + 8.0f * k, ky + (kh - rs.y) * 0.5f), IM_COL32(255, 255, 255, A(230)), rep);
 }
 
 HWND OverlayHwnd() { return s_hwnd; }   // (11/11) menumouse.cpp
@@ -169,6 +233,7 @@ void OverlayResize() { if (s_rtv) { s_rtv->Release(); s_rtv = nullptr; } }
 static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     // (1/11) rueda del mouse para el zoom de la camara libre (mensaje normal o raw input, por si el juego pide NOLEGACY)
     // (11/11) sin camara libre la rueda va a los menus nativos del juego (menumouse.cpp: arriba / abajo)
+    if (!g_menuOpen && m == WM_CHAR && MotorUiChar((unsigned)w)) return 0;      // (17/11 07:27) buscador de clips del Motor
     if (!g_menuOpen) {
         int wd = 0;
         if (m == WM_MOUSEWHEEL) wd = (int)GET_WHEEL_DELTA_WPARAM(w);
@@ -178,9 +243,9 @@ static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                 if (ri.data.mouse.usButtonFlags & RI_MOUSE_WHEEL) wd = (int)(short)ri.data.mouse.usButtonData;
             }
         }
-        if (wd != 0) { if (FreeCamActive()) FreeCamWheel(wd); else MenuMouseWheel(wd); }
+        if (wd != 0) { if (MotorUiWheel(wd)) {} else if (FreeCamActive()) FreeCamWheel(wd); else MenuMouseWheel(wd); }   // (15/11 h) sobre un panel del editor del Motor la rueda es del panel
     }
-    if ((g_menuOpen || g_inspectOn) && s_init) {
+    if ((g_menuOpen || g_inspectOn || MotorLabWantsInput()) && s_init) {      // (21/11) laboratorio de animaciones: su ventana usa el mouse
         ImGui_ImplWin32_WndProcHandler(h, m, w, l);
         ImGuiIO& io = ImGui::GetIO();
         bool mouse = m >= WM_MOUSEFIRST && m <= WM_MOUSELAST;
@@ -279,6 +344,8 @@ static bool s_rail = false;                       // barra lateral solo con icon
 static bool s_slim = false;                       // botones de arriba solo con iconos (ventana muy angosta)
 static int s_winReq = -1;                         // 0 ventana, 1 grande, 2 panel a la derecha: se aplica al proximo Begin
 static MvPad s_pad;                               // (14/11) el mando de este cuadro (menuvisual.cpp)
+static double s_shareTapT = -1.0;                 // (15/11) ultimo toque CORTO de SHARE, medido desde que se apreto de verdad (HUD de la camara libre)
+static bool s_hudFresh = false, s_hudNewCam = false;   // (15/11) el HUD de la camara libre recien aparece (camara prendida o menu cerrado) / la camara recien se prendio
 // (14/11, Agustin: "el menu debe reconocer si esta usando mando o teclado para adaptarse con lo ultimo tocado") 0 teclado / mouse, 1 mando
 static int s_lastDev = 0;
 static bool PadUi() { return s_lastDev == 1 && s_pad.connected; }
@@ -978,7 +1045,7 @@ static void DrawWindNowPanel() {
     if (!w.on) {
         ImGui::TextDisabled("%s", TRS("Viento unico apagado: prende 'Viento distinto en cada partido' y 'Viento unico (rachas reales)'."));
         if (Anim()) {   // (14/11) igual se puede elegir el rumbo fijo en la cancha
-            MvWindIn wi; wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now(); { auto& L = g_cfg.live; wi.preset = &L[501][0]; wi.change = &L[501][3]; wi.gusts = &L[502][0]; wi.gustLen = &L[502][1]; wi.turbP = &L[502][2]; wi.veer = &L[502][3]; wi.shelterMode = &L[503][0]; wi.shelter = &L[503][1]; wi.grass = &L[503][2]; wi.cloth = &L[503][3]; }
+            MvWindIn wi; wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now(); { auto& L = g_cfg.live; wi.preset = &L[501][0]; wi.change = &L[501][3]; wi.gusts = &L[502][0]; wi.gustLen = &L[502][1]; wi.turbP = &L[502][2]; wi.veer = &L[502][3]; wi.shelterMode = &L[503][0]; wi.shelter = &L[503][1]; wi.grass = &L[503][2]; wi.cloth = &L[503][3]; if (L[500][2] < 0.05f) L[500][2] = 1.8f; wi.height = &L[500][2]; wi.hem = &L[508][3]; wi.flag = &L[514][1]; const WindHeight hp{ std::clamp(L[508][0], 0.0f, 1.0f), std::clamp(L[508][1], 0.0f, 1.0f), std::clamp(L[508][2], 1.0f, 3.0f), std::clamp(L[500][2], 0.2f, 10.0f) }; wi.kGrass = WindHeightK(hp, 0.08f); wi.kCloth = WindHeightK(hp, 1.2f); wi.kFlag = WindHeightK(hp, 1.4f); wi.kHead = WindHeightK(hp, 1.8f); wi.kTop = WindHeightK(hp, 20.0f); }
             MvWindWidget(wi);
         }
         return;
@@ -990,11 +1057,11 @@ static void DrawWindNowPanel() {
     }
     { const WindHeight hp = g_windHeight;   // (14/11) viento a cada altura (fila 508)
       ImGui::TextDisabled(TRS("Al ras del pasto %.1f m/s, ropa %.1f, cabeza %.1f, arriba de la tribuna (20 m) %.1f"),
-          w.speed * w.grassK, w.speed * w.clothK, w.speed, w.speed * WindHeightK(hp, 20.0f)); }
+          w.speed * w.grassK, w.speed * w.clothK, w.speed * WindHeightK(hp, 1.8f), w.speed * WindHeightK(hp, 20.0f)); }
     if (Anim()) {   // (14/11) la cancha con el viento que vuela; arrastrar fija el rumbo
         ImGui::TextDisabled(TRS("En 2 s: %.1f m/s. Promedio del partido: %.1f m/s"), w.soonSpeed, w.base);
         MvWindIn wi; wi.live = true; wi.speed = w.speed; wi.dirDeg = w.dirDeg; wi.soonSpeed = w.soonSpeed; wi.soonDirDeg = w.soonDirDeg; wi.gust = w.gust; wi.turb = w.turb;
-        wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now(); { auto& L = g_cfg.live; wi.preset = &L[501][0]; wi.change = &L[501][3]; wi.gusts = &L[502][0]; wi.gustLen = &L[502][1]; wi.turbP = &L[502][2]; wi.veer = &L[502][3]; wi.shelterMode = &L[503][0]; wi.shelter = &L[503][1]; wi.grass = &L[503][2]; wi.cloth = &L[503][3]; }
+        wi.fixed = &g_cfg.live[501][1]; wi.fixedDeg = &g_cfg.live[501][2]; wi.strength = &g_cfg.live[353][0]; wi.anim = true; wi.k = UIK(); wi.now = Now(); { auto& L = g_cfg.live; wi.preset = &L[501][0]; wi.change = &L[501][3]; wi.gusts = &L[502][0]; wi.gustLen = &L[502][1]; wi.turbP = &L[502][2]; wi.veer = &L[502][3]; wi.shelterMode = &L[503][0]; wi.shelter = &L[503][1]; wi.grass = &L[503][2]; wi.cloth = &L[503][3]; if (L[500][2] < 0.05f) L[500][2] = 1.8f; wi.height = &L[500][2]; wi.hem = &L[508][3]; wi.flag = &L[514][1]; const WindHeight hp{ std::clamp(L[508][0], 0.0f, 1.0f), std::clamp(L[508][1], 0.0f, 1.0f), std::clamp(L[508][2], 1.0f, 3.0f), std::clamp(L[500][2], 0.2f, 10.0f) }; wi.kGrass = WindHeightK(hp, 0.08f); wi.kCloth = WindHeightK(hp, 1.2f); wi.kFlag = WindHeightK(hp, 1.4f); wi.kHead = WindHeightK(hp, 1.8f); wi.kTop = WindHeightK(hp, 20.0f); }
         MvWindWidget(wi);
     } else {
     ImGui::TextDisabled(TRS("En 2 s: %.1f m/s. Promedio del partido: %.1f m/s"), w.soonSpeed, w.base);
@@ -1143,9 +1210,13 @@ static void DrawGroup(MenuGroup& g, int gid) {
         ci.rmb = front && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
         ci.anim = Anim(); ci.k = UIK(); ci.now = Now();
         ci.pad = s_pad; ci.padOn = &g_cfg.camPad; ci.padFly = FreeCamPadWanted() && s_pad.connected; ci.padGiven = FreeCamPadState().given; ci.padUi = PadUi();   // (14/11) iconos del mando con su funcion
+        ci.vert = &g_cfg.camVert;   // (15/11) subir / bajar mas rapido o mas lento
         const int padWas = g_cfg.camPad;
         if (MvCamWidget(ci)) PushRecent(g.title);
         if (g_cfg.camPad != padWas) { SaveOption("camara_mando", g_cfg.camPad ? "1" : "0"); if (g_cfg.camPad) FreeCamPadTake(); }
+        {   // (15/11) camara_vertical va al ini al soltar el mouse (no en cada cuadro del arrastre); SaveOption lee y reescribe el ini
+            static float s_vSaved = -1.0f; if (s_vSaved < 0.0f) s_vSaved = g_cfg.camVert;
+            if (fabsf(g_cfg.camVert - s_vSaved) > 1e-4f && !ImGui::IsMouseDown(0)) { s_vSaved = g_cfg.camVert; char vb[24]; snprintf(vb, sizeof vb, "%.3f", g_cfg.camVert); SaveOption("camara_vertical", vb); Log("camara libre: subir / bajar x%.2f de la velocidad", g_cfg.camVert); } }
     }
     if (Anim() && g.id == "CamaraLenta") {
         ImGui::Spacing();
@@ -1857,6 +1928,10 @@ static void DrawCards(const std::vector<int>& ids, bool labels) {
 static void DrawToolsPage() {
     PageTitle(kIcoTools, TRS("Herramientas"), TRS("Para ver que hace el mod y pasarle datos a Claude; no hacen falta para jugar."));
     ImGui::Spacing();
+    if (ImGui::CollapsingHeader(TRS("Laboratorio de animaciones"), ImGuiTreeNodeFlags_DefaultOpen)) {      // (21/11 3icxbh) motorlab.cpp
+        if (ImGui::Button(TRS(MotorLabWantsInput() ? "Cerrar el laboratorio (F8)" : "Abrir el laboratorio (F8)"), ImVec2(240 * UIK(), 0))) MotorLabToggle();
+        ImGui::TextWrapped("%s", TRS("En un partido: banca real del estadio con jugadores del Motor sentados, cambiar sus animaciones y ver nombres, cuadros, esqueleto y valores encima de cada uno. Necesita Estadio > Banco de suplentes = Si."));
+    }
     if (ImGui::CollapsingHeader(TRS("Inspector y catalogo de shaders"), ImGuiTreeNodeFlags_DefaultOpen)) {
         { bool ins = g_inspectOn.load(); if (ins) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.2f, 1));
           if (ImGui::Button(ins ? "Inspector: ON" : "Inspector", ImVec2(130 * UIK(), 0))) { g_inspectOn = !ins; s_status = TRS(ins ? "Inspector apagado" : "Inspector visual: flechas sobre cada parte conocida; clic en una ficha para ver sus texturas"); }
@@ -1929,12 +2004,15 @@ static void DrawSettingsPage() {
     const float lw = 230.0f * UIK();
     auto row = [&](const char* label) { ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(label); ImGui::SameLine(lw); };
     {   // (27/10) idioma del menu: se guarda en [PES21FX] language
-        static const char* const kLangs[3] = { "Espa\xC3\xB1ol", "English", "Portugu\xC3\xAAs" };
+        const char* const kLangs[4] = { "Espa\xC3\xB1ol", "English", "Portugu\xC3\xAAs", TRS("Como el juego (autom\xC3\xA1tico)") };
         static const char* const kLangKey[3] = { "es", "en", "pt" };
-        int lg = (g_cfg.lang >= 0 && g_cfg.lang <= 2) ? g_cfg.lang : 0;
+        int lg = g_cfg.langAuto ? 3 : (g_cfg.lang >= 0 && g_cfg.lang <= 2) ? g_cfg.lang : 0;
         row("Idioma / Language / Idioma");
         ImGui::SetNextItemWidth(200 * UIK());
-        if (ImGui::Combo("##idioma", &lg, kLangs, 3)) { g_cfg.lang = lg; SaveOption("language", kLangKey[lg]); LoadMenuLang(); }
+        if (ImGui::Combo("##idioma", &lg, kLangs, 4)) {      // (15/11) elegir un idioma a mano apaga el automatico
+            if (lg == 3) { g_cfg.langAuto = 1; SaveOption("idioma_auto", "1"); }
+            else { g_cfg.langAuto = 0; g_cfg.lang = lg; SaveOption("idioma_auto", "0"); SaveOption("language", kLangKey[lg]); LoadMenuLang(); } }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("'Como el juego' usa el idioma de textos que elegiste en el juego. Si el juego est\xC3\xA1 en un idioma que el men\xC3\xBA no tiene, queda el \xC3\xBAltimo elegido."));
     }
     {   // (31/10) que el juego no reciba las teclas mientras se escribe en el menu: [PES21FX] bloquear_teclado
         const char* kBlk[3] = { TRS("Siempre"), TRS("No mientras escribo"), TRS("No con el menu abierto") };
@@ -1943,6 +2021,13 @@ static void DrawSettingsPage() {
         ImGui::SetNextItemWidth(260 * UIK());
         if (ImGui::Combo("##bloqteclas", &bk, kBlk, 3)) { g_cfg.blockKeys = bk; SaveOption("bloquear_teclado", std::to_string(bk)); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Que el juego no reciba las teclas mientras escribis en el menu (buscador, nombres). 'No al escribir' = solo con un campo de texto activo; 'No con el menu' = mientras el menu esta abierto."));
+    }
+    {   // (15/11) ventana sin bordes a pantalla completa: [PES21FX] ventana_sin_bordes (borderless.cpp); vale al volver a abrir el juego
+        bool bl = g_cfg.borderless != 0;
+        row(TRS("Ventana sin bordes a pantalla completa"));
+        if (ImGui::Checkbox("##ventanasinbordes", &bl)) { g_cfg.borderless = bl ? 1 : 0; SaveOption("ventana_sin_bordes", bl ? "1" : "0"); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("El juego ocupa toda la pantalla pero sigue siendo una ventana: se puede pasar a otro programa sin que se minimice ni parpadee. Hay que elegir Ventana y la resolucion del monitor en la configuracion del juego (settings.exe). Vale al volver a abrir el juego."));
+        ImGui::SameLine(); ImGui::TextDisabled("%s", TRS("(al volver a abrir el juego)"));
     }
     {   // (11/11) mouse en los menus nativos del juego: [PES21FX] mouse_menus
         bool mm = g_cfg.menuMouse != 0;
@@ -2025,10 +2110,20 @@ static void DrawSettingsPage() {
         int cc = std::clamp(g_cfg.menuCursor, 0, 2); ImGui::SetNextItemWidth(320.0f * UIK());
         if (ImGui::Combo(TRS("Cursor del menu"), &cc, cn, 3)) { if (g_cfg.menuCursor) s_curOn = g_cfg.menuCursor; g_cfg.menuCursor = cc; char b[8]; snprintf(b, sizeof(b), "%d", cc); SaveOption("menu_cursor", b); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Tambien con el boton Cursor de arriba o F1. Es el mismo con el menu abierto o cerrado. Con un mando conectado se esconde solo si no moves el mouse."));
+        {   // (15/11 p, Agustin 05:38: "una opcion para agrandar el cursor general un poco o achicarlo") [PES21FX] cursor_tamano
+            int pc = (int)std::lround(g_cfg.cursorScale * 100.0f); ImGui::SetNextItemWidth(320.0f * UIK());
+            if (ImGui::SliderInt(TRS("Tamano del cursor"), &pc, 75, 200, "%d %%")) g_cfg.cursorScale = std::clamp((float)pc / 100.0f, 0.75f, 2.0f);
+            if (ImGui::IsItemDeactivatedAfterEdit()) { char b[16]; snprintf(b, sizeof(b), "%.2f", g_cfg.cursorScale); SaveOption("cursor_tamano", b); }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Agranda o achica el cursor dibujado: el del menu, el de los menus del juego, el de la repeticion y los del Motor (tambien la flecha doble de los paneles). 100 % = como venia."));
+            }
     }
     {   bool nd = g_cfg.camNoDof != 0;   // (14/11 h) camara libre sin desenfoque de profundidad
         if (ImGui::Checkbox(TRS("Camara libre sin desenfoque de profundidad"), &nd)) { g_cfg.camNoDof = nd ? 1 : 0; SaveOption("camara_sin_dof", nd ? "1" : "0"); }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con la camara libre prendida se apaga el desenfoque de profundidad del juego (fondo y primer plano) y el bokeh: todo queda nitido."));
+    }
+    {   bool nm = g_cfg.camNoMblur != 0;   // (15/11, Agustin: "permitirme apagar o prender el desenfoque de movimiento")
+        if (ImGui::Checkbox(TRS("Camara libre sin desenfoque de movimiento"), &nm)) { g_cfg.camNoMblur = nm ? 1 : 0; SaveOption("camara_sin_desenfoque_mov", nm ? "1" : "0"); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", TRS("Con la camara libre prendida no hay desenfoque de movimiento (ni el barrido de los cortes de la repeticion): al moverla todo queda nitido. Con el mando L3, con el teclado M."));
     }
     {   bool rs = g_cfg.replaySlow != 0;   // (14/11 g) la repeticion normal en camara lenta (velocidad de la flecha derecha / SlowMoServer)
         if (ImGui::Checkbox(TRS("Repeticion en camara lenta"), &rs)) { g_cfg.replaySlow = rs ? 1 : 0; SaveOption("repeticion_lenta", rs ? "1" : "0"); }
@@ -2287,11 +2382,17 @@ static void DrawMenu() {
             ImGui::EndPopup();
         }
         if (ImGui::GetContentRegionAvail().x - ImGui::GetItemRectMax().x + ImGui::GetWindowPos().x > 210.0f * UIK()) ImGui::SameLine();   // (08/11) si no entra, el buscador baja a su propia fila
+        const bool searchByKb = s_focusSearch;   // (16/11) Ctrl+F: el buscador se abre con el teclado, nunca con el teclado en pantalla
         if (s_focusSearch) { ImGui::SetKeyboardFocusHere(); s_focusSearch = false; }
         ImGui::SetNextItemWidth(std::max(140.0f * UIK(), ImGui::GetContentRegionAvail().x - (s_search[0] ? ImGui::GetFrameHeight() + 6.0f * UIK() : 0.0f)));
         ImGui::InputTextWithHint("##buscar", IcoL(kIcoSearch, TRS(PadUi() && g_cfg.menuPad ? "Buscar opcion (OPTIONS: teclado del mando)" : "Buscar opcion (Ctrl+F)")).c_str(), s_search, sizeof(s_search));
         // (14/11) con el mando: elegir el buscador (cruz / triangulo) abre el teclado en pantalla; mientras esta abierto el campo se suelta
-        if (ImGui::IsItemActivated() && s_pad.connected && g_cfg.menuPad && GImGui->NavInputSource == ImGuiInputSource_Gamepad) MvVkOpen();
+        // (16/11, Agustin: "el menu de insert detecta el mando todo el tiempo en el buscador aunque no este tocando el mando y quiera usar
+        // el teclado") ImGui deja NavInputSource en "mando" desde el ultimo boton del mando y no lo cambia con el mouse ni con las letras:
+        // un clic o Ctrl+F en el buscador abria el teclado en pantalla y soltaba el campo. Ahora solo se abre si lo ultimo tocado es el mando
+        // y el buscador se eligio con el mando (no con clic ni Ctrl+F); y si se vuelve al teclado / mouse, el teclado en pantalla se cierra.
+        if (ImGui::IsItemActivated() && PadUi() && g_cfg.menuPad && !searchByKb && !ImGui::IsMouseClicked(ImGuiMouseButton_Left) && GImGui->NavInputSource == ImGuiInputSource_Gamepad) MvVkOpen();
+        if (MvVkIsOpen() && !PadUi()) MvVkClose();
         if (MvVkIsOpen() && ImGui::IsItemActive()) ImGui::ClearActiveID();
         if (s_search[0]) { ImGui::SameLine(0, 4.0f * UIK()); if (ImGui::Button(s_iconsOk ? (Ico(kIcoX) + "##limpiar").c_str() : "x", ImVec2(ImGui::GetFrameHeight(), 0))) s_search[0] = 0; }
     }
@@ -2658,6 +2759,47 @@ static bool SkCopy(void* dst, const void* src, size_t n) {
     if (!SkReadable(src, n)) return false;
     __try { memcpy(dst, src, n); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+// (17/11 06:58, Agustin con capturas: "faltan los nombres", "cuerpo ahora solo es los brazos", "ropa esta mal") el nombre del hueso no
+// salia nunca: + 0x08 no daba texto en estos esqueletos, y como el grupo del cuerpo se sacaba del nombre, todo el cuerpo caia en
+// "Ropa". Ahora se prueban, en orden, el texto en + 0x08, el texto del puntero que hay ahi (cadena con cabecera) y + 0x08 / + 0x10
+// dentro de ese puntero; si nada da texto, el hash del hueso (+ 0x10, StrCode32) contra una tabla de nombres candidatos. Las
+// primeras veces se anotan en el log los bytes del hueso para saber el formato real.
+#include "skbonenames.inc"
+static bool SkIdent(const char* t, char* out, int n) {
+    int q = 0; while (q < n - 1 && t[q] && ((t[q] >= 'a' && t[q] <= 'z') || (t[q] >= 'A' && t[q] <= 'Z') || (t[q] >= '0' && t[q] <= '9') || t[q] == '_' || t[q] == '.')) q++;
+    if (q < 2 || (t[q] != 0 && q < n - 1)) return false;
+    memcpy(out, t, (size_t)q); out[q] = 0; return true;
+}
+static bool SkBoneName(const char* bone, char* out, int n) {
+    const char* np = nullptr; char tb[48] = {};
+    if (SkCopy(&np, bone + 0x08, 8) && np) {
+        if (SkCopy(tb, np, 40) && SkIdent(tb, out, n)) return true;
+        const char* p2 = nullptr;
+        if (SkCopy(&p2, np, 8) && p2 && SkCopy(tb, p2, 40) && SkIdent(tb, out, n)) return true;
+        if (SkCopy(tb, np + 0x08, 40) && SkIdent(tb, out, n)) return true;
+        if (SkCopy(tb, np + 0x10, 40) && SkIdent(tb, out, n)) return true;
+    }
+    uint32_t h = 0;
+    if (SkCopy(&h, bone + 0x10, 4) && h) {
+        int lo = 0, hi = (int)(sizeof kSkNames / sizeof kSkNames[0]) - 1;
+        while (lo <= hi) { const int m = (lo + hi) / 2; if (kSkNames[m].h == h) { snprintf(out, n, "%s", kSkNames[m].n); return true; } if (kSkNames[m].h < h) lo = m + 1; else hi = m - 1; }
+        snprintf(out, n, "#%08X", h); return false;
+    }
+    return false;
+}
+// (17/11 07:55, Agustin: "mejora como se plasman los huesos, los grupos que no se deformen que sean entendibles") el grupo sale del
+// NOMBRE en los cuatro esqueletos (antes solo en el del cuerpo; el de la "cara" trae tambien pecho, cuello y cabeza, y el de las manos el
+// antebrazo): 1 cara (skf_), 2 cuerpo (sk_ / skl_ / root), 4 deformacion (dsk_, ayudas de piel), 3 ropa y el resto. Cada grupo con su color.
+// El mismo hueso en dos esqueletos (el antebrazo esta en el cuerpo y en la mano) se dibuja una sola vez: el doble daba piezas encimadas
+// que parecian deformadas.
+static int SkGroup(const char* nm, bool named) {
+    if (!named) return 2;
+    char lw[8] = {}; for (int q = 0; q < 5 && nm[q]; q++) lw[q] = (char)tolower((unsigned char)nm[q]);
+    if (!strncmp(lw, "skf_", 4)) return 1;
+    if (!strncmp(lw, "dsk_", 4)) return 4;
+    if (!strncmp(lw, "sk_", 3) || !strncmp(lw, "skl_", 4) || !strncmp(lw, "root", 4)) return 2;
+    return 3;
+}
 static void DrawSkeletonView() {
     std::vector<float> S; if (!NamedCBRead("SceneCB", S) || S.size() < 16) return;
     const float* PV = &S[0];   // m_projectionView (mundo -> recorte), como headshadow.cpp
@@ -2676,26 +2818,48 @@ static void DrawSkeletonView() {
         if (fabsf(nx) > 1.5f || fabsf(ny) > 1.5f) return false;
         o = ImVec2(rx + (nx * 0.5f + 0.5f) * rw, ry + (0.5f - 0.5f * ny) * rh); return true;
     };
+    // (17/11 b, Agustin 03:47 con captura: "la vista de huesos esta bastante desfazada al modelo") en el Motor los huesos salian mas
+    // chicos que el modelo, creciendo el error con la altura (unos 5 % con un jugador de 1,89 m). La estatura va como escala del
+    // hueso raiz en el controlador del clip (motorjug.cpp) y estos huesos se leen sin ella (INFERIDO de la captura): en el Motor se
+    // multiplican por esa escala (estatura x tamano pedido).
+    float mScale = 1.0f; { MotorJugState J; if (MotorPageActive()) { MotorJugGet(&J); if (J.seen && J.rootScale > 0.05f && J.rootScale < 20.0f) mScale = J.rootScale; }
+        static float s_last = 0.0f; if (mScale != s_last) { s_last = mScale; static int nl = 0; if (nl++ < 8) Log("Esqueleto: escala de la raiz en el Motor %.4f", mScale); } }
     static const int kOff[4] = { 0x88, 0x90, 0x98, 0xA0 };
-    static const ImU32 kCol[4] = { IM_COL32(255, 255, 255, 220), IM_COL32(90, 210, 255, 220), IM_COL32(90, 210, 255, 220), IM_COL32(255, 210, 60, 230) };
+    // color por grupo (indice = SkGroup): cara amarillo, cuerpo blanco, ropa violeta, deformacion celeste
+    static const ImU32 kGCol[5] = { IM_COL32(255, 255, 255, 220), IM_COL32(255, 210, 60, 235), IM_COL32(245, 245, 245, 230), IM_COL32(200, 130, 255, 220), IM_COL32(90, 210, 255, 200) };
     int drawn = 0, bones = 0;
+    const int grp = std::clamp((int)(g_cfg.live[426][1] + 0.5f), 0, 3);
+    const bool names = g_cfg.live[426][0] > 1.5f; const float kk = std::max(1.0f, vp->Size.y / 1080.0f);
+    ImVec2 mouse(-1.0e6f, -1.0e6f); { HWND h = OverlayHwnd(); POINT p{}; RECT rc{}; if (h && GetCursorPos(&p) && ScreenToClient(h, &p) && GetClientRect(h, &rc) && rc.right > rc.left && rc.bottom > rc.top) mouse = ImVec2(vp->Pos.x + (float)p.x * vp->Size.x / (float)(rc.right - rc.left), vp->Pos.y + (float)p.y * vp->Size.y / (float)(rc.bottom - rc.top)); }
+    float bestD2 = 16.0f * 16.0f * kk * kk; ImVec2 bestPt; ImU32 bestCol = 0; char bestNm[40] = {};
     for (int sl = 0; sl < kCharSlots && drawn < 24; sl++) {
         if (!alive[sl] || !ci[sl].node) continue;
         float W[12]; if (!CharNodeMatrix(ci[sl].node, W)) continue;
+        static uint32_t seenH[1600]; int nSeen = 0;      // hashes ya dibujados en este personaje
         for (int r = 0; r < 4; r++) {
             void* rig = nullptr; if (!SkCopy(&rig, (const char*)ci[sl].node + kOff[r], 8) || !rig) continue;
             const char* arr = nullptr; int n = 0;
             if (!SkCopy(&arr, (const char*)rig + 0x28, 8) || !arr || !SkCopy(&n, (const char*)rig + 0x30, 4) || n < 2 || n > 400) continue;
-            static ImVec2 pt[400]; static bool ok[400]; static float wp[400][3];
+            static ImVec2 pt[400]; static bool ok[400], dup[400]; static float wp[400][3]; static signed char gr[400];
+            { static int s_dump = 0; if (s_dump < 4 && r == (s_dump % 4)) { s_dump++; for (int b = 0; b < 3 && b < n; b++) { unsigned char by[0x20] = {}, tx[24] = {}; const char* np = nullptr; char nm[48] = "?";
+                SkCopy(by, arr + (size_t)b * 0xc0, sizeof by); SkCopy(&np, arr + (size_t)b * 0xc0 + 0x08, 8); if (np) SkCopy(tx, np, sizeof tx); SkBoneName(arr + (size_t)b * 0xc0, nm, sizeof nm);
+                char hx[200]; int o = 0; for (int q = 0; q < 0x20; q++) o += snprintf(hx + o, sizeof hx - o, "%02x", by[q]); o += snprintf(hx + o, sizeof hx - o, " | "); for (int q = 0; q < 24; q++) o += snprintf(hx + o, sizeof hx - o, "%02x", tx[q]);
+                Log("Esqueleto: esqueleto %d (de %d huesos) hueso %d: %s -> nombre '%s'", r, n, b, hx, nm); } } }
             // (09/11) manos y cara cuelgan de un hueso del cuerpo (rig + 0x120 = rig padre, + 0x128 = hueso de enganche): sus
             // transformaciones estan en el espacio de ese hueso (0x1419f8820 arma sus matrices con la inversa del enganche), asi que
             // se componen con la transformacion actual del hueso de enganche para llevarlas al espacio del modelo
             float A[12]; bool att = false;
             if (r > 0) { const void* prig = nullptr; const char* ab = nullptr; const void* ax = nullptr;
                 if (SkCopy(&prig, (const char*)rig + 0x120, 8) && prig && SkCopy(&ab, (const char*)rig + 0x128, 8) && ab && SkCopy(&ax, ab + 0x18, 8) && ax && SkCopy(A, ax, sizeof A)) att = true; }
+            const int nSeen0 = nSeen;
             for (int b = 0; b < n; b++) {
-                ok[b] = false;
+                ok[b] = false; dup[b] = false;
                 const char* bone = arr + (size_t)b * 0xc0; const void* cur = nullptr; float x[12];
+                { char n0[48] = {}; const bool named = SkBoneName(bone, n0, sizeof n0); gr[b] = (signed char)SkGroup(n0, named);
+                  uint32_t h = 0; SkCopy(&h, bone + 0x10, 4);
+                  if (h) { for (int q = 0; q < nSeen0; q++) if (seenH[q] == h) { dup[b] = true; break; } if (!dup[b] && nSeen < 1600) seenH[nSeen++] = h; } }
+                // (17/11 b) solo un grupo: 1 cara, 2 cuerpo, 3 ropa / ayudas (la deformacion va con el cuerpo)
+                if (grp != 0 && (gr[b] == 4 ? 2 : gr[b]) != grp) continue;
                 if (!SkCopy(&cur, bone + 0x18, 8) || !cur || !SkCopy(x, cur, sizeof x)) continue;
                 float t[3] = { x[8], x[9], x[10] }; if (!(fabsf(t[0]) < 3.0f && fabsf(t[1]) < 3.0f && fabsf(t[2]) < 3.0f)) continue;
                 if (att) {   // modelo = enganche.t + rot(enganche.q, enganche.s * t)
@@ -2703,12 +2867,14 @@ static void DrawSkeletonView() {
                     const float cx = 2.0f * (qy * v2 - qz * v1), cy = 2.0f * (qz * v0 - qx * v2), cz = 2.0f * (qx * v1 - qy * v0);
                     t[0] = A[8] + v0 + qw * cx + (qy * cz - qz * cy); t[1] = A[9] + v1 + qw * cy + (qz * cx - qx * cz); t[2] = A[10] + v2 + qw * cz + (qx * cy - qy * cx);
                 }
+                t[0] *= mScale; t[1] *= mScale; t[2] *= mScale;
                 float w[3]; for (int k = 0; k < 3; k++) w[k] = W[4 * k] * t[0] + W[4 * k + 1] * t[1] + W[4 * k + 2] * t[2] + W[4 * k + 3];
                 wp[b][0] = t[0]; wp[b][1] = t[1]; wp[b][2] = t[2];
                 ok[b] = toScreen(w, pt[b]);
             }
             for (int b = 0; b < n; b++) {
-                if (!ok[b]) continue; bones++;
+                if (!ok[b] || dup[b]) continue; bones++;
+                const ImU32 col = kGCol[std::clamp((int)gr[b], 0, 4)]; const bool thin = gr[b] == 1 || gr[b] == 4;
                 const char* bone = arr + (size_t)b * 0xc0; uint64_t pv = 0; int par = -1;
                 if (SkCopy(&pv, bone + 0x20, 8)) {
                     if (pv < (uint64_t)n) par = (int)pv;
@@ -2718,13 +2884,43 @@ static void DrawSkeletonView() {
                 if (par >= 0 && par != b && ok[par]) {   // (09/11) los huesos de deformacion (dsk_*) cuelgan lejos de su padre: esa union va tenue
                     const float dx = wp[b][0] - wp[par][0], dy = wp[b][1] - wp[par][1], dz = wp[b][2] - wp[par][2];
                     const bool lejos = dx * dx + dy * dy + dz * dz > 0.35f * 0.35f;
-                    dl->AddLine(pt[par], pt[b], lejos ? ((kCol[r] & 0x00ffffffu) | 0x30000000u) : kCol[r], r == 3 ? 1.0f : 1.5f); }
-                dl->AddCircleFilled(pt[b], r == 3 ? 1.8f : 2.5f, kCol[r], 8);
+                    // (17/11 06:58, Agustin: "a los huesos le falta esa forma triangular mostrando a donde apunta") pieza como en
+                    // Blender: ancha cerca del padre (al 18 %) y en punta en el hijo; la union lejana sigue como linea tenue
+                    const float sx = pt[b].x - pt[par].x, sy = pt[b].y - pt[par].y, L = sqrtf(sx * sx + sy * sy);
+                    // (07:55) solo los huesos del cuerpo (sk_) llevan la pieza; cara, deformacion y ropa: linea fina con su color.
+                    // El ancho de la pieza sale del largo del hueso EN EL MUNDO (8 % del largo, proyectado a la distancia del padre), no del
+                    // largo en pantalla: un hueso que apunta a la camara ya no se ve como un rombo aplastado o gigante.
+                    const float L3 = sqrtf(dx * dx + dy * dy + dz * dz);
+                    float wpx = 0.0f; { float wq[3]; for (int k = 0; k < 3; k++) wq[k] = W[4 * k] * wp[par][0] + W[4 * k + 1] * wp[par][1] + W[4 * k + 2] * wp[par][2] + W[4 * k + 3];
+                        const float cw = PV[12] * wq[0] + PV[13] * wq[1] + PV[14] * wq[2] + PV[15]; if (cw > 0.05f) wpx = 0.08f * L3 * PV[5] / cw * 0.5f * rh; }
+                    if (lejos || thin || L < 6.0f * kk || !(wpx > 0.0f)) dl->AddLine(pt[par], pt[b], lejos ? ((col & 0x00ffffffu) | 0x30000000u) : col, thin ? 1.0f : 1.5f);
+                    else { const float w = std::clamp(wpx, 1.5f * kk, 10.0f * kk), nx = -sy / L * w, ny = sx / L * w;
+                        const ImVec2 m(pt[par].x + sx * 0.18f, pt[par].y + sy * 0.18f), a(m.x + nx, m.y + ny), c2(m.x - nx, m.y - ny);
+                        dl->AddTriangleFilled(pt[par], a, pt[b], (col & 0x00ffffffu) | 0x50000000u); dl->AddTriangleFilled(pt[par], pt[b], c2, (col & 0x00ffffffu) | 0x30000000u);
+                        const ImVec2 poly[4] = { pt[par], a, pt[b], c2 }; dl->AddPolyline(poly, 4, col, ImDrawFlags_Closed, 1.3f); } }
+                dl->AddCircleFilled(pt[b], thin ? 1.6f : 2.5f, col, 8);
+                // (17/11 b, Agustin 04:00: "agregar en la vista de hueso un texto pequeno con el nombre del hueso") nombre del hueso
+                // (hueso + 0x08 = puntero al nombre, como exprbones.cpp): chico al lado de cada punto con x426 = 2, y siempre el del
+                // hueso mas cercano al mouse, mas grande y con fondo
+                char nb[48] = {};
+                const float mdx = pt[b].x - mouse.x, mdy = pt[b].y - mouse.y, md2 = mdx * mdx + mdy * mdy; const bool near_ = md2 < bestD2;
+                if (names || near_) {
+                    SkBoneName(bone, nb, sizeof nb);     // sin nombre: '#hash' (sirve igual para buscarlo con tools/foxhash.py)
+                    if (nb[0]) {
+                        if (names) { const ImVec2 tp2(pt[b].x + 5.0f * kk, pt[b].y - 7.0f * kk); const float fsn = 12.0f * kk;
+                            dl->AddText(nullptr, fsn, ImVec2(tp2.x + 1.0f, tp2.y + 1.0f), IM_COL32(0, 0, 0, 220), nb); dl->AddText(nullptr, fsn, tp2, (col & 0x00ffffffu) | 0xf0000000u, nb); }
+                        if (near_) { bestD2 = md2; bestPt = pt[b]; bestCol = col; memcpy(bestNm, nb, sizeof bestNm < sizeof nb ? sizeof bestNm : sizeof nb); bestNm[sizeof bestNm - 1] = 0; }
+                    }
+                }
             }
         }
         drawn++;
     }
-    char buf[120]; snprintf(buf, sizeof buf, TRS("Esqueleto: %d personajes, %d huesos (blanco cuerpo, celeste manos, amarillo cara)"), drawn, bones);
+    if (bestNm[0]) { const float fs = 15.0f * kk; const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0.0f, bestNm); const ImVec2 tp(bestPt.x + 12.0f * kk, bestPt.y - ts.y - 8.0f * kk);
+        dl->AddCircle(bestPt, 6.0f * kk, IM_COL32(255, 255, 255, 240), 16, 1.6f * kk);
+        dl->AddRectFilled(ImVec2(tp.x - 6.0f * kk, tp.y - 3.0f * kk), ImVec2(tp.x + ts.x + 6.0f * kk, tp.y + ts.y + 3.0f * kk), IM_COL32(12, 14, 18, 230), 4.0f * kk);
+        dl->AddText(nullptr, fs, tp, bestCol | 0xff000000u, bestNm); }
+    char buf[120]; snprintf(buf, sizeof buf, TRS("Esqueleto: %d personajes, %d huesos (blanco cuerpo, amarillo cara, celeste deformaci\xC3\xB3n, violeta ropa)"), drawn, bones);
     ImVec2 tp(vp->Pos.x + 16, vp->Pos.y + vp->Size.y - 34);
     ImVec2 ts = ImGui::CalcTextSize(buf);
     dl->AddRectFilled(ImVec2(tp.x - 6, tp.y - 3), ImVec2(tp.x + ts.x + 6, tp.y + ts.y + 3), IM_COL32(0, 0, 0, 150), 4.0f);
@@ -2746,17 +2942,24 @@ void OverlayPresent(IDXGISwapChain* sc) {
     {   // (14/11 j, Agustin: "al mantener presionado el boton select o share, se habilite directamente la camara libre en el modo
         // repeticion") SHARE / SELECT mantenido 0.6 s: x344 = 3 (camara libre solo en la repeticion: si ya esta en la repeticion vuela
         // enseguida); otra vez mantenido: vuelve a lo que habia. Apretarlo corto sigue mostrando / escondiendo el HUD
-        static double s_shT = -1.0; static bool s_shDone = false; static float s_shPrev = 0.0f; static MvPad s_sp;
+        static double s_shT = -1.0; static bool s_shDone = false; static float s_shPrev = 0.0f; static MvPad s_sp; static uint32_t s_shCnt = 0; static bool s_shCntOk = false;
+        // (14/11 n) en la repeticion el juego no ve SHARE mantenido (su barra no se esconde al prender la camara libre): keyblock.cpp
+        g_shareMask = g_cfg.camShareHold && !g_menuOpen && !MotorPageActive() && GetForegroundWindow() == s_hwnd && (ReplayViewerCalled() || ReplayNow());
         if (g_cfg.camShareHold && !g_menuOpen && !MotorPageActive() && GetForegroundWindow() == s_hwnd && MvPadPoll(s_sp) && s_sp.connected) {
             const double tn = Now();
-            if (!s_sp.b[kPadShare]) { s_shT = -1.0; s_shDone = false; }
+            // (15/11, Agustin: "al activar la camara libre con el mando no se muestra ese menu que me gustaba de dll abajo") el HUD media el
+            // toque desde que EL veia SHARE (recien con la camara prendida, 0.6 s despues de apretarlo): soltar SHARE al prenderla contaba
+            // como toque corto y lo escondia. El toque corto se mide aca, desde que se apreto de verdad (tambien uno que cae entre dos
+            // cuadros: la cuenta de MvPadPresses), y el HUD solo mira s_shareTapT
+            uint32_t pc[kPadCount]; MvPadPresses(pc); const bool cnt = s_shCntOk && pc[kPadShare] != s_shCnt; s_shCnt = pc[kPadShare]; s_shCntOk = true;
+            if (!s_sp.b[kPadShare]) { if ((s_shT >= 0.0 && !s_shDone && tn - s_shT < 0.5) || (s_shT < 0.0 && cnt)) s_shareTapT = tn; s_shT = -1.0; s_shDone = false; }
             else { if (s_shT < 0.0) s_shT = tn;
                    if (!s_shDone && tn - s_shT > 0.6) { s_shDone = true;
                        std::lock_guard<std::mutex> lk(g_cfgMutex);
                        if (g_cfg.live[344][0] > 2.5f || FreeCamActive()) { g_cfg.live[344][0] = s_shPrev > 2.5f ? 0.0f : s_shPrev; s_toastMsg = TRS("Camara libre apagada"); }
                        else { s_shPrev = g_cfg.live[344][0]; g_cfg.live[344][0] = 1.0f; FreeCamPadTake(); s_toastMsg = TRS(ReplayNow() ? "Camara libre en la repeticion" : "Camara libre prendida"); }   // (14/11 k, Agustin: "al no estar activa el modo repeticion funcione normal con sus botones") x344 = 1: en la repeticion los controles del visor, fuera de ella los de siempre
                        s_curToastT = tn; Log("camara libre: SHARE mantenido, x344 = %.0f", g_cfg.live[344][0]); } }
-        } else { s_shT = -1.0; s_shDone = false; }
+        } else { s_shT = -1.0; s_shDone = false; s_shCntOk = false; }
     }
     const bool curToast = Now() - s_curToastT < 1.8;
     float mouseHintA = 0.0f;
@@ -2769,6 +2972,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
     RastroReplayHookEnsure();   // (14/11 g) gancho del visor de repeticiones si la camara libre / lenta van solo en la repeticion
     const bool camFree = FreeCamActive() && !MotorPageActive(); const float camSlow = TiempoFactor();   // (1/11) aviso en pantalla
     const bool camHud = !g_menuOpen && camFree;   // (14/11 g) la camara lenta sola ya no muestra nada abajo
+    { static bool s_hudRan = false, s_camWas = false; if (camHud && !s_hudRan) s_hudFresh = true; if (camFree && !s_camWas) s_hudNewCam = true; s_hudRan = camHud; s_camWas = camFree; }   // (15/11) antes de las salidas tempranas
     const bool lightIcons = g_cfg.live[319][0] > 0.5f && g_cfg.live[297][0] > 0.5f && g_cfg.live[378][2] < 0.5f && SSSSEditorLightAge() < 0.5;   // (08/11) con la luz fija al mundo (z378) el icono (relativo a la camara) mentiria: no se dibuja   // (1/11) iconos de la luz del editor
     const bool sunCompass = g_cfg.live[175][0] > 0.5f && g_cfg.live[93][3] > 0.5f;   // (2/11) brujula del sol, solo en partido
     {   // (08/11) el menu aparece y se desvanece en ~0.16 s
@@ -2787,7 +2991,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         const bool want = mmCur && g_cfg.mouseHint && g_cfg.menuCursor != 0;
         s_mh = std::clamp(s_mh + (want ? dt / 0.20f : -dt / 0.40f), 0.0f, 1.0f); mouseHintA = s_mh * s_mh * (3.0f - 2.0f * s_mh);
     }
-    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo && !curToast && mouseHintA <= 0.0f && !repe) {
+    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo && !curToast && mouseHintA <= 0.0f && !repe && !MotorLabShowing() && !MotorLabOwnsPlayers()) {
         g_blockGamePad = false;   // (14/11) sin menu ni camara libre no se dibuja nada (ni se lee el mando): el juego vuelve a ver el mando
         return;
     }
@@ -2823,15 +3027,46 @@ void OverlayPresent(IDXGISwapChain* sc) {
         const bool camPad = FreeCamPadWanted();   // (14/11) modo foto: el mando mueve la camara libre
         if ((menuShown && (g_cfg.menuPad || g_cfg.menuPadDraw)) || comboOn || s_padHold || camPad) MvPadPoll(s_pad); else s_pad = MvPad();
         if (camPad) FreeCamPadFeed(s_pad);
-        {   // lo ultimo que se toco: el mando (palancas, gatillos o un boton) o el teclado / mouse (mover, clic, rueda, una tecla)
-            bool padIn = s_pad.connected && (fabsf(s_pad.lx) + fabsf(s_pad.ly) + fabsf(s_pad.rx) + fabsf(s_pad.ry) > 0.35f || s_pad.l2 > 0.25f || s_pad.r2 > 0.25f);
-            if (s_pad.connected) for (int i = 0; i < kPadCount; i++) padIn |= s_pad.b[i];
-            bool kbIn = fabsf(io2.MouseDelta.x) + fabsf(io2.MouseDelta.y) > 2.0f || io2.MouseWheel != 0.0f || io2.MouseDown[0] || io2.MouseDown[1];
-            if (!kbIn) for (int kk = ImGuiKey_NamedKey_BEGIN; kk < ImGuiKey_GamepadStart; kk++) if (ImGui::IsKeyDown((ImGuiKey)kk)) { kbIn = true; break; }
+        {   // lo ultimo que se toco: el mando o el teclado / mouse.
+            // (14/11 n, Agustin: "el teclado y el control deberian ser inputs diferentes con switcher o detectores para cambiar y que las
+            // cosas funcionen bien con ambos") en su log cambiaba 8 veces en 3 s: contaba como "teclado" cualquier tecla mantenida y
+            // cualquier movimiento del mouse (tambien el que pone el propio menu o el que manda el mando por Steam / DS4Windows). Ahora
+            // solo cuentan los CAMBIOS: un boton recien apretado o una palanca / gatillo que recien sale del centro = mando; una tecla
+            // recien apretada, un clic, la rueda o el mouse movido de verdad (mas de 24 px en un cuarto de segundo) = teclado y mouse,
+            // y eso no le gana al mando hasta medio segundo despues de soltarlo.
+            static bool s_dB[kPadCount] = {}, s_dStick = false, s_dTrig = false; static bool s_dKey[256] = {}; static POINT s_dCur{ -32000, -32000 };
+            static float s_dMouse = 0.0f; static double s_dPadT = -1.0e9, s_dPrevT = 0.0; static int s_dLogs = 0, s_dQuiet = 0; static double s_dLogT = 0.0;
+            const double tn = Now(); const float dtd = (float)std::clamp(tn - s_dPrevT, 0.0, 0.25); s_dPrevT = tn;
+            bool padEdge = false, padHeld = false;
+            if (s_pad.connected) {
+                for (int i = 0; i < kPadCount; i++) { padEdge |= s_pad.b[i] && !s_dB[i]; padHeld |= s_pad.b[i]; s_dB[i] = s_pad.b[i]; }
+                const bool stick = std::max(std::max(fabsf(s_pad.lx), fabsf(s_pad.ly)), std::max(fabsf(s_pad.rx), fabsf(s_pad.ry))) > 0.5f, trig = s_pad.l2 > 0.5f || s_pad.r2 > 0.5f;
+                padEdge |= (stick && !s_dStick) || (trig && !s_dTrig); padHeld |= stick || trig; s_dStick = stick; s_dTrig = trig;
+            } else { memset(s_dB, 0, sizeof s_dB); s_dStick = s_dTrig = false; }
+            // (16/11) un boton / palanca que queda apretado solo (POV o eje que reposa fuera del centro) contaba como mando para siempre y el
+            // teclado nunca ganaba: lo mantenido cuenta solo 2 s despues de haberse apretado
+            static double s_dEdgeT = -1.0e9; if (padEdge) s_dEdgeT = tn;
+            if (padEdge || (padHeld && tn - s_dEdgeT < 2.0)) s_dPadT = tn;
+            // teclado y mouse leidos directo de Windows (con el menu cerrado ImGui no recibe las teclas): solo con el juego al frente
+            bool kbEdge = false;
+            if (GetForegroundWindow() == s_hwnd) {
+                static unsigned char s_vkList[160]; static int s_vkN = 0;   // teclas que cuentan: letras, numeros, F1-F12, flechas, edicion, OEM, botones del mouse
+                if (!s_vkN) { auto add = [](int a, int b) { for (int v = a; v <= b && s_vkN < 160; v++) s_vkList[s_vkN++] = (unsigned char)v; };
+                    add(VK_LBUTTON, VK_RBUTTON); add(VK_MBUTTON, VK_XBUTTON2); add(VK_BACK, VK_TAB); add(VK_RETURN, VK_RETURN); add(VK_SHIFT, VK_CONTROL); add(VK_ESCAPE, VK_ESCAPE);
+                    add(VK_SPACE, VK_DOWN); add(VK_INSERT, VK_DELETE); add('0', '9'); add('A', 'Z'); add(VK_NUMPAD0, VK_DIVIDE); add(VK_F1, VK_F12);
+                    add(VK_OEM_1, VK_OEM_3); add(VK_OEM_4, VK_OEM_7); add(VK_OEM_102, VK_OEM_102); }
+                for (int i = 0; i < s_vkN; i++) { const int vk = s_vkList[i]; const bool d = (GetAsyncKeyState(vk) & 0x8000) != 0; kbEdge |= d && !s_dKey[vk]; s_dKey[vk] = d; }
+                POINT cp{}; if (GetCursorPos(&cp)) { if (s_dCur.x != -32000) s_dMouse = s_dMouse * expf(-dtd * 4.0f) + (float)(std::abs(cp.x - s_dCur.x) + std::abs(cp.y - s_dCur.y)); s_dCur = cp; }
+                if (s_dMouse > 24.0f * UIK()) { kbEdge = true; s_dMouse = 0.0f; }
+            } else { memset(s_dKey, 1, sizeof s_dKey); s_dCur.x = -32000; s_dMouse = 0.0f; }   // al volver al juego, lo que ya estaba apretado no cuenta
             const int was = s_lastDev;
-            if (padIn) s_lastDev = 1; else if (kbIn) s_lastDev = 0;
+            if (padEdge) s_lastDev = 1;
+            else if (kbEdge && tn - s_dPadT > 0.5) s_lastDev = 0;
             if (!s_pad.connected) s_lastDev = 0;
-            if (was != s_lastDev) Log("menu: se adapta a %s", s_lastDev ? "el mando" : "teclado y mouse");
+            if (was != s_lastDev) {   // al log: los primeros 12 cambios y despues uno cada 30 s con cuantos hubo
+                if (s_dLogs < 12) { s_dLogs++; Log("menu: se adapta a %s", s_lastDev ? "el mando" : "teclado y mouse"); }
+                else if (++s_dQuiet, tn - s_dLogT > 30.0) { s_dLogT = tn; Log("menu: se adapta a %s (%d cambios mas desde el ultimo aviso)", s_lastDev ? "el mando" : "teclado y mouse", s_dQuiet); s_dQuiet = 0; }
+            }
         }
         {   // (14/11, Agustin: "al abrir el menu con l3+r3 por ejemplo") L3 + R3 juntos abren y cierran el menu
             const bool combo = s_pad.b[kPadL3] && s_pad.b[kPadR3];
@@ -2863,6 +3098,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         s_optWas = opt;
     }
     if (menuShown && MvVkVisible()) MvVirtualKeyboard(s_search, (int)sizeof(s_search), s_pad, UIK(), Ease(s_menuVis), g_cfg.menuVisual, &GlassBackdrop);   // (14/11 b) mismo vidrio y colores del menu
+    MvSetCursorScale(g_cfg.cursorScale);   // (15/11 p) tamano de los cursores dibujados
     if (g_menuOpen && g_cfg.menuCursor == 1) {   // (14/11) cursor nuevo: flecha con sombra, verde sobre lo que se toca, onda al clic, barra I en texto
         ImGuiIO& mio = ImGui::GetIO();
         static float s_curA = 1.0f; static double s_mMoveT = 0.0;   // con el mando: si el mouse no se mueve en 2.5 s el cursor se va
@@ -2871,8 +3107,8 @@ void OverlayPresent(IDXGISwapChain* sc) {
         s_curA = std::clamp(s_curA + (idle ? -1.0f : 1.0f) * mio.DeltaTime * (idle ? 3.0f : 10.0f), 0.0f, 1.0f);
         if (ImGui::IsMousePosValid()) {
             const ImGuiMouseCursor mc = ImGui::GetMouseCursor();
-            const int kind = mc == ImGuiMouseCursor_TextInput ? 2 : (ImGui::IsAnyItemHovered() || mc == ImGuiMouseCursor_Hand) ? 1 : 0;
-            if (mc == ImGuiMouseCursor_Arrow || mc == ImGuiMouseCursor_Hand || mc == ImGuiMouseCursor_TextInput)
+            const int kind = mc == ImGuiMouseCursor_ResizeEW ? 3 : mc == ImGuiMouseCursor_ResizeNS ? 4 : mc == ImGuiMouseCursor_TextInput ? 2 : (ImGui::IsAnyItemHovered() || mc == ImGuiMouseCursor_Hand) ? 1 : 0;
+            if (mc == ImGuiMouseCursor_Arrow || mc == ImGuiMouseCursor_Hand || mc == ImGuiMouseCursor_TextInput || mc == ImGuiMouseCursor_ResizeEW || mc == ImGuiMouseCursor_ResizeNS)   // (15/11 p) las flechas de cambiar el tamano: las propias
                 MvCursorDraw(ImGui::GetForegroundDrawList(), mio.MousePos, kind, ImGui::IsMouseDown(0), UIK(), s_curA * Ease(s_menuVis), g_cfg.menuVisual);
             else mio.MouseDrawCursor = true;   // flechas de agrandar / mover ventana: las de ImGui
         }
@@ -2897,6 +3133,15 @@ void OverlayPresent(IDXGISwapChain* sc) {
         const double tn = Now(); const float dth = (float)std::clamp(tn - s_hudLast, 0.0, 0.1); s_hudLast = tn;
         const FreeCamPadInfo pi = FreeCamPadState();
         const bool front = GetForegroundWindow() == s_hwnd;
+        static double s_tapSeen = -1.0;
+        if (s_hudFresh) {   // (15/11) camara recien prendida (o menu recien cerrado): se ve 3 s aunque no se toque nada. Antes quedaba la hora
+            // del ultimo uso (se apagaba enseguida). Al PRENDER la camara tambien se olvida lo escondido con SHARE / H la vez anterior
+            // (camara_hud 0 sigue escondido hasta SHARE / H); al cerrar el menu queda como estaba
+            s_hudFresh = false; s_hudT = tn; s_tapSeen = s_shareTapT;
+            s_shWas = pi.flying && s_pad.b[kPadShare]; s_hWas = front && (GetAsyncKeyState('H') & 0x8000) != 0;
+            if (s_hudNewCam) { s_hudNewCam = false; s_hudHide = g_cfg.camHud == 0;
+                Log("camara libre: HUD %s", s_hudHide ? "escondido al prenderla (camara_hud 0: SHARE corto o H lo muestran)" : g_cfg.camHud == 2 ? "a la vista al prenderla (siempre)" : "a la vista al prenderla (se apaga a los 3 s sin tocar nada)"); }
+        }
         bool input = false;
         if (pi.flying && s_pad.connected) { input = fabsf(s_pad.lx) + fabsf(s_pad.ly) + fabsf(s_pad.rx) + fabsf(s_pad.ry) > 0.15f || s_pad.l2 > 0.1f || s_pad.r2 > 0.1f;   // sticks, gatillos y botones; la cruceta no
                                             for (int i = 0; i < kPadUp; i++) if (i != kPadShare) input |= s_pad.b[i]; }
@@ -2905,7 +3150,10 @@ void OverlayPresent(IDXGISwapChain* sc) {
         if (input || s_hudT == 0.0) s_hudT = tn;
         { const bool sh = pi.flying && s_pad.b[kPadShare], hk = front && camFree && (GetAsyncKeyState('H') & 0x8000) != 0;
           static double s_shDown = 0.0; if (sh && !s_shWas) s_shDown = tn;   // (14/11 j) SHARE: al soltarlo y solo si fue corto (mantenido = camara libre)
-          if ((!sh && s_shWas && tn - s_shDown < 0.5) || (hk && !s_hWas)) { s_hudHide = !s_hudHide; s_hudT = tn; Log("camara libre: HUD %s", s_hudHide ? "escondido" : "a la vista"); }
+          // (15/11) con SHARE mantenido = camara libre (camara_share 1) el toque lo mide el bloque de SHARE desde que se apreto de verdad
+          const bool shTap = g_cfg.camShareHold ? s_shareTapT != s_tapSeen && pi.flying : !sh && s_shWas && tn - s_shDown < 0.5;
+          s_tapSeen = s_shareTapT;
+          if (shTap || (hk && !s_hWas)) { s_hudHide = !s_hudHide; s_hudT = tn; Log("camara libre: HUD %s", s_hudHide ? "escondido" : "a la vista"); }
           s_shWas = sh; s_hWas = hk; }
         // (14/11 i, Agustin: "que el menu se apague de la camara libre con mando pasados unos tres segundos sin presionar nada")
         // 3 s sin tocar nada: se APAGA del todo (antes se achicaba). camara_hud 1 vuelve al tocar algo; camara_hud 0 (mostrado con
@@ -2918,7 +3166,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
             MvHudIn h; h.pad = s_pad; h.padMode = PadUi(); h.freeCam = camFree;
             h.status = TRS(ReplayNow() ? "REPETICION" : "EN VIVO"); h.speed = g_cfg.live[344][1]; h.zoom = g_cfg.live[344][2]; h.follow = g_cfg.live[346][2] > 0.5f;
             h.photo = pi.scale > 0.0f; h.clock = pi.scale > 0.0f ? pi.scale : camSlow; h.paused = pi.paused; h.adv = pi.advancing; h.step = pi.step; h.steps = FreeCamPhotoSteps(&h.nSteps);
-            h.replay = ReplayNow(); h.dofOff = g_cfg.camNoDof != 0; h.compact = s_hudC; h.k = UIK(); h.alpha = s_hudA; h.anim = Anim(); h.now = tn;
+            h.replay = ReplayNow(); h.dofOff = g_cfg.camNoDof != 0; h.mblurOff = g_cfg.camNoMblur != 0; h.compact = s_hudC; h.k = UIK(); h.alpha = s_hudA; h.anim = Anim(); h.now = tn;
             const ImGuiViewport* vp = ImGui::GetMainViewport();
             MvPhotoHud(ImGui::GetForegroundDrawList(), vp->Pos, ImVec2(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y), h);
         }
@@ -2926,20 +3174,106 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (lightIcons) DrawEditorLightIcons();
     if (sunCompass && !g_menuOpen) DrawSunCompass();
     if (g_cfg.live[426][0] > 0.5f) DrawSkeletonView();   // (09/11 f) vista del esqueleto (Diagnostico)
-    if (mmCur && g_cfg.menuCursor == 1) {   // (14/11 c / d, Agustin: "que se mantenga igual con el menu abierto o cerrado", "que muestre donde puede clickear")
+    {   // (15/11) boton "Salir del juego" del menu principal (menumouse.cpp MenuExitButton: lugar, mouse encima, primer clic)
+        float bx, by, bw, bh; int st = 0;
+        if (!g_menuOpen && MenuExitButton(&bx, &by, &bw, &bh, &st)) {
+            ImDrawList* dl = ImGui::GetForegroundDrawList(); const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);
+            // estilo de las pestanas / cartas del menu: azul translucido, borde fino claro, esquinas apenas redondeadas; con el mouse encima
+            // borde blanco grueso como la carta elegida; primer clic: rojo y el aviso a la izquierda
+            const ImVec2 a0(bx, by), b0(bx + bw, by + bh); const float rr = bh * 0.14f;
+            const ImU32 fill = st == 2 ? IM_COL32(150, 30, 36, 215) : (st == 1 ? IM_COL32(40, 70, 140, 200) : IM_COL32(22, 42, 100, 150));
+            dl->AddRectFilled(a0, b0, fill, rr);
+            dl->AddRect(a0, b0, st ? IM_COL32(255, 255, 255, 245) : IM_COL32(160, 172, 196, 190), rr, 0, (st ? 3.0f : 1.6f) * k);
+            const ImU32 fg = st ? IM_COL32(255, 255, 255, 255) : IM_COL32(200, 208, 222, 235);
+            const float r = bh * 0.24f, cx = bx + bw * 0.5f, cy = by + bh * 0.5f + r * 0.08f;           // icono de apagar
+            dl->PathArcTo(ImVec2(cx, cy), r, -3.14159f * 0.5f + 0.7f, 3.14159f * 1.5f - 0.7f, 20); dl->PathStroke(fg, 0, std::max(2.0f, bh * 0.065f));
+            dl->AddLine(ImVec2(cx, cy - r * 1.18f), ImVec2(cx, cy - r * 0.15f), fg, std::max(2.0f, bh * 0.065f));
+            if (st >= 1) {                                                   // con el mouse encima, el nombre; armado, el aviso
+                // (Agustin 04:19: "una fuente mas similar a la de game settings y bajarle la opacidad al fondo del texto y al texto")
+                // negrita condensada del menu (Saira Semi Condensed, si esta) en mayusculas, gris claro translucido sobre fondo tenue
+                const char* src = TRS("Salir del juego");   // (Agustin 04:21: "que no se muestre lo de quieres salir si o no") sin aviso: el primer clic solo pone el boton en rojo
+                char up[96]; size_t n = 0; for (; src[n] && n < sizeof up - 1; n++) up[n] = (src[n] >= 'a' && src[n] <= 'z') ? (char)(src[n] - 32) : src[n]; up[n] = 0;
+                ImFont* f = s_fontBold ? s_fontBold : ImGui::GetFont(); const float fs = std::max(f->FontSize, bh * 0.42f);
+                const ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, up), pad(12.0f * k, 5.0f * k);
+                const ImVec2 t1(bx - 8.0f * k, cy + ts.y * 0.5f + pad.y), t0(t1.x - ts.x - pad.x * 2, cy - ts.y * 0.5f - pad.y);
+                dl->AddRectFilled(t0, t1, st == 2 ? IM_COL32(110, 20, 28, 120) : IM_COL32(18, 34, 80, 110), rr);
+                dl->AddText(f, fs, ImVec2(t0.x + pad.x, t0.y + pad.y), IM_COL32(205, 212, 226, 200), up);
+            }
+        }
+    }
+    MotorPreCoverDraw();   // (15/11 j) tapa negra desde que se acepta el boton 12 del Editar hasta que el Motor dibuja su entrada
+    if (gizmo) MotorGizmoDraw();   // (15/11 h, Agustin 03:17: "el cursor parece estar atras") el editor del Motor se dibuja ANTES que el cursor, asi la flecha queda arriba de los paneles
+    // (15/11 p, Agustin 05:33: "cuando se vaya a agrandar o se pueda arrastrar para el tamano de las cartas ... darle al cursor un icono") en el
+    // borde de un panel del editor del Motor: la flecha doble (con cualquiera de los dos cursores)
+    const int motorCur = gizmo ? MotorCursorKind() : 0;
+    if (mmCur && g_cfg.menuCursor != 0 && motorCur) {
+        const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);
+        MvCursorDraw(ImGui::GetForegroundDrawList(), ImVec2(mmx, mmy), motorCur, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, k, 1.0f, g_cfg.menuVisual);
+    }
+    else if (mmCur && g_cfg.menuCursor == 1) {   // (14/11 c / d, Agustin: "que se mantenga igual con el menu abierto o cerrado", "que muestre donde puede clickear")
         const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);   // el mismo dardo del menu; mano justo sobre una fila del juego
-        MvCursorDraw(ImGui::GetForegroundDrawList(), ImVec2(mmx, mmy), MenuMouseOverRow() ? 1 : 0, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, k, 1.0f, g_cfg.menuVisual);
+        MvCursorDraw(ImGui::GetForegroundDrawList(), ImVec2(mmx, mmy), MenuViewCamDragging() ? 5 : MenuMouseOverRow() ? 1 : 0, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0 || (MenuViewCamDragging() && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0), k, 1.0f, g_cfg.menuVisual);
     }
     else if (mmCur && g_cfg.menuCursor != 0) {   // (11/11) el juego esconde el cursor de Windows: una flecha chica donde esta el mouse (los menus son los del juego)
-        ImDrawList* dl = ImGui::GetForegroundDrawList(); const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f);
+        ImDrawList* dl = ImGui::GetForegroundDrawList(); const float k = std::max(1.0f, ImGui::GetIO().DisplaySize.y / 1080.0f) * MvCursorScale();
         const ImVec2 a(mmx, mmy), b(mmx, mmy + 19.0f * k), c(mmx + 5.2f * k, mmy + 14.6f * k), d(mmx + 13.5f * k, mmy + 13.5f * k);
         dl->AddTriangleFilled(a, b, c, IM_COL32(255, 255, 255, 255)); dl->AddTriangleFilled(a, c, d, IM_COL32(255, 255, 255, 255));
         const ImVec2 pts[4] = { a, b, c, d }; dl->AddPolyline(pts, 4, IM_COL32(0, 0, 0, 255), ImDrawFlags_Closed, 1.4f * k);
     }
+    {   // (15/11 ythnmm) destello del doble clic sobre el visor del Editar: viaja con el punto hasta el centro mientras la camara se acerca
+        float px, py, age; int kind;
+        if (!g_menuOpen && MenuViewCamPulse(&px, &py, &age, &kind)) {
+            ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
+            float vcx = ds.x * 0.5f, vcy = ds.y * 0.5f; MenuViewCamCenter(&vcx, &vcy);   // (15/11 e) viaja al centro del visor, no al de la ventana
+            const float e = kind == 1 ? expf(-9.0f * age) : 1.0f; const ImVec2 c(vcx + (px - vcx) * e, vcy + (py - vcy) * e);
+            const float t = age / 0.9f, fade = (1.0f - t) * (1.0f - t); const ImVec4 g = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+            for (int i = 7; i >= 1; i--) dl->AddCircleFilled(c, (10.0f + (float)i * 9.0f) * k * (0.7f + 0.6f * t), ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 0.035f * fade)), 40);   // brillo suave
+            dl->AddCircle(c, (16.0f + 70.0f * t) * k, ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 0.55f * fade)), 48, 2.0f * k);                                       // aro que se abre
+            dl->AddCircle(c, (8.0f + 34.0f * t) * k, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.35f * fade)), 40, 1.2f * k);
+        }
+    }
     float hintH = 0.0f;
-    if (mouseHintA > 0.0f) {   // (14/11 d) "clic izquierdo seleccionar / avanzar, clic derecho volver" en el idioma del menu
+    if (mouseHintA > 0.0f && !MotorUiOn()) {   // (15/11 b: en el Motor no va, tiene su menu)   // (14/11 d) "clic izquierdo seleccionar / avanzar, clic derecho volver" en el idioma del menu
         const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
-        hintH = MvMouseHint(ImGui::GetForegroundDrawList(), ImVec2(ds.x - 18.0f * k, ds.y - 18.0f * k), k, mouseHintA, TRS("Seleccionar / avanzar"), TRS("Volver")) + 6.0f * k;
+        char kb[16]; const char* kn = g_cfg.cursorKey ? KeyHudName(g_cfg.cursorKey, kb, sizeof(kb)) : nullptr;   // (15/11) + la tecla del cursor (F1)
+        const bool vc = MenuViewCamHint();   // (15/11 ythnmm) sobre el visor del Editar: girar / mover / zoom
+        hintH = MvMouseHint(ImGui::GetForegroundDrawList(), ImVec2(ds.x - 18.0f * k, ds.y - 18.0f * k), k, mouseHintA, vc ? TRS("Girar camara") : TRS("Seleccionar / avanzar"), vc ? TRS("Mover camara / Volver") : TRS("Volver"), kn, TRS("Cursor"), vc ? TRS("Zoom") : nullptr, vc, vc ? TRS("Zoom en la zona") : nullptr) + 6.0f * k;
+    }
+    // (16/11, Agustin 17:08: "cambiar vista a perspectiva u ortografica ... con un boton") boton de la camara con mouse de Apariencia,
+    // abajo a la derecha sobre la guia; el clic lo toma menumouse.cpp (VcInput) con el rectangulo que se le pasa aca
+    if (!g_menuOpen && !MotorUiOn() && MenuViewCamLive()) {
+        ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
+        const bool o = MenuViewCamOrtho(); const char* lab = o ? TRS("Ortogr\303\241fica") : TRS("Perspectiva");
+        const ImVec2 ts = ImGui::CalcTextSize(lab), pad(12.0f * k, 7.0f * k); const float ic = 18.0f * k;
+        const ImVec2 b(ds.x - 18.0f * k, ds.y - 18.0f * k - hintH - 6.0f * k), a0(b.x - ts.x - ic - pad.x * 2 - 6.0f * k, b.y - std::max(ts.y, ic) - pad.y * 2);
+        POINT cp{}; HWND hw = OverlayHwnd(); bool hov = false;
+        if (hw && GetCursorPos(&cp) && ScreenToClient(hw, &cp)) hov = (float)cp.x >= a0.x && (float)cp.x <= b.x && (float)cp.y >= a0.y && (float)cp.y <= b.y;
+        const ImVec4 g = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+        if (hov || o) for (int i = 4; i >= 1; i--) dl->AddRect(ImVec2(a0.x - i * 1.5f * k, a0.y - i * 1.5f * k), ImVec2(b.x + i * 1.5f * k, b.y + i * 1.5f * k), ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, (hov ? 0.09f : 0.05f) * (5 - i))), 9.0f * k, 0, 2.0f * k);   // brillo
+        dl->AddRectFilled(a0, b, IM_COL32(12, 16, 20, hov ? 215 : 180), 7.0f * k);
+        dl->AddRect(a0, b, o ? ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 0.9f)) : IM_COL32(255, 255, 255, 60), 7.0f * k, 0, 1.2f * k);
+        {   // icono: cubo en perspectiva (lineas que se juntan) u ortografico (paralelas)
+            const ImVec2 c(a0.x + pad.x + ic * 0.5f, (a0.y + b.y) * 0.5f); const float r = ic * 0.42f, sk = o ? 0.0f : 0.28f;
+            const ImU32 w = o ? ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 1)) : IM_COL32(235, 238, 242, 255);
+            const ImVec2 f0(c.x - r, c.y - r * 0.6f), f1(c.x + r * 0.6f, c.y - r * 0.6f), f2(c.x + r * 0.6f, c.y + r), f3(c.x - r, c.y + r);
+            const float bx = r * 0.45f, by = -r * 0.45f, sh = r * sk;   // cara de atras: corrida y (en perspectiva) mas chica
+            const ImVec2 g0(f0.x + bx + sh, f0.y + by + sh), g1(f1.x + bx - sh, f1.y + by + sh), g2(f2.x + bx - sh, f2.y + by - sh), g3(f3.x + bx + sh, f3.y + by - sh);
+            const float lw = 1.4f * k;
+            dl->AddQuad(g0, g1, g2, g3, (w & 0x00ffffff) | 0x8c000000, lw); dl->AddQuad(f0, f1, f2, f3, w, lw);
+            dl->AddLine(f0, g0, w, lw); dl->AddLine(f1, g1, w, lw); dl->AddLine(f2, g2, w, lw); dl->AddLine(f3, g3, w, lw);
+        }
+        dl->AddText(ImVec2(a0.x + pad.x + ic + 6.0f * k, (a0.y + b.y - ts.y) * 0.5f), o ? ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 1)) : IM_COL32(235, 238, 242, 255), lab);
+        MenuViewCamOrthoButton(a0.x, a0.y, b.x, b.y);
+        hintH += (b.y - a0.y) + 6.0f * k;
+    } else MenuViewCamOrthoButton(0, 0, 0, 0);
+    {   // (16/11, Agustin 17:09: lupa al hacer zoom con la rueda / la cruceta, "con brillo como el resto") al lado del cursor
+        float za; int zd;
+        if (!g_menuOpen && ZoomIconGet(&za, &zd)) {
+            const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
+            POINT cp{}; HWND hw = OverlayHwnd(); ImVec2 c(ds.x * 0.5f, ds.y * 0.5f);
+            if (hw && GetCursorPos(&cp) && ScreenToClient(hw, &cp) && cp.x >= 0 && cp.y >= 0 && cp.x < ds.x && cp.y < ds.y && (mmCur || MotorUiOn())) c = ImVec2((float)cp.x + 26.0f * k, (float)cp.y + 24.0f * k);
+            MvZoomIconDraw(ImGui::GetForegroundDrawList(), c, zd, k * 1.15f, za);
+        }
     }
     if (curToast) {   // (14/11 c) "Cursor apagado / prendido (F1)" chico, abajo a la derecha, en el idioma del menu; se va solo en 1.8 s
         const float t = (float)(Now() - s_curToastT), a = std::min(1.0f, std::min(t / 0.12f, (1.8f - t) / 0.35f));
@@ -2952,13 +3286,13 @@ void OverlayPresent(IDXGISwapChain* sc) {
         dl->AddRectFilled(ImVec2(a0.x, a0.y + 4.0f * k), ImVec2(a0.x + 3.0f * k, b.y - 4.0f * k), ImGui::GetColorU32(ImGuiCol_CheckMark, a), 1.5f * k);
         dl->AddText(ImVec2(a0.x + pad.x, a0.y + pad.y), IM_COL32(235, 240, 245, (int)(255 * a)), msg.c_str());
     }
-    if (gizmo) MotorGizmoDraw();
-    if (repe && !camFree) RepeticionDraw();   // (14/11 k, Agustin: "que no se muestre el menu raro del tiempo de abajo") con la camara libre no se dibuja la barra de la repeticion
+    if (repe) RepeticionDraw(mmCur);   // (14/11 n) solo la marca y el minuto al pasar el mouse sobre la barra DEL JUEGO, con o sin camara libre (antes no se dibujaba nada con la camara libre)
     if (keyHud) KeyHudDraw();
     InspectDrawOverlay();
+    MotorLabDraw();      // (21/11 3icxbh) laboratorio de animaciones (motorlab.cpp)
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
     g_menuTyping = g_menuOpen && ImGui::GetIO().WantTextInput;
-    g_blockGameKeys = (g_menuOpen && (g_cfg.blockKeys == 2 || (g_cfg.blockKeys == 1 && ImGui::GetIO().WantTextInput))) || FreeCamBlocksKeys();
+    g_blockGameKeys = (g_menuOpen && (g_cfg.blockKeys == 2 || (g_cfg.blockKeys == 1 && ImGui::GetIO().WantTextInput))) || FreeCamBlocksKeys() || (MotorLabWantsInput() && ImGui::GetIO().WantTextInput);
     if (!s_btnPending.empty()) {
         std::string a = s_btnPending; s_btnPending.clear();
         if (a == "repe_libre_lenta") {   // (14/11, Agustin: "camara libre con camara lenta en repeticion") las dos solas durante la repeticion
@@ -2999,6 +3333,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         if (g_cfg.clothDirty && Now() - g_cfg.clothChangeT > 0.4) SaveCloth();
     }
+    MotorCoverFlush();   // (15/11 n) la tapa del Motor arriba de todo lo demas (motorgizmo.cpp)
     ImGui::Render();
     if (glassBB) { GlassBlur(glassBB); glassBB->Release(); }
     ID3D11RenderTargetView* oldRT[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};

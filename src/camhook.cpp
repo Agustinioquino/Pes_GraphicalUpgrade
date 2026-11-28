@@ -106,11 +106,24 @@ static bool ReadView(void* view, unsigned* fl, int* w, int* h) {
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 
-static std::atomic<int> s_aaW{0}, s_aaH{0};
+// (16/11, Agustin 06:44: rastros al mover con el mouse la camara del visor en Apariencia) mientras la camara a mano se mueve
+// (menumouse.cpp) se prende el bit 0x80 de la camara de la vista: el TAA del juego dibuja "Cancel Temporal Pass" y no mezcla
+// cuadros viejos. Quieta, vuelve el TAA normal
+static bool CancelView(void* view) {
+    __try {
+        if (!view) return false;
+        void* cam = *(void* volatile*)((char*)view + 0x4a0);
+        if (!cam) return false;
+        *(volatile unsigned*)((char*)cam + 0xf0) |= 0x80u;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+static std::atomic<int> s_aaW{0}, s_aaH{0}; static std::atomic<int> g_vcAaCancel{0}, g_vcAaFail{0};
 static uintptr_t __fastcall hk_AA(void* self, void* a2, void* a3, void* view) {
     unsigned fl = 0; int w = 0, h = 0;
     s_aaCalls++;
     if (!s_aaTid.load()) s_aaTid = GetCurrentThreadId();
+    if (MenuViewCamMoving()) { if (CancelView(view)) { g_vcAaCancel.fetch_add(1); static std::atomic<int> n{0}; if (n.fetch_add(1) < 3) Log("camara del motor: camara del visor movida con el mouse: el TAA del juego descarta la historia mientras se mueve"); } else g_vcAaFail.fetch_add(1); }
     if (ReadView(view, &fl, &w, &h)) {
         s_aaW = w; s_aaH = h;
         if (fl & 0x80) {
@@ -223,6 +236,7 @@ void CamHookPresent() {
         (s_applies.load() - s_ap0) / (float)fr, (s_aaCalls.load() - s_aac0) / (float)fr, s_aaW.load(), s_aaH.load(), s_camTid.load(), s_aaTid.load(),
         g_cutUse[0].load(), g_cutUse[1].load(), g_cutUse[2].load(), UseCuts() ? "" : " (x161 = 0: no se usan)",
         pos[0], pos[1], pos[2], tgt[0], tgt[1], tgt[2], have ? "" : " (sin datos)");
+    { const int nc = g_vcAaCancel.exchange(0), nf = g_vcAaFail.exchange(0); if (nc || nf || MenuViewCamLive()) Log("camara del motor (30 s): camara a mano del visor: TAA cancelado %d veces mientras se movia (%d sin camara de vista)", nc, nf); }
     s_t = t; s_c0 = s_cuts.load(); s_a0 = s_aaResets.load(); s_ap0 = s_applies.load(); s_aac0 = s_aaCalls.load(); s_f0 = now; s_maxStreak = 0;
 }
 

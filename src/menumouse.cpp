@@ -108,6 +108,17 @@ static const unsigned char kAfpSetVisibleSig[13] = { 0x8b,0x49,0x0c,0x44,0x0f,0x
 static bool s_guideOk = false, s_guideHidden = false; static double s_guideT = 0;
 static std::atomic<double> s_padT{0};                                    // ultima vez que el mando / teclado movio o apreto algo en un menu
 
+// (14/11 g, Agustin: "al usar mando, para que funcione bien, que se reinicie la seleccion") por ventana: la fila que tenia elegida el
+// mando antes de que el mouse eligiera otra. La primera direccion del mando despues del mouse vuelve a esa fila (y no mueve).
+struct PadSel { void* win; uintptr_t vt; int g, r; bool dirty; double t; };   // vt: la misma direccion puede ser otra pagina despues
+static PadSel s_padSel[8] = {};
+static PadSel* PadSelFor(void* win, bool create) {
+    PadSel* old = &s_padSel[0];
+    for (PadSel& e : s_padSel) { if (e.win == win) return &e; if (e.t < old->t) old = &e; }
+    if (!create) return nullptr;
+    *old = PadSel{ win, 0, -1, -1, false, 0 }; return old;
+}
+
 static void* s_pendWin = nullptr; static int s_pendAction = -1;
 static void* s_pendDxWin = nullptr; static int s_pendDx = 0;              // (v3) clic sobre una fila con selector: "derecha" / "izquierda" para el juego
 static POINT s_last = { -32000, -32000 }; static bool s_lWas = false, s_rWas = false; static double s_stepT = 0;
@@ -181,10 +192,30 @@ static bool DrawnRect(uint8_t* node, float& x, float& y, float& w, float& h) {
     x = x0; y = y0; w = x1 - x0; h = y1 - y0; return true;
 }
 
+// (14/11 f) el nodo dice "visible" pero el AFP no lo muestra: el objeto o un padre con la bandera de invisible (0x20000 en +0x20, la de
+// la propiedad 0x1007) o con el alfa de su color en 0 (+0xdc, si tiene transformacion de color: 0x8000000 en +0x24). En el menu
+// principal del Dream Patch la lista del medio (grupo 1) no se dibuja pero sus filas siguen "visibles" para el juego: el mouse las
+// elegia y despues el mando quedaba moviendose en una lista que no se ve (Agustin 14/11 13:42).
+static bool AfpShown(uint8_t* node, uint32_t* why = nullptr) {
+    if (!s_afpOk || g_cfg.menuMouseDrawn == 0) return true;
+    uint8_t* hd = P8(node + 0x40); if (!Ptr(hd)) return true;
+    const uint32_t id = U32(hd + 0xc); if (((id >> 27) & 0xf) != 4) return true;
+    uint8_t* o = ((PFN_AfpObj)kAfpObj)(id);
+    for (int i = 0; i < 32 && Ptr(o); i++) {
+        // (15/11) NO se mira 0x20000 en +0x20: el log del 14/11 21:59 lo muestra prendido en TODOS los objetos (tambien en los que se ven).
+        // La lista escondida del menu principal se reconoce por el alfa: un padre con 0x8000000 en +0x24 y +0xdc = 0.00
+        if (U32(o + 0x24) & 0x8000000u) { float a; memcpy(&a, o + 0xdc, 4); if (std::isfinite(a) && a < 0.02f) { if (why) *why = 0x200u + (uint32_t)i; return false; } }
+        int16_t depth; memcpy(&depth, o + 0x78, 2); if (depth < 1) break;
+        o = P8(o + 0x40);
+    }
+    return true;
+}
+
 struct Hit { int group = -1, row = -1; float x = 0, y = 0, w = 0, h = 0, dist = 0; };   // dist > 0: no esta justo encima, es la fila mas cercana de su grupo
 
 // replica de la recorrida de 0x140e400d0 con (mx, my) en vez del puntero del juego
-static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
+static bool HitTest(uint8_t* I, float mx, float my, Hit& out, bool useShown = true) {
+    int nSeen = 0, nHidden = 0;                    // si el AFP da por escondidas TODAS las filas, la lectura esta mal: se repite sin esa prueba
     uint8_t* root = P8(I + 0x98); if (!Ptr(root)) return false;
     const uint32_t ng = U32(I + 0xa4); if (ng == 0 || ng > 64) return false;
     // (v2) huecos entre filas de un mismo grupo (pestanas separadas, listas con margen): con el mouse dentro del rectangulo que
@@ -214,6 +245,48 @@ static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
           if (lb != le && Ptr(lb) && le > lb && (size_t)(le - lb) <= 4 * 256) for (uint8_t* e = lb; e + 4 <= le; e += 4) if (U32(e) == g) { inList = true; break; } }
         const uint32_t n = ChildCount(grp); if (n > 512) continue;
         Hit cand; float nearD = 1e9f; int rows = 0; float bx0 = 1e9f, by0 = 1e9f, bx1 = -1e9f, by1 = -1e9f;
+        // (14/11 f) GRILLA CON FILAS CHICAS: en un menu redibujado por un parche la fila del juego puede ser solo la esquina de la tarjeta
+        // (126 x 126 con tarjetas cada 420 px). Si las filas del grupo son mucho mas chicas que la distancia entre ellas, cada fila
+        // ocupa su celda: hasta la columna siguiente y hasta la fila siguiente de su columna (o el borde de la grilla).
+        struct Cell { uint32_t r; float x, y, w, h; }; static Cell s_cell[96]; int nc = 0; bool cells = false;
+        if (g_cfg.menuMouseDrawn != 0 && n <= 96) {
+            for (uint32_t r = 0; r < n; r++) {
+                uint8_t* node = Child(grp, r);
+                if (!Ptr(node) || !NodeFlag(node, 0x0c) || (!NodeFlag(node, 0x10) && !inList)) continue;
+                void** vt = *(void***)node; if (!Ptr(vt) || !RowClass(vt)) continue;
+                float pos[2] = { 0, 0 }, size[2] = { 0, 0 };
+                if (((PFN_NodeVec2)vt[0xa0 / 8])(node, pos) < 0) continue;
+                ((PFN_NodeVec2)vt[0xc0 / 8])(node, size);
+                if (!(size[0] > 0.0f) || !(size[1] > 0.0f) || !(size[0] < 4000.0f) || !(size[1] < 4000.0f) || !(std::fabs(pos[0]) < 8000.0f) || !(std::fabs(pos[1]) < 8000.0f)) continue;
+                if (useShown && !AfpShown(node)) continue;
+                s_cell[nc++] = { r, pos[0], pos[1], size[0], size[1] };
+            }
+            float xs[96], ys[96]; int nx = 0, ny = 0; float maxW = 0, maxH = 0;
+            for (int i = 0; i < nc; i++) {
+                bool fx = false, fy = false;
+                for (int k = 0; k < nx; k++) if (std::fabs(xs[k] - s_cell[i].x) < 6.0f) fx = true;
+                for (int k = 0; k < ny; k++) if (std::fabs(ys[k] - s_cell[i].y) < 6.0f) fy = true;
+                if (!fx) xs[nx++] = s_cell[i].x; if (!fy) ys[ny++] = s_cell[i].y;
+                maxW = std::max(maxW, s_cell[i].w); maxH = std::max(maxH, s_cell[i].h);
+            }
+            std::sort(xs, xs + nx); std::sort(ys, ys + ny);
+            float pitchX = 1e9f, pitchY = 1e9f;
+            for (int k = 1; k < nx; k++) pitchX = std::min(pitchX, xs[k] - xs[k - 1]);
+            for (int k = 1; k < ny; k++) pitchY = std::min(pitchY, ys[k] - ys[k - 1]);
+            cells = nc >= 2 && ((nx >= 2 && maxW < 0.6f * pitchX) || (nx < 2 && ny >= 2 && maxH < 0.6f * pitchY));
+            if (cells) {
+                const float right = nx >= 2 ? xs[nx - 1] + (xs[nx - 1] - xs[nx - 2]) : xs[0] + maxW;
+                const float bottom = ny >= 2 ? ys[ny - 1] + (ys[ny - 1] - ys[ny - 2]) : ys[0] + maxH;
+                for (int i = 0; i < nc; i++) {
+                    Cell& c = s_cell[i]; float nxX = right, nxY = bottom;
+                    for (int k = 0; k < nx; k++) if (xs[k] > c.x + 6.0f) { nxX = xs[k]; break; }
+                    for (int j = 0; j < nc; j++) if (std::fabs(s_cell[j].x - c.x) < 6.0f && s_cell[j].y > c.y + 6.0f) nxY = std::min(nxY, s_cell[j].y);
+                    const float gapX = nx >= 2 ? 0.03f * (nxX - c.x) : 0.0f;
+                    if (nx >= 2) c.w = std::max(8.0f, nxX - c.x - gapX);
+                    c.h = std::max(8.0f, nxY - c.y - 2.0f);
+                }
+            }
+        }
         for (uint32_t r = 0; r < n; r++) {
             uint8_t* node = Child(grp, r);
             if (!Ptr(node) || !NodeFlag(node, 0x0c) || (!NodeFlag(node, 0x10) && !inList)) continue;
@@ -222,7 +295,10 @@ static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
             if (((PFN_NodeVec2)vt[0xa0 / 8])(node, pos) < 0) continue;      // sin clip: el juego usaria valores viejos, aca se saltea
             ((PFN_NodeVec2)vt[0xc0 / 8])(node, size);
             if (!(size[0] > 0.0f) || !(size[1] > 0.0f)) continue;
-            {
+            nSeen++;
+            if (useShown && !AfpShown(node)) { nHidden++; continue; }       // (14/11 f) el juego la da por visible pero no se dibuja
+            if (cells) for (int i = 0; i < nc; i++) if (s_cell[i].r == r) { size[0] = s_cell[i].w; size[1] = s_cell[i].h; break; }
+            if (!cells) {
                 float dx0, dy0, dw, dh;
                 if (DrawnRect(node, dx0, dy0, dw, dh)) {
                     const float ix = std::min(pos[0] + size[0], dx0 + dw) - std::max(pos[0], dx0), iy = std::min(pos[1] + size[1], dy0 + dh) - std::max(pos[1], dy0);
@@ -257,6 +333,7 @@ static bool HitTest(uint8_t* I, float mx, float my, Hit& out) {
         }
         if (rows >= 2 && cand.group >= 0 && nearD < bestD && mx > bx0 && mx < bx1 && my > by0 && my < by1) { bestD = nearD; best = cand; }
     }
+    if (useShown && nSeen > 0 && nHidden == nSeen) return HitTest(I, mx, my, out, false);
     const bool drawnBad = nBogus * 10 > nRows * 6;
     if (drawnBad && directAll.group >= 0 && (direct.group < 0 || directAllD < directD)) { out = directAll; return true; }
     if (direct.group >= 0) { out = direct; return true; }
@@ -309,7 +386,9 @@ static bool Enabled() { return s_ok && g_cfg.menuMouse != 0 && !g_menuOpen.load(
 static void Sample(double now, bool fresh) {
     s_m = Muestra(); s_m.t = now;
     const bool lNow = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, rNow = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
-    const bool lEdge = lNow && !s_lWas && !fresh, rEdge = rNow && !s_rWas && !fresh;
+    // (15/11 n, Agustin 05:10: "cuando se selecciona la opcion camara de juego el click derecho hace regresar al menu editar") en el Motor
+    // el clic derecho nunca es volver (se sale con su boton Volver o Esc): con la camara del juego tambien es para mirar
+    const bool lEdge = lNow && !s_lWas && !fresh, rEdge = rNow && !s_rWas && !fresh && !MotorPageActive();
     s_lWas = lNow; s_rWas = rNow;
     HWND h = OverlayHwnd(); POINT p{}; RECT rc{};
     if (!h || GetForegroundWindow() != h || !GetCursorPos(&p) || !ScreenToClient(h, &p) || !GetClientRect(h, &rc)) { s_last.x = s_last.y = -32000; return; }
@@ -341,7 +420,10 @@ static void GuideSync(double now) {
 static bool IsTeamSel(void* win) {
     if (!s_tsOk) return false;
     void** vt = *(void***)win;
-    return Ptr(vt) && (uintptr_t)vt[0x250 / 8] == kTsPrev && (uintptr_t)vt[0x258 / 8] == kTsNext && (uintptr_t)vt[0x260 / 8] == kTsMove;
+    // (15/11) + menu::MenuEditCmnNationalitySelectBase 0x142728bd0 (Editar: elegir liga / nacionalidad): hereda de TeamSelectCommon
+    // (mismas ranuras 0x250 / 0x258, su propio mover 0x140c9f310); antes caia en la prueba general = un solo rect gigante y el clic aceptaba
+    const uintptr_t mv = Ptr(vt) ? (uintptr_t)vt[0x260 / 8] : 0;
+    return Ptr(vt) && (uintptr_t)vt[0x250 / 8] == kTsPrev && (uintptr_t)vt[0x258 / 8] == kTsNext && (mv == kTsMove || mv == 0x140c9f310ull);
 }
 
 // rect de un nodo cualquiera: lo que dibuja; si no se puede leer, el del juego
@@ -431,26 +513,385 @@ static bool TeamSelStep(void* win, uint8_t* I, float mx, float my, double now) {
     return true;
 }
 
+// (15/11 ythnmm, Agustin 04:12: "un boton sobre game settings que permita cerrar el juego, y que se pueda elegir con el mouse",
+// "que solo se muestre en la pantalla principal, el menu previo a elegir el modo") boton "Salir del juego" sobre la pestana de mas
+// a la derecha de la fila de arriba del menu principal (menu::TopModeSelect 0x142676ea8; en el Dream Patch es GAME SETTINGS),
+// solo con esa pagina activa y en su primer nivel (ventana+0x98 == 0: las tarjetas que abren otra lista lo suben a 1, vf49
+// 0x140ab0830). Cerrar = lo mismo que la X de la ventana: el bucle principal sigue mientras [0x143713268]+0xfc sea 0 (0x1403a6ac0;
+// la X de la ventana y el nodo de flujo ProcExit, 0x141265760, ponen 1). Primer clic: "Salir? clic otra vez"; segundo clic
+// (dentro de 4 s) cierra. [PES21FX] mouse_boton_salir = 0 lo saca.
+static const uintptr_t kMoveSel = 0x140e3e8c0ull;   // (15/11) mover la seleccion del juego (ver hk_Dirs, paginas sin mando)
+static const unsigned char kMoveSelSig[24] = { 0x44,0x88,0x4c,0x24,0x20,0x44,0x89,0x44,0x24,0x18,0x89,0x54,0x24,0x10,0x55,0x53,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56 };
+static const uintptr_t kTopModeVt = 0x142676ea8ull, kGameRoot = 0x143713268ull;
+// (Agustin 04:19: "que funcione como la opcion de salir") el boton manda el MISMO evento que la opcion Salir del menu principal:
+// TopMenu/TopMenuNew.json "24_Exit" -> ProcExit (0x141265760, que solo pone [0x143713268]+0xfc = 1, sin guardar nada aparte).
+// Se dispara con 0x140ab1f10 (TopModeSelect: animacion de salida "dmmOut" + 0x140e45290 = evento del flujo, lo mismo que hace su
+// vf49 al aceptar una tarjeta). Si a los 3 s el juego sigue (flujo sin ese evento en otro parche), se pone el 1 directo.
+static const uintptr_t kTopModeNext = 0x140ab1f10ull;
+static const unsigned char kTopModeNextSig[28] = { 0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xec,0x20,0x48,0x8b,0xd9,0x49,0x8b,0xf8,0x48,0x8b,0x89,0xe0,0x00,0x00,0x00 };
+static double s_exitFallT = -1.0;
+static void ExitFallback(double now) {
+    if (s_exitFallT < 0 || now - s_exitFallT < 3.0) return;
+    s_exitFallT = -1.0; uint8_t* gr = *(uint8_t**)kGameRoot;
+    if (Ptr(gr) && gr[0xfc] == 0) { gr[0xfc] = 1; Log("mouse en menus: boton Salir: el flujo no cerro en 3 s -> se cierra como la X de la ventana"); }
+}
+static std::atomic<double> s_exitShowT{-1.0e9}, s_exitArmT{-1.0e9};
+static std::atomic<float> s_exitX{0}, s_exitY{0}, s_exitW{0}, s_exitH{0};
+static std::atomic<bool> s_exitHover{false};
+static bool ExitTabRect(uint8_t* I, float r[4]) {      // pestana de arriba de todo y mas a la derecha del grupo 0 (rect del juego en x / y; ancho dibujado si se puede)
+    uint8_t* root = P8(I + 0x98); uint8_t* grp = Ptr(root) ? Child(root, 0) : nullptr; if (!Ptr(grp)) return false;
+    const uint32_t n = std::min<uint32_t>(ChildCount(grp), 64);
+    float px[64], py[64], pw[64], ph[64]; int m = 0;
+    for (uint32_t i = 0; i < n; i++) { uint8_t* nd = Child(grp, i); if (!Ptr(nd)) continue; void** vt = *(void***)nd; if (!Ptr(vt) || !RowClass(vt)) continue;
+        if (!NodeFlag(nd, 0x0c)) continue;
+        float pos[2] = { 0, 0 }, size[2] = { 0, 0 }; if (((PFN_NodeVec2)vt[0xa0 / 8])(nd, pos) < 0) continue; ((PFN_NodeVec2)vt[0xc0 / 8])(nd, size);
+        float d[4]; const bool dk = DrawnRect(nd, d[0], d[1], d[2], d[3]);
+        if (!(pos[0] > -100.0f && pos[0] < 2000.0f && pos[1] > -100.0f && pos[1] < 1100.0f)) continue;
+        px[m] = pos[0]; py[m] = pos[1]; pw[m] = dk && d[2] > size[0] ? d[2] : size[0]; ph[m] = dk && d[3] > 8.0f ? d[3] : size[1]; m++; }
+    if (m < 2) return false;
+    float top = 1e9f; for (int i = 0; i < m; i++) top = std::min(top, py[i]);
+    int best = -1, cnt = 0; float prevX = -1e9f;
+    for (int i = 0; i < m; i++) if (py[i] < top + 12.0f) { cnt++; if (best < 0 || px[i] > px[best]) best = i; }
+    if (best < 0 || cnt < 2) return false;                // tiene que haber una fila de pestanas (2 o mas a la misma altura)
+    for (int i = 0; i < m; i++) if (i != best && py[i] < top + 12.0f && px[i] > prevX) prevX = px[i];
+    float w = pw[best]; const float pitch = px[best] - prevX;
+    if (pitch > 40.0f && (w < pitch * 0.6f || w > pitch * 1.4f)) w = pitch - 12.0f;   // tamano del juego que no es el dibujado (126 x 126 en el Dream Patch)
+    r[0] = px[best]; r[1] = py[best]; r[2] = std::clamp(w, 120.0f, 700.0f); r[3] = ph[best]; return true;
+}
+bool MenuExitButton(float* x, float* y, float* w, float* h, int* state) {   // overlay.cpp lo dibuja (pixeles de la ventana)
+    if (!s_ok || g_cfg.menuMouse == 0 || g_cfg.menuExitBtn == 0 || Now() - s_exitShowT.load() > 0.25) return false;
+    *x = s_exitX.load(); *y = s_exitY.load(); *w = s_exitW.load(); *h = s_exitH.load();
+    *state = Now() - s_exitArmT.load() < 4.0 ? 2 : (s_exitHover.load() ? 1 : 0);
+    return *w > 4.0f && *h > 4.0f;
+}
+
+// (15/11 ythnmm, Agustin 17:24: "le falta opciones en el modo editar jugador opciones para mover la camara, hacer zoom") CAMARA DEL
+// VISOR DEL EDITAR CON EL MOUSE. Solo rueda, clic izquierdo y derecho (regla del 14/11), y solo con el mouse FUERA de las filas del menu
+// (sobre el jugador): arrastrar con el izquierdo = girar alrededor del jugador, arrastrar con el derecho = correr la camara (arriba /
+// abajo / costados), rueda = acercar / alejar. Un clic derecho sin arrastrar sigue siendo "volver" (se manda al soltar). Sobre las filas
+// todo sigue como antes (la rueda mueve la lista).
+// El visor existe mientras vive edit::ModelView ([0x1438040d0], visor-editar-impl); su camara (CameraImpl) llega cada cuadro a
+// RenderTarget::SetCamera 0x1419bf3f0 (gancho de freecam.cpp). Ahi MenuViewCamAdjust corre posicion / objetivo sobre la camara del
+// juego (giro y altura alrededor del objetivo, distancia x zoom, corrimiento en el plano de la pantalla) y freecam.cpp devuelve los
+// valores del juego despues de mandarla: nada se acumula en el juego y al salir del visor (otro ModelView o ninguno) todo vuelve a cero.
+// [PES21FX] mouse_camara_editar = 0 lo apaga.
+static const uintptr_t kModelView = 0x1438040d0ull;
+static std::atomic<double> s_vcLiveT{-1.0e9};
+static std::atomic<int> s_vcDrag{0};                 // 0 nada, 1 girando (izquierdo), 2 corriendo (derecho)
+static std::atomic<int> s_vcWheel{0};
+static std::atomic<bool> s_vcBackReq{false};          // clic derecho sin arrastrar fuera de las filas: "volver" al soltar
+static void* s_vcBackWin = nullptr; static double s_vcBackT = 0;
+static std::atomic<float> s_vcDYaw{0}, s_vcDPitch{0}, s_vcDPanX{0}, s_vcDPanY{0};   // pedido del mouse (lo consume MenuViewCamAdjust)
+static float s_vcYaw = 0, s_vcPitch = 0, s_vcZoom = 1.0f, s_vcZoomCur = 1.0f, s_vcPan[3] = {};   // objetivo (lo que pidio el mouse)
+static float s_vcYawCur = 0, s_vcPitchCur = 0, s_vcPanCur[3] = {};                                // lo que se ve: sigue al objetivo con un retardo corto
+// (15/11 c, Agustin 17:35: "al hacer click en una zona del cuerpo se haga un zoom ahi, al hacer doble click rapido, con un pequeno zoom
+// con animacion suave, y un brillo en la zona") DOBLE CLIC sobre el visor: la camara se corre hasta dejar ese punto en el centro y se
+// acerca (x 0.5), todo con el retardo suave; otro doble clic con el zoom puesto vuelve a la camara del juego. El brillo es un destello
+// en la pantalla (overlay.cpp, MenuViewCamPulse) que viaja con el punto hasta el centro.
+static std::atomic<int> s_vcFocusReq{0}; static std::atomic<float> s_vcFocusX{0}, s_vcFocusY{0};   // fraccion del alto de la pantalla desde el centro
+static bool s_vcFocused = false;
+static std::atomic<double> s_vcPulseT{-1.0e9}; static std::atomic<float> s_vcPulseX{0}, s_vcPulseY{0}; static std::atomic<int> s_vcPulseKind{0};
+// (15/11 e, Agustin 18:40: "el zoom al hacer doble click no es preciso") la imagen del visor NO ocupa toda la ventana: el juego la dibuja
+// en el clip loaderTex (edit::ModelView +0x9c / +0xa0, ~1238 x 1080 del escenario, graficos-niveles-visor-tamano) pegado a la derecha,
+// con la relacion de aspecto de la camara (+0x44). El centro de la camara es el centro de ESE rectangulo, no el de la ventana: el punto
+// del doble clic se mide desde ahi y en altos de ese rectangulo. INFERIDO: alto completo y pegado a la derecha (lo dice el log).
+static std::atomic<float> s_vcAspect{0.0f}, s_vcCx{0}, s_vcCy{0};
+static std::atomic<double> s_vcMoveT{-1.0e9};   // (16/11) ultima vez que la camara a mano se movio
+// (16/11, Agustin 17:08 / 17:09: "dale a la camara del mouse del menu apariencia la opcion de hacer zoom con la rueda y cambiar vista a
+// perspectiva o ortografica", "con un boton", "agrega un icono que aparezca al usar la rueda", "con brillo como el resto")
+static std::atomic<bool> s_vcOrtho{false}; static float s_vcOrthoCur = 0.0f;   // 0 = perspectiva .. 1 = ortografica (animado)
+static std::atomic<float> s_vcBtn[4] = {};   // boton perspectiva / ortografica (pixeles de la ventana; lo dibuja overlay.cpp)
+static std::atomic<double> s_ziT{-1.0e9}; static std::atomic<int> s_ziDir{0};
+void ZoomIconNote(int dir) { if (dir == 0) return; s_ziDir.store(dir > 0 ? 1 : -1); s_ziT.store(Now()); }
+bool ZoomIconGet(float* age, int* dir) { const float a = (float)(Now() - s_ziT.load()); if (a < 0.0f || a > 0.75f) return false; *age = a; *dir = s_ziDir.load(); return true; }
+bool MenuViewCamOrtho() { return s_vcOrtho.load(); }
+void MenuViewCamOrthoButton(float x0, float y0, float x1, float y1) { s_vcBtn[0] = x0; s_vcBtn[1] = y0; s_vcBtn[2] = x1; s_vcBtn[3] = y1; }
+static uintptr_t s_vcMv = 0; static double s_vcT = 0; static int s_vcLog = 0;
+// (15/11 d, Agustin 17:56: "unicamente en el menu editar jugador y sus submenus, pero no en el resto de menus y no en el motor") la
+// camara a mano solo vale dentro de Editar > Jugadores. La clase de cada pagina sale del RTTI del exe (vtable[-1] -> localizador ->
+// descriptor de tipo ".?AV<clase>@menu@@"): menu::MenuEditPl* / MenuEditPlayerMain prenden el modo jugador, cualquier otra pagina
+// menu::MenuEdit* (Equipos, Ligas, Entrenadores, el menu de Editar...) lo apaga, y las comunes (MenuEditCmn*: listas, colores,
+// nacionalidad) y las que no son del Editar (avisos) lo dejan como estaba. Salir del visor (sin ModelView) tambien lo apaga.
+static std::atomic<bool> s_vcPlayer{false};
+static int VcPageKind(void* win) {   // 1 jugador, 2 comun / ajena, 3 otra del Editar
+    static uintptr_t s_vt[64] = {}; static int8_t s_kind[64] = {}; static int s_n = 0;
+    const uintptr_t vt = *(uintptr_t*)win;
+    for (int i = 0; i < s_n; i++) if (s_vt[i] == vt) return s_kind[i];
+    int kind = 2; const char* nm = nullptr;
+    const uintptr_t col = Readable((const void*)(vt - 8), 8) ? *(const uintptr_t*)(vt - 8) : 0;
+    if (col && Readable((const void*)col, 0x18) && U32((const uint8_t*)col) == 1) {
+        const uint32_t tdRva = U32((const uint8_t*)col + 0x0c), selfRva = U32((const uint8_t*)col + 0x14);
+        const uintptr_t base = col - selfRva, td = base + tdRva;
+        if (base == 0x140000000ull && Readable((const void*)(td + 0x10), 64)) {
+            nm = (const char*)(td + 0x10);
+            if (memchr(nm, 0, 64) == nullptr) nm = nullptr;
+        }
+    }
+    if (nm && strncmp(nm, ".?AVMenuEdit", 12) == 0) {
+        // (15/11 f, Agustin 18:45: "al salir del menu de apariencia, que es el que tiene que permitir mover la camara, la camara tendria
+        // que volver a donde esta por default") solo Apariencia y lo que cuelga de ella (cara, pelo, montaje, cuerpo, accesorios)
+        const char* r = nm + 12;
+        // (16/11, Agustin 00:04: "el menu de movimiento no detecta el mouse y no permite mover la camara") tambien Movimiento (PlMotionSetting)
+        static const char* kAp[] = { "PlAppearance", "PlFaceType", "PlHairstyle", "PlMontage", "PlBody", "PlAccessory", "PlMotionSetting" };
+        kind = strncmp(r, "Cmn", 3) == 0 ? 2 : 3;
+        for (const char* a : kAp) if (strncmp(r, a, strlen(a)) == 0) kind = 1;
+    }
+    if (s_n < 64) { s_vt[s_n] = vt; s_kind[s_n] = (int8_t)kind; s_n++; Log("mouse en menus: pagina %s (vtable %p) -> camara del visor %s", nm ? nm : "(sin RTTI)", (void*)vt, kind == 1 ? "si (Apariencia / Movimiento del jugador)" : kind == 3 ? "no (otra parte del Editar: vuelve a la del juego)" : "sin cambio"); }
+    return kind;
+}
+static bool VcLive() { return s_ok && g_cfg.menuMouse != 0 && g_cfg.menuViewCam != 0 && s_vcPlayer.load() && Now() - s_vcLiveT.load() < 0.3; }
+static void VcReset(const char* why) {
+    if (s_vcYaw != 0 || s_vcPitch != 0 || s_vcZoom != 1.0f || s_vcPan[0] != 0 || s_vcPan[1] != 0 || s_vcPan[2] != 0) Log("mouse en menus: camara del visor del Editar vuelve a la del juego (%s)", why);
+    s_vcYaw = s_vcPitch = 0; s_vcZoom = s_vcZoomCur = 1.0f; s_vcPan[0] = s_vcPan[1] = s_vcPan[2] = 0;
+    s_vcYawCur = s_vcPitchCur = 0; s_vcPanCur[0] = s_vcPanCur[1] = s_vcPanCur[2] = 0; s_vcFocused = false; s_vcFocusReq = 0;
+    s_vcDYaw = 0; s_vcDPitch = 0; s_vcDPanX = 0; s_vcDPanY = 0; s_vcWheel = 0;
+}
+// (15/11 b, Agustin 17:31: "lo de arrastrar que detecte el menu a la izquierda para poder seguir haciendo click en las partes del menu o
+// volver avanzar") ZONA DEL MENU: todo lo que esta a la izquierda del borde derecho de las filas visibles (mas 32 px) es del menu, aunque
+// no haya una fila justo debajo: ahi los clics y la rueda siguen como siempre (elegir, aceptar, volver, mover la lista). La camara solo se
+// maneja a la derecha de esa franja. Cada ventana del cuadro suma sus filas (Step); el valor se renueva cada 0.15 s.
+static std::atomic<float> s_menuRightPx{-1.0f}; static std::atomic<double> s_menuRightT{-1.0e9};
+static void VcMenuExtent(uint8_t* I, double now) {
+    uint8_t* root = P8(I + 0x98); if (!Ptr(root)) return;
+    const float cw = s_m.cw, ch = s_m.ch; if (cw < 160.0f || ch < 90.0f) return;
+    float sw = cw, sh = ch, ox = 0, oy = 0;
+    if (cw * 9.0f > ch * 16.0f) { sw = ch * 16.0f / 9.0f; ox = (cw - sw) * 0.5f; } else if (cw * 9.0f < ch * 16.0f) { sh = cw * 9.0f / 16.0f; oy = (ch - sh) * 0.5f; }
+    (void)oy; (void)sh;
+    float right = -1.0f; int n = 0;
+    const uint32_t ng = std::min<uint32_t>(U32(I + 0xa4), 64);
+    for (uint32_t g = 0; g < ng; g++) { uint8_t* grp = Child(root, g); if (!Ptr(grp)) continue; const uint32_t nr = std::min<uint32_t>(ChildCount(grp), 512);
+        for (uint32_t r = 0; r < nr; r++) { uint8_t* nd = Child(grp, r); if (!Ptr(nd) || !NodeFlag(nd, 0x0c)) continue; void** v = *(void***)nd; if (!Ptr(v) || !RowClass(v)) continue;
+            float pos[2] = { 0, 0 }, size[2] = { 0, 0 }; if (((PFN_NodeVec2)v[0xa0 / 8])(nd, pos) < 0) continue; ((PFN_NodeVec2)v[0xc0 / 8])(nd, size);
+            float x = pos[0], w = size[0], dy = 0, dw = 0, dh = 0; if (DrawnRect(nd, x, dy, dw, dh) && dw > 0) w = dw; else x = pos[0];
+            if (!(x == x) || !(w == w) || w <= 0 || x + w < 0 || x > 1920.0f) continue;
+            right = std::max(right, x + w); n++; } }
+    if (n == 0) return;
+    const float px = ox + right * sw / 1920.0f + 32.0f;
+    const bool fresh = now - s_menuRightT.load() > 0.15;
+    if (fresh || px > s_menuRightPx.load()) s_menuRightPx.store(px);
+    if (fresh) s_menuRightT.store(now);
+}
+static bool VcInMenu(int x) { return Now() - s_menuRightT.load() < 0.5 && (float)x < s_menuRightPx.load(); }
+bool MenuViewCamLive() { return VcLive(); }
+bool MenuViewCamHint() { return VcLive() && !s_over.load() && !VcInMenu(s_curX.load()); }   // overlay.cpp: la guia de abajo muestra girar / mover / zoom
+// lo llama freecam.cpp hk_SetCam antes de mandar la camara; save = 0x34 bytes desde +0x10 (lo devuelve despues)
+bool MenuViewCamAdjust(unsigned char* cam, unsigned char* save) {
+    if (!s_ok || g_cfg.menuMouse == 0 || g_cfg.menuViewCam == 0 || g_menuOpen.load(std::memory_order_relaxed)) return false;
+    const uintptr_t mv = Readable((const void*)kModelView, 8) ? *(const uintptr_t*)kModelView : 0;
+    // (15/11 f, Agustin 18:45: "al mover la camara con el mouse se ven errores graficos") antes la camara corrida iba solo en la copia que
+    // se manda al render target y despues se devolvia la del juego: el resto del juego (recorte de objetos, sombras, nivel de detalle) seguia
+    // leyendo la camara vieja y no coincidia con lo que se dibujaba. Ahora se ESCRIBE en el CameraImpl y queda (como la camara libre); se
+    // guarda la del juego (base) y lo ultimo escrito: si el juego la cambia (otra vista del visor) se toma esa como base nueva. Al volver a
+    // cero (salir de Apariencia) se escribe la base una vez.
+    // (15/11 r, videos de Agustin 16:10: el jugador saltaba de un lugar a otro cuadro a cuadro al mover la camara) el gancho recibe MAS DE
+    // UNA camara (unas 1.5 llamadas por cuadro: el visor y otro render target del Editar). Antes, al cambiar de puntero se olvidaba la base
+    // y la camara que volvia traia lo que habiamos escrito como "base nueva": se sumaba dos veces y saltaba. Ahora cada camara guarda su
+    // propia base y lo ultimo escrito (hasta 4).
+    struct VcCam { unsigned char* cam; unsigned char base[0x34], wrote[0x34]; bool haveBase, dirty; double t; float gameFov, wroteFov; bool fovW; };
+    static VcCam s_vc[4] = {}; static int s_vcCamLog = 0;
+    VcCam* E = nullptr; { const double tn = Now(); int old = 0;
+        for (int i = 0; i < 4; i++) { if (s_vc[i].cam == cam) { E = &s_vc[i]; break; } if (s_vc[i].t < s_vc[old].t) old = i; }
+        if (!E) { E = &s_vc[old]; E->cam = cam; E->haveBase = false; E->dirty = false; E->fovW = false; if (s_vcCamLog++ < 6) Log("mouse en menus: camara del visor: camara %p anotada (lugar %d)", (void*)cam, old); }
+        E->t = tn; }
+    unsigned char* s_base = E->base; unsigned char* s_wrote = E->wrote; bool& s_haveBase = E->haveBase; bool& s_dirty = E->dirty;
+    // solo posicion y objetivo (+0x10..+0x27) son nuestros: si el juego los cambio, son la base nueva; lo demas (arriba, cerca / lejos,
+    // campo de vision) se toma siempre del juego, asi un cambio parcial nunca suma lo nuestro a la base
+    if (!s_haveBase || memcmp(cam + 0x10, s_wrote, 24) != 0) {   // el juego puso otra vista (p. ej. al entrar a Cara): se arranca de esa
+        if (s_haveBase && s_dirty) VcReset("el juego cambio la vista del visor");
+        memcpy(s_base, cam + 0x10, 24); memcpy(s_wrote, cam + 0x10, 24); s_haveBase = true; s_dirty = false; }
+    // campo de vision: si lo escribimos nosotros (ortografica) el del juego es el guardado, si el juego puso otro, ese es el nuevo
+    { float cf; memcpy(&cf, cam + 0x40, 4); if (!E->fovW || cf != E->wroteFov) { E->gameFov = cf; E->fovW = false; } }
+    memcpy(s_base + 24, cam + 0x10 + 24, 0x34 - 24); memcpy(s_base + 0x30, &E->gameFov, 4);
+    auto Restore = [&]() {
+        if (E->fovW) { memcpy(cam + 0x40, &E->gameFov, 4); E->fovW = false; }
+        if (s_dirty) { memcpy(cam + 0x10, s_base, 24); memcpy(s_wrote, s_base, 24); s_dirty = false; Log("mouse en menus: camara del visor: vuelve a la del juego"); } };
+    if (!mv) { if (s_vcMv) { VcReset("salio del visor"); s_vcMv = 0; } s_vcPlayer = false; Restore(); return false; }
+    if (!s_vcPlayer.load()) { if (s_vcYawCur != 0 || s_vcPitchCur != 0 || s_vcZoomCur != 1.0f || s_vcPan[0] != 0 || s_vcPan[1] != 0 || s_vcPan[2] != 0) VcReset("fuera de Apariencia"); Restore(); return false; }
+    if (mv != s_vcMv) { VcReset("visor nuevo"); s_vcMv = mv; }
+    int proj; memcpy(&proj, s_base + 0x2c, 4); if (proj != 0) return false;
+    float pos[3], tgt[3], fov; memcpy(pos, s_base + 0x00, 12); memcpy(tgt, s_base + 0x0c, 12); memcpy(&fov, s_base + 0x30, 4);   // la camara del juego (base)
+    for (float f : pos) if (!(f == f) || fabsf(f) > 1.0e5f) return false;
+    for (float f : tgt) if (!(f == f) || fabsf(f) > 1.0e5f) return false;
+    if (!(fov > 0.005f && fov < 3.0f)) return false;
+    const float v[3] = { pos[0] - tgt[0], pos[1] - tgt[1], pos[2] - tgt[2] };
+    const float d = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (d < 0.01f) return false;
+    s_vcLiveT.store(Now());
+    { float asp; memcpy(&asp, cam + 0x44, 4); if (asp == asp && asp > 0.2f && asp < 5.0f) s_vcAspect.store(asp); }
+    if (s_vcLog < 2) { s_vcLog++; Log("mouse en menus: camara del visor del Editar a mano (camara del juego a %.2f m, campo de vision %.3f): arrastrar = girar, derecho = mover, rueda = zoom", d, fov); }
+    // pedido del mouse
+    // (16/11, Agustin 06:44: "la camara con el mouse en apariencia sigue viendose rastros o glitches") el gancho recibe ~1.5 camaras por
+    // cuadro y el suavizado avanzaba en CADA llamada: dentro de un mismo cuadro cada camara del visor salia un poco distinta. Ahora el
+    // suavizado avanza una sola vez por cuadro (numero de Present) y todas las camaras de ese cuadro reciben la misma
+    static int s_vcFrame = -1; const int pf = PresentNo(); const bool step = pf != s_vcFrame; s_vcFrame = pf;
+    const double now = Now(); const float dt = step ? (float)std::clamp(now - s_vcT, 0.0, 0.1) : 0.0f; if (step) s_vcT = now;
+    s_vcYaw += s_vcDYaw.exchange(0); s_vcPitch += s_vcDPitch.exchange(0);
+    { const int w = s_vcWheel.exchange(0); if (w) { s_vcZoom = std::clamp(s_vcZoom * powf(0.88f, (float)w / 120.0f), 0.12f, 3.0f); static int nz = 0; if (nz++ < 3) Log("mouse en menus: camara del visor: rueda -> distancia x%.2f", s_vcZoom); } }
+    { const float to = s_vcOrtho.load() ? 1.0f : 0.0f; if (fabsf(s_vcOrthoCur - to) > 1e-3f) s_vcOrthoCur += (to - s_vcOrthoCur) * std::clamp(8.0f * dt, 0.0f, 1.0f); else s_vcOrthoCur = to; }
+    const float pitch0 = asinf(std::clamp(v[1] / d, -1.0f, 1.0f)), yaw0 = atan2f(v[0], v[2]);
+    s_vcPitch = std::clamp(s_vcPitch, -1.35f - pitch0, 1.35f - pitch0);   // nunca justo arriba / abajo del jugador
+    // lo que se ve sigue al objetivo (arrastrar se siente directo; el doble clic y la vuelta se ven como un movimiento suave)
+    const bool busy = s_vcDrag.load() != 0; const float ks = std::clamp((busy ? 30.0f : 9.0f) * dt, 0.0f, 1.0f);
+    auto Go = [&](float& cur, float tgtv, float eps) { if (fabsf(cur - tgtv) > eps) cur += (tgtv - cur) * ks; else cur = tgtv; };
+    Go(s_vcYawCur, s_vcYaw, 1e-4f); Go(s_vcPitchCur, s_vcPitch, 1e-4f); Go(s_vcZoomCur, s_vcZoom, 1e-4f);
+    for (int i = 0; i < 3; i++) Go(s_vcPanCur[i], s_vcPan[i], 1e-4f);
+    while (s_vcYaw > 3.1415927f) { s_vcYaw -= 6.2831853f; s_vcYawCur -= 6.2831853f; }   // la vuelta a cero nunca da mas de media vuelta
+    while (s_vcYaw < -3.1415927f) { s_vcYaw += 6.2831853f; s_vcYawCur += 6.2831853f; }
+    const float pt = pitch0 + s_vcPitchCur, yw = yaw0 + s_vcYawCur, dn = d * s_vcZoomCur;
+    const float nv[3] = { dn * cosf(pt) * sinf(yw), dn * sinf(pt), dn * cosf(pt) * cosf(yw) };
+    // ejes de la camara nueva (derecha / arriba de la pantalla) para correrla en el plano de la pantalla
+    const float f[3] = { -nv[0] / dn, -nv[1] / dn, -nv[2] / dn };
+    float r[3] = { -f[2], 0.0f, f[0] }; { const float l = sqrtf(r[0] * r[0] + r[2] * r[2]); if (l < 1e-4f) return false; r[0] /= l; r[2] /= l; }   // f x (0,1,0)
+    const float u[3] = { r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0] };
+    const float h = 2.0f * dn * tanf(fov * 0.5f), panMax = std::max(1.5f, 1.5f * d);
+    auto PanClamp = [&]() { const float pl = sqrtf(s_vcPan[0] * s_vcPan[0] + s_vcPan[1] * s_vcPan[1] + s_vcPan[2] * s_vcPan[2]); if (pl > panMax) for (float& c : s_vcPan) c *= panMax / pl; };
+    { const float px = s_vcDPanX.exchange(0), py = s_vcDPanY.exchange(0);   // fraccion del alto de la pantalla
+      if (px != 0 || py != 0) { for (int i = 0; i < 3; i++) s_vcPan[i] += (-r[i] * px + u[i] * py) * h; PanClamp(); } }
+    if (s_vcFocusReq.exchange(0)) {   // doble clic
+        if (s_vcFocused) {            // ya habia zoom a una zona: volver a la camara del juego (suave)
+            s_vcYaw = s_vcPitch = 0; s_vcZoom = 1.0f; s_vcPan[0] = s_vcPan[1] = s_vcPan[2] = 0; s_vcFocused = false; s_vcPulseKind = 0;
+            Log("mouse en menus: camara del visor: doble clic -> vuelve a la camara del juego");
+        } else {
+            // (15/11 g, Agustin 18:46: "el doble click debe ser por zonas del jugador o dependiendo del jugador") ZONAS DEL CUERPO: el rayo
+            // del mouse (camara que se ve ahora) corta el plano vertical que pasa por la cara del jugador (esqueleto: exprbones.cpp, sk_head);
+            // la altura del corte respecto de la cara (piso = y 0 del visor) dice la zona: cabeza, torso, piernas o pies. La camara va al
+            // punto de esa zona sobre el eje del jugador (la cabeza: el centro de la cara de verdad) y se acerca segun la zona.
+            const float fx = s_vcFocusX.load(), fy = s_vcFocusY.load();
+            float cp[3]; for (int i = 0; i < 3; i++) cp[i] = tgt[i] + s_vcPanCur[i] + nv[i];          // camara que se ve
+            const void* lk = nullptr; float fc[3], ffw[3], fup[3]; double age = 99.0;
+            const bool face = ExprFaceFrame(cp, f, &lk, fc, ffw, fup, &age) && age < 1.0 && fc[1] > 0.6f && fc[1] < 2.6f;
+            bool zoned = false;
+            if (face) {
+                const float th = 2.0f * tanf(fov * 0.5f);
+                float dir[3]; for (int i = 0; i < 3; i++) dir[i] = f[i] + (r[i] * fx - u[i] * fy) * th;
+                float n[3] = { f[0], 0.0f, f[2] }; const float nl = sqrtf(n[0] * n[0] + n[2] * n[2]);
+                if (nl > 1e-3f) { n[0] /= nl; n[2] /= nl;
+                    const float den = dir[0] * n[0] + dir[2] * n[2];
+                    if (fabsf(den) > 1e-4f) {
+                        const float tt = ((fc[0] - cp[0]) * n[0] + (fc[2] - cp[2]) * n[2]) / den;
+                        if (tt > 0.0f) {
+                            const float hy = cp[1] + dir[1] * tt, H = fc[1], rel = hy / H;   // 1 = altura de la cara, 0 = piso
+                            static const char* kZn[4] = { "cabeza", "torso", "piernas", "pies" };
+                            const int z = rel > 0.86f ? 0 : rel > 0.55f ? 1 : rel > 0.22f ? 2 : 3;
+                            const float yz[4] = { fc[1], H * 0.74f, H * 0.42f, H * 0.07f }, zz[4] = { 0.20f, 0.42f, 0.48f, 0.32f };
+                            const float P[3] = { fc[0], yz[z], fc[2] };
+                            for (int i = 0; i < 3; i++) s_vcPan[i] = P[i] - tgt[i];
+                            PanClamp(); s_vcZoom = std::clamp(zz[z], 0.12f, 3.0f); s_vcFocused = true; s_vcPulseKind = 1; zoned = true;
+                            Log("mouse en menus: camara del visor: doble clic -> zona %s (corte a %.2f m, cara a %.2f m), distancia x%.2f", kZn[z], hy, H, s_vcZoom);
+                        }
+                    }
+                }
+            }
+            if (!zoned) {   // sin dato del esqueleto: el punto de la pantalla
+                for (int i = 0; i < 3; i++) s_vcPan[i] = s_vcPanCur[i] + (r[i] * fx - u[i] * fy) * h;   // ese punto al centro (en el plano del objetivo)
+                PanClamp(); s_vcZoom = std::clamp(s_vcZoomCur * 0.5f, 0.12f, 3.0f); s_vcFocused = true; s_vcPulseKind = 1;
+                Log("mouse en menus: camara del visor: doble clic sin esqueleto (%s) -> punto de la pantalla (%.2f, %.2f), distancia x%.2f", face ? "corte fuera" : "sin cara", fx, fy, s_vcZoom);
+            }
+        }
+    }
+    (void)save;
+    if (s_vcYawCur == 0 && s_vcPitchCur == 0 && s_vcZoomCur == 1.0f && s_vcPanCur[0] == 0 && s_vcPanCur[1] == 0 && s_vcPanCur[2] == 0 && s_vcOrthoCur == 0.0f) { Restore(); return false; }
+    float nt[3], np[3]; for (int i = 0; i < 3; i++) { nt[i] = tgt[i] + s_vcPanCur[i]; np[i] = nt[i] + nv[i]; }
+    // ORTOGRAFICA (como la del Motor): la camara se aleja K veces sobre la misma linea y el campo de vision se cierra en la misma
+    // proporcion: el objetivo queda del mismo tamano y las lineas paralelas casi no se juntan. Animado (s_vcOrthoCur)
+    if (s_vcOrthoCur > 0.0f) {
+        const float K = 1.0f + 19.0f * s_vcOrthoCur * s_vcOrthoCur;
+        for (int i = 0; i < 3; i++) np[i] = nt[i] + nv[i] * K;
+        const float nf = 2.0f * atanf(tanf(fov * 0.5f) / K);
+        memcpy(cam + 0x40, &nf, 4); E->wroteFov = nf; E->fovW = true;
+        { float cf; memcpy(&cf, cam + 0x38, 4); const float need = dn * K + 50.0f; if (cf == cf && cf < need) memcpy(cam + 0x38, &need, 4); }   // que no corte lejos
+    } else if (E->fovW) { memcpy(cam + 0x40, &E->gameFov, 4); E->fovW = false; }
+    // (16/11) camara en movimiento: el TAA del juego mezcla la historia sin saber que la camara se movio (rastros); camhook.cpp le
+    // pide descartar la historia mientras se mueve (MenuViewCamMoving)
+    { static float s_lastNp[3] = {}, s_lastNt[3] = {}; float dm = 0.0f; for (int i = 0; i < 3; i++) dm = std::max(dm, std::max(fabsf(np[i] - s_lastNp[i]), fabsf(nt[i] - s_lastNt[i])));
+      if (dm > 1.0e-4f) s_vcMoveT.store(now); memcpy(s_lastNp, np, 12); memcpy(s_lastNt, nt, 12); }
+    memcpy(cam + 0x10, np, 12); memcpy(cam + 0x1c, nt, 12);
+    memcpy(s_wrote, cam + 0x10, 24); s_dirty = true;
+    return true;
+}
+bool MenuViewCamMoving() { return Now() - s_vcMoveT.load() < 0.12; }
+// overlay.cpp: destello del doble clic (pixeles de la ventana); kind 1 = zoom a la zona, 0 = vuelta
+bool MenuViewCamPulse(float* x, float* y, float* age, int* kind) {
+    const float a = (float)(Now() - s_vcPulseT.load()); if (a < 0.0f || a > 0.9f) return false;
+    *x = s_vcPulseX.load(); *y = s_vcPulseY.load(); *age = a; *kind = s_vcPulseKind.load(); return true;
+}
+bool MenuViewCamCenter(float* x, float* y) { *x = s_vcCx.load(); *y = s_vcCy.load(); return *x > 0; }   // centro del visor (pixeles)
+bool MenuViewCamWantsHead() { return VcLive(); }   // (15/11 g) exprbones.cpp publica la cara mientras el visor de Apariencia esta a mano
+bool MenuViewCamDragging() { return VcLive() && s_vcDrag.load() != 0; }   // (15/11 e) flechas solo mientras se arrastra
+// cada cuadro (MenuMousePresent): botones y movimiento del mouse para la camara del visor
+static void VcInput() {
+    static bool s_l = true, s_r = true; static POINT s_p0{}, s_pl{}; static double s_t0 = 0; static bool s_far = false;
+    const bool lNow = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0, rNow = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+    const bool lEdge = lNow && !s_l, rEdge = rNow && !s_r, lUp = !lNow && s_l, rUp = !rNow && s_r; s_l = lNow; s_r = rNow;
+    HWND h = OverlayHwnd(); POINT p{}; RECT rc{};
+    const bool ok = VcLive() && h && GetForegroundWindow() == h && GetCursorPos(&p) && ScreenToClient(h, &p) && GetClientRect(h, &rc)
+        && p.x >= 0 && p.y >= 0 && p.x < rc.right && p.y < rc.bottom && rc.bottom > 90;
+    if (!ok) { s_vcDrag = 0; return; }
+    const float ch = (float)rc.bottom;
+    int drag = s_vcDrag.load();
+    if (drag == 0 && lEdge && (float)p.x >= s_vcBtn[0].load() && (float)p.x <= s_vcBtn[2].load() && (float)p.y >= s_vcBtn[1].load() && (float)p.y <= s_vcBtn[3].load() && s_vcBtn[2].load() > 0.0f) {
+        const bool o = !s_vcOrtho.load(); s_vcOrtho = o; Log("mouse en menus: camara del visor: vista %s (boton)", o ? "ortografica" : "en perspectiva"); return; }
+    if (drag == 0 && lEdge && !s_over.load() && !VcInMenu(p.x)) {   // doble clic rapido (menos de 0.35 s y casi en el mismo lugar)
+        static double s_lt = -1.0e9; static POINT s_lp{}; const double t = Now();
+        if (t - s_lt < 0.35 && abs(p.x - s_lp.x) + abs(p.y - s_lp.y) < 10) {
+            const float cw = (float)rc.right; float sw = cw, sh = ch, ox = 0, oy = 0;   // escenario 16:9 centrado
+            if (cw * 9.0f > ch * 16.0f) { sw = ch * 16.0f / 9.0f; ox = (cw - sw) * 0.5f; } else if (cw * 9.0f < ch * 16.0f) { sh = cw * 9.0f / 16.0f; oy = (ch - sh) * 0.5f; }
+            const float asp = s_vcAspect.load(); const float vw = asp > 0.2f ? std::min(sw, asp * sh) : sw;   // rectangulo del visor: alto completo, pegado a la derecha
+            const float vx0 = ox + sw - vw, vcx = vx0 + vw * 0.5f, vcy = oy + sh * 0.5f;
+            s_vcCx.store(vcx); s_vcCy.store(vcy);
+            s_vcFocusX.store(((float)p.x - vcx) / sh); s_vcFocusY.store(((float)p.y - vcy) / sh); s_vcFocusReq = 1;
+            { static int s_nl = 0; if (s_nl++ < 8) { const uintptr_t mv = Readable((const void*)kModelView, 8) ? *(const uintptr_t*)kModelView : 0; int mw = 0, mh = 0;
+                if (mv && Readable((const void*)(mv + 0x9c), 8)) { memcpy(&mw, (const void*)(mv + 0x9c), 4); memcpy(&mh, (const void*)(mv + 0xa0), 4); }
+                Log("mouse en menus: doble clic en (%d, %d) de %.0f x %.0f; visor %.0f..%.0f (aspecto %.3f, centro %.0f, %.0f); ModelView tamano %d x %d", (int)p.x, (int)p.y, cw, ch, vx0, vx0 + vw, asp, vcx, vcy, mw, mh); } }
+            s_vcPulseX.store((float)p.x); s_vcPulseY.store((float)p.y); s_vcPulseT.store(t); s_lt = -1.0e9;
+        } else { s_lt = t; s_lp = p; }
+    }
+    if (drag == 0 && (lEdge || rEdge) && !s_over.load() && !VcInMenu(p.x)) {
+        drag = lEdge ? 1 : 2; s_vcDrag = drag; s_p0 = s_pl = p; s_t0 = Now(); s_far = false;
+        static int s_nl = 0; if (s_nl++ < 6) Log("mouse en menus: camara del visor: %s desde x %d (el menu llega hasta x %.0f de %d)", drag == 1 ? "girar" : "mover", (int)p.x, s_menuRightPx.load(), (int)rc.right);
+    }
+    if (drag != 0) {
+        const float dx = (float)(p.x - s_pl.x), dy = (float)(p.y - s_pl.y); s_pl = p;
+        if (abs(p.x - s_p0.x) + abs(p.y - s_p0.y) > 6) s_far = true;
+        if (drag == 1 && (dx != 0 || dy != 0)) { const float k = 3.6f / ch;   // alto de la pantalla = ~200 grados
+            s_vcDYaw.store(s_vcDYaw.load() - dx * k); s_vcDPitch.store(s_vcDPitch.load() + dy * k); }
+        if (drag == 2 && (dx != 0 || dy != 0)) { s_vcDPanX.store(s_vcDPanX.load() + dx / ch); s_vcDPanY.store(s_vcDPanY.load() + dy / ch); }
+        if ((drag == 1 && lUp) || (drag == 2 && rUp)) {
+            if (drag == 2 && !s_far && Now() - s_t0 < 0.6) s_vcBackReq = true;   // fue un clic derecho: "volver"
+            s_vcDrag = 0;
+        }
+    }
+}
+
 static void Step(void* win) {
     const double now = Now();
     const bool fresh = now - s_stepT > 0.25;      // primer paso de un menu despues de un rato sin menus
     const bool batch = fresh || now - s_m.t > 0.004;
     s_stepT = now; s_pendWin = nullptr; s_pendAction = -1; s_pendDxWin = nullptr;
     if (fresh) { s_wheelAcc = 0; s_wheel.store(0); s_latchWin = nullptr; s_extraAct = -1; s_wheelOptWin = nullptr; }
-    if (batch) { Sample(now, fresh); GuideSync(now); }   // siempre, para no inventar un clic al volver del menu de PES21FX
+    if (batch) { Sample(now, fresh); GuideSync(now); ExitFallback(now); }   // siempre, para no inventar un clic al volver del menu de PES21FX
     // (12/11) en el Motor el juego no ve el teclado (freecam.cpp FreeCamBlocksKeys): Esc = "volver" lo pone la DLL, este o no el
     // mouse en menus prendido, para que siempre se pueda salir sin mando
     if (g_cfg.motorKeys != 0 && Ptr(win) && MotorPageIs(win) && !g_menuOpen.load(std::memory_order_relaxed)) {
         static bool s_escWas = true; HWND h = OverlayHwnd();
         const bool esc = h && GetForegroundWindow() == h && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
-        const bool edge = esc && !s_escWas && !fresh; s_escWas = esc;
-        if (edge) { s_pendWin = win; s_pendAction = 1; Log("mouse en menus: Esc en el Motor -> volver"); return; }
+        const bool edge = esc && !s_escWas && !fresh && !MotorUiEscBusy(); s_escWas = esc;   // (15/11 g) con un menu o una ventana del Motor abiertos, Esc cierra eso (motorgizmo.cpp)
+        const bool btn = MotorUiTakeBack();              // (15/11) boton Volver de la barra de iconos del Motor (motorgizmo.cpp)
+        if (edge || btn) { s_pendWin = win; s_pendAction = 1; Log("mouse en menus: %s en el Motor -> volver", btn ? "boton Volver" : "Esc"); return; }
     }
     if (!Enabled() || !Ptr(win)) { s_latchWin = nullptr; return; }
     if (s_rWas && FreeCamActive()) { s_liveT.store(now); return; }   // volando con la camara libre del Motor: el mouse no elige filas
     uint8_t* I = P8((uint8_t*)win + 0x88); if (!Ptr(I)) return;
     s_liveT.store(now); s_nStep.fetch_add(1, std::memory_order_relaxed);
     if (!s_m.ok) return;
+    if (s_vcBackReq.load() && (win == s_vcBackWin || now - s_vcBackT > 1.0)) {   // (15/11) clic derecho sin arrastrar sobre el visor: volver
+        s_vcBackReq = false; s_vcBackWin = nullptr; s_pendWin = win; s_pendAction = 1; s_moveT.store(now); return;
+    }
+    if (((I[9] >> 1) & 1) != 0) { const int pk = VcPageKind(win); if (pk == 1) s_vcPlayer = true; else if (pk == 3) s_vcPlayer = false; }   // solo la pagina activa decide
+    if (VcLive()) VcMenuExtent(I, now);
+    if (s_vcDrag.load() != 0 || (VcLive() && !s_over.load() && !VcInMenu(s_m.p.x) && (s_m.lEdge || s_m.rEdge))) {   // (15/11) el mouse esta moviendo la camara del visor: no elige filas
+        if (s_m.rEdge && (!s_vcBackWin || now - s_vcBackT > 0.1)) { s_vcBackWin = win; s_vcBackT = now; }
+        s_m.lEdge = s_m.rEdge = false; s_moveT.store(now); return;
+    }
     if (s_m.lEdge && s_movieOk && *(uintptr_t*)win == kMovieVt) {        // video de la intro: clic = saltearlo
         uint8_t* w = (uint8_t*)win;
         if (w[0xa4] == 2 && Ptr(P8(w + 0x90))) {
@@ -478,19 +919,42 @@ static void Step(void* win) {
             int rows = 0, rowsOk = 0; uint8_t* root = P8(I + 0x98); const uint32_t ng = Ptr(root) ? std::min<uint32_t>(U32(I + 0xa4), 64) : 0;
             for (uint32_t g = 0; g < ng; g++) { uint8_t* grp = Child(root, g); if (!Ptr(grp)) continue; const uint32_t n = std::min<uint32_t>(ChildCount(grp), 512);
                 for (uint32_t r = 0; r < n; r++) { uint8_t* nd = Child(grp, r); if (!Ptr(nd)) continue; rows++; void** v = *(void***)nd; if (Ptr(v) && RowClass(v)) rowsOk++; } }
-            Log("mouse en menus: pagina vtable %p: puntero propio %d, grupos %u, filas %d (%d que la DLL sabe medir), grupo / fila actual %d / %d",
-                (void*)vt, (int)I[0x44], ng, rows, rowsOk, (int)U32(I + 0xa0), (int)U32(I + 0xd8));
+            Log("mouse en menus: pagina vtable %p: puntero propio %d, grupos %u, filas %d (%d que la DLL sabe medir), grupo / fila actual %d / %d, activa %d",
+                (void*)vt, (int)I[0x44], ng, rows, rowsOk, (int)U32(I + 0xa0), (int)U32(I + 0xd8), (int)((I[9] >> 1) & 1));
             int shown = 0;                           // (14/11 e) rect del juego y rect dibujado de cada fila (hasta 24 por pagina)
             for (uint32_t g = 0; g < ng && shown < 24; g++) { uint8_t* grp = Child(root, g); if (!Ptr(grp)) continue; const uint32_t n = std::min<uint32_t>(ChildCount(grp), 512);
                 for (uint32_t r = 0; r < n && shown < 24; r++) { uint8_t* nd = Child(grp, r); if (!Ptr(nd)) continue; void** v = *(void***)nd; if (!Ptr(v) || !RowClass(v)) continue;
                     float pos[2] = { 0, 0 }, size[2] = { 0, 0 }, d[4] = { 0, 0, 0, 0 };
                     const int pr = ((PFN_NodeVec2)v[0xa0 / 8])(nd, pos); ((PFN_NodeVec2)v[0xc0 / 8])(nd, size);
                     const bool dk = DrawnRect(nd, d[0], d[1], d[2], d[3]); shown++;
-                    Log("mouse en menus:   fila %u / %u: juego %.0f %.0f %.0f x %.0f (%d), dibujo %s %.0f %.0f %.0f x %.0f, visible %d activa %d",
-                        g, r, pos[0], pos[1], size[0], size[1], pr, dk ? "si" : "no", d[0], d[1], d[2], d[3], (int)NodeFlag(nd, 0x0c), (int)NodeFlag(nd, 0x10)); } }
+                    uint32_t why = 0; const bool sh = AfpShown(nd, &why);
+                    char chain[160]; int co = 0; chain[0] = 0;      // cadena de padres del AFP: banderas +0x20 y alfa
+                    { uint8_t* hd = P8(nd + 0x40); const uint32_t id = Ptr(hd) ? U32(hd + 0xc) : 0; uint8_t* o = (s_afpOk && ((id >> 27) & 0xf) == 4) ? ((PFN_AfpObj)kAfpObj)(id) : nullptr;
+                      for (int i = 0; i < 6 && Ptr(o) && co < 130; i++) { float a; memcpy(&a, o + 0xdc, 4); int16_t dp; memcpy(&dp, o + 0x78, 2);
+                          co += snprintf(chain + co, sizeof chain - (size_t)co, " %x/%x/%.2f", U32(o + 0x20) & 0xfffffu, U32(o + 0x24) >> 24, a); if (dp < 1) break; o = P8(o + 0x40); } }
+                    Log("mouse en menus:   fila %u / %u: juego %.0f %.0f %.0f x %.0f (%d), dibujo %s %.0f %.0f %.0f x %.0f, visible %d activa %d, mostrada %d (%x), afp%s",
+                        g, r, pos[0], pos[1], size[0], size[1], pr, dk ? "si" : "no", d[0], d[1], d[2], d[3], (int)NodeFlag(nd, 0x0c), (int)NodeFlag(nd, 0x10), (int)sh, why, chain); } }
         }
     }
-    if (I[0x44]) return;                              // pagina con puntero propio del juego: no se toca (por ahora)
+    if (I[0x44]) {                                    // pagina con puntero propio: el mouse mueve ese puntero (FeedOwnPointer); aca solo los clics
+        if (g_cfg.menuMouseOwnPtr == 0) return;
+        if (s_m.lEdge) { s_m.lEdge = false; s_pendWin = win; s_pendAction = 0; s_moveT.store(now); }      // clic = aceptar (como X / A)
+        else if (s_m.rEdge && !FreeCamActive()) {                                                         // derecho = volver
+            bool given = false; for (int i = 0; i < s_rN; i++) if (s_rGiven[i] == win) given = true;
+            if (!given && s_rN < 8) { s_rGiven[s_rN++] = win; s_pendWin = win; s_pendAction = 1; }
+        }
+        return;
+    }
+    // (15/11, Agustin: "si se selecciona un partido y detecta el mouse moverse al momento de cargar se abre el menu que permite cambiarse
+    // de local o visitante") la pantalla de elegir lado (menu::SideSelect 0x14267c718 / menu::SideSelectEach 0x14271ecf8) sigue armada
+    // durante la carga: el log del 14/11 22:16:24 muestra al mouse eligiendo su fila 2 con 16330 cuadros de menu (carga). Ahi el mouse solo
+    // actua si la ventana esta activa para el mando (Impl+9 bit 1, lo mismo que mira 0x140e3f270) y con un clic, nunca solo por moverse.
+    const uintptr_t pageVt = *(uintptr_t*)win;
+    const bool sideSel = pageVt == 0x14267c718ull || pageVt == 0x14271ecf8ull;
+    if (sideSel) {
+        if (((I[9] >> 1) & 1) == 0) { if (s_m.lEdge || s_m.rEdge) { static int s_n = 0; if (s_n++ < 6) Log("mouse en menus: elegir lado inactivo (carga): el mouse no lo toca"); } return; }
+        if (!s_m.lEdge && !s_m.rEdge) return;
+    }
     if (s_latchWin == win) {                          // clic del paso anterior que primero tuvo que elegir la fila
         const bool same = (int)U32(I + 0xa0) == s_latchG && (int)U32(I + 0xd8) == s_latchR && now - s_latchT < 0.25;
         s_latchWin = nullptr;
@@ -503,6 +967,32 @@ static void Step(void* win) {
     const float cw = s_m.cw, ch = s_m.ch; float sw = cw, sh = ch, ox = 0, oy = 0;
     if (cw * 9.0f > ch * 16.0f) { sw = ch * 16.0f / 9.0f; ox = (cw - sw) * 0.5f; } else if (cw * 9.0f < ch * 16.0f) { sh = cw * 9.0f / 16.0f; oy = (ch - sh) * 0.5f; }
     const float mx = ((float)s_m.p.x - ox) * 1920.0f / sw, my = ((float)s_m.p.y - oy) * 1080.0f / sh;
+    if (g_cfg.menuExitBtn != 0 && pageVt == kTopModeVt) {                  // (15/11) boton "Salir del juego" del menu principal
+        float r[4];
+        if (((I[9] >> 1) & 1) != 0 && *(int32_t*)((uint8_t*)win + 0x98) == 0 && ExitTabRect(I, r)) {
+            // (Agustin 04:16: "un icono que quede ni muy grande y similar al estilo del resto de cartas del menu") cuadrado chico con el icono de apagar, alineado al borde derecho de la pestana
+            const float bh = 54.0f, gap = 12.0f, bw = bh, bx = r[0] + r[2] - bw, by = std::max(4.0f, r[1] - gap - bh);
+            s_exitX.store(ox + bx * sw / 1920.0f); s_exitY.store(oy + by * sh / 1080.0f); s_exitW.store(bw * sw / 1920.0f); s_exitH.store(bh * sh / 1080.0f);
+            s_exitShowT.store(now);
+            const bool over = mx >= bx && mx < bx + bw && my >= by && my < by + bh;
+            s_exitHover.store(over);
+            if (s_m.lEdge && over) {
+                s_m.lEdge = false; s_moveT.store(now);
+                if (now - s_exitArmT.load() < 4.0) {
+                    if (SigAt(kTopModeNext, kTopModeNextSig, sizeof kTopModeNextSig)) {
+                        ((void (*)(void*, unsigned char, const char*))kTopModeNext)(win, 0, "24_Exit");
+                        Log("mouse en menus: boton Salir del juego -> evento 24_Exit (la opcion Salir del menu principal)");
+                    } else Log("mouse en menus: boton Salir del juego: 0x140ab1f10 no coincide, se cierra como la X de la ventana");
+                    s_exitFallT = SigAt(kTopModeNext, kTopModeNextSig, sizeof kTopModeNextSig) ? now : now - 3.0;
+                    ExitFallback(now);
+                    s_exitArmT.store(-1.0e9);
+                } else { s_exitArmT.store(now); Log("mouse en menus: boton Salir del juego: primer clic (falta confirmar)"); }
+                return;
+            }
+            if (s_m.lEdge) s_exitArmT.store(-1.0e9);                        // clic en otro lado: se desarma
+            if (over) { s_overB = true; s_over.store(true); return; }        // sobre el boton: no elige filas del menu (mano del dardo)
+        }
+    }
     if (g_cfg.menuMouseTeamSel != 0 && IsTeamSel(win) && TeamSelStep(win, I, mx, my, now)) return;
     if (s_extraAct >= 0) {   // (14/11 ythnmm) accion pedida: la ventana bajo el mouse que tenga esa accion; si ninguna, la primera que la tenga
         if (now - s_extraT > 0.5) s_extraAct = -1;
@@ -533,6 +1023,7 @@ static void Step(void* win) {
     if (s_m.moved) s_over.store(s_overB);
     bool chose = false;
     if (on && !((int)U32(I + 0xa0) == hit.group && (int)U32(I + 0xd8) == hitAbs)) {
+        if (PadSel* ps = PadSelFor(win, true)) { if (!ps->dirty || ps->vt != *(uintptr_t*)win) { ps->vt = *(uintptr_t*)win; ps->g = (int)U32(I + 0xa0); ps->r = (int)U32(I + 0xd8); ps->dirty = true; } ps->t = now; }
         SelectLikeGame(win, hit.group, hitAbs); chose = true;
         const int k = s_nSel.fetch_add(1, std::memory_order_relaxed);
         if (hit.dist > 0) s_nNear.fetch_add(1, std::memory_order_relaxed);
@@ -558,7 +1049,40 @@ static void Step(void* win) {
     }
 }
 
+// (15/11 ythnmm) paginas con puntero propio del juego (Impl+0x44: Plan de juego, myClub, paleta de colores). El juego mueve ese
+// puntero con el analogico: menusystem::PointingCursor (singleton 0x143707fe8, vtable 0x1427c8500, 8 punteros de 0x58 bytes desde +0x80;
+// +0x10 estado 0..2 = a la vista, +0x14 posicion x / y en el escenario de 1920 x 1080, +0x3c cuadros de "salto" animado, +0x48 limites
+// propios en +0x2c, si no los generales en +0x70). La prueba nativa de 0x140e400d0 lee esa posicion (FUN_140e69a70) y elige la fila;
+// se salta si +0x3c no es 0 (FUN_140e69ea0). Aca, ANTES de esa prueba, el mouse escribe la posicion cuando se movio: el juego elige
+// la fila como con el analogico y el analogico sigue desde donde quedo.
+static const uintptr_t kPtrMgr = 0x143707fe8ull, kPtrMgrVt = 0x1427c8500ull;
+static void FeedOwnPointer(void* win) {
+    static POINT s_last[8]; static bool s_have[8] = {}; static int s_nLog = 0;
+    if (!s_ok || !Ptr(win) || g_cfg.menuMouseOwnPtr == 0 || !Enabled()) return;
+    uint8_t* I = P8((uint8_t*)win + 0x88); if (!Ptr(I) || !I[0x44] || (!I[0x45] && !I[0x46])) return;
+    const uint32_t idx = U32(I + 0x114); if (idx >= 8) return;
+    uint8_t* mgr = *(uint8_t**)kPtrMgr; if (!Ptr(mgr) || *(uintptr_t*)mgr != kPtrMgrVt) return;
+    uint8_t* c = mgr + 0x80 + (size_t)idx * 0x58;
+    HWND h = OverlayHwnd(); POINT p{}; RECT rc{};
+    if (!h || GetForegroundWindow() != h || !GetCursorPos(&p) || !ScreenToClient(h, &p) || !GetClientRect(h, &rc)) { s_have[idx] = false; return; }
+    const float cw = (float)(rc.right - rc.left), ch = (float)(rc.bottom - rc.top);
+    if (cw < 160.0f || ch < 90.0f || p.x < 0 || p.y < 0 || (float)p.x >= cw || (float)p.y >= ch) return;
+    const bool moved = s_have[idx] && (p.x != s_last[idx].x || p.y != s_last[idx].y);
+    s_last[idx] = p; s_have[idx] = true;
+    if (!moved || c[0x10] > 2) return;                // sin moverse no se pisa el analogico; puntero escondido: la pagina no lo usa
+    float sw = cw, sh = ch, ox = 0, oy = 0;
+    if (cw * 9.0f > ch * 16.0f) { sw = ch * 16.0f / 9.0f; ox = (cw - sw) * 0.5f; } else if (cw * 9.0f < ch * 16.0f) { sh = cw * 9.0f / 16.0f; oy = (ch - sh) * 0.5f; }
+    float mx = ((float)p.x - ox) * 1920.0f / sw, my = ((float)p.y - oy) * 1080.0f / sh;
+    float b[4]; memcpy(b, c[0x48] ? c + 0x2c : mgr + 0x70, sizeof b);
+    if (b[2] > 1.0f && b[3] > 1.0f && b[2] < 10000.0f && b[3] < 10000.0f) { mx = std::clamp(mx, b[0], b[0] + b[2]); my = std::clamp(my, b[1], b[1] + b[3]); }
+    memcpy(c + 0x14, &mx, 4); memcpy(c + 0x18, &my, 4);
+    *(uint32_t*)(c + 0x3c) = 0;
+    s_moveT.store(Now());
+    if (s_nLog < 10) { s_nLog++; Log("mouse en menus: puntero propio %u de la pagina (vtable %p) -> %.0f %.0f (limites %.0f %.0f %.0f x %.0f)", idx, *(void**)win, mx, my, b[0], b[1], b[2], b[3]); }
+}
+
 static void hk_Hover(void* win) {
+    FeedOwnPointer(win);
     o_hover(win);
     MotorPageSeen(win);     // motorpage.cpp: para saber si el estudio del Motor esta abierto (icono de la ultima tecla)
     Step(win);
@@ -566,11 +1090,57 @@ static void hk_Hover(void* win) {
 
 static void hk_Dirs(void* win, int* dx, int* dy, unsigned char* trig) {
     o_dirs(win, dx, dy, trig);
-    if (dx && dy && (*dx != 0 || *dy != 0)) s_padT.store(Now());         // (14/11 e) el mando / teclado movio: vuelve la barra de botones, se va la flecha
+    if (dx && dy && (*dx != 0 || *dy != 0)) {                            // (14/11 e) el mando / teclado movio: vuelve la barra de botones, se va la flecha
+        const bool mouseLast = s_moveT.load() > s_padT.load();
+        s_padT.store(Now());
+        PadSel* ps = PadSelFor(win, false);
+        if (ps && ps->dirty) {                                           // (14/11 g) vuelve la seleccion que tenia el mando
+            ps->dirty = false;
+            uint8_t* I = Ptr(win) ? P8((uint8_t*)win + 0x88) : nullptr;
+            if (mouseLast && g_cfg.menuMousePadReset != 0 && Enabled() && Ptr(I) && ps->vt == *(uintptr_t*)win && Now() - ps->t < 300.0 && ps->g >= 0 && ps->r >= 0 && (uint32_t)ps->g < U32(I + 0xa4) &&
+                !((int)U32(I + 0xa0) == ps->g && (int)U32(I + 0xd8) == ps->r)) {
+                SelectLikeGame(win, ps->g, ps->r);
+                *dx = 0; *dy = 0; if (trig) *trig = 0;
+                static int s_n = 0; if (s_n++ < 8) Log("mouse en menus: se uso el mando -> vuelve la seleccion a grupo %d fila %d", ps->g, ps->r);
+            }
+        }
+    }
     const bool ts = s_tsWin != nullptr && Now() - s_tsT < 0.2;           // el mouse esta sobre la lista de Elegir equipo: la rueda es de esa ventana (TeamSelStep)
     const int w = ts ? 0 : s_wheel.exchange(0);
     void* const optWin = s_pendDxWin; s_pendDxWin = nullptr;
     if (!Enabled() || !dx || !dy) { s_wheelAcc = 0; return; }
+    {   // (15/11 05:39 cierre al entrar a Editar jugadores, 0xc0000005 en 0x1408ec1c0 < 0x140e69a94 < 0x140e3cc9b, RAX = FFFFFFFF)
+        // el juego mueve la seleccion con 0x140e3e8c0 -> 0x140e3cbd0, que lee el puntero numero Impl+0x114 SIN mirar si es valido
+        // (0x140e69a70: base + 0x94 + n * 0x58). El juego solo llega ahi con un mando de verdad (0x140e3e6b0 sale si
+        // 0x141b57c60(Impl+0x114) no da mando); si la pagina no tiene mando (Impl+0x114 = -1) la rueda / el clic sobre un selector
+        // NO pueden mandar direcciones: se descartan.
+        // (15/11 06:04, Agustin: "en el menu editar la rueda del mouse no funciona") en esas paginas la DLL mueve ella misma con la MISMA
+        // funcion del juego (0x140e3e8c0, lo que 0x140e3e480 llama despues de leer las direcciones) con Impl+0x114 = 0 solo durante esa
+        // llamada: 0x140e3cbd0 lee el puntero 0 (memoria valida) y lo pisa con la posicion de la fila actual si hay una.
+        uint8_t* I = P8((uint8_t*)win + 0x88);
+        if (!Ptr(I) || U32(I + 0x114) >= 8u) {
+            int mdx = 0, mdy = 0; unsigned char mtr = 1;
+            if (optWin && optWin == win && *dx == 0 && *dy == 0) mdx = s_pendDx > 0 ? 1 : -1;
+            else {
+                s_wheelAcc = std::clamp(s_wheelAcc + w, -600, 600);
+                HWND h = OverlayHwnd();
+                if (std::abs(s_wheelAcc) >= 120 && *dx == 0 && *dy == 0 && h && GetForegroundWindow() == h) {
+                    const int sgn = s_wheelAcc > 0 ? 1 : -1; s_wheelAcc -= sgn * 120;
+                    if (s_wheelOptWin == win) mdx = sgn > 0 ? 1 : -1; else { mdy = sgn > 0 ? -1 : 1; mtr = 0; }
+                }
+            }
+            if ((mdx != 0 || mdy != 0) && Ptr(I) && SigAt(kMoveSel, kMoveSelSig, sizeof kMoveSelSig)) {
+                const uint32_t keep = U32(I + 0x114);
+                *(uint32_t*)(I + 0x114) = 0;
+                ((int (*)(void*, int, int, unsigned char))kMoveSel)(win, mdx, mdy, mtr);
+                *(uint32_t*)(I + 0x114) = keep;
+                s_pendWin = nullptr; s_pendAction = -1; s_moveT.store(Now());
+                s_nWheel.fetch_add(1, std::memory_order_relaxed);
+                static int s_n = 0; if (s_n++ < 6) Log("mouse en menus: pagina sin mando (vtable %p): la DLL mueve %d / %d con 0x140e3e8c0", *(void**)win, mdx, mdy);
+            }
+            return;
+        }
+    }
     if (optWin && optWin == win && *dx == 0 && *dy == 0) {               // (v3) clic sobre un selector: lo mismo que apretar derecha / izquierda
         *dx = s_pendDx > 0 ? 1 : -1; if (trig) *trig = 1;                 // 1 = recien apretado: al llegar a la ultima opcion da la vuelta
         s_wheelAcc = 0; s_moveT.store(Now());
@@ -642,7 +1212,11 @@ static void Install() {
     Log("mouse en menus: listo (prueba del puntero 0x140e400d0, direcciones 0x140e3e6b0, acciones 0x140e48f80); mouse_menus = %d (0 lo apaga)", g_cfg.menuMouse);
 }
 
-void MenuMouseWheel(int delta) { if (s_ok && g_cfg.menuMouse != 0) s_wheel.fetch_add(delta, std::memory_order_relaxed); }
+void MenuMouseWheel(int delta) {
+    if (!s_ok || g_cfg.menuMouse == 0) return;
+    if (VcLive() && !s_over.load() && !VcInMenu(s_curX.load())) { s_vcWheel.fetch_add(delta, std::memory_order_relaxed); ZoomIconNote(delta); return; }   // (15/11) rueda sobre el jugador del Editar = zoom
+    s_wheel.fetch_add(delta, std::memory_order_relaxed);
+}
 
 bool MenuMouseOverRow() { return s_over.load(); }   // (14/11 d) para la mano del cursor sobre los menus del juego
 
@@ -668,6 +1242,7 @@ bool MenuMouseCursor(float* x, float* y) {
 void MenuMousePresent() {
     if (!s_tried) Install();
     if (!s_ok) return;
+    VcInput();
     {   // (v2) atajo para sacar / poner el mouse en los menus (y su flecha): [PES21FX] tecla_mouse_menus (sin tecla de fabrica; ej. F8).
         // No se guarda en el ini: al abrir el juego vale lo que diga mouse_menus
         static bool s_was = false; const int vk = g_cfg.menuMouseKey;

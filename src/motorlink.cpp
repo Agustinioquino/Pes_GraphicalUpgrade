@@ -39,7 +39,7 @@ struct MotorLink {
     float escala;                   // +0x2c pedido del modulo: escala de la vista de profundidad (0 = automatica)
     float escalaAct;                // +0x30 lo que rige
     uint32_t panel;                 // +0x34 (11/11) el modulo lo cambia en cada cuadro con su panel abierto: el mouse es del Motor (menumouse.cpp)
-    uint32_t res[2];                // +0x38
+    uint32_t res[2];                // +0x38 res[0] = idioma del mod (0 es, 1 en, 2 pt; 15/11)
 };
 #pragma pack(pop)
 static_assert(sizeof(MotorLink) == 64, "MotorLink debe medir 64 bytes (lo lee MotorTiempoReal.lua)");
@@ -81,8 +81,50 @@ static ID3D11RasterizerState* WireFor(ID3D11RasterizerState* cur) {
     return w;
 }
 
+// (17/11 06:59, Agustin: "que la vista de alambre muestre distintos colores en las mallas para entender de que se tratan") con
+// g_motorWireCol cada malla del G-buffer sale TENIDA de un color propio: el destino 0 (albedo, SV_Target0 en los PS del G-buffer) se
+// escribe como albedo x color (mezcla con el factor de mezcla), los demas destinos quedan como el juego los pide. El color sale de
+// la malla (VS, cantidad de indices, primer indice y vertice base): la misma malla tiene siempre el mismo color. Los dibujos que ya
+// mezclan en el destino 0 (pelo, calcos) no se tocan. La textura sigue debajo: los negros (pelo, barba) quedan oscuros.
+std::atomic<bool> g_motorWireCol{ false };
+static std::unordered_map<ID3D11BlendState*, ID3D11BlendState*> s_tint;   // bajo s_wireMx; nulo = ese estado no se tine
+struct WireTintSave { bool on = false; ID3D11BlendState* bs = nullptr; FLOAT bf[4] = {}; UINT sm = 0xffffffffu; };
+static thread_local WireTintSave t_tint;
+static ID3D11BlendState* TintFor(ID3D11BlendState* cur) {
+    std::lock_guard<std::mutex> lk(s_wireMx);
+    auto it = s_tint.find(cur);
+    if (it != s_tint.end()) return it->second;
+    if (s_tint.size() >= kWireMax || !g_dev.dev) return nullptr;
+    D3D11_BLEND_DESC bd{};
+    if (cur) cur->GetDesc(&bd);
+    else { for (auto& r : bd.RenderTarget) { r.SrcBlend = r.SrcBlendAlpha = D3D11_BLEND_ONE; r.DestBlend = r.DestBlendAlpha = D3D11_BLEND_ZERO; r.BlendOp = r.BlendOpAlpha = D3D11_BLEND_OP_ADD; r.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL; } }
+    ID3D11BlendState* t = nullptr;
+    if (!bd.RenderTarget[0].BlendEnable && (bd.RenderTarget[0].RenderTargetWriteMask & 7)) {
+        if (!bd.IndependentBlendEnable) { for (int i = 1; i < 8; i++) bd.RenderTarget[i] = bd.RenderTarget[0]; bd.IndependentBlendEnable = TRUE; }
+        auto& r = bd.RenderTarget[0];
+        r.BlendEnable = TRUE; r.SrcBlend = D3D11_BLEND_BLEND_FACTOR; r.DestBlend = D3D11_BLEND_ZERO; r.BlendOp = D3D11_BLEND_OP_ADD;
+        r.SrcBlendAlpha = D3D11_BLEND_ONE; r.DestBlendAlpha = D3D11_BLEND_ZERO; r.BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        if (FAILED(g_dev.dev->CreateBlendState(&bd, &t))) t = nullptr;
+    }
+    if (cur) cur->AddRef();
+    s_tint[cur] = t;
+    return t;
+}
+static void WireTintBegin(ID3D11DeviceContext* c, uint64_t seed) {
+    static const float kPal[12][3] = { {1.0f, 0.35f, 0.3f}, {0.35f, 0.85f, 1.0f}, {0.45f, 1.0f, 0.4f}, {1.0f, 0.85f, 0.25f}, {0.85f, 0.45f, 1.0f}, {1.0f, 0.55f, 0.15f},
+        {0.3f, 1.0f, 0.8f}, {1.0f, 0.4f, 0.75f}, {0.55f, 0.6f, 1.0f}, {0.8f, 1.0f, 0.3f}, {1.0f, 1.0f, 1.0f}, {0.3f, 0.6f, 1.0f} };
+    ID3D11BlendState* bs = nullptr; FLOAT bf[4]; UINT sm = 0; c->OMGetBlendState(&bs, bf, &sm);
+    ID3D11BlendState* t = TintFor(bs);
+    if (!t) { if (bs) bs->Release(); return; }
+    seed ^= seed >> 29; seed *= 0xbf58476d1ce4e5b9ull; seed ^= seed >> 32;
+    const float* col = kPal[seed % 12];
+    const FLOAT f[4] = { col[0], col[1], col[2], 1.0f };
+    c->OMSetBlendState(t, f, sm);
+    t_tint.on = true; t_tint.bs = bs; memcpy(t_tint.bf, bf, sizeof bf); t_tint.sm = sm;
+}
+
 // antes de un dibujo: true = se puso el estado de alambre y *prev guarda (con referencia) el que estaba (puede ser nulo)
-bool MotorWireBegin(ID3D11DeviceContext* c, ID3D11RasterizerState** prev) {
+bool MotorWireBegin(ID3D11DeviceContext* c, ID3D11RasterizerState** prev, uint64_t seed) {
     // G-buffer de PES = 5 destinos + profundidad. Con "3 o mas" entraban tambien las luces diferidas (difusa, especular y
     // sombra: 3 destinos) y el generador de mapas de cara de la DLL (facegen.cpp: 3 destinos, sin profundidad, RS nulo)
     ID3D11RenderTargetView* rt[4] = {}; ID3D11DepthStencilView* dsv = nullptr;
@@ -98,18 +140,79 @@ bool MotorWireBegin(ID3D11DeviceContext* c, ID3D11RasterizerState** prev) {
     c->RSSetState(w);
     *prev = cur;
     s_wireDraws.fetch_add(1, std::memory_order_relaxed);
+    t_tint.on = false;
+    if (g_motorWireCol.load(std::memory_order_relaxed)) WireTintBegin(c, seed);
     return true;
 }
 
 void MotorWireEnd(ID3D11DeviceContext* c, ID3D11RasterizerState* prev) {
     c->RSSetState(prev);
     if (prev) prev->Release();
+    if (t_tint.on) { c->OMSetBlendState(t_tint.bs, t_tint.bf, t_tint.sm); if (t_tint.bs) t_tint.bs->Release(); t_tint = WireTintSave(); }
 }
 
 // ---------------------------------------------------------------- una vez por cuadro (antes de subir t120)
 static float Limpio(float v, float lo, float hi) { return (v >= lo && v <= hi) ? v : 0.0f; }   // NaN o fuera de rango = 0
 
+// ---------------------------------------------------------------- (15/11, Agustin 03:29) idioma de textos del juego
+// CONFIRMADO en el C (menu::LanguageSelectText::vf75 0x140b22e80): al elegir idioma de textos el juego guarda su numero en
+// *(*(0x143714240) + 0x50) + 0x13024 (u32). Que numero es cada idioma NO se saco del exe: se anota en el registro cada vez que
+// cambia y la tabla numero -> es / en / pt va en el ini ([PES21FX] idioma_juego_ids = es,en,pt). Con idioma_auto = 1 y un numero
+// conocido el menu pasa a ese idioma; elegir un idioma a mano apaga idioma_auto.
+static bool RdOk(const void* p, size_t n) {
+    MEMORY_BASIC_INFORMATION mi{};
+    if (!p || !VirtualQuery(p, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return false;
+    return (const uint8_t*)p + n <= (const uint8_t*)mi.BaseAddress + mi.RegionSize;
+}
+int GameTextLang() {
+    static int ok = -1;
+    if (ok < 0) { const HMODULE m = GetModuleHandleW(nullptr); ok = 0;
+        if ((uintptr_t)m == 0x140000000ull) { const auto* dos = (const IMAGE_DOS_HEADER*)m; const auto* nt = (const IMAGE_NT_HEADERS*)((const uint8_t*)m + dos->e_lfanew);
+            if (nt->FileHeader.TimeDateStamp == 0x62787C6Au) ok = 1; }
+        if (!ok) Log("idioma del juego: exe distinto, no se lee"); }
+    if (!ok) return -1;
+    const void* const* g = (const void* const*)0x143714240ull;
+    if (!RdOk(g, 8) || !*g) return -1;
+    const uint8_t* a = (const uint8_t*)*g;
+    if (!RdOk(a + 0x50, 8)) return -1;
+    const uint8_t* b = *(const uint8_t* const*)(a + 0x50);
+    if (!b || !RdOk(b + 0x13024, 4)) return -1;
+    return (int)*(const uint32_t*)(b + 0x13024);
+}
+// (15/11, Agustin 03:59: el idioma lo elige Steam en Propiedades > Idioma; el juego no deja cambiarlo adentro) Steam deja el idioma
+// del juego en steamapps\appmanifest_<appid>.acf, clave "language" (dentro de "UserConfig"). La carpeta del juego es
+// steamapps\common\<nombre>\, asi que el archivo esta dos niveles arriba del exe. Se lee al arrancar y cada 30 s (solo lectura).
+static int SteamLang() {
+    static double t = -100.0; static int last = -1;
+    if (Now() - t < 30.0) return last; t = Now();
+    wchar_t exe[MAX_PATH] = {}; if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return last;
+    std::wstring d(exe); for (int up = 0; up < 3; up++) { const size_t k = d.find_last_of(L"\\/"); if (k == std::wstring::npos) return last; d.resize(k); }
+    WIN32_FIND_DATAW fd{}; HANDLE h = FindFirstFileW((d + L"\\appmanifest_*.acf").c_str(), &fd); if (h == INVALID_HANDLE_VALUE) return last;
+    int found = -1; std::string lang;
+    do { FILE* f = _wfopen((d + L"\\" + fd.cFileName).c_str(), L"rb"); if (!f) continue;
+        std::string txt; char buf[4096]; size_t n; while ((n = fread(buf, 1, sizeof buf, f)) > 0 && txt.size() < 65536) txt.append(buf, n); fclose(f);
+        if (txt.find("\"1259970\"") == std::string::npos && txt.find("PES 2021") == std::string::npos) continue;   // PES 2021 = app 1259970
+        size_t k = txt.find("\"language\""); if (k == std::string::npos) continue;
+        k = txt.find('"', k + 10); const size_t e = k == std::string::npos ? k : txt.find('"', k + 1); if (e == std::string::npos) continue;
+        lang = txt.substr(k + 1, e - k - 1); for (char& c : lang) c = (char)tolower((unsigned char)c);
+        found = (lang == "english") ? 1 : (lang == "portuguese" || lang == "brazilian") ? 2 : (lang == "spanish" || lang == "latam") ? 0 : 3;
+        break; } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    if (found != last) Log("idioma de Steam del juego: %s (%s)", lang.empty() ? "no encontrado" : lang.c_str(), found == 0 ? "castellano" : found == 1 ? "ingles" : found == 2 ? "portugues" : found == 3 ? "otro: queda el ultimo elegido" : "-");
+    last = found; return last;
+}
+static void GameLangPoll() {
+    static double t = 0; if (Now() - t < 1.0) return; t = Now();
+    static int last = -2; const int id = GameTextLang();
+    if (id < 0) { if (g_cfg.langAuto) { const int sl = SteamLang(); if (sl >= 0 && sl <= 2 && g_cfg.lang != sl) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.lang = sl; LoadMenuLang(); } } return; }
+    if (id != last) { last = id; static int n = 0; if (n++ < 40) Log("idioma del juego: textos = numero %d (idioma_auto %d, tabla es %d en %d pt %d)", id, g_cfg.langAuto, g_cfg.langGame[0], g_cfg.langGame[1], g_cfg.langGame[2]); }
+    if (!g_cfg.langAuto) return;
+    { const int sl = SteamLang(); if (sl >= 0 && sl <= 2) { if (g_cfg.lang != sl) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.lang = sl; LoadMenuLang(); Log("idioma del menu: sigue a Steam -> %d", sl); } return; } }
+    for (int i = 0; i < 3; i++) if (g_cfg.langGame[i] == id && g_cfg.lang != i) { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.lang = i; LoadMenuLang(); Log("idioma del menu: sigue al juego -> %d", i); }
+}
+
 void MotorLinkPresent() {
+    GameLangPoll();
     static bool tried = false;
     if (!tried) {
         tried = true;
@@ -156,6 +259,7 @@ void MotorLinkPresent() {
     if (s_ml) {
         s_ml->vistaAct = v[0]; s_ml->alambreAct = v[1]; s_ml->corteAct = v[2]; s_ml->escalaAct = v[3];
         s_ml->alambreDibujos = nd;
+        s_ml->res[0] = (g_cfg.lang == 1 || g_cfg.lang == 2) ? (uint32_t)g_cfg.lang : 0u;   // (15/11) idioma del mod: el modulo de Sider nombra la pestana del Editar con esto
         s_ml->dllSeq = s_ml->dllSeq + 1;
     }
     if (wire) {   // cada 10 s con el alambre prendido: cuantos dibujos se cambiaron (0 = ningun dibujo de G-buffer: avisar)

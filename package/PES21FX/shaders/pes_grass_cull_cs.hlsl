@@ -19,6 +19,7 @@ cbuffer PESGrassCull : register(b0) {
                     // [1]: x margen del fundido en pHi | y, z, w indices por tarjeta de los niveles 0 / 1 / 2
                     // [2]: (nivel 0) x ancho de la hoja en camaras de juego (m) | y ancho con la camara al ras (m) | z, w rampa en px/m
                     // [4]: x 1 = editor | (11/11 m) y relleno del atlas bajo las hojas 3D (y403; la DLL lo manda solo con las hojas 3D prendidas)
+                    //      (21/11) z 1 = corte en z del editor | w ese z (m): la celda que queda por debajo de ese z no se emite (laboratorio de animaciones: foso del banco)
                     // [5]: (11/11) HOJAS 3D: x umbral (px/m; 0 = hojas 3D apagadas en los niveles 0..2) | y hojas de la celda mas cercana (la DLL lo ajusta al total) | z tope total de hojas | w indices por hoja
                     // [6]: (12/11) HOJAS ANGOSTAS de primerisimo plano (x432): x umbral (px/m; 0 = sin escalon angosto) | y hojas angostas por hoja comun | z indices por hoja angosta
 }
@@ -114,6 +115,7 @@ void main(uint3 id : SV_DispatchThreadID)
     float4 cvB = float4(dot(PB, cb2[8]), dot(PB, cb2[9]), dot(PB, cb2[10]), dot(PB, cb2[11]));
     float4 ccB = float4(dot(cvB, cb2[4]), dot(cvB, cb2[5]), dot(cvB, cb2[6]), dot(cvB, cb2[7]));
     float radB = cellB * 0.7071 + 0.15;
+    if (gPad[4].x > 0.5 && gPad[4].z > 0.5 && zB - cellB * 0.5 < gPad[4].w - 0.01) return;   // (21/11) corte del editor
     if (ccB.w < -radB) return;
     float wB = max(ccB.w, 0.05);
     float pB = abs(cb2[5].y) * gP1.x / wB;
@@ -162,6 +164,7 @@ void main(uint3 id : SV_DispatchThreadID)
   float4 cv = float4(dot(P, cb2[8]), dot(P, cb2[9]), dot(P, cb2[10]), dot(P, cb2[11]));
   float4 cc = float4(dot(cv, cb2[4]), dot(cv, cb2[5]), dot(cv, cb2[6]), dot(cv, cb2[7]));
   float rad = cell * 0.7071 + 0.15;
+  if (gPad[4].x > 0.5 && gPad[4].z > 0.5 && z - cell * 0.5 < gPad[4].w - 0.01) return;   // (21/11) corte del editor (foso del banco)
   if (cc.w < -rad) return;                         // detras de la camara
   float w = max(cc.w, 0.05);
   // tamano en pantalla: pixeles por metro en el centro de la celda (el VS funde con el mismo criterio)
