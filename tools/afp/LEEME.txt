@@ -1,0 +1,8 @@
+Tablas y notas del script de las pantallas de menu (AFP) de PES 2021 1.07.02, sacadas del exe por el hilo de decompilacion
+el 15/11/2026. Sirven para desensamblar (y despues escribir) el ActionScript 3 pre-parseado de los .bin de menu.
+
+afp_abc_opcodes.tsv        134 instrucciones: opcode interno de Konami, opcode AVM2 de Flash, nombre, operandos, bandera, manejador
+afp_nombres_internos.tsv   1836 nombres internos del reproductor (id 0x100..0xd0f) que el pool de textos nombra por numero
+20261115_afp_script_interprete.cpp.md        como ejecuta el script (ejecutor, tablas, cabecera de cada cuerpo, operandos varint u30)
+20261115_afp_cpp_script_comunicacion.cpp.md  como se hablan el C++ y el script (etiquetas, ExternalInterface)
+20261115_pantallas_menu_carga.cpp.md         como una pagina carga su .bin y que le exige a la pelicula

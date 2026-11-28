@@ -1,0 +1,135 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Vista juego</title>
+<style>html,body{margin:0;background:#f4f4f0}canvas{display:block}</style></head>
+<body><canvas id="c" width="960" height="460"></canvas>
+<script>
+// Dibujo de la escena de vista_juego.py: mallas del juego con piel por huesos (en el sombreador), dos vistas, sombra en el piso.
+const cv = document.getElementById('c');
+const gl = cv.getContext('webgl2', {preserveDrawingBuffer: true, antialias: true});
+function sh(type, src) { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw gl.getShaderInfoLog(s); return s; }
+function prog(vs, fs) { const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p); if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw gl.getProgramInfoLog(p); return p; }
+const VS = `#version 300 es
+in vec3 pos; in vec3 nrm; in vec2 uv; in vec4 bi; in vec4 bw;
+uniform highp sampler2D B; uniform mat4 vp; uniform float shadow;
+out vec3 vN; out vec2 vUV; out vec3 vW;
+// huesos en una textura: 3 texeles por hueso = filas de la matriz 3x4 (giro con escala | lugar), ya en el mundo
+void fila(int b, float w, inout vec4 r0, inout vec4 r1, inout vec4 r2){
+  r0 += w*texelFetch(B, ivec2(b*3,0), 0); r1 += w*texelFetch(B, ivec2(b*3+1,0), 0); r2 += w*texelFetch(B, ivec2(b*3+2,0), 0); }
+void main(){
+  vec4 r0 = vec4(0.0), r1 = vec4(0.0), r2 = vec4(0.0);
+  fila(int(bi.x), bw.x, r0, r1, r2); fila(int(bi.y), bw.y, r0, r1, r2); fila(int(bi.z), bw.z, r0, r1, r2); fila(int(bi.w), bw.w, r0, r1, r2);
+  vec4 p4 = vec4(pos, 1.0); vec4 w = vec4(dot(r0, p4), dot(r1, p4), dot(r2, p4), 1.0);
+  vec3 n3 = vec3(dot(r0.xyz, nrm), dot(r1.xyz, nrm), dot(r2.xyz, nrm));
+  vN = normalize(n3); vUV = uv; vW = w.xyz;
+  if (shadow > 0.5) { vec3 L = normalize(vec3(0.45,1.0,0.35)); w.xyz -= L * (w.y / L.y); w.y = 0.002; }
+  gl_Position = vp * w;
+}`;
+const FS = `#version 300 es
+precision highp float;
+in vec3 vN; in vec2 vUV; in vec3 vW;
+uniform vec3 col; uniform int useTex; uniform sampler2D tex; uniform float shadow; uniform int alphaTest;
+out vec4 o;
+void main(){
+  if (shadow > 0.5) { o = vec4(0.80,0.80,0.78,1.0); return; }   // sombra lisa (antes negra al 22 %: donde se encimaban las mallas quedaban manchas mas oscuras)
+  vec4 base = vec4(col,1.0);
+  if (useTex == 1) { base = texture(tex, vUV); if (alphaTest == 1 && base.a < 0.4) discard; base.a = 1.0; }
+  vec3 N = normalize(vN); if (!gl_FrontFacing) N = -N;
+  vec3 L = normalize(vec3(0.45,1.0,0.35));
+  float d = max(dot(N,L),0.0);
+  vec3 amb = mix(vec3(0.42,0.40,0.36), vec3(0.62,0.66,0.72), N.y*0.5+0.5);
+  vec3 c = base.rgb * (amb + vec3(1.0,0.97,0.9)*d*0.75);
+  o = vec4(pow(c, vec3(1.0)), 1.0);
+}`;
+const FLOOR_VS = `#version 300 es
+in vec3 pos; uniform mat4 vp; out vec3 w; void main(){ w = pos; gl_Position = vp*vec4(pos,1.0); }`;
+const FLOOR_FS = `#version 300 es
+precision highp float; in vec3 w; out vec4 o;
+void main(){ vec2 g = abs(fract(w.xz*4.0+0.5)-0.5)/fwidth(w.xz*4.0); float l = 1.0-min(min(g.x,g.y),1.0);
+  o = vec4(mix(vec3(0.93,0.93,0.90), vec3(0.80,0.80,0.76), l*0.8), 1.0); }`;
+let P, PF, S, buffers = [], texs = {}, frames = [];
+function b64f(s, T) { const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new T(u.buffer); }
+function mkMesh(m) {
+  const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+  const at = (name, data, n) => { const loc = gl.getAttribLocation(P, name); if (loc < 0) return; const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, n, gl.FLOAT, false, 0, 0); };
+  at('pos', b64f(m.pos, Float32Array), 3); at('nrm', b64f(m.nrm, Float32Array), 3); at('uv', b64f(m.uv, Float32Array), 2);
+  at('bi', b64f(m.bi, Float32Array), 4); at('bw', b64f(m.bw, Float32Array), 4);
+  const ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, b64f(m.faces, Uint32Array), gl.STATIC_DRAW);
+  gl.bindVertexArray(null); return {vao, n: m.nf * 3, kind: m.kind};
+}
+function loadTex(url) { return new Promise(r => { const im = new Image(); im.onload = () => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, im); gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); r(t); }; im.src = url; }); }
+// matrices (columna mayor)
+function mmul(a, b) { const o = new Float32Array(16); for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k*4+r]*b[c*4+k]; o[c*4+r] = s; } return o; }
+function persp(fov, asp, n, f) { const t = 1/Math.tan(fov/2); return new Float32Array([t/asp,0,0,0, 0,t,0,0, 0,0,(f+n)/(n-f),-1, 0,0,2*f*n/(n-f),0]); }
+function look(e, c) { const z = norm(sub(e, c)), x = norm(cross([0,1,0], z)), y = cross(z, x);
+  return new Float32Array([x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0, -dot(x,e),-dot(y,e),-dot(z,e),1]); }
+const sub = (a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]], dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2], cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+const norm = a => { const l = Math.hypot(...a) || 1; return [a[0]/l,a[1]/l,a[2]/l]; };
+let boneTex = null;
+function boneRows(i, f) { const J = S.jugadores[i]; const NB = S.nb; f = Math.min(f, J.n); const fr = frames[i]; const out = new Float32Array(NB*12);
+  for (let b = 0; b < NB; b++) { const q = fr.subarray((f*NB+b)*12, (f*NB+b)*12+12);   // columnas c0 c1 c2 t -> filas
+    for (let r = 0; r < 3; r++) { out[b*12+r*4] = q[r]; out[b*12+r*4+1] = q[3+r]; out[b*12+r*4+2] = q[6+r]; out[b*12+r*4+3] = q[9+r]; } } return out; }
+function hipsW(i, f) { const NB = S.nb; f = Math.min(f, S.jugadores[i].n); const q = frames[i].subarray((f*NB+1)*12, (f*NB+1)*12+12); const b = S.bind[1];
+  return [q[0]*b[0]+q[3]*b[1]+q[6]*b[2]+q[9], q[1]*b[0]+q[4]*b[1]+q[7]*b[2]+q[10], q[2]*b[0]+q[5]*b[1]+q[8]*b[2]+q[11]]; }
+let floorVao;
+window.init = async function(scene, base) {
+  S = scene; P = prog(VS, FS); PF = prog(FLOOR_VS, FLOOR_FS);
+  for (const m of S.cuerpo) buffers.push({...mkMesh(m), who: -1});
+  for (let i = 0; i < 2; i++) { const J = S.jugadores[i]; frames.push(b64f(J.frames, Float32Array));
+    for (const m of J.cara) buffers.push({...mkMesh(m), who: i});
+    for (const k in J.tex) texs[i + k] = await loadTex(base + J.tex[k]); }
+  for (const k in (S.texc || {})) texs['c' + k] = await loadTex(base + S.texc[k]);
+  floorVao = gl.createVertexArray(); gl.bindVertexArray(floorVao); const fb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, fb);
+  const R = 30; gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-R,0,-R, R,0,-R, R,0,R, -R,0,-R, R,0,R, -R,0,R]), gl.STATIC_DRAW);
+  const l = gl.getAttribLocation(PF, 'pos'); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 3, gl.FLOAT, false, 0, 0); gl.bindVertexArray(null);
+  return buffers.length;
+};
+const KCOL = {skin: [0.78,0.56,0.44], shorts: null, socks: null, shirt: null, eye: [0.85,0.85,0.82]};
+let tx = null;
+window.draw = function(f, views) {
+  gl.enable(gl.DEPTH_TEST); gl.clearColor(0.957,0.957,0.941,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  const h0 = hipsW(0, f), h1 = hipsW(1, f); const mid = [(h0[0]+h1[0])/2, 0.95, (h0[2]+h1[2])/2];
+  tx = (tx === null || window._snap) ? mid : [tx[0]+(mid[0]-tx[0])*0.15, 0.95, tx[2]+(mid[2]-tx[2])*0.15];
+  const cols = views.length == 4 ? 2 : views.length, rows = views.length == 4 ? 2 : 1; const W = cv.width / cols, H = cv.height / rows; const sep = Math.hypot(h0[0]-h1[0], h0[2]-h1[2]);
+  window._sep = sep;
+  views.forEach((v, vi) => {
+    // (18/11 03:08, Agustin: "las vistas no me gustan", las mira en el celular) cada vista puede traer su lugar en el cuadro
+    // (r = [x, y, ancho, alto] de 0 a 1, y desde arriba): una grande y tres chicas; y la distancia se abre lo justo para que
+    // entren los dos (sep * k + k0), no 1.9 veces la separacion
+    let vx = (vi % cols)*W, vy = (rows - 1 - Math.floor(vi / cols))*H, vw = W, vh = H;
+    if (v.r) { vw = Math.round(v.r[2]*cv.width); vh = Math.round(v.r[3]*cv.height); vx = Math.round(v.r[0]*cv.width); vy = cv.height - Math.round(v.r[1]*cv.height) - vh; }
+    gl.viewport(vx, vy, vw, vh);
+    const yaw = v.yaw*Math.PI/180, pit = v.pitch*Math.PI/180; v = {...v, dist: Math.max(v.dist, sep * (v.k ?? 1.9) + (v.k0 ?? 0))};
+    const eye = [tx[0] + Math.sin(yaw)*Math.cos(pit)*v.dist, tx[1] + Math.sin(-pit)*v.dist*-1 + 0, tx[2] - Math.cos(yaw)*Math.cos(pit)*v.dist];
+    eye[1] = tx[1] - Math.sin(pit)*v.dist;
+    const vp = mmul(persp(v.fov*Math.PI/180, vw/vh, 0.1, 100), look(eye, [tx[0], v.ty ?? tx[1], tx[2]]));
+    gl.useProgram(PF); gl.uniformMatrix4fv(gl.getUniformLocation(PF,'vp'), false, vp); gl.bindVertexArray(floorVao); gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.useProgram(P); gl.uniformMatrix4fv(gl.getUniformLocation(P,'vp'), false, vp);
+    for (const pass of [1, 0]) {
+      if (pass) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); } else { gl.disable(gl.BLEND); gl.depthMask(true); }
+      gl.uniform1f(gl.getUniformLocation(P,'shadow'), pass);
+      for (let i = 0; i < 2; i++) {
+        if (!boneTex) { boneTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, boneTex); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST); }
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, boneTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, S.nb*3, 1, 0, gl.RGBA, gl.FLOAT, boneRows(i, f)); gl.uniform1i(gl.getUniformLocation(P,'B'), 1);
+        const J = S.jugadores[i];
+        for (const m of buffers) { if (m.who != -1 && m.who != i) continue;
+          if (pass && (m.kind == 'eye' || m.kind == 'hair')) continue;
+          let c = KCOL[m.kind]; if (m.kind == 'shirt') c = J.color; if (m.kind == 'shorts') c = [0.95,0.95,0.95]; if (m.kind == 'socks') c = J.color;
+          let t = null; if (m.kind == 'face') t = texs[i + 'face_bsm_alp']; if (m.kind == 'hair') t = texs[i + 'hair_parts_bsm_alp']; if (m.kind == 'boots') t = texs['cboots'];
+          gl.uniform1i(gl.getUniformLocation(P,'useTex'), t ? 1 : 0); gl.uniform1i(gl.getUniformLocation(P,'alphaTest'), m.kind == 'hair' ? 1 : 0);
+          if (t) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform1i(gl.getUniformLocation(P,'tex'), 0); }
+          gl.uniform3fv(gl.getUniformLocation(P,'col'), c || [0.7,0.7,0.7]);
+          gl.bindVertexArray(m.vao); gl.drawElements(gl.TRIANGLES, m.n, gl.UNSIGNED_INT, 0);
+        }
+      }
+    }
+  });
+  gl.depthMask(true); gl.disable(gl.BLEND);
+  return [h0, h1];
+};
+</script></body></html>

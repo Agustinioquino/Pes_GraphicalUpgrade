@@ -11,6 +11,7 @@ Texture2D<float4> inDepth : register(t0);
 Texture2D<float4> inNrm   : register(t1);
 Texture2D<float4> inAlb   : register(t2);
 Texture2D<float4> inDif   : register(t3);
+Texture2D<float4> inMat   : register(t4);   // (23/11 ru34vc i) material del G-buffer (carteles LED), lo enlaza la DLL; sin enlazar = 0
 Texture1D<float4> IniParams : register(t120);
 SamplerState sPoint : register(s0);
 SamplerState sLinear : register(s1);
@@ -80,7 +81,18 @@ float4 SampleV2(float2 uv, float2 uvS, float3 Pc, float3 Nc, float areaPx, bool 
   float cosV = max(saturate(dot(Ns, -normalize(Ps))), 0.25);
   float area = areaPx * mpp * mpp / cosV;
   float ff = cosC * cosS * area / (3.14159265 * max(dist2, 0.04));
-  float3 Ls = inAlb.SampleLevel(sPoint, uvS, 0).xyz * inDif.SampleLevel(sPoint, uvS, 0).xyz;
+  float3 albS = inAlb.SampleLevel(sPoint, uvS, 0).xyz;
+  float3 Ls = albS * inDif.SampleLevel(sPoint, uvS, 0).xyz;
+  // (23/11 ru34vc i) 541 LOS CARTELES LED REBOTAN: un LED emite (la composicion le suma su luz propia, 141), pero esa luz no estaba en la
+  // luz difusa que lee el rebote: el cartel no teñia a los jugadores ni al pasto de al lado. Aca se suma con la misma cuenta que la
+  // composicion (albedo x brillo y141 x 2500 x exposicion), por x541. De noche y en la sombra es lo que mas se nota.
+  { float4 P541 = IniParams.Load(int2(541, 0)); if (all(P541 == 0.0)) P541 = float4(1, 0, 0, 1);
+    float4 LD = IniParams.Load(int2(141, 0));
+    if (P541.w > 0.5 && P541.x > 0.001 && LD.x > 0.5) {
+      float4 gm = inMat.SampleLevel(sPoint, uvS, 0);
+      if (abs(gm.x - 0.99215686) < 0.0025 && abs(gm.y - 0.00392157) < 0.0018 && gm.z < 0.002)
+        Ls += albS * ((LD.y > 0.0 ? LD.y : 1.0) * 2500.0 * c[23].z) * saturate(P541.x);
+    } }
   ff = min(ff, g_ffCap);                                               // una sola muestra nunca aporta mas de un tercio
   return float4(Ls * ff, ff);
 }

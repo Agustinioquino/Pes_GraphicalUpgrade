@@ -317,7 +317,7 @@ class Tr:
     def tr_instr(self, line):
         raw = line.strip()
         if not raw or raw.startswith('//'): return
-        m = re.match(r'^([a-z_0-9]+(?:\([^)]*\))*)\s*(.*)$', raw)
+        m = re.match(r'^([a-z_0-9]+(?:\([^)]*\))*(?:_uint|_rcpFloat)?)\s*(.*)$', raw)   # (14/11) resinfo ..._uint: el sufijo va con la instruccion
         opfull, rest = m.group(1), m.group(2)
         sat = '_sat' in opfull
         op = opfull.replace('_sat', '')
@@ -399,6 +399,10 @@ class Tr:
             self.assign(ops[0], '(%s >> (%s & 31))' % (I(1), U(2)), kind='i')
         elif op == 'ushr':
             self.assign(ops[0], '(%s >> (%s & 31))' % (U(1), U(2)), kind='u')
+        elif op == 'udiv':   # udiv cociente, resto, a, b (14/11: VS del banderin). Ojo: no sirve si un destino pisa un operando
+            qe, re_ = '(%s / max(%s, 1u))' % (U(2), U(3)), '(%s %% max(%s, 1u))' % (U(2), U(3))
+            if ops[0] != 'null': self.assign(ops[0], qe, kind='u')
+            if ops[1] != 'null': self.assign(ops[1], re_, kind='u')
         elif op == 'ineg':
             self.assign(ops[0], '(-%s)' % I(1), kind='i')
         elif op == 'ftoi':

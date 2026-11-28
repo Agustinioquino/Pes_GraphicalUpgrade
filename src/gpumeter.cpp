@@ -21,6 +21,8 @@
 #include <cmath>
 #include <cstring>
 #include <intrin.h>
+#include <unordered_map>
+#include <vector>
 #pragma intrinsic(_ReturnAddress)
 
 namespace fx {
@@ -388,6 +390,145 @@ static std::string s_summary;
 std::string GpuMeterSummary() { return s_summary; }
 void GpuMeterTotals(double& frameMs, int& frames, double* zoneMs) { frameMs = s_fTot; frames = s_fTotN; for (int z = 0; z < kGpuZoneN; z++) zoneMs[z] = s_zTot[z]; }
 
+// (13/11, pasto: "la densidad adaptativa no funciona"; su log: cuadro en la GPU 46-75 ms y el pasto 2-15 ms, "bajar el pasto no sube los FPS")
+// PERFIL POR SHADER: con el medidor prendido (x375), una vez por minuto durante 120 cuadros (o cuando lo pide la prueba automatica) se pone
+// una marca de tiempo en la GPU cada vez que cambia el PS de los dibujos (o el VS si no hay PS: sombras / profundidad). (13/11 v3) No solo
+// en el contexto inmediato: tambien dentro de las listas diferidas que graban los otros hilos del juego. Cada contexto lleva su cadena de
+// marcas y el tiempo entre una marca y la siguiente de la MISMA cadena va al shader que estaba puesto; las listas se cierran en
+// FinishCommandList. En el inmediato el tiempo de cada ExecuteCommandList va aparte ("listas diferidas, total") para no contarlo dos
+// veces. Una marca de una lista que no llega (lista descartada) a los 12 cuadros se da por perdida. Linea "perfil GPU" del log con los 18
+// mas caros; la prueba automatica pide el informe largo (40 shaders). OJO: si la placa no va llena, los ms incluyen las esperas de la placa
+// entre dibujo y dibujo (se ve con el uso del motor 3D de perfrec.cpp). Solo mide.
+namespace {
+const int kSpMax = 6144, kSpFr = 5, kSpRun = 120;
+struct SpRec { uint64_t key; int prev; int draws; bool repl, def; };
+struct SpFrame { ID3D11Query* dis = nullptr; ID3D11Query* ts[kSpMax] = {}; SpRec st[kSpMax] = {}; std::atomic<int> n{0}; int frame = -1, gen = 0; bool open = false, read = true; };
+SpFrame* s_sp = nullptr; int s_spState = 0, s_spLeft = 0, s_spDone = 0, s_spLostSt = 0; std::atomic<int> s_spOver{0}; std::atomic<int> s_spCur{-1};
+double s_spNext = 0.0, s_spTot = 0.0, s_spListTot = 0.0, s_spDefTot = 0.0; bool s_spKick = false, s_spHold = false; int s_spRuns = 0;
+std::atomic<bool> s_spOn{false};
+SpCtx s_immSp;   // cadena del contexto inmediato (draws, Present y ExecuteCommandList)
+struct SpAcc { double ms = 0.0, draws = 0.0, defMs = 0.0; bool repl = false; };
+std::unordered_map<uint64_t, SpAcc>* s_spAcc = new std::unordered_map<uint64_t, SpAcc>;
+std::string* s_spLong = new std::string;
+const uint64_t kSpPresent = 1, kSpExec = 2, kSpEnd = 3, kSpVsBit = 1ull << 63;
+bool SpReady() {
+    if (s_spState) return s_spState == 1;
+    s_spState = 2; if (!g_dev.dev) return false;
+    s_sp = new SpFrame[kSpFr]; D3D11_QUERY_DESC qd = {};
+    for (int f = 0; f < kSpFr; f++) {
+        qd.Query = D3D11_QUERY_TIMESTAMP_DISJOINT; if (FAILED(g_dev.dev->CreateQuery(&qd, &s_sp[f].dis))) return false;
+        qd.Query = D3D11_QUERY_TIMESTAMP; for (int i = 0; i < kSpMax; i++) if (FAILED(g_dev.dev->CreateQuery(&qd, &s_sp[f].ts[i]))) return false; }
+    s_spState = 1; return true;
+}
+void SpStampC(ID3D11DeviceContext* c, SpCtx& x, uint64_t key, bool repl) {
+    const int cur = s_spCur.load(std::memory_order_acquire); if (cur < 0) return;
+    SpFrame& F = s_sp[cur];
+    const bool same = x.slot == cur && x.gen == F.gen;
+    if (same && x.last >= 0 && x.key == key) return;
+    const int i = F.n.fetch_add(1, std::memory_order_relaxed);
+    if (i >= kSpMax) { s_spOver.fetch_add(1, std::memory_order_relaxed); return; }
+    c->End(F.ts[i]);
+    F.st[i].key = key; F.st[i].prev = same ? x.last : -1; F.st[i].draws = 0; F.st[i].repl = repl; F.st[i].def = c != g_dev.imm;
+    x.slot = cur; x.gen = F.gen; x.last = i; x.key = key;
+}
+bool SpRead(SpFrame& F) {   // true = leido (o descartado)
+    D3D11_QUERY_DATA_TIMESTAMP_DISJOINT d = {};
+    if (g_dev.imm->GetData(F.dis, &d, sizeof d, D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) return s_frame - F.frame > 60;
+    const int n = (std::min)(F.n.load(), kSpMax);
+    static UINT64 T[kSpMax]; static bool ok[kSpMax];
+    const bool late = s_frame - F.frame > 12;
+    for (int i = 0; i < n; i++) { ok[i] = g_dev.imm->GetData(F.ts[i], &T[i], 8, D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK;
+        if (!ok[i] && !late && (F.st[i].def || s_frame - F.frame < 6)) return false; }
+    if (d.Disjoint || !d.Frequency || n < 2) return true;
+    const double f = 1000.0 / double(d.Frequency);
+    for (int i = 0; i < n; i++) {
+        if (!ok[i]) { s_spLostSt++; continue; }
+        const int p = F.st[i].prev; if (p < 0 || p >= i || !ok[p] || T[i] < T[p]) continue;
+        const double ms = double(T[i] - T[p]) * f; if (ms > 500.0) continue;
+        const SpRec& r = F.st[p];
+        if (r.key == kSpExec) { s_spListTot += ms; continue; }
+        if (r.key == kSpEnd) continue;
+        SpAcc& a = (*s_spAcc)[r.key]; a.ms += ms; a.draws += r.draws; if (r.repl) a.repl = true;
+        if (r.def) { a.defMs += ms; s_spDefTot += ms; } else s_spTot += ms; }
+    s_spDone++;
+    return true;
+}
+const char* SpName(uint64_t h) {
+    switch (h & ~kSpVsBit) {
+    case 0x619b86cb5691cdceULL: return "composicion / luz (619b86)"; case 0xf807e74d5b900a15ULL: return "composicion 2 (f807e7)";
+    case 0x18afff0f79d9aaa5ULL: return "pasto hojas PS (18afff)"; case 0x498b30bad256e8edULL: return "pasto VS (498b30)";
+    case 0x24943e559ce781b9ULL: return "desenfoque de movimiento (24943e)"; case 0x5ce3ed8702271bc1ULL: return "piel (5ce3ed)";
+    case 0x5e92f2343848915aULL: return "base de la cancha (5e92f2)"; case 0xc9564b9b155f0a49ULL: return "base de la cancha 2 (c9564b)";
+    case 0x1a7534929602c747ULL: return "TAA (1a7534)"; case 0x0f5c2b9995c3a601ULL: return "nitidez CAS (0f5c2b)";
+    case 0x1c02a92ab4ae3362ULL: return "piel del cuerpo VS (1c02a9)";
+    default: return ""; }
+}
+}   // namespace
+void GpuShaderProfDraw(ID3D11DeviceContext* c, const ShaderEntry* ps, const ShaderEntry* vs, SpCtx& ctx) {
+    if (!s_spOn.load(std::memory_order_relaxed)) return;
+    SpCtx& x = c == g_dev.imm ? s_immSp : ctx;
+    const ShaderEntry* e = ps ? ps : vs; const uint64_t key = ps ? ps->hash : (vs ? (vs->hash | kSpVsBit) : 0);
+    SpStampC(c, x, key, e && e->repl);
+    const int cur = s_spCur.load(std::memory_order_relaxed);
+    if (cur >= 0 && x.slot == cur && x.last >= 0 && x.last < kSpMax && x.gen == s_sp[cur].gen) s_sp[cur].st[x.last].draws++;
+}
+void GpuShaderProfExec(ID3D11DeviceContext* c, SpCtx& ctx) { if (s_spOn.load(std::memory_order_relaxed)) SpStampC(c, c == g_dev.imm ? s_immSp : ctx, kSpExec, false); }
+void GpuShaderProfFinish(ID3D11DeviceContext* c, SpCtx& ctx) {
+    if (c == g_dev.imm) return;
+    if (s_spOn.load(std::memory_order_relaxed)) SpStampC(c, ctx, kSpEnd, false);
+    ctx.last = -1; ctx.key = 0;   // la lista termina: la cadena de este contexto vuelve a empezar
+}
+void GpuShaderProfKick() { s_spKick = true; }
+void GpuShaderProfHold(bool on) { s_spHold = on; }
+int GpuShaderProfRuns() { return s_spRuns; }
+std::string GpuShaderProfReport() { return *s_spLong; }
+static void GpuShaderProfPresent(double t) {
+    const int cur0 = s_spCur.load();
+    if (cur0 >= 0) {   // cerrar el cuadro que termina
+        SpFrame& F = s_sp[cur0]; SpStampC(g_dev.imm, s_immSp, kSpEnd, false);
+        g_dev.imm->End(F.dis); F.open = false; F.read = false; s_spCur.store(-1); }
+    bool pend = false;
+    if (s_sp) for (int f = 0; f < kSpFr; f++) { SpFrame& F = s_sp[f]; if (F.read || F.open || F.frame < 0) continue;
+        if (s_frame - F.frame >= 3 && SpRead(F)) F.read = true;
+        if (!F.read) pend = true; }
+    if (s_spLeft <= 0) {
+        s_spOn.store(false);
+        if (pend) return;   // el informe espera a los ultimos cuadros
+        if (s_spDone > 0) {   // informe
+            std::vector<std::pair<double, uint64_t>> v; for (auto& kv : *s_spAcc) v.push_back({ kv.second.ms, kv.first }); std::sort(v.rbegin(), v.rend());
+            const double D = s_spDone, all = (s_spTot + s_spDefTot) / D;
+            char buf[4096]; int n = snprintf(buf, sizeof buf, "perfil GPU (%d cuadros): inmediato %.2f ms + listas diferidas %.2f ms (con detalle %.2f) por cuadro |",
+                s_spDone, s_spTot / D, s_spListTot / D, s_spDefTot / D);
+            std::string lg; char lb[400];
+            snprintf(lb, sizeof lb, "PERFIL DE LA PLACA POR SHADER (%d cuadros): contexto inmediato %.2f ms + listas diferidas %.2f ms por cuadro (%.2f ms con detalle por shader);"
+                " marcas perdidas %d, de mas %d\r\n  (ms = tiempo de la placa entre que se pone ese shader y el siguiente; si la placa no va llena incluye sus esperas)\r\n",
+                s_spDone, s_spTot / D, s_spListTot / D, s_spDefTot / D, s_spLostSt, s_spOver.load()); lg += lb;
+            for (size_t i = 0; i < v.size() && i < 40; i++) { const uint64_t k = v[i].second; const SpAcc& a = (*s_spAcc)[k];
+                const double ms = a.ms / D, pc = all > 0 ? 100.0 * ms / all : 0.0;
+                if (k == kSpPresent) { if (i < 18 && n < (int)sizeof buf - 120) n += snprintf(buf + n, sizeof buf - n, " Present y tareas del mod %.2f |", ms);
+                    snprintf(lb, sizeof lb, "  %2d. %-40s %6.2f ms %5.1f %%\r\n", (int)i + 1, "Present, tareas del mod y comienzo del cuadro", ms, pc); lg += lb; continue; }
+                if (i < 18 && n < (int)sizeof buf - 120) n += snprintf(buf + n, sizeof buf - n, " %s%016llx%s %s %.2f ms x%.0f |", (k & kSpVsBit) ? "VS " : "",
+                    (unsigned long long)(k & ~kSpVsBit), a.repl ? " (mod)" : "", SpName(k), ms, a.draws / D);
+                char nm[64]; snprintf(nm, sizeof nm, "%s %016llx%s", (k & kSpVsBit) ? "VS" : "PS", (unsigned long long)(k & ~kSpVsBit), a.repl ? " (mod)" : "");
+                snprintf(lb, sizeof lb, "  %2d. %-26s %-32s %6.2f ms %5.1f %%  %5.0f dibujos%s\r\n", (int)i + 1, nm, SpName(k), ms, pc, a.draws / D,
+                    a.defMs > 0.005 * D ? (" (en listas " + std::to_string(int(100.0 * a.defMs / (std::max)(a.ms, 1e-9))) + " %)").c_str() : "");
+                lg += lb; }
+            if (s_spOver.load()) n += snprintf(buf + n, sizeof buf - n, " (marcas de mas: %d)", s_spOver.load());
+            Log("%s", buf); *s_spLong = lg; s_spRuns++; }
+        s_spAcc->clear(); s_spDone = 0; s_spTot = s_spListTot = s_spDefTot = 0.0; s_spOver.store(0); s_spLostSt = 0;
+        if (s_spNext == 0.0) s_spNext = t + 20.0;
+        const bool go = s_spKick || (!s_spHold && t >= s_spNext);
+        if (!go || !SpReady()) return;
+        s_spKick = false; s_spNext = t + 60.0; s_spLeft = kSpRun;
+    }
+    // abrir el cuadro que empieza (si hay lugar)
+    int slot = -1; for (int f = 0; f < kSpFr; f++) if (s_sp[f].read && !s_sp[f].open) { slot = f; break; }
+    if (slot < 0) { s_spOn.store(false); return; }
+    SpFrame& F = s_sp[slot]; F.n.store(0); F.gen++; F.frame = s_frame; F.open = true; F.read = false;
+    g_dev.imm->Begin(F.dis); s_spCur.store(slot, std::memory_order_release); s_spLeft--; s_spOn.store(true);
+    SpStampC(g_dev.imm, s_immSp, kSpPresent, false);
+}
+
 void GpuMeterPresent() {
     if (!g_cfg.meterOn || !g_dev.imm) return;
     s_frameNo.fetch_add(1, std::memory_order_relaxed);
@@ -395,11 +536,12 @@ void GpuMeterPresent() {
     static bool wasOn = false;
     if (want != wasOn) { wasOn = want; Log("medidor: %s (x375)", want ? "prendido" : "apagado"); if (!want) s_summary.clear(); }
     s_want.store(want);
-    if (!want) { s_lastPresentT = 0; return; }
+    if (!want) { s_lastPresentT = 0; s_spOn.store(false); return; }
     const double t = Now();
     if (s_lastPresentT > 0) { double ms = (t - s_lastPresentT) * 1000.0; if (ms < 1000.0) { s_cpuSum += ms; if (ms > s_cpuMax) s_cpuMax = ms; s_cpuN++; } }
     s_lastPresentT = t;
     if (ZonesReady()) { ReadZones(); FrameStamp(); }
+    GpuShaderProfPresent(t);   // (13/11) perfil por shader (una vez por minuto, 120 cuadros)
     s_frame++;
     static double next = 0; static int frames0 = 0; static uint64_t peakLocal = 0;
     IDXGIAdapter3* a3 = Adapter3();

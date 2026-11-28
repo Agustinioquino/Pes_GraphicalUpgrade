@@ -1,4 +1,5 @@
 // PES21 FX - punto de entrada. Sider llama a PES21FX_Init(carpeta) desde PES21FX.lua (LuaJIT FFI).
+#include "siderui.h"
 #include "core.h"
 #include <algorithm>
 #include <vector>
@@ -512,6 +513,7 @@ static int InitMod() {
     if (!fx::g_cfg.optHooks) { fx::Log("hooks = 0: el mod queda cargado pero sin ganchos (prueba)"); return 2; }
     if (!fx::InstallHooks()) { fx::Log("ERROR: no se pudieron instalar los ganchos de D3D11"); return 0; }
     fx::Log("ganchos instalados");
+    fx::BorderlessStart();   // (15/11) ventana sin bordes: antes de que el juego lea el tamano y cree la ventana (borderless.cpp)
     fx::StartHangWatch();   // (08/11 c) congelamientos: volcado automatico
     fx::PanelStart(fx::g_cfg.panelPort);   // (08/11) panel en vivo: HTTP en 127.0.0.1 (panel.cpp)
     fx::MemWatchStart();   // (26/10) liberador de memoria del juego + VirtualProtect/VirtualFree (memwatch.cpp)
@@ -533,6 +535,7 @@ BOOL APIENTRY DllMain(HMODULE h, DWORD reason, LPVOID reserved) {
         fx::CoverFlush();   // (08/11 h) ultimo volcado de la cobertura
         fx::RastroFlush(true);
         fx::RastroV4Flush(true);   // (10/11 d)   // (08/11 i) rastro del motor
+        { std::string m; if (fx::SdApplyPending(&m)) fprintf(fx::g_log, "pagina Sider: %s\n", m.c_str()); else if (!m.empty()) fprintf(fx::g_log, "pagina Sider: NO se aplicaron los cambios pendientes: %s\n", m.c_str()); }   // (14/11) modulos prendidos / apagados desde el Insert
         fprintf(fx::g_log, "--- fin del proceso (%s)\n", reserved ? "el juego salio" : "DLL descargada");
         fflush(fx::g_log);
     }

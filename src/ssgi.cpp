@@ -180,12 +180,12 @@ ID3D11ShaderResourceView* SSGIBeforeComposition(ID3D11DeviceContext* c, int fram
     if (tm) { c->Begin(tm->dis); c->End(tm->ts[0]); }
     // 1) SSGI de este cuadro -> tex0
     c->OMSetRenderTargets(1, &s_rtv[0], nullptr);
-    ID3D11ShaderResourceView* sv0[4] = { depth, nrm, alb, dif }; c->PSSetShaderResources(0, 4, sv0);
+    ID3D11ShaderResourceView* sv0[5] = { depth, nrm, alb, dif, in[1] }; c->PSSetShaderResources(0, 5, sv0);   // (23/11 ru34vc i) t4 = material (LED, 541)
     c->PSSetShader(s_ps, nullptr, 0); c->Draw(3, 0);
     if (tm) c->End(tm->ts[1]);
     // 2) acumulacion: tex0 + historia anterior -> historia nueva
     int hNew = 1 + s_ping, hOld = 1 + (1 - s_ping); s_ping = 1 - s_ping;
-    c->PSSetShaderResources(0, 4, nulls); c->OMSetRenderTargets(1, &s_rtv[hNew], nullptr);
+    { ID3D11ShaderResourceView* n5[5] = {}; c->PSSetShaderResources(0, 5, n5); } c->OMSetRenderTargets(1, &s_rtv[hNew], nullptr);
     D3D11_VIEWPORT vpF{ 0, 0, (float)fw, (float)fh, 0, 1 }; c->RSSetViewports(1, &vpF);
     ID3D11ShaderResourceView* sv1[3] = { s_srv[0], s_srv[hOld], depth }; c->PSSetShaderResources(0, 3, sv1);
     c->PSSetConstantBuffers(3, 1, &s_prev);

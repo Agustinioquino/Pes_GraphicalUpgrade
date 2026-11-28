@@ -83,6 +83,7 @@ Texture2D<float4> StereoParams : register(t125);
 #include "pes_common.hlsli"   // PES21 (18/10): curva del dia, transmision de piel, tamano del sol
 #include "pes_sunturf.hlsli"   // (27/10) el sol sobre el pasto (313)
 #include "pes_headshadow.hlsli"   // (27/10 c) sombra propia de la cabeza (t30)
+#include "pes_contact3.hlsli"   // (23/11 ru34vc) sombras de contacto v3 (x526)
 #include "pes_skinthick.hlsli"   // (04/11) grosor real de la piel con el atlas de la cabeza (t30)
 
 
@@ -197,17 +198,24 @@ void main(
   // las sombras siguen siendo las del sol real del juego (el shadow map lo arma el motor).
   float4 pesLDir = g_psLight.m_lightDir0; float4 pesLCol = g_psLight.m_lightColor0; bool pesFreeSun = false; float4 pesP258 = IniParams.Load(int2(258,0)); bool pesShMis = pesP258.x > 0.5 || pesP258.y > 0.5;   // (04/11) y258 = 1: tampoco medir grosor con el shadow map del juego (sol_parche 0: manchas naranjas duras en la piel)   // (02/11) shadow map sin alinear con la luz (sol_parche 1 y sombra_parche 0): no medir grosor con el
   { float4 SF = IniParams.Load(int2(101,0));
-    if (SF.x > 0.5) { pesFreeSun = true;
-      float az = radians(SF.y), el = radians(SF.z);
-      float3 w = normalize(float3(cos(el) * sin(az), sin(el), cos(el) * cos(az)));   // mundo: Y arriba
-      float3 v = float3(dot(float3(g_psScene.m_view._m00, g_psScene.m_view._m01, g_psScene.m_view._m02), w),
-                        dot(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12), w),
-                        dot(float3(g_psScene.m_view._m20, g_psScene.m_view._m21, g_psScene.m_view._m22), w));
-      // el juego guarda la direccion HACIA el sol o desde el sol? se respeta el signo original (mismo sentido que m_lightDir0.y)
-      float sgn = (g_psLight.m_lightDir0.y < 0) ? -1.0 : 1.0;
-      pesLDir.xyz = normalize(v) * sgn;
+    if (SF.x > 0.5) {
+      // (12/11 hefeaf) w452 (la escribe la DLL): 2 = el sol libre ya esta en el motor (x450: las sombras lo siguen) -> no se gira
+      // nada aca y las sombras reales quedan encendidas; 1 = direccion armada por la DLL (azimut desde el sol del partido, giro)
+      float4 SD = IniParams.Load(int2(452,0));
+      if (SD.w < 1.5) { pesFreeSun = true;
+        float3 w;
+        if (SD.w > 0.5 && dot(SD.xyz, SD.xyz) > 0.25) w = normalize(SD.xyz);
+        else { float az = radians(SF.y), el = radians(SF.z); w = normalize(float3(cos(el) * sin(az), sin(el), cos(el) * cos(az))); }   // mundo: Y arriba
+        // (26/10) mundo -> vista: con las columnas (las filas _m0x.._m2x pasan de vista a mundo). (12/11) a748 / b8a2 / de64 / d514
+        // todavia usaban las filas: el sol libre giraba con la camara en esas pasadas; ahora todas iguales
+        float3 v = float3(dot(float3(g_psScene.m_view._m00, g_psScene.m_view._m10, g_psScene.m_view._m20), w),
+                          dot(float3(g_psScene.m_view._m01, g_psScene.m_view._m11, g_psScene.m_view._m21), w),
+                          dot(float3(g_psScene.m_view._m02, g_psScene.m_view._m12, g_psScene.m_view._m22), w));
+        float sgn = (g_psLight.m_lightDir0.y < 0) ? -1.0 : 1.0;   // se respeta el signo original
+        pesLDir.xyz = normalize(v) * sgn; }
       float warm = saturate(IniParams.Load(int2(102,0)).x);
       float3 tint = lerp(float3(1, 1, 1), float3(1.0, 0.62, 0.32), warm);
+      float4 ST = IniParams.Load(int2(453,0)); if (ST.w > 0.5) tint *= ST.xyz;   // (12/11) temperatura del sol (z450, K)
       pesLCol.xyz = g_psLight.m_lightColor0.xyz * max(SF.w, 0.0) * tint;
     } }
   float4 r0,r1,r2,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,r13,r14;
@@ -551,7 +559,7 @@ void main(
   if (pesTurf) { float rawT = rawNdotL; float wrapT = r2.x; float rawS = dot(pesNT, pesLT);
     float3 upT = normalize(float3(g_psScene.m_view._m10, g_psScene.m_view._m11, g_psScene.m_view._m12));   // arriba (cancha) en vista
     float upNL = dot(upT, normalize(pesLDir.xyz)); if (upNL < -0.2 && pesPG.w > 1.0) upNL = -upNL;   // (03/11) como el rebote: el sol siempre arriba
-    r3.xyz = PESTurfDiffuse(r8.xyz, rawT, wrapT, pesPG, trans, upNL);
+    r3.xyz = PESTurfDiffuse2(r8.xyz, rawT, wrapT, pesPG, trans, upNL, pesNT, normalize(pesLDir.xyz), upT, normalize(-r7.xyz), 1.0);   // (13/11 tanda 2) x496 un solo sol
     // (04/11) z330: la luz que atraviesa la hoja hacia la camara (contraluz), fina de cerca y suave de lejos (pes_sunturf.hlsli)
     r3.xyz += PESTurfTransmit(r8.xyz, v0.xy / v0.ww, v1.xy / v1.ww, g_DepthTexture, g_samplerPoint_Wrap_s, g_psScene.m_projectionParam,
                               g_psScene.m_cameraCenterOffset.xy, g_psSystem.m_renderBuffer.x, pesLT, rawS, trans, pesPG); }
@@ -644,7 +652,8 @@ void main(
     // 18/10 c: el espacio de vista del motor tiene z NEGATIVA hacia adelante: con "zC > 0.1" el trazado no corria nunca
     // (por eso el interruptor "no hacia nada"). Ahora todo va con el signo de zC.
     float zSgn = zC < 0.0 ? -1.0 : 1.0, zA = abs(zC);
-    if (CS.w > 0.5 && csK > 0 && zA > 0.1 && zA < 60.0 && rawNdotL > 0.02 && r0.x > 0.03) {
+    bool pesCS3 = IniParams.Load(int2(526,0)).x > 0.5;   // (23/11 ru34vc) v3 reemplaza a esta
+    if (!pesCS3 && CS.w > 0.5 && csK > 0 && zA > 0.1 && zA < 60.0 && rawNdotL > 0.02 && r0.x > 0.03) {
       float3 Pv = float3((sC - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * zC, zC);
       float3 Lc = normalize(pesLDir.xyz);
       float ign = frac(52.9829189 * frac(dot(v2.xy, float2(0.06711056, 0.00583715))) + frac(g_psSystem.m_timeParam.z * 7.31));
@@ -687,6 +696,20 @@ void main(
       r0.xyz *= cs;
     }
   }
+  // (23/11 ru34vc) SOMBRAS DE CONTACTO v3 (x526 = 1, pes_contact3.hlsli): rayo medido en pixeles, profundidad correcta con la perspectiva,
+  // la oclusion mas fuerte del recorrido y borde suave del grosor. Misma fila 52 (fuerza, largo, suavidad, on)
+  { float2 sC3 = v0.xy / v0.ww, uC3 = v1.xy / v1.ww;
+    float2 dS3 = float2(ddx(sC3.x), ddy(sC3.y)), dU3 = float2(ddx(uC3.x), ddy(uC3.y));
+    float2 pxU3 = abs(dU3);
+    dS3 = (abs(dS3) < 1e-9) ? 1e-9 : dS3;
+    float2 Am3 = dU3 / dS3, Bm3 = uC3 - Am3 * sC3;
+    if (IniParams.Load(int2(526,0)).x > 0.5 && IniParams.Load(int2(52,0)).w > 0.5 && rawNdotL > 0.02 && r0.x > 0.03) {
+      float jit3 = frac(52.9829189 * frac(dot(v2.xy, float2(0.06711056, 0.00583715))) + frac(g_psSystem.m_timeParam.z * 7.31));
+      float cs3 = PESContactShadow3(sC3, uC3, Am3, Bm3, pxU3, normalize(pesLDir.xyz), matType, skinTag, jit3);
+      csDbg = cs3;
+      if (isSkin) cs3 = lerp(1.0, cs3, 0.85);       // en la piel la luz se difunde: sombra mas suave (como la v2)
+      r0.xyz *= cs3;
+    } }
   // (27/10) sombras entre hojas (x313): la sombra de cada hoja sobre las de atras, hacia el sol
   { float2 sT = v0.xy / v0.ww, uT = v1.xy / v1.ww;
     float2 dST = float2(ddx(sT.x), ddy(sT.y)), dUT = float2(ddx(uT.x), ddy(uT.y));
@@ -996,7 +1019,7 @@ void main(
     float dd = nh * nh * (a4 - 1) + 1;
     float D2 = a4 / (3.14159 * dd * dd);
     float F2 = 0.028 + 0.972 * pow(1 - saturate(dot(V2, H2)), 5);
-    float sharp = D2 * F2 * nl2 * 0.25 * P5.y * eF;
+    float sharp = D2 * F2 * nl2 * PESSkinVis(nl2, saturate(dot(n2, V2)), a4) * P5.y * eF;
     r1.xyz += sharp * PESSunColor() * g_psScene.m_exposure.zzz * shadowScalar * PESSkinSharpOcc(specInt, w5k);
   }
   // diagnostico w12 = 3 sobre piel: magenta = es piel pero no se midio el grosor (sin cascada / transmision apagada);
@@ -1016,6 +1039,6 @@ void main(
   { float4 P89 = IniParams.Load(int2(89,0));
     if (P89.x > 0.5) { float fl = P89.y > 0.0 ? P89.y : 1.0; float3 c89 = pesLCol.xyz; float m89 = max(max(c89.x, c89.y), c89.z); if (m89 < 1e-3) m89 = 1.0;
       o0.xyz = (c89 / m89) * fl * 0.6; if (P89.z < 0.5) o1.xyz = 0; } }
-  o2.xyzw = r0.xyzw;
+  o2.xyzw = r0.xyzw;   // (13/11 tanda 2) w447: r0.w ya es la visibilidad limpia del sol (la del shadow map del motor, sin la sombra de contacto, x313 ni la cabeza): la composicion la usa tal cual
   return;
 }

@@ -46,7 +46,63 @@ float3 PESMowGrain(float2 pm, float3 gIn, float pat, float widthM, float lean)
 // live = desgaste en vivo (mapa que pinta la DLL con los jugadores, 0..1): seca y, al maximo, pela (z115)
 // (26/10 f) w292: desgaste en vivo mas visible: el mapa sube muy lento (una pasada de un jugador ~0.01, uno parado ~0.02/s; a los pocos
 // minutos casi todo queda < 0.15 = 9-15% de paja, imperceptible). 1 - exp(-5 x): 0.1 -> 0.39, 0.15 -> 0.53, 0.3 -> 0.78
-float PESWearLiveCurve(float live) { return IniParams.Load(int2(292, 0)).w > 0.5 ? 1.0 - exp(-5.0 * saturate(live)) : saturate(live); }
+// (12/11) x431 desgaste real: curva PROGRESIVA en S (una pasada suelta casi no se ve; donde se insiste sube rapido y despues se satura): 0.1 -> 0.10,
+// 0.2 -> 0.35, 0.3 -> 0.65, 0.45 -> 0.97. El mapa ahora sube por las acciones (frenadas, giros, remates, barridas), no por estar parado
+float PESWearLiveCurve(float live) {
+  if (IniParams.Load(int2(431, 0)).x > 0.5) { float c = saturate(live * 2.2); return c * c * (3.0 - 2.0 * c); }
+  return IniParams.Load(int2(292, 0)).w > 0.5 ? 1.0 - exp(-5.0 * saturate(live)) : saturate(live); }
+// (12/11, Agustin: "un slider para probar el desgaste en vivo") x437 PRUEBA. (12/11 15:02, Agustin: "desgasta partes de la cancha que no
+// se tocaron aun") ya no pinta un partido fijo: AGRANDA al instante el desgaste que ya hay en el mapa del partido (solo donde se piso o se
+// jugo), mas en las zonas que mas se gastan (bocas de arco, punto penal, circulo central, laterales) y en parches (ruido). 0 = como esta;
+// 1 = lo pisado ~4x mas gastado; 2 = ~9x (lo poco pisado ya seco, lo mucho pelado). No toca el mapa: al volver a 0 queda lo que habia.
+// uv = la del mapa (pm se saca de ahi), wxz = metros del mundo
+float PESWearTest(float live, float2 uv, float2 wxz) {
+  float t = IniParams.Load(int2(437, 0)).x;
+  if (t < 0.001 || live < 1e-4) return live;
+  float2 pm = PESPitchMeters(uv), a = abs(pm);
+  float gm = exp(-((a.x - 49.5) * (a.x - 49.5) / 9.0 + pm.y * pm.y / 30.0));   // boca del arco (area chica)
+  float pk = exp(-((a.x - 41.5) * (a.x - 41.5) / 40.0 + pm.y * pm.y / 70.0));  // punto penal / medialuna
+  float cc = exp(-(pm.x * pm.x / 70.0 + pm.y * pm.y / 45.0));                  // circulo central
+  float wg = 0.45 * exp(-(a.y - 27.0) * (a.y - 27.0) / 30.0) * step(a.x, 52.5);  // carriles de los laterales
+  float use = saturate(gm + 0.8 * pk + 0.75 * cc + wg) * step(a.x, 53.5) * step(a.y, 35.0);
+  float n = PESGnoise(wxz * 0.7 + 2.3) * 0.6 + PESGnoise(wxz * 2.9 + 8.1) * 0.4;
+  float amp = 1.0 + clamp(t, 0.0, 2.0) * (2.5 + 2.0 * use) * (0.7 + 0.6 * n);
+  return saturate(live * amp);
+}
+// (12/11, Agustin: "el brillo del pasto al mover la camara se nota bastante mas que al estar quieto") x436 BRILLO ESTABLE (0 = como antes,
+// 1 = natural, 2 = mas filtrado). PESTipS = smoothstep de los efectos de la punta (cera, rocio, punta encendida) que, cuando un pixel ya cubre
+// buena parte de la hoja (aa -> 1), pasa a su PROMEDIO sobre la hoja: lo mismo que deja el TAA con la camara quieta, sin prenderse y
+// apagarse pixel a pixel al moverla
+float PESStableK() { return clamp(IniParams.Load(int2(436, 0)).x, 0.0, 2.0); }
+float PESTipS(float a, float b, float x, float aa) { return lerp(smoothstep(a, b, x), saturate(1.0 - 0.5 * (a + b)), aa); }
+bool PESWearLiveOn(float4 LW) { return LW.w > 0.5 || IniParams.Load(int2(437, 0)).x > 0.001; }
+// (12/11 20:30, Agustin: "y otras dos mejoras visuales del propio cesped") dos cosas que pasan en una cancha real a medida que se juega,
+// con el mismo mapa de desgaste en vivo (live = PESWearTest del mapa; 0 = nadie piso ahi) y fijas en el mundo (wxz en metros):
+// z443 LINEAS GASTADAS: donde se juega mucho (bocas de arco, area, circulo) los tapones raspan la cal: la linea se corta en manchones de
+// 3-25 cm que dejan ver el pasto de abajo y el resto queda mas fino. Devuelve cuanto queda de la pintura (1 = entera). Misma cuenta en la
+// base (5e92 / c956) y en las hojas pintadas (498b30): el borde de cada raspon coincide
+float PESLineWearK(float2 wxz, float live) {
+  float k = clamp(IniParams.Load(int2(443, 0)).z, 0.0, 2.0);
+  if (k < 0.001 || live < 1e-4 || !PESWearLiveOn(IniParams.Load(int2(115, 0)))) return 1.0;
+  float a = saturate(PESWearLiveCurve(live) * k * 1.2);
+  if (a < 0.005) return 1.0;
+  float n = PESGnoise(wxz * 4.5 + 2.9) * 0.55 + PESGnoise(wxz * 13.0 + 7.3) * 0.30 + PESGnoise(wxz * 31.0 + 0.7) * 0.15;
+  float off = 1.0 - smoothstep(a * 0.62 - 0.05, a * 0.62 + 0.05, n);   // raspado (los manchones crecen con el desgaste; a tope ~60 %: la linea se sigue leyendo)
+  return saturate((1.0 - 0.88 * off) * (1.0 - 0.25 * a));
+}
+// w443 FRANJAS QUE SE BORRAN DONDE SE JUEGA: el pasto pisado una y otra vez queda acostado para cualquier lado (remolinos de ~40 cm): las
+// franjas del corte se pierden en las zonas de mucho juego y quedan manchas claras y oscuras sueltas, que cambian con la camara como las
+// franjas. g = grano (hacia donde esta peinada la hoja, espacio mundo); base (5e92 / c956) y hojas (498b30) con la misma cuenta
+float3 PESTrampleGrain(float3 g, float2 wxz, float live) {
+  float k = clamp(IniParams.Load(int2(443, 0)).w, 0.0, 2.0);
+  if (k < 0.001 || live < 1e-4 || !PESWearLiveOn(IniParams.Load(int2(115, 0)))) return g;
+  float t = saturate(k * smoothstep(0.03, 0.50, PESWearLiveCurve(live)));
+  if (t < 0.001) return g;
+  float an = (PESGnoise(wxz * 2.2 + 4.1) * 0.65 + PESGnoise(wxz * 6.3 + 1.7) * 0.35) * 12.566;
+  float L = length(g.xz) * (0.75 + 0.5 * PESGnoise(wxz * 3.7 + 9.3));
+  float3 gR = normalize(float3(cos(an) * L, max(g.y, 0.2), sin(an) * L));
+  return normalize(lerp(g, gR, t));
+}
 float2 PESWear(float2 pm, float2 wxz, float wear, float areas, float bald, float live)
 {
   float col = 0.0, bare = 0.0;
@@ -67,25 +123,49 @@ float2 PESWear(float2 pm, float2 wxz, float wear, float areas, float bald, float
   // Multiplica el seco y el pelado de los dos (base y hojas a la vez, misma funcion)
   float wearK = 1.0 + clamp(IniParams.Load(int2(329, 0)).y, 0.0, 3.0);
   col = saturate(col * wearK); bare = saturate(bare * wearK);
-  if (LW.w > 0.5 && live > 0.001) {
+  if (PESWearLiveOn(LW) && live > 0.001) {
     float n4 = PESGnoise(wxz * 2.1 + 4.4);                       // el pisoteo no es parejo
     float lv = saturate(PESWearLiveCurve(live) * (0.8 + 0.4 * n4));
+    // (12/11) x431 desgaste real, por etapas: hasta ~40 % solo mas corto (PESWearLiveHeight) y apenas mas apagado; despues seco (verde paja, no
+    // amarillo: "el color raro del desgaste") y desde ~80 % la tierra asoma por manchas (el ruido n4 hace el borde irregular)
+    if (IniParams.Load(int2(431, 0)).x > 0.5) {
+      // (12/11, Agustin: "el desgaste no que se borre el pasto, que cambie su color, su tamano", "tiene que parecer real") el gastado no es
+      // una mancha pareja: se rompe en parches de ~10 cm (unas matas aguantan, otras no) y la tierra solo asoma al final, en motas chicas
+      // ENTRE las hojas (ruido de ~3 cm), nunca como un claro liso
+      float n5 = PESGnoise(wxz * 9.0 + 1.9), n6 = PESGnoise(wxz * 37.0 + 5.3);
+      float lvR = saturate(PESWearLiveCurve(live) * (0.60 + 0.50 * n4 + 0.40 * n5));
+      col = saturate(col + smoothstep(0.25, 0.85, lvR) * 0.45 * wearK);
+      bare = max(bare, smoothstep(0.88 / wearK, 1.0, lvR) * smoothstep(0.35, 0.65, n6) * 0.7 * saturate(LW.z));
+    } else {
     col = saturate(col + lv * 0.6 * wearK);   // (02/11 paso 6) 0.9 -> 0.6: con live ~0.1 ya habia 70 % de paja
     bare = max(bare, smoothstep(0.7 / wearK, 1.0, lv) * saturate(LW.z));   // (02/11 paso 6) pelado desde mas desgaste (antes 0.55)
+    }
   }
   return float2(col, bare);
 }
-float PESWearLiveHeight(float live) { float4 LW = IniParams.Load(int2(115, 0)); return LW.w > 0.5 ? 1.0 - 0.45 * PESWearLiveCurve(live) : 1.0; }
+float PESWearLiveHeight(float live) { float4 LW = IniParams.Load(int2(115, 0));
+  if (PESWearLiveOn(LW) && IniParams.Load(int2(431, 0)).x > 0.5) return 1.0 - 0.55 * smoothstep(0.0, 0.6, PESWearLiveCurve(live));   // (12/11) desgaste real: primero mas corto (hasta 45 % del alto)
+  return PESWearLiveOn(LW) ? 1.0 - 0.45 * PESWearLiveCurve(live) : 1.0; }
 
 // variacion de color por zonas (manchas de 2-6 m mas verdes / mas palidas, y detalle de 0.5 m): multiplicador rgb
 float3 PESGrassZones(float2 wxz, float k)
 {
-  if (k <= 0.001) return float3(1.0, 1.0, 1.0);
+  // (12/11 20:40, Agustin: dos mejoras del pasto en general) y444 MEZCLA DE VARIEDADES: una cancha real se siembra con dos o tres pastos
+  // (raigras y poa): manchones finos de 20-50 cm de uno mas oscuro y azulado entre otro mas claro y amarillento. Misma cuenta en la base y
+  // en las hojas (cada hoja toma el de su raiz), fijo en el mundo. 0 = como antes
+  float kMix = clamp(IniParams.Load(int2(444, 0)).y, 0.0, 2.0);
+  float3 tMix = float3(1.0, 1.0, 1.0);
+  if (kMix > 0.001) {
+    float nM = PESGnoise(wxz * 2.6 + 11.3) * 0.6 + PESGnoise(wxz * 6.1 + 3.9) * 0.4;
+    float sp = smoothstep(0.42, 0.62, nM);
+    tMix = lerp(float3(1.0, 1.0, 1.0), lerp(float3(0.92, 0.96, 1.04), float3(1.06, 1.04, 0.90), sp), saturate(0.7 * kMix));
+  }
+  if (k <= 0.001) return tMix;
   float m1 = PESGnoise(wxz * 0.045), m2 = PESGnoise(wxz * 0.16 + 5.3), m3 = PESGnoise(wxz * 0.85 + 1.7);
   float macro = (m1 * 0.55 + m2 * 0.3 + m3 * 0.15) - 0.5;
   float hue = m2 - 0.5;
   float3 t = (1.0 + macro * 0.28 * k) * lerp(float3(1.0, 1.0, 1.0), float3(1.10, 1.0, 0.82), hue * 0.9 * k);
-  return t;
+  return t * tMix;
 }
 
 // color seco (amarillo pajizo) y tierra, con la luminancia del pasto
@@ -114,10 +194,87 @@ void PESGroundLook(inout float3 c, inout float spec, inout float rough, float2 g
   if (g.x > 0.001) { c = lerp(c, pow(max(c, 1e-4), 1.25) * 0.72, g.x); spec = lerp(spec, saturate(spec * 2.2 + 0.25), g.x); rough = lerp(rough, max(0.14, rough * 0.6), g.x); }
   if (g.y > 0.001) { c = PESDryTint(c, g.y * 0.4); spec = lerp(spec, spec * 0.7, g.y); }
 }
+// (13/11 tanda 2) x448 PISADAS VISIBLES DE LEJOS: el pasto pisado (crush = mapa pes_flat, 0..1) se ve desde la camara de juego: seco = hojas
+// acostadas que muestran el enves (mas claro y con mas brillo, mas en rasante), mojado = mas oscuro y mate. Mas fuerte de lejos (donde no hay
+// hojas 3D que lo muestren). col = albedo, spec = brillo (o2.y en los PS), pxm = px/m del punto, graz = 0 desde arriba .. 1 rasante,
+// wet = humedad 0..1. Lo usan la base (5e92 / c956) y el VS 498b30. 0 = como antes
+void PESCrushLook(inout float3 col, inout float spec, float crush, float pxm, float graz, float wet) {
+  float k = clamp(IniParams.Load(int2(448, 0)).x, 0.0, 2.0);
+  float a = saturate(crush) * k * lerp(0.35, 1.0, 1.0 - smoothstep(110.0, 400.0, pxm));
+  if (a < 0.001) return;
+  float dry = 1.0 - saturate(wet);
+  col  *= lerp(1.0 - 0.10 * a, 1.0 + a * (0.10 + 0.08 * graz), dry);
+  spec *= lerp(1.0 - 0.40 * a, 1.0 + a * (0.35 + 0.25 * graz), dry);
+}
 // sol en espacio mundo (lo publica la DLL en 111: xyz hacia el sol, w altura en grados); (0,1,0) si todavia no hay dato
 float3 PESSunWorld() { float4 L = IniParams.Load(int2(111, 0)); return dot(L.xyz, L.xyz) > 0.5 ? L.xyz : float3(0.0, 1.0, 0.0); }
 // (04/11) sol del cielo en mundo (fila 312 de la DLL, no gira con la camara en repeticiones); si no hay, el de la luz (111)
 float3 PESSunSky() { float4 S = IniParams.Load(int2(312, 0)); return (S.w > 0.5 && S.y > 0.0) ? normalize(S.xyz) : PESSunWorld(); }
+// (12/11, Agustin, captura 21.20.40: "el pasto super cercano se ve mucho mas brillante que el demas, puedes hacer que el pasto de lejos
+// mantenga ese brillo y color") las hojas 3D salian ~1.6-1.9 veces mas claras que las tarjetas y el suelo por un error de cuenta (su
+// oclusion iba como 0.84..1 y el atlas la guarda como la mitad: el PS la duplica). Arreglado eso, x433 = BRILLO DEL NATURAL: una sola
+// ganancia para el suelo (5e92 / c956), las tarjetas y las hojas 3D (0 / sin la linea = 1.6, lo que tenian las hojas 3D), con hombro suave
+// arriba de 0.75 para que el sol fuerte no lo lave. Solo el natural con el pasto v3
+bool PESNatOn() { return IniParams.Load(int2(104, 0)).x > 0.5 && IniParams.Load(int2(407, 0)).x < 0.5 && IniParams.Load(int2(412, 0)).z < 0.5; }
+float PESNatGain() { if (!PESNatOn()) return 1.0; float g = IniParams.Load(int2(433, 0)).x; return g > 0.05 ? clamp(g, 0.5, 2.5) : 1.6; }
+float3 PESNatShoulder(float3 c) { return c - max(c - 0.75, 0.0) * 0.6; }
+// (12/11 23:45, Agustin: dentro de la sombra del estadio las puntas cercanas salian 1.3-4.5 veces mas claras y mas amarillas que el pasto en
+// sombra) w447 SOMBRA REAL EN LAS PUNTAS: visibilidad del sol en este pixel (1 = al sol, 0 = sombra entera del estadio, de los jugadores o de
+// las nubes) leida en t = copia de la DLL del RT2 de la pasada del sol del cuadro anterior (.w = visibilidad limpia: e9c13 / b8a2 / 7dbbc) en
+// la posicion que este pixel tenia en ese cuadro. px = SV_Position.xy, mv = o3.xy (px de ahora - px del cuadro anterior, lo mismo que lee el
+// TAA), rb = m_renderBuffer.xy, pxm = px/m del punto (de la pantalla; 0 = no se sabe). Si el pixel cae en sombra se mira una cruz y gana lo
+// mas soleado: (13/11, segunda lectura) la cruz cubre ~0.21 m (lo que se mueve en un cuadro la sombra de un jugador que corre a ~9 m/s, en
+// diagonal), minimo 1.5 px a 1080p y maximo 64 px: el atraso de un cuadro y lo que destapa un jugador que se mueve quedan como antes (al
+// sol), sin una franja apagada detras de cada sombra que corre; el borde de una sombra real conserva ~0.21 m de puntas como antes. Sin la textura enlazada (DLL vieja, editor,
+// corte de camara), con w447 = 0 o de noche = 1 (como antes). Los VS que incluyen este archivo no la llaman
+float PESSunVisGate(Texture2D<float4> t, float2 px, float2 mv, float2 rb, float pxm) {
+  float k = saturate(IniParams.Load(int2(447, 0)).w);
+  if (k < 0.001 || IniParams.Load(int2(114, 0)).w < 0.5) return 1.0;
+  uint w = 0, h = 0; t.GetDimensions(w, h);
+  if (w == 0 || h == 0) return 1.0;
+  float2 d = float2(w, h);
+  if (rb.x < 1.0 || rb.y < 1.0) rb = d;
+  float2 p = (px - mv) * (d / rb);
+  if (any(p < 0.0) || any(p >= d)) return 1.0;   // fuera de la pantalla en el cuadro anterior: como antes
+  float m = t.Load(int3(p, 0)).w;
+  if (m < 0.999) {
+    float hb = IniParams.Load(int2(63, 0)).z;   // media altura de la pantalla (px), la de los px/m
+    float rS = 0.21 * max(pxm, 0.0) * d.y / (hb > 1.0 ? 2.0 * hb : 1080.0);   // px/m de la pantalla -> px de la copia
+    float r = clamp(max(1.5 * d.y / 1080.0, rS), 1.0, 64.0);
+    float2 hi = d - 1.0;
+    float mx = max(t.Load(int3(clamp(p + float2(r, 0.0), 0.0, hi), 0)).w, t.Load(int3(clamp(p - float2(r, 0.0), 0.0, hi), 0)).w);
+    float my = max(t.Load(int3(clamp(p + float2(0.0, r), 0.0, hi), 0)).w, t.Load(int3(clamp(p - float2(0.0, r), 0.0, hi), 0)).w);
+    m = max(m, max(mx, my));
+  }
+  return lerp(1.0, smoothstep(0.1, 0.9, saturate(m)), k);
+}
+// (12/11, Agustin: "los efectos de translucidez y de mojado en algunas puntas se mantienen hasta cierta distancia y se actualizan lo mas en
+// vivo posible") lo que las hojas de cerca suman por hoja (la luz del sol que atraviesa la lamina a contraluz, las puntas encendidas, el
+// brillo humedo de algunas puntas) el suelo lo lleva como PROMEDIO de la copa: mismo tono de cerca y de lejos, calculado en cada cuadro con
+// el sol, la camara y la humedad de ese momento. V = del punto al ojo (mundo). pxm = px/m del punto: se apaga por debajo de z433 px/m
+// (0 = 10). y433 = cuanto (0 = nada). spec / rough = o2.y / o2.x
+// (12/11 23:45) sunV = PESSunVisGate del suelo (w447): en la sombra del estadio o de los jugadores la copa no lleva la luz que atraviesa las
+// hojas ni las puntas al sol fuerte (como un dia nublado), igual que las hojas de cerca; 1 = como antes
+void PESNatCanopy(inout float3 c, inout float spec, inout float rough, float3 V, float pxm, float sunV) {
+  float4 P = IniParams.Load(int2(433, 0));
+  if (P.y < 0.001 || !PESNatOn()) return;
+  float lim = P.z > 0.5 ? clamp(P.z, 2.0, 200.0) : 10.0;
+  float kY = saturate(P.y) * smoothstep(lim * 0.5, lim, pxm);
+  if (kY < 0.001) return;
+  float4 P414 = IniParams.Load(int2(414, 0)), P114 = IniParams.Load(int2(114, 0));
+  float day = P114.w > 0.5 ? 1.0 : 0.0;
+  float sunK = saturate(P414.w * 1.2) * day * sunV;
+  float3 S = PESSunSky();
+  float back = saturate(0.5 - 0.5 * dot(normalize(V.xz + 1e-5), normalize(S.xz + 1e-5)));   // mirando hacia el sol = contraluz
+  float tx = 0.32 * sunK * (0.28 + 0.82 * back) * clamp(IniParams.Load(int2(413, 0)).w, 0.0, 2.0);   // media de la transmision a lo largo de la hoja
+  c = lerp(c, c * float3(1.26, 1.36, 0.86), saturate(tx * 0.95) * kY);
+  c *= lerp(float3(1.0, 1.0, 1.0), float3(1.05, 1.06, 0.95), 0.5 * clamp(IniParams.Load(int2(295, 0)).z, 0.0, 2.0) * kY * lerp(0.3 * sunV, 1.0, saturate(P414.w) * sunV));   // puntas; (13/11 tanda 2) w447: en la sombra entera nada (antes quedaba el piso 0.3)
+  // puntas mojadas (x329: una de cada ~8 hojas, mas con la cancha humeda, en invierno y al amanecer): brillo promedio
+  float2 g = PESGround();
+  float dewK = (1.0 + 0.8 * g.x) * (1.0 - 0.85 * g.y) * (abs(P114.z - 1.0) < 0.5 ? 1.4 : 1.0);
+  float dew = 0.12 * dewK * clamp(IniParams.Load(int2(329, 0)).x, 0.0, 2.0) * kY;
+  spec = saturate(spec + 0.45 * dew); rough = lerp(rough, 0.12, saturate(dew));
+}
 // (25/10) cesped lejano en la base de la cancha: donde una hoja ya no mide en pantalla (mas alla del nivel medio del pasto
 // 3D), la base toma el aspecto del cesped visto de lejos en vez de una textura plana: matas claras / oscuras de 8 y 22 cm
 // (atenuadas con el tamano del pixel para que no titilen), cobertura segun el angulo de vista (rasante = se ven las puntas,
@@ -148,26 +305,141 @@ void PESFarTurf(inout float3 c, inout float spec, float3 V, float2 wxz, float px
 // (25/10 b) color del pasto, el mismo para la base y las hojas (fila 112): x matiz (giro del tono en grados, -60..60),
 // y verde (acerca el tono a un verde de cesped sano con la misma claridad; negativo = lo aleja), z contraste (alrededor
 // del gris medio del cesped). Se aplica despues de la correccion del amarillo (29) y antes del desgaste / cesped lejano.
-void PESGrassColorGrade(inout float3 c)
+// (13/11 tanda 2) x = c.rb / c.g. Debajo del verde medio (o del otro lado del empuje) x * rtK como antes; pasado el verde medio el empuje
+// se apaga de a poco hasta 0 a 2|d|: el promedio llega igual, los colores no se cruzan, lo calido casi no cambia
+float2 PESNatMap(float2 x, float2 ref, float2 rtK) {
+  float2 d = ref * (rtK - 1.0), y = x * rtK, s = sign(d), u = (x - ref) * s;   // u > 0: pasado ref en la direccion del empuje
+  float2 z = x + d * saturate(1.0 - u / max(2.0 * abs(d), 1e-5));
+  return (u > 0.0) ? z : y; }
+// (14/11, paso 3 del plan de optimizacion) la parte del color del pasto que no depende del pixel (filas 112 / 456: giro del tono, el verde
+// medio despues de cada ajuste, los empujes rt de y112 / w112 y el color elegido de x456, con sus senos, cosenos y divisiones) se calcula
+// UNA vez (PESGrassColorGradePrep) y se aplica a cada color con PESGrassColorGradeApply. El PS de las hojas (18afff) la aplicaba hasta 4
+// veces por pixel y la recalculaba entera cada vez. Mismas cuentas en el mismo orden: PESGrassColorGrade queda igual que antes
+struct PESCGP { float4 C, C456; bool pre456, skip, natR; float ca, sa; float3 rtY, rtW, gCur, tP; float2 natRefW; };
+PESCGP PESGrassColorGradePrep()
 {
-  float4 C = IniParams.Load(int2(112, 0));
-  if (abs(C.x) < 0.01 && abs(C.y) < 0.001 && abs(C.z) < 0.001 && C.w < 0.001) return;
+  PESCGP g;
+  g.C = IniParams.Load(int2(112, 0));
+  g.C456 = IniParams.Load(int2(456, 0));   // (12/11 22:56) color del pasto elegible (ver el final)
+  g.pre456 = g.C456.x > 0.5 && g.C456.y > 0.001;
+  g.skip = abs(g.C.x) < 0.01 && abs(g.C.y) < 0.001 && abs(g.C.z) < 0.001 && g.C.w < 0.001 && !g.pre456;
   const float3 LW = float3(0.2126, 0.7152, 0.0722);
+  const float3 gRef = float3(0.40, 1.0, 0.25);
+  // (13/11, segunda lectura) gCur = el verde medio del pasto tal como queda despues de x / y / w112: x456 mide su corrimiento desde aca
+  // (antes lo media desde gRef y se sumaba al "Verde natural" w112 0.5: "Verano" / "Oliva" dejaban la cancha color paja)
+  float3 gCur = gRef;
+  g.ca = 1.0; g.sa = 0.0;
+  if (abs(g.C.x) > 0.01) {
+    float a = radians(clamp(g.C.x, -60.0, 60.0)); g.ca = cos(a); g.sa = sin(a);
+    if (g.pre456) {
+      float yR = dot(gCur, LW), iR = dot(gCur, float3(0.596, -0.274, -0.322)), qR = dot(gCur, float3(0.211, -0.523, 0.312));
+      float2 iqR = float2(iR * g.ca - qR * g.sa, iR * g.sa + qR * g.ca);
+      gCur = max(float3(yR + 0.956 * iqR.x + 0.621 * iqR.y, yR - 0.272 * iqR.x - 0.647 * iqR.y, yR - 1.106 * iqR.x + 1.703 * iqR.y), 1e-3);
+      gCur /= gCur.g;
+    }
+  }
+  // (12/11 20:50, Agustin: "la opcion de color del pasto para que funcione bien con este nuevo pasto natural") natural: "Verde" y "Verde
+  // natural" ya no llevan cada pixel al MISMO color: se calcula el corrimiento que necesita el verde medio del pasto (r/g 0.40, b/g 0.25)
+  // y se aplica igual a todos los colores, con la claridad de cada uno (PESGrassColorGradeApply)
+  g.natR = PESNatOn();
+  float2 natRef = gRef.rb;   // (13/11) donde esta el verde medio (r/g, b/g) antes del w112: si el y112 ya lo movio, el w112 parte de ahi
+  g.rtY = float3(1.0, 1.0, 1.0);
+  if (abs(g.C.y) > 0.001) {
+    float3 gg = float3(0.19, 0.42, 0.10);
+    if (g.natR) {
+      float3 rt = max(lerp(gRef, gg / gg.g, clamp(g.C.y, -1.0, 1.0) * 0.6), 0.02) / gRef;
+      gCur *= rt;
+      natRef *= rt.rb;   // el verde medio (kS = 1) cae justo en ref * rt
+      g.rtY = rt;
+    } else {
+      float3 g2 = gg * (dot(gCur, LW) / dot(gg, LW)); gCur = max(lerp(gCur, g2, clamp(g.C.y, -1.0, 1.0) * 0.6), 1e-3); gCur /= gCur.g;
+    }
+  }
+  // (27/10 n) tanda 11, w112 "verde natural": acerca la cromatica a (0.78, 1, 0.42) conservando la luminancia; 1 = casi todo
+  g.rtW = float3(1.0, 1.0, 1.0);
+  if (g.C.w > 0.001) {
+    float3 t = float3(0.78, 1.0, 0.42);
+    if (g.natR) {
+      float3 rt = lerp(gRef, t, clamp(g.C.w, 0.0, 1.0) * 0.85) / gRef;
+      gCur *= rt;
+      g.rtW = rt;
+    } else {
+      float3 tt = t * (dot(gCur, LW) / dot(t, LW)); gCur = max(lerp(gCur, tt, clamp(g.C.w, 0.0, 1.0) * 0.85), 1e-3); gCur /= gCur.g;
+    }
+  }
+  g.natRefW = natRef; g.gCur = gCur;
+  // (12/11 22:56) x456 COLOR DEL PASTO: 0 como esta, 1 natural al sol, 2 ingles (azulado profundo), 3 esmeralda, 4 oliva, 5 lima, 6 verano
+  // (amarillento), 7 personalizado (z456 tono en grados: 90 amarillento, 120 verde puro, 150 azulado; w456 saturacion 0..1.5)
+  g.tP = gRef;
+  if (g.pre456) {
+    int pI = (int)round(clamp(g.C456.x, 0.0, 7.0));
+    if (pI == 1) g.tP = float3(0.62, 1.0, 0.34);
+    else if (pI == 2) g.tP = float3(0.30, 1.0, 0.34);
+    else if (pI == 3) g.tP = float3(0.17, 1.0, 0.44);
+    else if (pI == 4) g.tP = float3(0.74, 1.0, 0.20);
+    else if (pI == 5) g.tP = float3(0.56, 1.0, 0.07);
+    else if (pI == 6) g.tP = float3(0.86, 1.0, 0.30);
+    else if (pI == 7) {
+      float hD = g.C456.z > 1.0 ? clamp(g.C456.z, 60.0, 180.0) : 112.0, sD = g.C456.w > 0.001 ? clamp(g.C456.w, 0.05, 1.5) : 0.75;
+      float3 hc = saturate(abs(frac(hD / 360.0 + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0);   // tono puro (rojo en 0)
+      hc = max(lerp(float3(1.0, 1.0, 1.0), hc, min(sD, 1.0)), 0.0); hc /= max(hc.g, 1e-3);
+      if (sD > 1.0) hc = max(lerp(float3(1.0, 1.0, 1.0), hc, sD), 0.02);   // mas de 1: aun mas saturado
+      g.tP = max(hc, 0.02);
+    }
+  }
+  return g;
+}
+void PESGrassColorGradeApply(PESCGP g, inout float3 c)
+{
+  if (g.skip) return;
+  const float3 LW = float3(0.2126, 0.7152, 0.0722);
+  const float3 gRef = float3(0.40, 1.0, 0.25);
   float l = dot(c, LW);
-  if (abs(C.x) > 0.01) {
+  if (abs(g.C.x) > 0.01) {
     float3 yiq = float3(l, dot(c, float3(0.596, -0.274, -0.322)), dot(c, float3(0.211, -0.523, 0.312)));
-    float a = radians(clamp(C.x, -60.0, 60.0)); float ca = cos(a), sa = sin(a);
-    float2 iq = float2(yiq.y * ca - yiq.z * sa, yiq.y * sa + yiq.z * ca);
+    float2 iq = float2(yiq.y * g.ca - yiq.z * g.sa, yiq.y * g.sa + yiq.z * g.ca);
     c = max(float3(yiq.x + 0.956 * iq.x + 0.621 * iq.y, yiq.x - 0.272 * iq.x - 0.647 * iq.y, yiq.x - 1.106 * iq.x + 1.703 * iq.y), 0.0);
   }
-  if (abs(C.y) > 0.001) {
-    float3 g = float3(0.19, 0.42, 0.10); g *= l / dot(g, LW);
-    c = max(lerp(c, g, clamp(C.y, -1.0, 1.0) * 0.6), 0.0);
+  // (12/11) el tono del natural solo mueve lo que tiene color: gris / blanco (lineas de cal, bordes de linea) quedan como estan
+  float mxC = max(c.r, max(c.g, c.b)), mnC = min(c.r, min(c.g, c.b));
+  float kS = saturate(((mxC - mnC) / max(mxC, 1e-3) - 0.12) * 5.0);
+  if (abs(g.C.y) > 0.001) {
+    if (g.natR) {
+      float3 rtK = lerp(float3(1.0, 1.0, 1.0), g.rtY, kS);
+      float gN = max(c.g, 1e-4);
+      float3 cn = c; cn.rb = gN * PESNatMap(c.rb / gN, gRef.rb, rtK.rb);   // (13/11 tanda 2) rt.g = 1: el verde no cambia
+      c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
+    } else {
+      float3 gg = float3(0.19, 0.42, 0.10);
+      gg *= l / dot(gg, LW);
+      c = max(lerp(c, gg, clamp(g.C.y, -1.0, 1.0) * 0.6), 0.0);
+    }
   }
-  if (abs(C.z) > 0.001) { float k = 1.0 + clamp(C.z, -0.8, 1.0); c = max((c - 0.18) * k + 0.18, 0.0); }
-  // (27/10 n) tanda 11, w112 "verde natural": el cesped real al sol con cielo despejado (foto de Agustin, pelota sobre la linea) tiene
-  // r/g 0.75-0.80 y b/g 0.3-0.5; el del mod daba r/g 0.40 y b/g 0.25 (verde saturado y frio, "no humano"). El "Verde" (y112) acerca a
-  // (0.19, 0.42, 0.10) = r/g 0.45, aun mas saturado. Esto acerca la cromatica a (0.78, 1, 0.42) conservando la luminancia; 1 = casi todo
-  if (C.w > 0.001) { float3 t = float3(0.78, 1.0, 0.42); t *= l / dot(t, LW); c = max(lerp(c, t, clamp(C.w, 0.0, 1.0) * 0.85), 0.0); }
+  if (abs(g.C.z) > 0.001) { float k = 1.0 + clamp(g.C.z, -0.8, 1.0); c = max((c - 0.18) * k + 0.18, 0.0); }
+  if (g.C.w > 0.001) {
+    if (g.natR) {
+      float3 rtK = lerp(float3(1.0, 1.0, 1.0), g.rtW, kS);
+      float gN = max(c.g, 1e-4);
+      float3 cn = c; cn.rb = gN * PESNatMap(c.rb / gN, g.natRefW, rtK.rb);   // (13/11 tanda 2) rt.g = 1: el verde no cambia
+      c = max(cn * (dot(c, LW) / max(dot(cn, LW), 1e-5)), 0.0);
+    } else {
+      float3 t = float3(0.78, 1.0, 0.42);
+      t *= l / dot(t, LW); c = max(lerp(c, t, clamp(g.C.w, 0.0, 1.0) * 0.85), 0.0);
+    }
+  }
+  // x456: cambia SOLO el tono del verde (el corrimiento que lleva el verde medio al elegido, con la misma claridad de cada color) y solo en
+  // lo que es verde: las hojas secas / paja, la tierra del desgaste y el gris / blanco de las lineas quedan como estan
+  if (g.pre456) {
+    float lP = dot(c, LW);
+    float rgP = c.r / max(c.g, 1e-4), bgP = c.b / max(c.g, 1e-4);
+    float mxP = max(c.r, max(c.g, c.b)), mnP = min(c.r, min(c.g, c.b));
+    float kSP = saturate(((mxP - mnP) / max(mxP, 1e-3) - 0.12) * 5.0);
+    float kG = kSP * smoothstep(1.02, 0.80, rgP) * smoothstep(1.10, 0.85, bgP) * step(mnP + 1e-4, c.g);   // verde (no paja, tierra ni gris)
+    float3 rtP = lerp(float3(1.0, 1.0, 1.0), clamp(g.tP / g.gCur, 0.25, 4.0), saturate(g.C456.y) * kG);
+    rtP.r = min(rtP.r, max(max(g.tP.r, 0.95) * c.g / max(c.r, 1e-4), 1.0));   // (13/11) un verde nunca termina con mas rojo que verde
+    rtP.b = min(rtP.b, max(max(g.tP.b, 0.95) * c.g / max(c.b, 1e-4), 1.0));   // ni con mas azul que verde (x112 alto + Esmeralda / Ingles)
+    float3 cP = c * rtP; c = max(cP * (lP / max(dot(cP, LW), 1e-5)), 0.0);
+  }
 }
+void PESGrassColorGrade(inout float3 c) { PESGrassColorGradeApply(PESGrassColorGradePrep(), c); }
 #endif

@@ -32,8 +32,14 @@ VSOut main(uint vid : SV_VertexID, uint iid : SV_InstanceID)
   float cr = cos(rot), sr = sin(rot);
   float3 axisR = normalize(axis * cr + cross(side, axis) * sr);   // giro alrededor del ancho
   if (rest) { axisR = normalize(float3(cr, 0.18, sr)); side = normalize(cross(axisR, float3(0.0, 1.0, 0.0))); }
-  float len = max(p.w, 0.002), wid = len * (lump ? 1.0 : (rest ? 0.55 : 0.22));   // terrones y polvo: tarjeta cuadrada; acostado: manojo abierto
-  float3 world = p.xyz + side * ((cx - 0.5) * wid) + axisR * (cy * len);
+  // (11/11) polvo: nube de frente a la camara (antes una tarjeta parada segun su velocidad)
+  if (kind == 2.0 && !rest) { float3 up = normalize(float3(0.0, 1.0, 0.0) - toCam * toCam.y + 1e-4); float3 rt = normalize(cross(up, toCam) + 1e-4);
+    axisR = normalize(up * cr + rt * sr); side = normalize(cross(axisR, toCam) + 1e-4); }
+  // (11/11, recortes v2) tarjeta CUADRADA para todos: el atlas de particulas (pes_debris) dibuja cada pieza en un cuadrado de 512 (la hoja suelta
+  // ocupa ~10 % del ancho, el manojo abre en abanico). Con 0.22 de ancho la hoja quedaba aplastada a menos de un milimetro y el manojo a una
+  // raya. En el aire gira sobre su centro (antes sobre la punta de abajo: daba vueltas como una helice); acostada, desde la raiz
+  float len = max(p.w, 0.002), wid = len;
+  float3 world = p.xyz + side * ((cx - 0.5) * wid) + axisR * ((rest ? cy : cy - 0.5) * len);
   float4 wp = float4(world, 1.0);
   float4 vp = float4(dot(wp, cb2[8]), dot(wp, cb2[9]), dot(wp, cb2[10]), dot(wp, cb2[11]));
   float4 cp = float4(dot(vp, cb2[4]), dot(vp, cb2[5]), dot(vp, cb2[6]), dot(vp, cb2[7]));
