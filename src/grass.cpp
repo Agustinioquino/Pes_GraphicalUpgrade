@@ -118,6 +118,7 @@ GrassDbg g_grassDbg;
 static std::atomic<int> s_preLast{0};   // (2/11 paso 10) niveles con prepasada de profundidad en la ultima emision (para el log)
 static void Why(const char* w) { g_grassDbg.why = w; }
 UINT g_bbW = 0, g_bbH = 0;
+static std::atomic<unsigned> s_passH{0};   // (28/11) alto del G-buffer cuando la base se acepto a otra resolucion (0 = la pantalla)
 
 static std::mutex s_cbMx;
 static void EnsureBuffers() {
@@ -1259,7 +1260,7 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
     const float narrowK = GrassLive(432, 0);
     const float narrowThr = (bladeOn && narrowK >= 0.5f) ? bladeThr * std::clamp(narrowK, 1.0f, 6.0f) : 0.0f;
     const float narrowMul = GrassLive(432, 2) > 0.05f ? std::clamp(GrassLive(432, 2), 0.5f, 3.0f) : 1.6f;
-    const float halfL = 52.5f + 3.0f, halfW = 34.0f + 3.0f, halfH = 0.5f * (float)(g_bbH ? g_bbH : 1080);
+    const float halfL = 52.5f + 3.0f, halfW = 34.0f + 3.0f, halfH = 0.5f * (float)(s_passH.load() ? s_passH.load() : (g_bbH ? g_bbH : 1080));
     ID3D11DeviceContext1* c1 = nullptr; c->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&c1);
     // estado del contexto que se toca (se devuelve al final)
     GrassState prev; ShaderBind oldSh = {};
@@ -1554,6 +1555,35 @@ static bool MainPass(ID3D11DeviceContext* c) {
     g_grassDbg.rtW = w;
     return w == g_bbW;
 }
+// (28/11, Agustin: "el pasto no se ve de lejos", log 28/11: en el partido en vivo "pasto v3: llamadas 0, emisiones 0 (desde la base 0)" y
+// "base: hasta 0 dibujos por grabacion", pero la base 5e92 se dibuja con 5 targets; en la repeticion si emite. Desde el 16/11 11:38 ningun
+// partido tuvo pasto del mod en juego) la base de la cancha se acepta tambien si es el G-buffer (5 targets o mas) con la MISMA forma que la
+// pantalla aunque mida distinto (el juego dibuja la cancha a otra resolucion que el backbuffer). Cada rechazo se anota con sus medidas
+static std::atomic<int> s_baseRej[4], s_baseOkScaled{0};
+static std::atomic<unsigned> s_baseRejW{0}, s_baseRejH{0};
+static bool BaseMainPass(ID3D11DeviceContext* c, int nrt) {
+    if (MainPass(c)) return true;
+    ID3D11RenderTargetView* rtv = nullptr; c->OMGetRenderTargets(1, &rtv, nullptr);
+    if (!rtv) { s_baseRej[1]++; return false; }
+    ID3D11Resource* res = nullptr; rtv->GetResource(&res); rtv->Release();
+    ID3D11Texture2D* t = nullptr; UINT w = 0, h = 0;
+    if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t)) && t) { D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); w = d.Width; h = d.Height; t->Release(); }
+    if (res) res->Release();
+    s_baseRejW.store(w); s_baseRejH.store(h);
+    const bool sameShape = w >= 640 && h >= 360 && g_bbW && g_bbH && std::fabs((double)w * g_bbH - (double)h * g_bbW) <= 0.01 * (double)w * g_bbH;
+    if (nrt >= 5 && sameShape) { s_baseOkScaled++; s_passH.store(h); return true; }
+    s_baseRej[2]++;
+    return false;
+}
+static void BaseDiagLog() {
+    static double next = 0.0; const double tn = Now();
+    if (tn < next) return; next = tn + 10.0;
+    const int r0 = s_baseRej[0].exchange(0), r1 = s_baseRej[1].exchange(0), r2 = s_baseRej[2].exchange(0), r3 = s_baseRej[3].exchange(0), ok = s_baseOkScaled.exchange(0);
+    if (r0 + r1 + r2 + r3 + ok == 0) return;
+    static int nLog = 0; if (nLog++ >= 60) return;
+    Log("pasto base (10 s): aceptada a otra resolucion %d | descartada: pasto apagado (w58) %d, sin target %d, otro tamano %d (ultimo %ux%u, pantalla %ux%u), menos de 2 targets %d",
+        ok, r0, r1, r2, s_baseRejW.load(), s_baseRejH.load(), g_bbW, g_bbH, r3);
+}
 // (12/11 23:45) w447: la copia de la sombra del sol del cuadro anterior para la base de la cancha (BeforeDraw de 5e92 / c956, t48: la copa
 // del suelo en la sombra sin lo que es solo del sol), solo en la pasada principal (la de las hojas) y con y433. Con referencia; null = como antes
 ID3D11ShaderResourceView* GrassSunVisSRV(ID3D11DeviceContext* c) {
@@ -1668,9 +1698,12 @@ void GrassCaptureEarly(ID3D11DeviceContext* c, const ShaderEntry* vs, const Shad
 // (26/10 g) con w294 = 1 la emision espera al siguiente dibujo que no sea de la base (ver BasePend / GrassBaseFlush)
 static bool IsTurfPS(uint64_t h) { return h == 0x5e92f2343848915aULL || h == 0xc9564b9b155f0a49ULL || h == 0x8d8f4e5fc80fc684ULL || h == 0x91d1b2f17d4f7671ULL; }
 void GrassOnBaseDraw(ID3D11DeviceContext* c) {
-    if (g_cfg.bypass || !g_dev.dev || g_cfg.live[58][3] < 0.5f) return;
-    if (!MainPass(c)) return;
-    if (RtvCount(c) < 2) return;   // (26/10 d) solo el G-buffer (una pasada auxiliar del mismo tamano se quedaria con el cuadro)
+    if (g_cfg.bypass || !g_dev.dev) return;
+    BaseDiagLog();
+    if (g_cfg.live[58][3] < 0.5f) { s_baseRej[0]++; return; }
+    const int nrtB = RtvCount(c);
+    if (nrtB < 2) { s_baseRej[3]++; return; }   // (26/10 d) solo el G-buffer (una pasada auxiliar del mismo tamano se quedaria con el cuadro)
+    if (!BaseMainPass(c, nrtB)) return;   // (28/11) antes MainPass solo (mismo ancho que la pantalla)
     // (26/10 f) stencil de la base para las hojas (x290) y "la base ya esta dibujada" (mezcla con el suelo, x291)
     ID3D11DepthStencilState* d = nullptr; UINT r = 0; c->OMGetDepthStencilState(&d, &r);
     { std::lock_guard<std::mutex> lk(s_bsMx);
