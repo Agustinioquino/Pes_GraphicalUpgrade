@@ -27,6 +27,9 @@
 namespace fx {
 std::atomic<int> g_grassLevelOff{0};   // (13/11) prueba automatica (menutest.cpp): bits 0..2 niveles, bit 3 hojas 3D
 std::atomic<int> g_grassSeenFrame{-1000000};   // (13/11 sk9ema) ultimo cuadro con el pasto de la cancha (wind.cpp: bajo techo)
+// (21/11 3icxbh) laboratorio de animaciones en el Editar (motorlab.cpp): el pasto del editor (x393) empieza en este z (m) y no entra al
+// foso del banco del estadio puesto en la escena. 1e9 = sin corte
+std::atomic<float> g_grassEdCutZ{1.0e9f};
 
 static const uint64_t kGrassVS = 0x498b30bad256e8edULL;
 static const uint64_t kGrassPS = 0x18afff0f79d9aaa5ULL;   // PS de las hojas (G-buffer): solo desde ese dibujo se guarda estado y se emite
@@ -1321,6 +1324,8 @@ static bool GrassEmit(ID3D11DeviceContext* c, bool bound, const BasePend* pend =
         // pasa de 1000 px/m (T0, donde empieza el pasto del juego) y el nivel 0 no emitia nada: en el editor no hay pasto del juego, asi
         // que el nivel 0 va sin tope; y el alcance se mide desde el jugador (origen), no desde la camara, que con zoom queda a 15-40 m
         if (t_editor) cull[36] = 1.0f;
+        // (21/11) gPad[4].z = 1: corte en z (gPad[4].w): celdas por debajo de ese z no se emiten (laboratorio: el borde del foso del banco)
+        if (t_editor) { const float zc = g_grassEdCutZ.load(std::memory_order_relaxed); if (zc < 1.0e8f) { cull[38] = 1.0f; cull[39] = zc; } }
         // (11/11 m) gPad[4].y: relleno del atlas bajo las hojas 3D (y403); gPad[5] (hojas 3D) ya en los niveles 0..2: el nivel 0 cuenta sus
         // tarjetas con el alto del relleno donde hay hojas 3D (antes gPad[5] se llenaba despues y en los niveles 0..2 valia 0)
         cull[37] = bladeOn ? NatFill() : 0.0f;
@@ -1516,7 +1521,9 @@ static int RtvCount(ID3D11DeviceContext* c);
 static std::atomic<int> s_edFrame{-1}, s_edLog{0}, s_edOk{0};
 void GrassEditorAfterFace(ID3D11DeviceContext* c) {
     if (g_cfg.bypass || !g_dev.dev || g_cfg.live[393][0] < 0.5f) return;
-    if (g_cfg.live[255][3] < 0.5f || g_cfg.live[44][3] > 0.5f) return;   // misma condicion que la luz de prueba: escena de menu sin el sol del partido
+    // misma condicion que la luz de prueba: escena de menu sin el sol del partido; (21/11) con el laboratorio de animaciones (corte puesto) basta
+    // con que no sea un partido: el Motor puede tener el sol del editor
+    if (g_cfg.live[255][3] < 0.5f || (g_cfg.live[44][3] > 0.5f && g_grassEdCutZ.load(std::memory_order_relaxed) >= 1.0e8f)) return;
     const int f = s_frame.load();
     if (s_edFrame.load() == f) return;   // (08/11 j) ya emitido este cuadro: barato, antes de mirar los targets (ahora se llama tambien por el cuerpo)
     if (RtvCount(c) < 2) return;   // solo el G-buffer del visor (la cara tambien se dibuja en prepasadas)

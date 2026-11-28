@@ -415,6 +415,21 @@ ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps, ID3D1
     // sin cambiar lo que tenga guardado en x424 para el Editar ([PES21FX] motor_fondo = 0 lo deja como en el Editar)
     const bool motorBg = g_cfg.motorBg != 0 && MotorPageActive();
     if (motorBg) mode = 1;
+    // (16/11, Agustin 17:06: "el fondo y la grilla no cargan" en el Motor; el log no tiene NINGUNA linea "fondo del editor" ni
+    // "motor (grilla)") diagnostico: dentro del Motor se anota que dibujos con una textura grande en t8 llegan aca y con que PS; si el
+    // fondo del menu ya no usa el PS de siempre (kUiPS) se ve aca
+    if (motorBg && ps != kUiPS && g_dev.dev) {
+        static std::atomic<int> s_nd{0}; static std::atomic<uint64_t> s_seen[8] = {};
+        bool known = false; for (auto& a : s_seen) if (a.load() == ps) known = true;
+        if (!known && s_nd.load() < 8) {
+            ID3D11ShaderResourceView* v8 = nullptr; c->PSGetShaderResources(8, 1, &v8);
+            if (v8) { ID3D11Resource* r = nullptr; v8->GetResource(&r); v8->Release();
+                if (r) { ID3D11Texture2D* t2 = nullptr; r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t2); r->Release();
+                    if (t2) { D3D11_TEXTURE2D_DESC dd; t2->GetDesc(&dd); t2->Release();
+                        if (dd.Width >= 1024) { const int k = s_nd.fetch_add(1); if (k < 8) { s_seen[k].store(ps); Log("fondo del editor (Motor): dibujo con PS %016llx (no es el del menu %016llx) y textura %ux%u en t8%s", (unsigned long long)ps, (unsigned long long)kUiPS, dd.Width, dd.Height, (dd.BindFlags & D3D11_BIND_RENDER_TARGET) ? " (imagen de render)" : ""); } } } } }
+        }
+    }
+    { static std::atomic<int> s_nm{0}; if (motorBg && ps == kUiPS && s_nm.fetch_add(1) == 0) Log("fondo del editor (Motor): llega el dibujo del menu con su PS de siempre"); }
     if (ps != kUiPS || mode <= 0 || !g_dev.dev) return nullptr;
     s_bgNUi.fetch_add(1, std::memory_order_relaxed); EditorBgDiagTick(mode);
     // (08/11 kd63zh) en la PC de Agustin la composicion f807 no pasa NUNCA por BeforeDraw en el editor (log 04e625e: 0 composiciones
@@ -462,6 +477,7 @@ ID3D11ShaderResourceView* EditorBgFor(ID3D11DeviceContext* c, uint64_t ps, ID3D1
     ID3D11ShaderResourceView* v = nullptr;
     if (mode >= 2) v = LoadUserBg();
     else if (s_bgImgTried) { s_bgImgTried = false; }                   // al volver a "imagen propia" se relee el archivo
+    if (motorBg && MotorVistaLive()) { static std::atomic<int> nl{0}; if (nl.fetch_add(1) == 0) Log("fondo del editor (Motor): jugador en la escena principal: el fondo del menu no se dibuja"); return nullptr; }   // (16/11) motorvista.cpp
     if (motorBg) { if (ID3D11ShaderResourceView* g = MotorGridSRV(c)) v = g; }   // (15/11) fondo del Motor: gris con grilla de piso (motorgrid.cpp; 15/11 o: con la grilla apagada, gris sin lineas)
     if (!v) { if (!s_bgBlack) s_bgBlack = SolidSRV(0xff000000u); v = s_bgBlack; }
     const int n = s_bgSwaps.fetch_add(1);

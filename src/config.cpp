@@ -7,6 +7,10 @@
 #include <fstream>
 #include <sstream>
 #include <iterator>
+// (23/11 8z607v v7d) camara (vista x proyeccion de SceneCB) para esconder a los suplentes que no entran en cuadro; secuencia par = lista
+std::atomic<unsigned> g_camSeq{0}; std::atomic<float> g_camPV[16]; std::atomic<double> g_camT{-1.0};
+// (23/11 8z607v v7d) relojes del juego para los suplentes (los escribe Present, los lee el hilo del juego)
+std::atomic<float> g_clkComp{0.0f}, g_clkPlayer{0.0f}; std::atomic<unsigned> g_clkCompN{0}, g_clkPlayerN{0}; static int g_clkCompF = -1, g_clkPlayerF = -1;
 
 namespace fx {
 
@@ -204,7 +208,9 @@ static bool LoadConfigLocked() {
             else if (kl == "motor_grilla") c.motorGrid = atoi(v.c_str()) != 0;               // (15/11) 1 = fondo con grilla de piso
             else if (kl == "motor_jugador_al_abrir") c.motorStartPlayer = atoi(v.c_str()) != 0;   // (15/11) 1 = carga al jugador al abrir (0 = solo el menu)
             else if (kl == "motor_teclado") c.motorKeys = atoi(v.c_str()) != 0;      // (12/11) 1 = en el Motor el juego no ve el teclado (Esc = salir)
-            else if (kl == "motor_fondo") c.motorBg = atoi(v.c_str()) != 0;          // (11/11) 1 = fondo negro en el estudio del Motor
+            else if (kl == "motor_fondo") c.motorBg = atoi(v.c_str()) != 0;
+            else if (kl == "motor_escena") c.motorScene = atoi(v.c_str());
+            else if (kl == "motor_jugador_mover") c.motorJug = atoi(v.c_str());   // (17/11) 1 = mover / girar / animar al jugador del Motor (motorjug.cpp)   // (16/11) 1 = el jugador del Motor en la escena principal (como en el partido)          // (11/11) 1 = fondo negro en el estudio del Motor
             else if (kl == "motor_camara") c.motorCam = atoi(v.c_str()) != 0;        // (11/11) 1 = el Motor abre con la camara libre
             else if (kl == "motor_gizmo") c.motorGizmo = atoi(v.c_str()) != 0;       // (11/11) 1 = gizmo de ejes arriba a la derecha
             else if (kl == "motor_botones") c.motorHelpBar = atoi(v.c_str()) != 0;   // (11/11) 1 = deja la barra de botones del mando en la pagina del Motor
@@ -673,6 +679,8 @@ static const DebugParam kDebugParams[] = {
     { 147, 1, 0.5f, 0.0f, "Borde de la mascara de la cara", "Piel", kV1, 1 },
     { 322, 3, 0.5f, 0.0f, "Franja de la union cuello / cuerpo", "Piel", kV1, 1 },
     { 360, 0, 0.5f, 0.0f, "Teselacion: inflar cara y cuerpo / ver teselacion del cuerpo", "Piel", kV27, 2 },
+    { 519, 0, 0.5f, 0.0f, "Cuerpo: ver a traves del torso", "Piel", kV1, 1 },   // (16/11 d9ybe2) pes_debug_cuerpo.hlsli
+    { 519, 2, 0.5f, 0.0f, "Cuerpo: cuadricula de costuras / solo la textura", "Piel", kV27, 2 },
 };
 static const int kDebugN = (int)(sizeof(kDebugParams) / sizeof(kDebugParams[0]));
 int DebugParamCount() { return kDebugN; }
@@ -900,16 +908,77 @@ static void BuildSkyEnv(const V3& s, float turb, float skyRatio) {
     g_dev.imm->UpdateSubresource(s_envTex, 0, nullptr, sharp, W * 16, W * H * 16);
     g_dev.imm->UpdateSubresource(s_envTex, 1, nullptr, blur, W * 16, W * H * 16);
 }
+// (23/11 ru34vc) CIELO COMO LUZ (filas 525..533): la luz que el cielo le da a una superficie segun hacia donde mira, como 9
+// armonicos esfericos (L2, Ramamoorthi y Hanrahan 2001) ya convolucionados con el coseno: E(n) = sum c_i Y_i(n). Sale del mismo
+// modelo de atmosfera (SkyPhys) + el pasto de abajo (el sol y el cielo rebotando en la cancha) + las tribunas que tapan el
+// horizonte (y525 grados). Se arma en un marco atado al sol: y arriba, x hacia el sol por el piso, z al costado (el cielo es
+// simetrico respecto del plano vertical del sol, asi el shader no necesita el rumbo del mundo). Colores RELATIVOS al sol
+// (como 150): el shader multiplica por el color del sol del juego. Se recalcula solo cuando el sol se mueve (junto con 150).
+// 527..533 = 27 coeficientes (rgb de c0..c8 seguidos), w de 533 = 1 valido. 0 = sin dato (noche, nublado: el shader usa lo de antes).
+static float s_shRow[7][4] = {};
+static void BuildSkySH(const V3& s, float turb, float skyRatio, const float sgE[3], const float sgZ[3], float atmo, float standDeg, float groundK) {
+    float c[9][3] = {};
+    const int NT = 12, NP = 24;               // hemisferio de arriba: 288 direcciones con el modelo de atmosfera
+    float cosEl = sqrtf((std::max)(1.0f - s.y * s.y, 0.0f));
+    V3 sf = V(cosEl, s.y, 0.0f);              // el sol en el marco del sol
+    float hb = std::clamp(standDeg, 0.0f, 40.0f) * 0.01745329f;   // tribunas: tapan desde el horizonte hasta hb
+    float gk = std::clamp(groundK, 0.0f, 2.0f);
+    // luz que llega al piso (sol + cielo), relativa al sol normal: el pasto la devuelve con su albedo (verde) y las tribunas con un gris oscuro
+    float Eg = (std::max)(s.y, 0.0f) + skyRatio;   // skyRatio = iluminancia horizontal del cielo / sol normal (res[3])
+    const float turfA[3] = { 0.10f, 0.17f, 0.05f }, standA[3] = { 0.12f, 0.12f, 0.13f };
+    auto add = [&](const V3& d, const float L[3], float dw) {
+        float x = d.x, y = d.y, z = d.z;
+        float Y[9] = { 0.282095f, 0.488603f * y, 0.488603f * z, 0.488603f * x, 1.092548f * x * y, 1.092548f * y * z,
+                       0.315392f * (3.0f * y * y - 1.0f), 1.092548f * x * z, 0.546274f * (x * x - z * z) };
+        for (int i = 0; i < 9; i++) for (int k = 0; k < 3; k++) c[i][k] += L[k] * Y[i] * dw;
+    };
+    for (int hemi = 0; hemi < 2; hemi++)
+        for (int i = 0; i < NT; i++) {
+            float th = (i + 0.5f) / NT * 1.5707963f, st = sinf(th), ct = cosf(th);   // th desde el cenit (o el nadir)
+            float dw = st * (1.5707963f / NT) * (6.2831853f / NP);
+            for (int j = 0; j < NP; j++) {
+                float ph = (j + 0.5f) / NP * 6.2831853f;
+                V3 d = V(st * cosf(ph), hemi == 0 ? ct : -ct, st * sinf(ph));
+                float L[3];
+                if (hemi == 0) {
+                    float el = 1.5707963f - th;
+                    if (el < hb) { for (int k = 0; k < 3; k++) L[k] = standA[k] * Eg / 3.14159265f * 0.6f; }   // tribuna (parte en su propia sombra)
+                    else { SkyPhys(d, sf, turb, 12, L); for (int k = 0; k < 3; k++) L[k] *= 0.31830989f; }   // SkyPhys trae pi x radiancia (ver acc / pi en 150)
+                } else {
+                    for (int k = 0; k < 3; k++) L[k] = turfA[k] * Eg / 3.14159265f * gk;   // la cancha
+                }
+                add(d, L, dw);
+            }
+        }
+    const float A[9] = { 3.14159265f, 2.0943951f, 2.0943951f, 2.0943951f, 0.785398f, 0.785398f, 0.785398f, 0.785398f, 0.785398f };
+    float out[28] = {};
+    for (int i = 0; i < 9; i++) for (int k = 0; k < 3; k++) {
+        float sref = sgE[k] + (sgZ[k] - sgE[k]) * atmo;               // relativo al color del sol (como 150)
+        out[i * 3 + k] = c[i][k] * A[i] / (std::max)(sref, 1e-6f);
+    }
+    out[27] = 1.0f;
+    for (int r = 0; r < 7; r++) for (int k = 0; k < 4; k++) s_shRow[r][k] = out[r * 4 + k];
+    static double lastLog = -1e9; double now = (double)GetTickCount64() * 0.001;
+    if (now - lastLog > 60.0) { lastLog = now;
+        auto E = [&](float x, float y, float z) {   // luminancia de E(n)
+            float Y[9] = { 0.282095f, 0.488603f * y, 0.488603f * z, 0.488603f * x, 1.092548f * x * y, 1.092548f * y * z,
+                           0.315392f * (3.0f * y * y - 1.0f), 1.092548f * x * z, 0.546274f * (x * x - z * z) };
+            float e[3] = {}; for (int i = 0; i < 9; i++) for (int k = 0; k < 3; k++) e[k] += out[i * 3 + k] * Y[i];
+            return 0.2126f * e[0] + 0.7152f * e[1] + 0.0722f * e[2]; };
+        Log("cielo como luz: sol a %.1f grados, tribunas %.0f grados, E arriba %.3f, de costado hacia el sol %.3f, de espaldas al sol %.3f, al costado %.3f, abajo %.3f (relativo al sol)",
+            asinf(std::clamp(s.y, -1.0f, 1.0f)) * 57.29578f, hb * 57.29578f, E(0, 1, 0), E(1, 0, 0), E(-1, 0, 0), E(0, 0, 1), E(0, -1, 0)); }
+}
 // p150: x y z = color del cielo relativo al sol (luminancia 1), w = cielo horizontal / sol normal. 0 = sin dato
 static void UpdatePhysSky(float (*p)[4]) {
-    static float last[5] = { -9, -9, -9, -9, -9 }; static float res[4] = {};
+    static float last[7] = { -9, -9, -9, -9, -9, -9, -9 }; static float res[4] = {};
     bool sunny = p[114][3] > 0.5f; const float* SW = p[312][3] > 0.5f ? p[312] : p[111];   // (26/10) sol estable (no gira en las repeticiones)
     float sx = SW[0], sy = SW[1], sz = SW[2];
-    if (!sunny || sy < 0.017f) { for (int k = 0; k < 4; k++) p[150][k] = 0.0f; return; }
+    if (!sunny || sy < 0.017f) { for (int k = 0; k < 4; k++) p[150][k] = 0.0f; for (int r = 0; r < 7; r++) for (int k = 0; k < 4; k++) p[527 + r][k] = 0.0f; return; }
     float turb = p[121][1] > 0.5f ? p[121][1] : 2.5f;
     float atmo = p[121][0] > 0.5f ? std::clamp(p[121][2] > 0.0f ? p[121][2] : 1.0f, 0.0f, 1.0f) : 0.0f;   // con el color fisico del sol (x121) prendido
-    if (fabsf(sx - last[0]) + fabsf(sy - last[1]) + fabsf(sz - last[2]) > 0.002f || fabsf(turb - last[3]) > 0.01f || fabsf(atmo - last[4]) > 0.01f) {
-        last[0] = sx; last[1] = sy; last[2] = sz; last[3] = turb; last[4] = atmo;
+    if (fabsf(sx - last[0]) + fabsf(sy - last[1]) + fabsf(sz - last[2]) > 0.002f || fabsf(turb - last[3]) > 0.01f || fabsf(atmo - last[4]) > 0.01f
+        || fabsf(p[525][1] - last[5]) > 0.01f || fabsf(p[525][2] - last[6]) > 0.01f) {
+        last[0] = sx; last[1] = sy; last[2] = sz; last[3] = turb; last[4] = atmo; last[5] = p[525][1]; last[6] = p[525][2];
         V3 s = V(sx, sy, sz);
         float acc[3] = {}; const int NT = 8, NP = 16;
         for (int i = 0; i < NT; i++) {
@@ -932,10 +1001,13 @@ static void UpdatePhysSky(float (*p)[4]) {
         for (int k = 0; k < 3; k++) res[k] = rel[k] / (std::max)(rl, 1e-6f);
         res[3] = skyL / 3.14159265f;   // iluminancia del cielo / del sol
         BuildSkyEnv(s, turb, res[3]);
+        BuildSkySH(s, turb, res[3], sgE, sgZ, atmo, p[525][1], p[525][2]);
     }
     for (int k = 0; k < 4; k++) p[150][k] = res[k];
+    for (int r = 0; r < 7; r++) for (int k = 0; k < 4; k++) p[527 + r][k] = s_shRow[r][k];
 }
 } // namespace
+ID3D11ShaderResourceView* SkyEnvSRV() { return s_envSRV; }   // (23/11 ru34vc h) tambien para el cielo dibujado (domo 9adf, t28)
 
 // ---------------------------------------------------------------- (13/11 tanda 2) fila 498: movimiento de la CAMARA (no va al ini)
 // Cuanto se corre la imagen por la camara entre dos cuadros, en px por cuadro a 1080 lineas: x / y = el centro de la pantalla (ndc: x a la
@@ -959,6 +1031,8 @@ static void CamaraFrame(float (*p)[4], double t) {
     if (!ok || age < 0 || age > 3) { o[0] = o[1] = o[2] = o[3] = 0.0f; havePrev = false; lastSf = -1; if (pendT >= 0.0) TaaVelProbeCancel(); pendT = -1.0; return; }
     if (sf != lastSf) {   // copia nueva de SceneCB (si es la misma, queda lo de antes)
         const float* PV = &S[0]; const float* P = &S[16];
+        { g_camSeq.fetch_add(1, std::memory_order_acq_rel); for (int i = 0; i < 16; i++) g_camPV[i].store(PV[i], std::memory_order_relaxed);   // (23/11 8z607v) para la banca
+          g_camT.store(t, std::memory_order_relaxed); g_camSeq.fetch_add(1, std::memory_order_acq_rel); }
         float VV[3][4];
         for (int i = 0; i < 4; i++) {
             VV[2][i] = PV[12 + i];
@@ -1108,6 +1182,14 @@ void UpdateTimeParams() {
               float ang = (na > 1e-4f && nb > 1e-4f) ? acosf(std::clamp((ax * bx + ay * by + az * bz) / (na * nb), -1.0f, 1.0f)) * 57.2958f : -1.0f;
               Log("cielo: sol del archivo del cielo (%.3f, %.3f, %.3f) | sol de la luz (%.3f, %.3f, %.3f) | diferencia %.1f grados", ax, ay, az, bx, by, bz, ang);
           } } }
+      // (23/11 8z607v v7d) relojes crudos para los suplentes (banca.cpp, hilo del juego): x de la composicion y x de la piel de la cara
+      // (SysCBP), con el numero de cuadro de la copia; en la repeticion el de la composicion quedo quieto (log 23/11 06:50)
+      if (ok) { g_clkComp.store(Y[16], std::memory_order_relaxed); g_clkCompN.fetch_add(fr != g_clkCompF ? 1u : 0u, std::memory_order_relaxed); g_clkCompF = fr; }
+      { std::vector<float> P; int pf = -1;
+        if (NamedCBRead("SysCBP", P, &pf) && P.size() >= 20) {
+            g_clkPlayer.store(P[16], std::memory_order_relaxed); if (pf != g_clkPlayerF) g_clkPlayerN.fetch_add(1u, std::memory_order_relaxed); g_clkPlayerF = pf;
+            static double plog = 0.0; if (t - plog >= 30.0) { plog = t; Log("reloj de los jugadores (piel de la cara): m_timeParam = (%.3f, %.3f, %.3f, %.3f)", P[16], P[17], P[18], P[19]); }
+        } }
       cloudT += adv; if (cloudT > 100000.0) cloudT -= 100000.0;
       p[157][0] = (float)cloudT; p[157][1] = 1.0f; p[157][2] = (good > 120) ? rateS : 1.0f; p[157][3] = (good > 120) ? 1.0f : 0.0f; }
     CamaraFrame(p, t);   // (13/11 tanda 2) fila 498: movimiento de la camara (x436 de 18afff, w454 de la pasada final)

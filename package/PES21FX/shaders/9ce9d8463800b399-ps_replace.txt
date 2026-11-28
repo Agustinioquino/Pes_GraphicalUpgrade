@@ -84,6 +84,8 @@ float3 PESSunColor() { return g_psLight.m_lightSourceColor.xyz; }   // para pes_
 Texture2D<float> pesMouthMask : register(t43);   // (10/11) mascara del interior de la boca (mouthmask.cpp): sin sombra nueva ahi
 #define PES_SK_FACESHADOW 1
 #include "pes_skinlight.hlsli"
+#define PES_FOCO_SOMBRA 1
+#include "pes_foco_noche.hlsli"   // (23/11 ru34vc j) 542 noche: sombra por torre y haz en la bruma
 
 void main(
   float4 i_texcoord0 : TEXCOORD0,
@@ -318,7 +320,14 @@ void main(
   r0.w = (saturate(max(r0.wwww, r2.xxxx))).w;
   r0.y = (saturate(r0.yyyy)).y;
   r3.xyz = ((r10.xyzx * r0.wwww)).xyz;
-  if (skOn) { skFS = PesSkFaceShadow(skAB, v0, v2.xy, skZ, skL, skNL, r10.xyz); r3.xyz = (PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) * skFS + PesSkTransAll(skN, skV, skL, skNL, r5.y, skCurvT, v2.xy)) * r10.xyz; }   // (04/11) piel
+  float3 skTrA = 0.0;
+  float3 skTrR = 0.0;   // (23/11 ru34vc k) 543 contraluz por grosor real (shadow map del foco): no la corta la sombra del foco
+  if (skOn) { skTrA = PesSkTransAll(skN, skV, skL, skNL, r5.y, skCurvT, v2.xy);
+    float skThM; float skWR = PesFocoThick(float3((v0.xy / v0.w - g_psScene.m_cameraCenterOffset.xy) * g_psScene.m_projectionParam.xy * skZ, skZ), skL, v2.xy, skThM);
+    float4 skP64 = IniParams.Load(int2(64,0));
+    if (skWR > 0.0 && skP64.x > 0.5 && skP64.z > 0.0) { float skTC = PesSkThickCurv(r5.y, skCurvT);
+      skTrR = PesSkTransThick(clamp(skThM, 0.5 * skTC, 2.0 * skTC), skN, skL, skNL, r5.y) * skWR * r10.xyz; skTrA *= 1.0 - skWR; } }
+  if (skOn) { skFS = PesSkFaceShadow(skAB, v0, v2.xy, skZ, skL, skNL, r10.xyz); r3.xyz = (PesSkDiffuse(skNL, r5.y, skTF, skZ, skCurv) * skFS + skTrA) * r10.xyz; }   // (04/11) piel
   r2.xzw = ((r2.zzzz * r12.xxyz)).xzw;
   r11.x = ((dot((r1.yzwy).xyz, (r9.xyzx).xyz)).xxxx).x;
   r0.w = ((g_lut1.Sample(g_samplerLinear_Clamp_s, (r11.xyxx).xy)).yzwx).w;
@@ -347,6 +356,7 @@ void main(
   r0.x = ((r0.xxxx * r0.xxxx + float4(asfloat(0xbf800000U), asfloat(0xbf800000U), asfloat(0xbf800000U), asfloat(0xbf800000U)))).x;
   r0.x = ((g_psLight.m_lightSourceParam3.zzzz * r0.xxxx + float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U)))).x;
   r1.xyz = ((r0.xxxx * r3.xyzx)).xyz;
+  r1.xyz += skTrR;   // (543) la luz que cruza la piel fina, sin la sombra del foco
   o0.xyz = ((r1.xyzx * g_psLight.m_lightSourceParam3.yyyy)).xyz;
   r0.xyz = ((r0.xxxx * r0.yzwy)).xyz;
   r0.xyz = ((r0.xyzx * g_psLight.m_lightSourceParam3.xxxx)).xyz;
@@ -354,6 +364,7 @@ void main(
   o0.w = (float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))).w;
   o1.w = (float4(asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U), asfloat(0x3f800000U))).w;
   o2.xyzw = (r6.xyzw).xyzw;
+  PesFocoNight(v0, v1, v2.xy, skMat, skTag, o0.xyz, o1.xyz);   // (23/11 ru34vc j) 542: sombra de esta torre (contacto v3 hacia el foco) y haz en la bruma
   { float skMS = PesSkMouthShadow(skAB, v0, v2.xy, skZ, skL); o0.xyz *= skMS; o1.xyz *= skMS; }   // (10/11 e) sombra de esta luz dentro de la boca (w388)
   return;
 }

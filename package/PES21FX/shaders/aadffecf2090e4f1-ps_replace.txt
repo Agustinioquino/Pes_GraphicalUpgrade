@@ -180,6 +180,37 @@ void main(
     float2 gH = float2(hX - hC, hY - hC) * 6.0 + grain * (0.25 + 0.55 * saturate(pBall.z));
     N = normalize(N + (n0 * gH.x + n1 * gH.y) * pesStainH * 1.2);
   }
+  // (23/11 ru34vc e) 537 GRANO DEL CUERO DE LA PELOTA (Agustin: "un shader de cuero... mas detalle de cerca"). Las pelotas de partido
+  // tienen la superficie de poliuretano repujada: celdas chicas redondeadas (tipo piel de naranja / micro hexagonos). Se arma con celdas
+  // al azar (Voronoi, 3x3 vecinos) en el uv de la pelota: cada celda es una cupula baja con un surco entre celdas. Solo aparece cuando una
+  // celda ocupa mas de ~3 pixeles (de cerca); de lejos se funde y no titila. y537 celdas por unidad de uv, x537 relieve, z537 mate en surcos
+  float4 BG7 = IniParams.Load(int2(537, 0));
+  float2 fwUV = fwidth(v2.xy);                                   // fuera de las ramas
+  float pesGrainH = 0.0;
+  if (pesOn && BG7.x > 0.001 && abs(pBall.x - 1.0) < 0.01) {
+    float Fq = clamp(BG7.y > 1.0 ? BG7.y : 320.0, 40.0, 2000.0);
+    float cellPx = 1.0 / max(Fq * max(fwUV.x, fwUV.y), 1e-6);   // pixeles por celda
+    float fadeG = saturate((cellPx - 3.0) / 4.0);
+    if (fadeG > 0.001) {
+      float2 q = v2.xy * Fq, iq = floor(q), fq = frac(q);
+      float d1 = 8.0, d2 = 8.0; float2 dv1 = 0;
+      [unroll] for (int j = -1; j <= 1; j++) [unroll] for (int i = -1; i <= 1; i++) {
+        float2 c = float2(i, j);
+        float2 h = frac(sin(float2(dot(iq + c, float2(127.1, 311.7)), dot(iq + c, float2(269.5, 183.3)))) * 43758.5453);
+        float2 dv = c + 0.15 + 0.7 * h - fq;
+        float dd = dot(dv, dv);
+        if (dd < d1) { d2 = d1; d1 = dd; dv1 = dv; } else if (dd < d2) d2 = dd;
+      }
+      d1 = sqrt(d1); d2 = sqrt(d2);
+      // cupula: alta en el centro de la celda, baja en el surco (donde d1 ~ d2)
+      float edge = saturate((d2 - d1) * 2.2);
+      pesGrainH = edge;
+      float2 gU = (d1 > 1e-4 ? dv1 / d1 : 0) * (1.0 - edge) * 1.0;   // pendiente hacia el centro de la celda
+      float kG = saturate(BG7.x) * 0.35 * fadeG * (1.0 - 0.7 * pesDust);
+      N = normalize(N + (n0 * gU.x + n1 * gU.y) * kG);
+      pesGrainH = lerp(1.0, pesGrainH, fadeG);
+    } else pesGrainH = 1.0;
+  }
   if (bootCov > 0.001 && bootRel > 0.001) {
     // (11/11 4wp0pj) relieve de los grumos y las hojitas: gradiente del alto en uv (de las derivadas de pantalla) -> inclina la normal
     float2 gB = clamp(bootG * (48.0 / 2048.0), -3.0, 3.0);
@@ -222,6 +253,8 @@ void main(
   if (bootCov > 0.001) {   // (11/11 4wp0pj) tierra seca: mate; barro mojado: algo de brillo; tapa el metal de los tapones
     rough = lerp(rough, lerp(0.9, 0.4, bootWet), bootCov); o2.y *= 1.0 - (0.65 - 0.35 * bootWet) * bootCov; o2.z *= 1.0 - bootCov;
   }   // (2/11) el polvo y la tierra apagan el brillo
+  if (pesOn && BG7.x > 0.001 && abs(pBall.x - 1.0) < 0.01 && BG7.z > 0.001)   // (23/11) 537: los surcos del grano un poco mas mates
+    rough = saturate(rough + (1.0 - pesGrainH) * 0.12 * saturate(BG7.z));
   o2.x = rough;
   o2.w = pesOn ? 1.0 : 0.0;   // (12/11 yo8viw) marca de pelota / botines para la composicion (619b86: luz y reflejo del cielo, z440); el tipo 1 no usa RT2.w
   if (pesOn && abs(pBall.x - 1.0) >= 0.01) o2.w = 0.7;   // (12/11 20:30) x443 / y443: 1 = la pelota (reconocida por la DLL), 0.7 = botines (619b86)

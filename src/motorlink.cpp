@@ -81,8 +81,50 @@ static ID3D11RasterizerState* WireFor(ID3D11RasterizerState* cur) {
     return w;
 }
 
+// (17/11 06:59, Agustin: "que la vista de alambre muestre distintos colores en las mallas para entender de que se tratan") con
+// g_motorWireCol cada malla del G-buffer sale TENIDA de un color propio: el destino 0 (albedo, SV_Target0 en los PS del G-buffer) se
+// escribe como albedo x color (mezcla con el factor de mezcla), los demas destinos quedan como el juego los pide. El color sale de
+// la malla (VS, cantidad de indices, primer indice y vertice base): la misma malla tiene siempre el mismo color. Los dibujos que ya
+// mezclan en el destino 0 (pelo, calcos) no se tocan. La textura sigue debajo: los negros (pelo, barba) quedan oscuros.
+std::atomic<bool> g_motorWireCol{ false };
+static std::unordered_map<ID3D11BlendState*, ID3D11BlendState*> s_tint;   // bajo s_wireMx; nulo = ese estado no se tine
+struct WireTintSave { bool on = false; ID3D11BlendState* bs = nullptr; FLOAT bf[4] = {}; UINT sm = 0xffffffffu; };
+static thread_local WireTintSave t_tint;
+static ID3D11BlendState* TintFor(ID3D11BlendState* cur) {
+    std::lock_guard<std::mutex> lk(s_wireMx);
+    auto it = s_tint.find(cur);
+    if (it != s_tint.end()) return it->second;
+    if (s_tint.size() >= kWireMax || !g_dev.dev) return nullptr;
+    D3D11_BLEND_DESC bd{};
+    if (cur) cur->GetDesc(&bd);
+    else { for (auto& r : bd.RenderTarget) { r.SrcBlend = r.SrcBlendAlpha = D3D11_BLEND_ONE; r.DestBlend = r.DestBlendAlpha = D3D11_BLEND_ZERO; r.BlendOp = r.BlendOpAlpha = D3D11_BLEND_OP_ADD; r.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL; } }
+    ID3D11BlendState* t = nullptr;
+    if (!bd.RenderTarget[0].BlendEnable && (bd.RenderTarget[0].RenderTargetWriteMask & 7)) {
+        if (!bd.IndependentBlendEnable) { for (int i = 1; i < 8; i++) bd.RenderTarget[i] = bd.RenderTarget[0]; bd.IndependentBlendEnable = TRUE; }
+        auto& r = bd.RenderTarget[0];
+        r.BlendEnable = TRUE; r.SrcBlend = D3D11_BLEND_BLEND_FACTOR; r.DestBlend = D3D11_BLEND_ZERO; r.BlendOp = D3D11_BLEND_OP_ADD;
+        r.SrcBlendAlpha = D3D11_BLEND_ONE; r.DestBlendAlpha = D3D11_BLEND_ZERO; r.BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        if (FAILED(g_dev.dev->CreateBlendState(&bd, &t))) t = nullptr;
+    }
+    if (cur) cur->AddRef();
+    s_tint[cur] = t;
+    return t;
+}
+static void WireTintBegin(ID3D11DeviceContext* c, uint64_t seed) {
+    static const float kPal[12][3] = { {1.0f, 0.35f, 0.3f}, {0.35f, 0.85f, 1.0f}, {0.45f, 1.0f, 0.4f}, {1.0f, 0.85f, 0.25f}, {0.85f, 0.45f, 1.0f}, {1.0f, 0.55f, 0.15f},
+        {0.3f, 1.0f, 0.8f}, {1.0f, 0.4f, 0.75f}, {0.55f, 0.6f, 1.0f}, {0.8f, 1.0f, 0.3f}, {1.0f, 1.0f, 1.0f}, {0.3f, 0.6f, 1.0f} };
+    ID3D11BlendState* bs = nullptr; FLOAT bf[4]; UINT sm = 0; c->OMGetBlendState(&bs, bf, &sm);
+    ID3D11BlendState* t = TintFor(bs);
+    if (!t) { if (bs) bs->Release(); return; }
+    seed ^= seed >> 29; seed *= 0xbf58476d1ce4e5b9ull; seed ^= seed >> 32;
+    const float* col = kPal[seed % 12];
+    const FLOAT f[4] = { col[0], col[1], col[2], 1.0f };
+    c->OMSetBlendState(t, f, sm);
+    t_tint.on = true; t_tint.bs = bs; memcpy(t_tint.bf, bf, sizeof bf); t_tint.sm = sm;
+}
+
 // antes de un dibujo: true = se puso el estado de alambre y *prev guarda (con referencia) el que estaba (puede ser nulo)
-bool MotorWireBegin(ID3D11DeviceContext* c, ID3D11RasterizerState** prev) {
+bool MotorWireBegin(ID3D11DeviceContext* c, ID3D11RasterizerState** prev, uint64_t seed) {
     // G-buffer de PES = 5 destinos + profundidad. Con "3 o mas" entraban tambien las luces diferidas (difusa, especular y
     // sombra: 3 destinos) y el generador de mapas de cara de la DLL (facegen.cpp: 3 destinos, sin profundidad, RS nulo)
     ID3D11RenderTargetView* rt[4] = {}; ID3D11DepthStencilView* dsv = nullptr;
@@ -98,12 +140,15 @@ bool MotorWireBegin(ID3D11DeviceContext* c, ID3D11RasterizerState** prev) {
     c->RSSetState(w);
     *prev = cur;
     s_wireDraws.fetch_add(1, std::memory_order_relaxed);
+    t_tint.on = false;
+    if (g_motorWireCol.load(std::memory_order_relaxed)) WireTintBegin(c, seed);
     return true;
 }
 
 void MotorWireEnd(ID3D11DeviceContext* c, ID3D11RasterizerState* prev) {
     c->RSSetState(prev);
     if (prev) prev->Release();
+    if (t_tint.on) { c->OMSetBlendState(t_tint.bs, t_tint.bf, t_tint.sm); if (t_tint.bs) t_tint.bs->Release(); t_tint = WireTintSave(); }
 }
 
 // ---------------------------------------------------------------- una vez por cuadro (antes de subir t120)

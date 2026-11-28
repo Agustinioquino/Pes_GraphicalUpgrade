@@ -61,6 +61,7 @@ Texture2D<float4> inDepth : register(t11);
 Texture2D<float4> inFogVolume : register(t12);
 Texture2D<float4> inOcclusion : register(t13);
 Texture2D<float4> inShadow : register(t14);
+Texture2D<float4> PESSkyVis : register(t50);   // PES21 (23/11 ru34vc) 534: visibilidad del cielo de lejos de la DLL (media res.: rgb normal doblada, a visibilidad)
 Texture2D<float4> PESGtao : register(t27);   // PES21 (20/10): GTAO de la DLL (1 = sin oclusion); se mezcla con el SSAO del juego (y132)
 Texture2DArray<float4> PESSkyEnv : register(t28);   // PES21 (21/10): panorama del cielo fisico para los reflejos (DLL, pes_skyenv): capa 0 nitida, 1 desenfocada
 Texture2D<float4> PESSsgi : register(t26);
@@ -97,6 +98,50 @@ cbuffer PESLightCopyC : register(b13)
 #include "pes_vista_motor.hlsli"   // PES21 (11/11, Motor en tiempo real): vistas del motor (fila 429)
 // PES21 (12/11 20:50, fila 445): azar y ruido fijos al mundo (sin seno: estables lejos del centro de la cancha) y luz del sol en un
 // punto del aire (espacio de vista; shadow map del sol con la misma cuenta que la luz volumetrica 335)
+// === PES21 (23/11 ru34vc) CIELO COMO LUZ (fila 525; 527..533 los escribe la DLL): la luz que da el cielo segun hacia donde mira la
+// superficie, como 9 armonicos esfericos convolucionados con el coseno (Ramamoorthi y Hanrahan 2001), sacados del mismo modelo de
+// atmosfera que el cielo fisico (150) + la cancha que rebota abajo + las tribunas que tapan el horizonte. Marco atado al sol: y arriba,
+// x hacia el sol por el piso, z al costado. Devuelve el color RELATIVO al sol (multiplicar por el color del sol del juego).
+// Lo que mira al sol recibe mas cielo (el cielo alrededor del sol brilla mas), de espaldas menos, abajo el verde de la cancha.
+bool PESSkySHOn() { return IniParams.Load(int2(525,0)).x > 0.5 && IniParams.Load(int2(533,0)).w > 0.5; }
+float3 PESSkySH(float3 n, float3 up, float3 Ld) {
+  float3 h = Ld - up * dot(Ld, up);
+  h = dot(h, h) > 1e-8 ? normalize(h) : normalize(cross(up, abs(up.x) < 0.9 ? float3(1, 0, 0) : float3(0, 0, 1)));
+  float3 sd = cross(up, h);
+  float x = dot(n, h), y = dot(n, up), z = dot(n, sd);
+  float4 a = IniParams.Load(int2(527,0)), b = IniParams.Load(int2(528,0)), c = IniParams.Load(int2(529,0)), d = IniParams.Load(int2(530,0));
+  float4 e = IniParams.Load(int2(531,0)), f = IniParams.Load(int2(532,0)), g = IniParams.Load(int2(533,0));
+  float3 E = a.xyz * 0.282095
+           + float3(a.w, b.x, b.y) * (0.488603 * y) + float3(b.z, b.w, c.x) * (0.488603 * z) + float3(c.y, c.z, c.w) * (0.488603 * x)
+           + d.xyz * (1.092548 * x * y) + float3(d.w, e.x, e.y) * (1.092548 * y * z) + float3(e.z, e.w, f.x) * (0.315392 * (3.0 * y * y - 1.0))
+           + float3(f.y, f.z, f.w) * (1.092548 * x * z) + g.xyz * (0.546274 * (x * x - z * z));
+  return max(E, 0.0);
+}
+// el color de la luz de cielo para la normal n, con brillo 1 en lo que mira para arriba (asi cada efecto conserva su fuerza de siempre)
+// (23/11 ru34vc) 534 visibilidad del cielo de lejos: techos, gradas, el fondo del banco de suplentes (gtao.cpp, pes_skyvis_ps).
+// Subida de media resolucion con 4 vecinos pesados por profundidad (sin halos en los bordes). xyz = normal doblada (0 si no hay), w = visibilidad.
+float4 PESSkyVisAt(float2 uv, float zc) {
+  if (IniParams.Load(int2(534,0)).x < 0.5 && IniParams.Load(int2(536,0)).x < 0.5) return float4(0, 0, 0, 1);
+  float W, H; PESSkyVis.GetDimensions(W, H);
+  if (W < 2.0) return float4(0, 0, 0, 1);
+  float2 tc = uv * float2(W, H) - 0.5; float2 f = frac(tc); float2 b0 = (floor(tc) + 0.5) / float2(W, H); float2 tx = 1.0 / float2(W, H);
+  float4 acc = 0; float ws = 0;
+  [unroll] for (int k = 0; k < 4; k++) {
+    float2 o = float2(k & 1, k >> 1);
+    float2 uvT = b0 + o * tx;
+    float wB = (o.x > 0.5 ? f.x : 1.0 - f.x) * (o.y > 0.5 ? f.y : 1.0 - f.y);
+    float zT = PESLinZ(uvT);
+    float w = (wB + 1e-3) * exp(-abs(zT - zc) / (0.03 * zc + 0.05));
+    acc += PESSkyVis.SampleLevel(g_samplerPoint_Clamp_s, uvT, 0) * w; ws += w;
+  }
+  acc /= max(ws, 1e-5);
+  float3 bn = acc.xyz * 2.0 - 1.0;
+  return float4(dot(bn, bn) > 0.04 ? normalize(bn) : float3(0, 0, 0), saturate(acc.w));
+}
+float3 PESSkySHRel(float3 n, float3 up, float3 Ld, float3 sunN) {
+  float lu = max(dot(PESSkySH(up, up, Ld), float3(0.3, 0.5, 0.2)), 1e-4);
+  return sunN * PESSkySH(n, up, Ld) / lu;
+}
 float PES445H(float2 c) { float2 q = frac(c * float2(0.1031, 0.1030)); q += dot(q, q.yx + 33.33); return frac((q.x + q.y) * q.x); }
 float PES445N(float2 p) {
   float2 i = floor(p), f = frac(p); f = f * f * (3.0 - 2.0 * f);
@@ -749,6 +794,10 @@ void main(
   // lo que mira al costado la mitad; cambia con la altura del sol (mas azul de dia, violaceo al atardecer, nada de noche).
   // x47 fuerza, y47 cuanto azul (0 = gris), w47 on/off [Alt+Shift+C]
   float3 Nsk = 0; float3 Vsk = 0; float zsk = PESLinZ(uvC); bool geoOk = false;
+  // (23/11 ru34vc) 534: visibilidad del cielo de lejos de este pixel (no en el pasto) y cuanto pesa en la luz de cielo / reflejos (z534)
+  float4 pesSV = float4(0, 0, 0, 1);
+  [branch] if (cmpOn && tyC != 3) pesSV = PESSkyVisAt(uvC, zsk);
+  float pesSVk = lerp(1.0, pesSV.w, saturate(IniParams.Load(int2(534,0)).z));
   float pesDownK = 0.0;   // (14/11) z512, ver abajo
   // (14/11) x512 / w512 contraluz con el color de la hoja (PESLeafTrans / PESSunLobe); el albedo del pasto sin tocar (r3 cambia mas abajo)
   float4 P512 = IniParams.Load(int2(512,0));
@@ -813,7 +862,19 @@ void main(
         // (07/11) y109: hemisferio coseno. Una superficie de costado recibe la MITAD del cielo, no un cuarto (fSky^2 apagaba el lado
         // en sombra de los jugadores: 'cuando estan en la sombra no se ve casi nada'). 0 = como antes, 1 = fisico.
         float3 fSkW = lerp(fSk3 * fSk3, fSk3, saturate(IniParams.Load(int2(109,0)).y));
-        r2.xyz += lum * tint * fSkW * max(SKY.x, 0.0) * 0.12 * day * aoSky * saturate((400.0 - zsk) / 120.0) * PESAmbGain() * (tyC == 1 ? pesBallSkyK : 1.0);
+        // (23/11 ru34vc) x525: con el cielo como luz, el color y la caida segun la normal salen de los armonicos del cielo (cada
+        // canal de la piel con su normal, como fSk3); el brillo hacia arriba queda igual que antes. "Cuanto azul" (y47) sigue mandando.
+        if (PESSkySHOn()) {
+          float3 snk = sunC / max(lum, 1e-4);
+          float3 NskB = Nsk;   // (23/11 ru34vc) 534: fuera de la piel, el cielo se mira por la normal doblada (el pedazo de cielo que se ve)
+          if (!skinC && dot(pesSV.xyz, pesSV.xyz) > 0.5) NskB = normalize(lerp(Nsk, pesSV.xyz, 0.7 * saturate(IniParams.Load(int2(534,0)).z)));
+          float3 eS = PESSkySHRel(NskB, upV, Ld, snk);
+          if (skinC) { float3 nG = normalize(NskR + Nsk);
+            eS = float3(PESSkySHRel(NskR, upV, Ld, snk).r, PESSkySHRel(nG, upV, Ld, snk).g, eS.b); }
+          float eL = dot(eS, float3(0.3, 0.5, 0.2));
+          tint = 1.0; fSkW = lerp(eL.xxx, eS, saturate(SKY.y > 0 ? SKY.y : 1.0));
+        }
+        r2.xyz += lum * tint * fSkW * max(SKY.x, 0.0) * 0.12 * day * aoSky * pesSVk * saturate((400.0 - zsk) / 120.0) * PESAmbGain() * (tyC == 1 ? pesBallSkyK : 1.0);   // (23/11) pesSVk: techos y gradas
       }
     }
   }
@@ -840,6 +901,7 @@ void main(
           if (SKt.y > 0.01) { float3 t = (sunT / max(lumT, 1e-4)) * SKt.xyz; skyT = t / max(dot(t, float3(0.3, 0.5, 0.2)), 1e-4); }
           else { float3 hor = max(g_psScene.m_fogColor.xyz, 0.0); float lh = dot(hor, float3(0.3, 0.5, 0.2));
                  if (lh > 1e-4) skyT = normalize(hor / lh * float3(0.75, 0.9, 1.25)) * 1.7; } }
+        if (PESSkySHOn()) skyT = PESSkySHRel(Nsk, upT, LdT, sunT / max(lumT, 1e-4));   // (23/11 ru34vc) x525: el color del cielo para esta normal
         float shT = saturate(inShadow.SampleLevel(g_samplerPoint_Clamp_s, uvC, 0).x);
         // (27/10) capturas de 69df3d5: la sombra de cerca quedaba casi negra y mas oscura que la del medio (26 contra 51 de verde
         // en sRGB): el AO de pantalla sobre las hojas 3D densas de cerca la apagaba. El AO pesa poco aca y la luz sube (0.14 -> 0.2)
@@ -873,6 +935,7 @@ void main(
                  if (lh > 1e-4) { skyG = hor / lh * float3(0.85, 0.95, 1.15); skyG /= max(dot(skyG, float3(0.3, 0.5, 0.2)), 1e-4); } } }
         float upF = saturate(0.5 + 0.5 * dot(Nsk, upG));
         float aoG = lerp(1.0, saturate(inOcclusion.SampleLevel(g_samplerLinear_Clamp_s, uvC, 0).x), 0.5);
+        if (PESSkySHOn()) { skyG = PESSkySHRel(Nsk, upG, LdG, sunG / max(lumG, 1e-4)); upF = 1.0; }   // (23/11 ru34vc) x525: color y caida de los armonicos
         sky436 = lumG * skyG * 0.045 * kSkG * upF * upF * dayG * aoG * saturate((400.0 - zsk) / 120.0) * PESAmbGain();
         r2.xyz += sky436;
       }
@@ -1359,6 +1422,15 @@ void main(
       float k = saturate(1.0 - GA.x * lerp(1.0, 0.5, r3D));   // solo la mitad del SSAO del motor vuelve, y solo en la zona de hojas 3D
       aoRaw = lerp(1.0, aoRaw, k); occRGB = lerp(float3(1,1,1), occRGB, k); }
   }
+  { // (23/11 ru34vc d) 536 SOMBRA DE LOS PIES EN EL PASTO: despues del alivio de x108, lo que tapan solo los jugadores, la pelota y lo que
+    // no es pasto (pes_skyvis_ps, .a del pasto en t50). Oscurece toda la luz ahi (debajo del botin tampoco entra el sol). z536 fuerza
+    float4 PF = IniParams.Load(int2(536,0));
+    [branch] if (cmpOn && tyC == 3 && PF.x > 0.5 && PF.z > 0.001) {
+      float vF = PESSkyVisAt(uvC, PESLinZ(uvC)).w;
+      vF = lerp(1.0, vF, saturate(PF.z));
+      aoRaw *= vF; occRGB *= vF;
+    }
+  }
   { // === PES21 piel en la sombra (02/11, 259) ===
     // Agustin (02/11): con parche 0 o 1 la piel en sombra salia casi negra, gris y plana (cuello bajo el menton). Dos cosas reales
     // que faltaban, solo en la piel:
@@ -1773,8 +1845,32 @@ void main(
           hzK = saturate(1.0 + 1.1 * dot(Rv, Ng)); hzK *= hzK;
         } }
       float soK = lerp(1.0, soL * lerp(1.0, aoE, 0.5) * hzK, RS.z > 0 ? saturate(RS.z) : 1.0);
+      soK *= pesSVk * pesSVk;   // (23/11 ru34vc) 534: bajo el techo / la grada el cielo que se refleja es mucho menos
       float sunLe = max(dot(max(pLc_color.xyz, 0.0), float3(0.2126, 0.7152, 0.0722)), 0.0) * g_psScene.m_exposure.z;
       r0.xyw += env * sunLe * specE * soK * (skinC ? 0.1 : max(RS.y, 0.0)) * (tyC == 1 ? min(pesBallSkyK, 1.0) : 1.0);
+      // (23/11 ru34vc) 535 LACA DE LA PELOTA: una pelota de partido tiene una capa de poliuretano brillante encima del panel impreso.
+      // Esa capa refleja el cielo nitido (capa nitida del panorama) con su propio Fresnel (F0 0.04), sin importar lo aspero del panel
+      float4 BC = IniParams.Load(int2(535,0));
+      if (BC.w > 0.5 && tyC == 1 && gmC.w > 0.85 && BC.z > 0.001) {
+        float Fc = 0.04 + 0.96 * pow(1.0 - NdVe, 5.0);
+        float3 envC = lerp(eS, gnd, saturate(-Rw.y * 10.0));
+        r0.xyw += envC * sunLe * Fc * soK * saturate(BC.z) * saturate(BC.x) * 0.5;
+      }
+    }
+  }
+  { // (23/11 ru34vc) 535 LACA DE LA PELOTA, el sol: brillo chico y nitido del sol sobre la capa (GGX con la rugosidad de la laca, y535),
+    // ademas del brillo ancho del panel que ya pone el juego. Solo en la pelota (la marca la DLL: RT2.w = 1), solo donde le da el sol.
+    float4 BC = IniParams.Load(int2(535,0));
+    if (cmpOn && geoOk && BC.w > 0.5 && BC.x > 0.001 && tyC == 1 && gmC.w > 0.85 && dot(pLc_dir.xyz, pLc_dir.xyz) > 1e-6) {
+      float3 LdB = normalize(pLc_dir.xyz);
+      float3 HB = normalize(LdB - Vsk);
+      float nlB = saturate(dot(Nsk, LdB)), nhB = saturate(dot(Nsk, HB)), lhB = saturate(dot(LdB, HB));
+      float rB = clamp(BC.y > 0.0 ? BC.y : 0.07, 0.03, 0.4); float aB = rB * rB;
+      float dB = aB * aB / (3.14159265 * pow(nhB * nhB * (aB * aB - 1.0) + 1.0, 2.0));
+      float FB = 0.04 + 0.96 * pow(1.0 - lhB, 5.0);
+      float specB = dB * FB * 0.25 / max(lhB * lhB, 0.1);   // Kelemen: visibilidad simple de una capa lisa
+      float3 sunB = max(pLc_color.xyz, 0.0) * g_psScene.m_exposure.zzz;
+      r0.xyw += sunB * min(specB, 60.0) * nlB * pesShMn * saturate(BC.x);
     }
   }
   { // === PES21 (12/11) y436 b) BRILLO DEL CIELO EN EL CESPED: 151 salta el pasto (tipo 3). La cera de las hojas refleja el cielo en angulo

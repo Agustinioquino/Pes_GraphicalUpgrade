@@ -26,18 +26,42 @@ static std::atomic<bool> s_fresh{false};       // ya se dibujo en este cuadro
 // (15/11 o) relacion de aspecto de la PANTALLA: la textura de 960 x 540 se estira a toda la pantalla; con un monitor 21:9 (el de
 // Agustin, 2560 x 1080) la grilla se proyectaba como 16:9 y quedaba estirada de costado (no seguia a la camara como el jugador)
 static float s_asp = 16.0f / 9.0f;
+// (16/11 b, Agustin 18:21: "el jugador sigue viendose en 2d no 3d") la sombra de contacto iba en el origen, pero en el estudio del
+// Motor el jugador NO esta en el origen (video 15.15.42: parado sobre el eje X, ~1-2 m al costado; la mancha quedaba lejos de los pies
+// y el jugador parecia pegado). Ahora el centro de la sombra sale de los pies reales: el punto mas bajo del jugador en su profundidad
+// (borrada a 0, todo lo que no es 0 es el jugador) proyectado al piso con la misma camara. s_shX / s_shZ = centro en el piso (m)
+static float s_shX = 0.0f, s_shZ = 0.0f; static bool s_shOk = false;
+static float s_feetU = -1.0f, s_feetV = -1.0f;   // pies en la imagen (0..1), -1 = sin dato
 
 static void MotorDepthDiagTick();
+#ifndef MOTORGRID_TEST
+static void MotorFeetPoll(ID3D11DeviceContext* ctx);
+#else
+static void MotorFeetPoll(void*) {}
+#endif
 void MotorGridPresent() { s_fresh.store(false, std::memory_order_relaxed);
 #ifndef MOTORGRID_TEST
+    MotorVistaPresent();
+    MotorJugPresent();
     MotorDepthDiagTick();
 #endif
 }
 
+// (17/11) con el jugador en la escena principal (motorvista.cpp) no hay fondo del menu donde poner la grilla: se pinta la misma grilla
+// sobre fondo TRANSPARENTE y el editor la dibuja encima de la vista principal (MotorGridOverlay). s_ovl = ese modo.
+static bool s_ovl = false;
 static inline void Plot(int x, int y, uint32_t rgb, float a) {
     if ((unsigned)x >= (unsigned)kW || (unsigned)y >= (unsigned)kH || a <= 0.0f) return;
     uint32_t& d = s_px[(size_t)y * kW + x]; if (a > 1.0f) a = 1.0f;
     const int ia = (int)(a * 256.0f);
+    if (s_ovl) {      // transparente: color sin mezclar con el fondo, la opacidad se acumula
+        const int oa = (int)(d >> 24); const int na = std::min(255, oa + (((255 - oa) * ia) >> 8));
+        if (oa == 0) { d = ((uint32_t)na << 24) | (rgb & 0xffffffu); return; }
+        const int w = na > 0 ? std::min(256, (ia * 255) / std::max(1, na)) : 256;
+        const int r0 = (int)(d & 255), g0 = (int)((d >> 8) & 255), b0 = (int)((d >> 16) & 255);
+        const int r1 = r0 + ((((int)(rgb & 255)) - r0) * w >> 8), g1 = g0 + ((((int)((rgb >> 8) & 255)) - g0) * w >> 8), b1 = b0 + ((((int)((rgb >> 16) & 255)) - b0) * w >> 8);
+        d = ((uint32_t)na << 24) | (uint32_t)r1 | ((uint32_t)g1 << 8) | ((uint32_t)b1 << 16); return;
+    }
     const int r = (int)(d & 255), g = (int)((d >> 8) & 255), b = (int)((d >> 16) & 255);
     const int nr = r + ((((int)(rgb & 255)) - r) * ia >> 8), ng = g + ((((int)((rgb >> 8) & 255)) - g) * ia >> 8), nb = b + ((((int)((rgb >> 16) & 255)) - b) * ia >> 8);
     d = 0xff000000u | (uint32_t)nr | ((uint32_t)ng << 8) | ((uint32_t)nb << 16);
@@ -88,11 +112,30 @@ static void Seg(const Cam& c, const float* a, const float* b, uint32_t rgb, floa
 }
 
 // pinta el fondo y la grilla en s_px con la camara c
+static void Blob(const Cam& c, float cxw, float czw, float R, float str) {
+    const float asp = s_asp, hx = 0.5f * kW, hy = 0.5f * kH;
+    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+    for (int q = 0; q < 16; q++) { const float an = (float)q * 0.3926991f; const float w[3] = { cxw + cosf(an) * R, 0.0f, czw + sinf(an) * R };
+        const float d[3] = { w[0] - c.pos[0], w[1] - c.pos[1], w[2] - c.pos[2] };
+        const float z = d[0] * c.f[0] + d[1] * c.f[1] + d[2] * c.f[2]; if (z < 0.05f) { x0 = 0; y0 = 0; x1 = (float)kW; y1 = (float)kH; break; }
+        const float sx = hx + (d[0] * c.r[0] + d[1] * c.r[1] + d[2] * c.r[2]) / (z * c.th * asp) * hx, sy = hy - (d[0] * c.u[0] + d[1] * c.u[1] + d[2] * c.u[2]) / (z * c.th) * hy;
+        x0 = std::min(x0, sx); x1 = std::max(x1, sx); y0 = std::min(y0, sy); y1 = std::max(y1, sy); }
+    const int ix0 = std::max(0, (int)x0 - 2), ix1 = std::min(kW - 1, (int)x1 + 2), iy0 = std::max(0, (int)y0 - 2), iy1 = std::min(kH - 1, (int)y1 + 2);
+    for (int y = iy0; y <= iy1; y++) { const float b = (hy - (float)y) / hy * c.th;
+        for (int x = ix0; x <= ix1; x++) { const float a = ((float)x - hx) / hx * c.th * asp;
+            const float dir[3] = { c.f[0] + c.r[0] * a + c.u[0] * b, c.f[1] + c.r[1] * a + c.u[1] * b, c.f[2] + c.r[2] * a + c.u[2] * b };
+            if (dir[1] > -1e-5f) continue; const float t = -c.pos[1] / dir[1]; const float gx = c.pos[0] + dir[0] * t, gz = c.pos[2] + dir[2] * t;
+            const float dd = sqrtf((gx - cxw) * (gx - cxw) + (gz - czw) * (gz - czw)) / R; if (dd >= 1.0f) continue;
+            const float k = (1.0f - dd) * (1.0f - dd) * str;      // mas oscura al centro, se desvanece hacia el borde
+            uint32_t& px = s_px[(size_t)y * kW + x]; const int m = (int)((1.0f - k) * 256.0f);
+            const uint32_t al = s_ovl ? std::max<uint32_t>(px >> 24, (uint32_t)(k * 255.0f)) : 255u;
+            px = (al << 24) | (uint32_t)(((px & 255) * m) >> 8) | ((uint32_t)((((px >> 8) & 255) * m) >> 8) << 8) | ((uint32_t)((((px >> 16) & 255) * m) >> 8) << 16); } }
+}
 static void GridPaint(const Cam& c) {
     // --- fondo: gris oscuro con un degrade suave hacia arriba ---
     for (int y = 0; y < kH; y++) {
         const float t = (float)y / (float)(kH - 1); const int v = (int)(30.0f + 14.0f * (1.0f - t));
-        const uint32_t col = 0xff000000u | (uint32_t)v | ((uint32_t)v << 8) | ((uint32_t)(v + 3) << 16);
+        const uint32_t col = s_ovl ? 0u : (0xff000000u | (uint32_t)v | ((uint32_t)v << 8) | ((uint32_t)(v + 3) << 16));
         uint32_t* row = &s_px[(size_t)y * kW]; for (int x = 0; x < kW; x++) row[x] = col;
     }
     // --- grilla (15/11 o, Agustin 05:14: "al desactivar la grilla del piso todo se pone negro, la grilla a cierta distancia pierde la
@@ -177,29 +220,95 @@ static void GridPaint(const Cam& c) {
     // --- (15/11 r, Agustin 19:22: "pq el jugador parece un png") sombra de contacto del jugador sobre el piso: el jugador lo dibuja el
     // visor del Editar en su propia imagen y se pega encima de este fondo, sin tocar el piso. Una mancha oscura suave en el piso
     // (y = 0) alrededor de los pies (el jugador del visor esta en el origen) lo apoya. Por pixel: rayo de la camara contra el piso.
-    {   const float R = 0.75f; const float asp = s_asp, hx = 0.5f * kW, hy = 0.5f * kH;
-        if (c.pos[1] > 0.05f) {
-            float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f; bool any = false;
-            for (int q = 0; q < 16; q++) { const float an = (float)q * 0.3926991f; const float w[3] = { cosf(an) * R, 0.0f, sinf(an) * R };
-                const float d[3] = { w[0] - c.pos[0], w[1] - c.pos[1], w[2] - c.pos[2] };
-                const float z = d[0] * c.f[0] + d[1] * c.f[1] + d[2] * c.f[2]; if (z < 0.05f) { any = false; x0 = 0; y0 = 0; x1 = (float)kW; y1 = (float)kH; break; }
-                const float sx = hx + (d[0] * c.r[0] + d[1] * c.r[1] + d[2] * c.r[2]) / (z * c.th * asp) * hx, sy = hy - (d[0] * c.u[0] + d[1] * c.u[1] + d[2] * c.u[2]) / (z * c.th) * hy;
-                x0 = std::min(x0, sx); x1 = std::max(x1, sx); y0 = std::min(y0, sy); y1 = std::max(y1, sy); any = true; }
-            (void)any;
-            const int ix0 = std::max(0, (int)x0 - 2), ix1 = std::min(kW - 1, (int)x1 + 2), iy0 = std::max(0, (int)y0 - 2), iy1 = std::min(kH - 1, (int)y1 + 2);
-            for (int y = iy0; y <= iy1; y++) { const float b = (hy - (float)y) / hy * c.th;
-                for (int x = ix0; x <= ix1; x++) { const float a = ((float)x - hx) / hx * c.th * asp;
-                    const float dir[3] = { c.f[0] + c.r[0] * a + c.u[0] * b, c.f[1] + c.r[1] * a + c.u[1] * b, c.f[2] + c.r[2] * a + c.u[2] * b };
-                    if (dir[1] > -1e-5f) continue; const float t = -c.pos[1] / dir[1]; const float gx = c.pos[0] + dir[0] * t, gz = c.pos[2] + dir[2] * t;
-                    const float dd = sqrtf(gx * gx + gz * gz) / R; if (dd >= 1.0f) continue;
-                    const float k = (1.0f - dd) * (1.0f - dd) * 0.55f;      // mas oscura al centro, se desvanece hacia el borde
-                    uint32_t& px = s_px[(size_t)y * kW + x]; const int m = (int)((1.0f - k) * 256.0f);
-                    px = 0xff000000u | (uint32_t)(((px & 255) * m) >> 8) | ((uint32_t)((((px >> 8) & 255) * m) >> 8) << 8) | ((uint32_t)((((px >> 16) & 255) * m) >> 8) << 16); } } } }
+    // (17/11 07:13, Agustin: "los jugadores no parecen estar arriba de una grilla") con la grilla encima (jugadores propios en la escena
+    // principal) va una mancha por cada jugador propio, oscura y transparente; con la grilla en la composicion queda debajo de ellos.
+    if (c.pos[1] > 0.05f) {
+        if (!s_ovl) Blob(c, s_shX, s_shZ, 0.75f, 0.55f);
+#ifndef MOTORGRID_TEST
+        else for (int i = 0; i < kMotorPjMax; i++) { float p[3], yw, sc; if (MotorPjGet(i, p, &yw, &sc) && fabsf(p[1]) < 0.3f) Blob(c, p[0], p[2], 0.55f * std::clamp(sc, 0.3f, 3.0f), 0.6f); }
+#endif
+    }
 }
 
 #ifndef MOTORGRID_TEST
 // fondo del estudio del Motor para este cuadro (nullptr = no se pudo: va el negro)
-ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx) {
+static ID3D11ShaderResourceView* GridSRV(ID3D11DeviceContext* ctx);
+ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx) { s_ovl = false; return GridSRV(ctx); }
+// (17/11) la grilla sola, transparente, para dibujarla encima de la vista principal (jugador en la escena principal). Sin grilla
+// (motor_grilla = 0) no hay nada que dibujar.
+ID3D11ShaderResourceView* MotorGridOverlay(ID3D11DeviceContext* ctx) {
+    if (g_cfg.motorGrid == 0) return nullptr;
+    s_ovl = true; ID3D11ShaderResourceView* v = GridSRV(ctx);
+    static int nl = 0; if (v && nl++ == 0) Log("motor (grilla): jugador en la escena principal: la grilla se dibuja encima de la vista principal");
+    return v;
+}
+// (17/11 07:08, Agustin: "por ese problema con el z buffer puede ser lo de la grilla tambien") la grilla iba ENCIMA de toda la imagen
+// (ImGui), sin profundidad: tapaba a los jugadores. Ahora la misma textura se pone en t49 de la composicion diferida (619b / f807,
+// pes_vista_motor.hlsli PESVistaGrilla) y el shader la mezcla solo donde no hay nada dibujado (z buffer vacio): los jugadores la tapan.
+// Si en 0,3 s ninguna composicion la tomo (shader viejo, "Ver original"), se vuelve a dibujar encima como antes.
+static std::mutex s_ovMx; static ID3D11ShaderResourceView* s_ovSrv = nullptr; static double s_ovT = -1.0e9; static std::atomic<double> s_ovBoundT{ -1.0e9 };
+void MotorGridOverlayStore(ID3D11ShaderResourceView* v) {
+    std::lock_guard<std::mutex> lk(s_ovMx);
+    if (v) v->AddRef(); if (s_ovSrv) s_ovSrv->Release(); s_ovSrv = v; s_ovT = Now();
+}
+ID3D11ShaderResourceView* MotorGridCompSRV() {
+    std::lock_guard<std::mutex> lk(s_ovMx);
+    if (!s_ovSrv || Now() - s_ovT > 0.3) return nullptr;
+    s_ovSrv->AddRef(); s_ovBoundT.store(Now(), std::memory_order_relaxed);
+    static int nl = 0; if (nl++ == 0) Log("motor (grilla): la grilla va en la composicion (t49) con la profundidad: los jugadores la tapan");
+    return s_ovSrv;
+}
+bool MotorGridCompBound() { return Now() - s_ovBoundT.load(std::memory_order_relaxed) < 0.3; }
+// (17/11 b) la camara con la que se dibujo la grilla por ultima vez, para poner cosas en el piso con la MISMA proyeccion (los iconos de
+// mover / girar / escalar del jugador, motorgizmo.cpp). u, v = 0..1 de la pantalla.
+static std::mutex s_camMx; static Cam s_camLast{}; static float s_camAsp = 16.0f / 9.0f; static double s_camT = -1.0e9;
+bool MotorGridProject(const float* w, float* u, float* v) {
+    std::lock_guard<std::mutex> lk(s_camMx); if (Now() - s_camT > 0.5) return false; const Cam& c = s_camLast;
+    const float d[3] = { w[0] - c.pos[0], w[1] - c.pos[1], w[2] - c.pos[2] };
+    const float z = d[0] * c.f[0] + d[1] * c.f[1] + d[2] * c.f[2]; if (z < 0.05f || c.th < 1e-5f) return false;
+    const float x = d[0] * c.r[0] + d[1] * c.r[1] + d[2] * c.r[2], y = d[0] * c.u[0] + d[1] * c.u[1] + d[2] * c.u[2];
+    *u = 0.5f + 0.5f * x / (z * c.th * s_camAsp); *v = 0.5f - 0.5f * y / (z * c.th); return true;
+}
+bool MotorGridRay(float u, float v, float* o, float* dir) {
+    std::lock_guard<std::mutex> lk(s_camMx); if (Now() - s_camT > 0.5) return false; const Cam& c = s_camLast;
+    const float a = (u * 2.0f - 1.0f) * c.th * s_camAsp, b = (1.0f - v * 2.0f) * c.th;
+    for (int i = 0; i < 3; i++) { o[i] = c.pos[i]; dir[i] = c.f[i] + c.r[i] * a + c.u[i] * b; }
+    return true;
+}
+
+// (17/11 07:13, Agustin con video: "al mover el jugador los iconos de abajo se sienten desconectados", "los jugadores no parecen estar
+// arriba de una grilla", "la vista ortografica y perspectiva no afecta a los jugadores") con los jugadores en la escena principal la
+// grilla y los iconos se proyectaban con la camara que se le manda al visor, pero los jugadores los dibuja la vista principal con SU
+// proyeccion: dos camaras distintas, por eso no coincidian. Ahora la camara de la grilla sale de la matriz con la que el juego dibujo la
+// escena (SceneCB m_projectionView, la misma con la que la vista de huesos cae justo sobre los jugadores): centro = M^-1 (0, 0, 1, 0),
+// adelante / derecha / arriba y campo de vision desproyectando puntos de la pantalla.
+static bool Inv4(const double* m, double* o) {
+    double a[4][8]; for (int r = 0; r < 4; r++) for (int c = 0; c < 8; c++) a[r][c] = c < 4 ? m[r * 4 + c] : (c - 4 == r ? 1.0 : 0.0);
+    for (int c = 0; c < 4; c++) { int pv = c; for (int r = c + 1; r < 4; r++) if (fabs(a[r][c]) > fabs(a[pv][c])) pv = r;
+        if (fabs(a[pv][c]) < 1e-12) return false; if (pv != c) for (int k = 0; k < 8; k++) std::swap(a[pv][k], a[c][k]);
+        const double d = a[c][c]; for (int k = 0; k < 8; k++) a[c][k] /= d;
+        for (int r = 0; r < 4; r++) if (r != c) { const double f = a[r][c]; if (f != 0.0) for (int k = 0; k < 8; k++) a[r][k] -= f * a[c][k]; } }
+    for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++) o[r * 4 + c] = a[r][c + 4]; return true;
+}
+static bool CamFromScene(Cam& c, float& asp) {
+    std::vector<float> S; if (!NamedCBRead("SceneCB", S) || S.size() < 16) return false;
+    double M[16], I[16]; for (int i = 0; i < 16; i++) M[i] = S[i];
+    if (!Inv4(M, I)) return false;
+    auto un = [&](double x, double y, double z, double w, double* o) { double h[4]; for (int r = 0; r < 4; r++) h[r] = I[r * 4] * x + I[r * 4 + 1] * y + I[r * 4 + 2] * z + I[r * 4 + 3] * w;
+        if (w == 0.0) { if (fabs(h[3]) < 1e-12) return false; } else if (fabs(h[3]) < 1e-12) return false; for (int k = 0; k < 3; k++) o[k] = h[k] / h[3]; return true; };
+    double C[3], p0[3], pr[3], pu[3];
+    if (!un(0, 0, 1, 0, C) || !un(0, 0, 0.5, 1, p0) || !un(1, 0, 0.5, 1, pr) || !un(0, 1, 0.5, 1, pu)) return false;
+    double f[3] = { p0[0] - C[0], p0[1] - C[1], p0[2] - C[2] }; const double lf = sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]); if (lf < 1e-6 || lf > 1e6) return false;
+    for (double& v : f) v /= lf;
+    double vr[3] = { pr[0] - C[0], pr[1] - C[1], pr[2] - C[2] }, vu[3] = { pu[0] - C[0], pu[1] - C[1], pu[2] - C[2] };
+    const double fr = vr[0] * f[0] + vr[1] * f[1] + vr[2] * f[2], fu = vu[0] * f[0] + vu[1] * f[1] + vu[2] * f[2]; if (fr <= 1e-6 || fu <= 1e-6) return false;
+    double r[3], u[3]; for (int k = 0; k < 3; k++) { r[k] = vr[k] / fr - f[k]; u[k] = vu[k] / fu - f[k]; }     // en el plano a distancia 1
+    const double tx = sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]), ty = sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]); if (tx < 1e-5 || ty < 1e-5 || ty > 50.0) return false;
+    for (int k = 0; k < 3; k++) { c.pos[k] = (float)C[k]; c.f[k] = (float)f[k]; c.r[k] = (float)(r[k] / tx); c.u[k] = (float)(u[k] / ty); }
+    c.th = (float)ty; asp = (float)(tx / ty);
+    return asp > 0.3f && asp < 6.0f;
+}
+static ID3D11ShaderResourceView* GridSRV(ID3D11DeviceContext* ctx) {
     if (!g_dev.dev || !ctx) return nullptr;
     if (!s_tried) {
         s_tried = true;
@@ -237,10 +346,31 @@ ID3D11ShaderResourceView* MotorGridSRV(ID3D11DeviceContext* ctx) {
                     yaw = atan2f(f[0], f[2]); pitch = asinf(std::clamp(f[1], -1.0f, 1.0f));
                     static int nl = 0; if (nl++ < 3) Log("motor (grilla): con la camara del visor: campo de vision %.4f, aspecto %.3f (pantalla %u x %u)", wf, s_asp, g_bbW, g_bbH);
                 } } } }
+    if (s_ovl) { Cam cs = c; float as = s_asp;     // jugadores en la escena principal: la camara con la que el juego dibujo esta escena
+        // (17/11 18:17, Agustin: "los huesos siguen desplazados"; orto sin efecto en los jugadores) la camara de SceneCB contra la que se
+        // le mando al visor: si el campo o el lugar no coinciden, el SceneCB leido es de otra pasada (el visor) o la vista principal no
+        // toma el campo de vision de la camara libre. Cada 4 s, 30 veces.
+        { static double t = 0.0; static int nl = 0; Cam dc = c; float da = s_asp; float wp[3], wt[3], wu[3], wf = 0.0f, wa = 0.0f;
+          if (Now() - t > 4.0 && nl < 30 && CamFromScene(dc, da)) { t = Now(); nl++; const bool wok = FreeCamWrittenCam(wp, wt, wu, &wf, &wa);
+            Log("motor (grilla): SceneCB lugar (%.2f, %.2f, %.2f) campo %.4f aspecto %.3f | mandada al visor %s lugar (%.2f, %.2f, %.2f) campo %.4f aspecto %.3f | orto %d",
+                dc.pos[0], dc.pos[1], dc.pos[2], 2.0f * atanf(dc.th), da, wok ? "si" : "no", wp[0], wp[1], wp[2], wf, wa, FreeCamOrtho() ? 1 : 0); } }
+        if (CamFromScene(cs, as)) { c = cs; s_asp = as; yaw = atan2f(c.f[0], c.f[2]); pitch = asinf(std::clamp(c.f[1], -1.0f, 1.0f));
+            static int nl = 0; if (nl++ < 3) Log("motor (grilla): camara sacada de la escena del juego: (%.2f, %.2f, %.2f) campo %.4f aspecto %.3f", c.pos[0], c.pos[1], c.pos[2], 2.0f * atanf(c.th), s_asp); }
+        else { static int nl = 0; if (nl++ < 3) Log("motor (grilla): no pude sacar la camara de SceneCB: queda la del visor"); } }
+    { std::lock_guard<std::mutex> lk(s_camMx); s_camLast = c; s_camAsp = s_asp; s_camT = Now(); }
+    if (!s_ovl) MotorFeetPoll(ctx);
+    if (!s_ovl && s_feetU >= 0.0f) {   // pies en la imagen -> rayo de la camara -> piso (y = 0)
+        const float a = (s_feetU * 2.0f - 1.0f) * c.th * s_asp, b = (1.0f - s_feetV * 2.0f) * c.th;
+        const float dir[3] = { c.f[0] + c.r[0] * a + c.u[0] * b, c.f[1] + c.r[1] * a + c.u[1] * b, c.f[2] + c.r[2] * a + c.u[2] * b };
+        if (dir[1] < -1e-4f && c.pos[1] > 0.0f) { const float t = -c.pos[1] / dir[1]; const float gx = c.pos[0] + dir[0] * t, gz = c.pos[2] + dir[2] * t;
+            if (fabsf(gx) < 50.0f && fabsf(gz) < 50.0f) {
+                if (!s_shOk || fabsf(gx - s_shX) + fabsf(gz - s_shZ) > 0.01f) { static int nl = 0; if (nl++ < 6) Log("motor (sombra): pies del jugador en la imagen (%.3f, %.3f) -> piso (%.2f, %.2f) m", s_feetU, s_feetV, gx, gz); }
+                s_shX = gx; s_shZ = gz; s_shOk = true; } } }
     // (15/11 o) si la camara y las opciones no cambiaron desde el ultimo dibujo, la textura ya esta bien: no se rehace
-    {   struct Key { float p[3], yaw, pitch, th, cell, asp, u[3]; int on, size, alpha, major, axes; };
-        static Key s_last{}; static bool s_have = false; Key kk{}; memcpy(kk.p, c.pos, sizeof kk.p); kk.yaw = yaw; kk.pitch = pitch; kk.th = c.th; kk.cell = g_cfg.motorGridCell; kk.asp = s_asp; memcpy(kk.u, c.u, sizeof kk.u);
-        kk.on = g_cfg.motorGrid; kk.size = g_cfg.motorGridSize; kk.alpha = g_cfg.motorGridAlpha; kk.major = g_cfg.motorGridMajor; kk.axes = g_cfg.motorGridAxes;
+    {   struct Key { float p[3], yaw, pitch, th, cell, asp, u[3], sh[2], pj; int on, size, alpha, major, axes, ovl; };
+        static Key s_last{}; static bool s_have = false; Key kk{}; memcpy(kk.p, c.pos, sizeof kk.p); kk.yaw = yaw; kk.pitch = pitch; kk.th = c.th; kk.cell = g_cfg.motorGridCell; kk.asp = s_asp; memcpy(kk.u, c.u, sizeof kk.u); kk.sh[0] = s_shX; kk.sh[1] = s_shZ;
+        if (s_ovl) for (int i = 0; i < kMotorPjMax; i++) { float p[3], yw, sc; if (MotorPjGet(i, p, &yw, &sc)) kk.pj += (p[0] * 1.37f + p[1] * 2.11f + p[2] * 3.07f + sc) * (float)(i + 1); }   // las sombras siguen a los jugadores
+        kk.on = g_cfg.motorGrid; kk.size = g_cfg.motorGridSize; kk.alpha = g_cfg.motorGridAlpha; kk.major = g_cfg.motorGridMajor; kk.axes = g_cfg.motorGridAxes; kk.ovl = s_ovl ? 1 : 0;
         if (s_have && memcmp(&kk, &s_last, sizeof kk) == 0) return s_srv;
         s_last = kk; s_have = true; }
     GridPaint(c);
@@ -267,7 +397,58 @@ static void DdDesc(ID3D11View* v, uint32_t& w, uint32_t& h, uint32_t& f, uintptr
     ID3D11Texture2D* t = nullptr; r->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t); r->Release();
     if (t) { D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); w = d.Width; h = d.Height; f = (uint32_t)d.Format; t->Release(); }
 }
+static std::atomic<bool> s_feetOn{false};                 // Motor abierto (lo pone MotorDepthDiagTick en cada Present)
+static ID3D11Resource* s_feetDepth = nullptr; static std::mutex s_feetMx;   // profundidad con la que se dibuja la imagen del jugador
+static ID3D11Texture2D* s_feetStage = nullptr; static D3D11_TEXTURE2D_DESC s_feetDesc{}; static bool s_feetPend = false; static double s_feetT = 0.0;
+static void FeetNoteRT(ID3D11RenderTargetView* rv, ID3D11DepthStencilView* d) {
+    const uintptr_t pi = s_ddPlayerImg.load(std::memory_order_relaxed); if (!pi || !rv || !d) return;
+    ID3D11Resource* r = nullptr; rv->GetResource(&r); if (!r) return; const bool mine = (uintptr_t)r == pi; r->Release(); if (!mine) return;
+    ID3D11Resource* dr = nullptr; d->GetResource(&dr); if (!dr) return;
+    std::lock_guard<std::mutex> lk(s_feetMx);
+    if (dr == s_feetDepth) { dr->Release(); return; }
+    if (s_feetDepth) s_feetDepth->Release(); s_feetDepth = dr;   // queda con su referencia
+    if (s_feetStage) { s_feetStage->Release(); s_feetStage = nullptr; } s_feetPend = false;
+    Log("motor (sombra): profundidad del jugador %p", (void*)dr);
+}
+// cada 0.2 s: copia la profundidad del jugador a una textura de lectura y, uno o mas cuadros despues (sin esperar a la placa), busca
+// el punto mas bajo del jugador: el promedio de x de lo que hay en el 3 % de abajo de su caja
+static void MotorFeetPoll(ID3D11DeviceContext* ctx) {
+    if (!ctx || !g_dev.dev) return;
+    std::lock_guard<std::mutex> lk(s_feetMx); if (!s_feetDepth) return;
+    const double now = Now();
+    if (!s_feetStage) {
+        ID3D11Texture2D* t = nullptr; s_feetDepth->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&t); if (!t) return;
+        D3D11_TEXTURE2D_DESC d; t->GetDesc(&d); t->Release();
+        if (d.SampleDesc.Count != 1 || (d.Format != DXGI_FORMAT_R32G8X24_TYPELESS && d.Format != DXGI_FORMAT_R32_TYPELESS) || d.Width < 64 || d.Height < 64) {
+            static int nl = 0; if (nl++ < 2) Log("motor (sombra): profundidad %ux%u fmt %d muestras %u: no se lee", d.Width, d.Height, (int)d.Format, d.SampleDesc.Count);
+            s_feetDepth->Release(); s_feetDepth = nullptr; return; }
+        d.MipLevels = 1; d.ArraySize = 1; d.Usage = D3D11_USAGE_STAGING; d.BindFlags = 0; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; d.MiscFlags = 0;
+        if (FAILED(g_dev.dev->CreateTexture2D(&d, nullptr, &s_feetStage)) || !s_feetStage) { s_feetStage = nullptr; static int nl = 0; if (nl++ < 2) Log("motor (sombra): no se pudo crear la copia de lectura"); return; }
+        s_feetDesc = d;
+    }
+    if (!s_feetPend) { if (now - s_feetT < 0.2) return; ctx->CopyResource(s_feetStage, s_feetDepth); s_feetPend = true; s_feetT = now; return; }
+    D3D11_MAPPED_SUBRESOURCE ms{};
+    const HRESULT hr = ctx->Map(s_feetStage, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &ms);
+    if (hr == DXGI_ERROR_WAS_STILL_DRAWING) return;
+    s_feetPend = false; if (FAILED(hr) || !ms.pData) return;
+    const UINT W = s_feetDesc.Width, H = s_feetDesc.Height, bpp = s_feetDesc.Format == DXGI_FORMAT_R32_TYPELESS ? 4 : 8;
+    int x0 = (int)W, x1 = -1, y0 = (int)H, y1 = -1; long cnt = 0, tot = 0;
+    for (UINT y = 0; y < H; y += 2) { const uint8_t* row = (const uint8_t*)ms.pData + (size_t)y * ms.RowPitch;
+        for (UINT x = 0; x < W; x += 2) { float z; memcpy(&z, row + (size_t)x * bpp, 4); tot++;
+            if (z > 0.0f && z == z) { cnt++; if ((int)x < x0) x0 = (int)x; if ((int)x > x1) x1 = (int)x; if ((int)y < y0) y0 = (int)y; if ((int)y > y1) y1 = (int)y; } } }
+    float fu = -1.0f, fv = -1.0f;
+    if (cnt > 50 && cnt < tot * 2 / 5 && y1 - y0 > 20) {   // si casi todo tiene profundidad hay piso u otra cosa: no sirve
+        const int band = std::max(4, (y1 - y0) * 3 / 100); double sx = 0; long n = 0;
+        for (int y = std::max(y0, y1 - band); y <= y1; y += 2) { const uint8_t* row = (const uint8_t*)ms.pData + (size_t)y * ms.RowPitch;
+            for (int x = x0; x <= x1; x += 2) { float z; memcpy(&z, row + (size_t)x * bpp, 4); if (z > 0.0f && z == z) { sx += x; n++; } } }
+        if (n > 0) { fu = (float)(sx / n + 0.5) / (float)W; fv = (float)(y1 + 1) / (float)H; }
+    }
+    ctx->Unmap(s_feetStage, 0);
+    { static int nl = 0; if (nl++ < 4) Log("motor (sombra): profundidad leida: %ld de %ld puntos con jugador, caja x %d..%d y %d..%d -> pies %s", cnt, tot, x0, x1, y0, y1, fu >= 0.0f ? "si" : "NO (se deja la sombra donde estaba)"); }
+    if (fu >= 0.0f) { s_feetU = fu; s_feetV = fv; }
+}
 void MotorDepthDiagRT(UINT n, ID3D11RenderTargetView* const* v, ID3D11DepthStencilView* d) {
+    if (s_feetOn.load(std::memory_order_relaxed) && n > 0 && v && d) FeetNoteRT(v[0], d);
     if (!s_ddOn.load(std::memory_order_relaxed) || !d) return;
     DdKey k{}; DdDesc(n > 0 && v ? v[0] : nullptr, k.rw, k.rh, k.rf, k.rres); DdDesc(d, k.dw, k.dh, k.df, k.dres);
     if (k.dw < 512) return;
@@ -280,6 +461,7 @@ void MotorDepthDiagClear(ID3D11DepthStencilView* d, float depth) {
 }
 static void MotorDepthDiagTick() {
     const double now = Now();
+    s_feetOn.store(MotorPageActive(), std::memory_order_relaxed);
     if (!MotorPageActive() || s_ddDumps >= 4) { s_ddOn.store(false); s_ddT0 = 0.0; return; }
     if (s_ddT0 == 0.0) { s_ddT0 = now; return; }
     if (!s_ddOn.load() && now - s_ddT0 > 20.0) { std::lock_guard<std::mutex> lk(s_ddMx); s_ddRt.clear(); s_ddClear.clear(); s_ddOn.store(true); s_ddT0 = now; return; }

@@ -233,6 +233,7 @@ void OverlayResize() { if (s_rtv) { s_rtv->Release(); s_rtv = nullptr; } }
 static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     // (1/11) rueda del mouse para el zoom de la camara libre (mensaje normal o raw input, por si el juego pide NOLEGACY)
     // (11/11) sin camara libre la rueda va a los menus nativos del juego (menumouse.cpp: arriba / abajo)
+    if (!g_menuOpen && m == WM_CHAR && MotorUiChar((unsigned)w)) return 0;      // (17/11 07:27) buscador de clips del Motor
     if (!g_menuOpen) {
         int wd = 0;
         if (m == WM_MOUSEWHEEL) wd = (int)GET_WHEEL_DELTA_WPARAM(w);
@@ -244,7 +245,7 @@ static LRESULT CALLBACK MenuProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         }
         if (wd != 0) { if (MotorUiWheel(wd)) {} else if (FreeCamActive()) FreeCamWheel(wd); else MenuMouseWheel(wd); }   // (15/11 h) sobre un panel del editor del Motor la rueda es del panel
     }
-    if ((g_menuOpen || g_inspectOn) && s_init) {
+    if ((g_menuOpen || g_inspectOn || MotorLabWantsInput()) && s_init) {      // (21/11) laboratorio de animaciones: su ventana usa el mouse
         ImGui_ImplWin32_WndProcHandler(h, m, w, l);
         ImGuiIO& io = ImGui::GetIO();
         bool mouse = m >= WM_MOUSEFIRST && m <= WM_MOUSELAST;
@@ -1927,6 +1928,10 @@ static void DrawCards(const std::vector<int>& ids, bool labels) {
 static void DrawToolsPage() {
     PageTitle(kIcoTools, TRS("Herramientas"), TRS("Para ver que hace el mod y pasarle datos a Claude; no hacen falta para jugar."));
     ImGui::Spacing();
+    if (ImGui::CollapsingHeader(TRS("Laboratorio de animaciones"), ImGuiTreeNodeFlags_DefaultOpen)) {      // (21/11 3icxbh) motorlab.cpp
+        if (ImGui::Button(TRS(MotorLabWantsInput() ? "Cerrar el laboratorio (F8)" : "Abrir el laboratorio (F8)"), ImVec2(240 * UIK(), 0))) MotorLabToggle();
+        ImGui::TextWrapped("%s", TRS("En un partido: banca real del estadio con jugadores del Motor sentados, cambiar sus animaciones y ver nombres, cuadros, esqueleto y valores encima de cada uno. Necesita Estadio > Banco de suplentes = Si."));
+    }
     if (ImGui::CollapsingHeader(TRS("Inspector y catalogo de shaders"), ImGuiTreeNodeFlags_DefaultOpen)) {
         { bool ins = g_inspectOn.load(); if (ins) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.25f, 0.2f, 1));
           if (ImGui::Button(ins ? "Inspector: ON" : "Inspector", ImVec2(130 * UIK(), 0))) { g_inspectOn = !ins; s_status = TRS(ins ? "Inspector apagado" : "Inspector visual: flechas sobre cada parte conocida; clic en una ficha para ver sus texturas"); }
@@ -2377,11 +2382,17 @@ static void DrawMenu() {
             ImGui::EndPopup();
         }
         if (ImGui::GetContentRegionAvail().x - ImGui::GetItemRectMax().x + ImGui::GetWindowPos().x > 210.0f * UIK()) ImGui::SameLine();   // (08/11) si no entra, el buscador baja a su propia fila
+        const bool searchByKb = s_focusSearch;   // (16/11) Ctrl+F: el buscador se abre con el teclado, nunca con el teclado en pantalla
         if (s_focusSearch) { ImGui::SetKeyboardFocusHere(); s_focusSearch = false; }
         ImGui::SetNextItemWidth(std::max(140.0f * UIK(), ImGui::GetContentRegionAvail().x - (s_search[0] ? ImGui::GetFrameHeight() + 6.0f * UIK() : 0.0f)));
         ImGui::InputTextWithHint("##buscar", IcoL(kIcoSearch, TRS(PadUi() && g_cfg.menuPad ? "Buscar opcion (OPTIONS: teclado del mando)" : "Buscar opcion (Ctrl+F)")).c_str(), s_search, sizeof(s_search));
         // (14/11) con el mando: elegir el buscador (cruz / triangulo) abre el teclado en pantalla; mientras esta abierto el campo se suelta
-        if (ImGui::IsItemActivated() && s_pad.connected && g_cfg.menuPad && GImGui->NavInputSource == ImGuiInputSource_Gamepad) MvVkOpen();
+        // (16/11, Agustin: "el menu de insert detecta el mando todo el tiempo en el buscador aunque no este tocando el mando y quiera usar
+        // el teclado") ImGui deja NavInputSource en "mando" desde el ultimo boton del mando y no lo cambia con el mouse ni con las letras:
+        // un clic o Ctrl+F en el buscador abria el teclado en pantalla y soltaba el campo. Ahora solo se abre si lo ultimo tocado es el mando
+        // y el buscador se eligio con el mando (no con clic ni Ctrl+F); y si se vuelve al teclado / mouse, el teclado en pantalla se cierra.
+        if (ImGui::IsItemActivated() && PadUi() && g_cfg.menuPad && !searchByKb && !ImGui::IsMouseClicked(ImGuiMouseButton_Left) && GImGui->NavInputSource == ImGuiInputSource_Gamepad) MvVkOpen();
+        if (MvVkIsOpen() && !PadUi()) MvVkClose();
         if (MvVkIsOpen() && ImGui::IsItemActive()) ImGui::ClearActiveID();
         if (s_search[0]) { ImGui::SameLine(0, 4.0f * UIK()); if (ImGui::Button(s_iconsOk ? (Ico(kIcoX) + "##limpiar").c_str() : "x", ImVec2(ImGui::GetFrameHeight(), 0))) s_search[0] = 0; }
     }
@@ -2748,6 +2759,47 @@ static bool SkCopy(void* dst, const void* src, size_t n) {
     if (!SkReadable(src, n)) return false;
     __try { memcpy(dst, src, n); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+// (17/11 06:58, Agustin con capturas: "faltan los nombres", "cuerpo ahora solo es los brazos", "ropa esta mal") el nombre del hueso no
+// salia nunca: + 0x08 no daba texto en estos esqueletos, y como el grupo del cuerpo se sacaba del nombre, todo el cuerpo caia en
+// "Ropa". Ahora se prueban, en orden, el texto en + 0x08, el texto del puntero que hay ahi (cadena con cabecera) y + 0x08 / + 0x10
+// dentro de ese puntero; si nada da texto, el hash del hueso (+ 0x10, StrCode32) contra una tabla de nombres candidatos. Las
+// primeras veces se anotan en el log los bytes del hueso para saber el formato real.
+#include "skbonenames.inc"
+static bool SkIdent(const char* t, char* out, int n) {
+    int q = 0; while (q < n - 1 && t[q] && ((t[q] >= 'a' && t[q] <= 'z') || (t[q] >= 'A' && t[q] <= 'Z') || (t[q] >= '0' && t[q] <= '9') || t[q] == '_' || t[q] == '.')) q++;
+    if (q < 2 || (t[q] != 0 && q < n - 1)) return false;
+    memcpy(out, t, (size_t)q); out[q] = 0; return true;
+}
+static bool SkBoneName(const char* bone, char* out, int n) {
+    const char* np = nullptr; char tb[48] = {};
+    if (SkCopy(&np, bone + 0x08, 8) && np) {
+        if (SkCopy(tb, np, 40) && SkIdent(tb, out, n)) return true;
+        const char* p2 = nullptr;
+        if (SkCopy(&p2, np, 8) && p2 && SkCopy(tb, p2, 40) && SkIdent(tb, out, n)) return true;
+        if (SkCopy(tb, np + 0x08, 40) && SkIdent(tb, out, n)) return true;
+        if (SkCopy(tb, np + 0x10, 40) && SkIdent(tb, out, n)) return true;
+    }
+    uint32_t h = 0;
+    if (SkCopy(&h, bone + 0x10, 4) && h) {
+        int lo = 0, hi = (int)(sizeof kSkNames / sizeof kSkNames[0]) - 1;
+        while (lo <= hi) { const int m = (lo + hi) / 2; if (kSkNames[m].h == h) { snprintf(out, n, "%s", kSkNames[m].n); return true; } if (kSkNames[m].h < h) lo = m + 1; else hi = m - 1; }
+        snprintf(out, n, "#%08X", h); return false;
+    }
+    return false;
+}
+// (17/11 07:55, Agustin: "mejora como se plasman los huesos, los grupos que no se deformen que sean entendibles") el grupo sale del
+// NOMBRE en los cuatro esqueletos (antes solo en el del cuerpo; el de la "cara" trae tambien pecho, cuello y cabeza, y el de las manos el
+// antebrazo): 1 cara (skf_), 2 cuerpo (sk_ / skl_ / root), 4 deformacion (dsk_, ayudas de piel), 3 ropa y el resto. Cada grupo con su color.
+// El mismo hueso en dos esqueletos (el antebrazo esta en el cuerpo y en la mano) se dibuja una sola vez: el doble daba piezas encimadas
+// que parecian deformadas.
+static int SkGroup(const char* nm, bool named) {
+    if (!named) return 2;
+    char lw[8] = {}; for (int q = 0; q < 5 && nm[q]; q++) lw[q] = (char)tolower((unsigned char)nm[q]);
+    if (!strncmp(lw, "skf_", 4)) return 1;
+    if (!strncmp(lw, "dsk_", 4)) return 4;
+    if (!strncmp(lw, "sk_", 3) || !strncmp(lw, "skl_", 4) || !strncmp(lw, "root", 4)) return 2;
+    return 3;
+}
 static void DrawSkeletonView() {
     std::vector<float> S; if (!NamedCBRead("SceneCB", S) || S.size() < 16) return;
     const float* PV = &S[0];   // m_projectionView (mundo -> recorte), como headshadow.cpp
@@ -2766,26 +2818,48 @@ static void DrawSkeletonView() {
         if (fabsf(nx) > 1.5f || fabsf(ny) > 1.5f) return false;
         o = ImVec2(rx + (nx * 0.5f + 0.5f) * rw, ry + (0.5f - 0.5f * ny) * rh); return true;
     };
+    // (17/11 b, Agustin 03:47 con captura: "la vista de huesos esta bastante desfazada al modelo") en el Motor los huesos salian mas
+    // chicos que el modelo, creciendo el error con la altura (unos 5 % con un jugador de 1,89 m). La estatura va como escala del
+    // hueso raiz en el controlador del clip (motorjug.cpp) y estos huesos se leen sin ella (INFERIDO de la captura): en el Motor se
+    // multiplican por esa escala (estatura x tamano pedido).
+    float mScale = 1.0f; { MotorJugState J; if (MotorPageActive()) { MotorJugGet(&J); if (J.seen && J.rootScale > 0.05f && J.rootScale < 20.0f) mScale = J.rootScale; }
+        static float s_last = 0.0f; if (mScale != s_last) { s_last = mScale; static int nl = 0; if (nl++ < 8) Log("Esqueleto: escala de la raiz en el Motor %.4f", mScale); } }
     static const int kOff[4] = { 0x88, 0x90, 0x98, 0xA0 };
-    static const ImU32 kCol[4] = { IM_COL32(255, 255, 255, 220), IM_COL32(90, 210, 255, 220), IM_COL32(90, 210, 255, 220), IM_COL32(255, 210, 60, 230) };
+    // color por grupo (indice = SkGroup): cara amarillo, cuerpo blanco, ropa violeta, deformacion celeste
+    static const ImU32 kGCol[5] = { IM_COL32(255, 255, 255, 220), IM_COL32(255, 210, 60, 235), IM_COL32(245, 245, 245, 230), IM_COL32(200, 130, 255, 220), IM_COL32(90, 210, 255, 200) };
     int drawn = 0, bones = 0;
+    const int grp = std::clamp((int)(g_cfg.live[426][1] + 0.5f), 0, 3);
+    const bool names = g_cfg.live[426][0] > 1.5f; const float kk = std::max(1.0f, vp->Size.y / 1080.0f);
+    ImVec2 mouse(-1.0e6f, -1.0e6f); { HWND h = OverlayHwnd(); POINT p{}; RECT rc{}; if (h && GetCursorPos(&p) && ScreenToClient(h, &p) && GetClientRect(h, &rc) && rc.right > rc.left && rc.bottom > rc.top) mouse = ImVec2(vp->Pos.x + (float)p.x * vp->Size.x / (float)(rc.right - rc.left), vp->Pos.y + (float)p.y * vp->Size.y / (float)(rc.bottom - rc.top)); }
+    float bestD2 = 16.0f * 16.0f * kk * kk; ImVec2 bestPt; ImU32 bestCol = 0; char bestNm[40] = {};
     for (int sl = 0; sl < kCharSlots && drawn < 24; sl++) {
         if (!alive[sl] || !ci[sl].node) continue;
         float W[12]; if (!CharNodeMatrix(ci[sl].node, W)) continue;
+        static uint32_t seenH[1600]; int nSeen = 0;      // hashes ya dibujados en este personaje
         for (int r = 0; r < 4; r++) {
             void* rig = nullptr; if (!SkCopy(&rig, (const char*)ci[sl].node + kOff[r], 8) || !rig) continue;
             const char* arr = nullptr; int n = 0;
             if (!SkCopy(&arr, (const char*)rig + 0x28, 8) || !arr || !SkCopy(&n, (const char*)rig + 0x30, 4) || n < 2 || n > 400) continue;
-            static ImVec2 pt[400]; static bool ok[400]; static float wp[400][3];
+            static ImVec2 pt[400]; static bool ok[400], dup[400]; static float wp[400][3]; static signed char gr[400];
+            { static int s_dump = 0; if (s_dump < 4 && r == (s_dump % 4)) { s_dump++; for (int b = 0; b < 3 && b < n; b++) { unsigned char by[0x20] = {}, tx[24] = {}; const char* np = nullptr; char nm[48] = "?";
+                SkCopy(by, arr + (size_t)b * 0xc0, sizeof by); SkCopy(&np, arr + (size_t)b * 0xc0 + 0x08, 8); if (np) SkCopy(tx, np, sizeof tx); SkBoneName(arr + (size_t)b * 0xc0, nm, sizeof nm);
+                char hx[200]; int o = 0; for (int q = 0; q < 0x20; q++) o += snprintf(hx + o, sizeof hx - o, "%02x", by[q]); o += snprintf(hx + o, sizeof hx - o, " | "); for (int q = 0; q < 24; q++) o += snprintf(hx + o, sizeof hx - o, "%02x", tx[q]);
+                Log("Esqueleto: esqueleto %d (de %d huesos) hueso %d: %s -> nombre '%s'", r, n, b, hx, nm); } } }
             // (09/11) manos y cara cuelgan de un hueso del cuerpo (rig + 0x120 = rig padre, + 0x128 = hueso de enganche): sus
             // transformaciones estan en el espacio de ese hueso (0x1419f8820 arma sus matrices con la inversa del enganche), asi que
             // se componen con la transformacion actual del hueso de enganche para llevarlas al espacio del modelo
             float A[12]; bool att = false;
             if (r > 0) { const void* prig = nullptr; const char* ab = nullptr; const void* ax = nullptr;
                 if (SkCopy(&prig, (const char*)rig + 0x120, 8) && prig && SkCopy(&ab, (const char*)rig + 0x128, 8) && ab && SkCopy(&ax, ab + 0x18, 8) && ax && SkCopy(A, ax, sizeof A)) att = true; }
+            const int nSeen0 = nSeen;
             for (int b = 0; b < n; b++) {
-                ok[b] = false;
+                ok[b] = false; dup[b] = false;
                 const char* bone = arr + (size_t)b * 0xc0; const void* cur = nullptr; float x[12];
+                { char n0[48] = {}; const bool named = SkBoneName(bone, n0, sizeof n0); gr[b] = (signed char)SkGroup(n0, named);
+                  uint32_t h = 0; SkCopy(&h, bone + 0x10, 4);
+                  if (h) { for (int q = 0; q < nSeen0; q++) if (seenH[q] == h) { dup[b] = true; break; } if (!dup[b] && nSeen < 1600) seenH[nSeen++] = h; } }
+                // (17/11 b) solo un grupo: 1 cara, 2 cuerpo, 3 ropa / ayudas (la deformacion va con el cuerpo)
+                if (grp != 0 && (gr[b] == 4 ? 2 : gr[b]) != grp) continue;
                 if (!SkCopy(&cur, bone + 0x18, 8) || !cur || !SkCopy(x, cur, sizeof x)) continue;
                 float t[3] = { x[8], x[9], x[10] }; if (!(fabsf(t[0]) < 3.0f && fabsf(t[1]) < 3.0f && fabsf(t[2]) < 3.0f)) continue;
                 if (att) {   // modelo = enganche.t + rot(enganche.q, enganche.s * t)
@@ -2793,12 +2867,14 @@ static void DrawSkeletonView() {
                     const float cx = 2.0f * (qy * v2 - qz * v1), cy = 2.0f * (qz * v0 - qx * v2), cz = 2.0f * (qx * v1 - qy * v0);
                     t[0] = A[8] + v0 + qw * cx + (qy * cz - qz * cy); t[1] = A[9] + v1 + qw * cy + (qz * cx - qx * cz); t[2] = A[10] + v2 + qw * cz + (qx * cy - qy * cx);
                 }
+                t[0] *= mScale; t[1] *= mScale; t[2] *= mScale;
                 float w[3]; for (int k = 0; k < 3; k++) w[k] = W[4 * k] * t[0] + W[4 * k + 1] * t[1] + W[4 * k + 2] * t[2] + W[4 * k + 3];
                 wp[b][0] = t[0]; wp[b][1] = t[1]; wp[b][2] = t[2];
                 ok[b] = toScreen(w, pt[b]);
             }
             for (int b = 0; b < n; b++) {
-                if (!ok[b]) continue; bones++;
+                if (!ok[b] || dup[b]) continue; bones++;
+                const ImU32 col = kGCol[std::clamp((int)gr[b], 0, 4)]; const bool thin = gr[b] == 1 || gr[b] == 4;
                 const char* bone = arr + (size_t)b * 0xc0; uint64_t pv = 0; int par = -1;
                 if (SkCopy(&pv, bone + 0x20, 8)) {
                     if (pv < (uint64_t)n) par = (int)pv;
@@ -2808,13 +2884,43 @@ static void DrawSkeletonView() {
                 if (par >= 0 && par != b && ok[par]) {   // (09/11) los huesos de deformacion (dsk_*) cuelgan lejos de su padre: esa union va tenue
                     const float dx = wp[b][0] - wp[par][0], dy = wp[b][1] - wp[par][1], dz = wp[b][2] - wp[par][2];
                     const bool lejos = dx * dx + dy * dy + dz * dz > 0.35f * 0.35f;
-                    dl->AddLine(pt[par], pt[b], lejos ? ((kCol[r] & 0x00ffffffu) | 0x30000000u) : kCol[r], r == 3 ? 1.0f : 1.5f); }
-                dl->AddCircleFilled(pt[b], r == 3 ? 1.8f : 2.5f, kCol[r], 8);
+                    // (17/11 06:58, Agustin: "a los huesos le falta esa forma triangular mostrando a donde apunta") pieza como en
+                    // Blender: ancha cerca del padre (al 18 %) y en punta en el hijo; la union lejana sigue como linea tenue
+                    const float sx = pt[b].x - pt[par].x, sy = pt[b].y - pt[par].y, L = sqrtf(sx * sx + sy * sy);
+                    // (07:55) solo los huesos del cuerpo (sk_) llevan la pieza; cara, deformacion y ropa: linea fina con su color.
+                    // El ancho de la pieza sale del largo del hueso EN EL MUNDO (8 % del largo, proyectado a la distancia del padre), no del
+                    // largo en pantalla: un hueso que apunta a la camara ya no se ve como un rombo aplastado o gigante.
+                    const float L3 = sqrtf(dx * dx + dy * dy + dz * dz);
+                    float wpx = 0.0f; { float wq[3]; for (int k = 0; k < 3; k++) wq[k] = W[4 * k] * wp[par][0] + W[4 * k + 1] * wp[par][1] + W[4 * k + 2] * wp[par][2] + W[4 * k + 3];
+                        const float cw = PV[12] * wq[0] + PV[13] * wq[1] + PV[14] * wq[2] + PV[15]; if (cw > 0.05f) wpx = 0.08f * L3 * PV[5] / cw * 0.5f * rh; }
+                    if (lejos || thin || L < 6.0f * kk || !(wpx > 0.0f)) dl->AddLine(pt[par], pt[b], lejos ? ((col & 0x00ffffffu) | 0x30000000u) : col, thin ? 1.0f : 1.5f);
+                    else { const float w = std::clamp(wpx, 1.5f * kk, 10.0f * kk), nx = -sy / L * w, ny = sx / L * w;
+                        const ImVec2 m(pt[par].x + sx * 0.18f, pt[par].y + sy * 0.18f), a(m.x + nx, m.y + ny), c2(m.x - nx, m.y - ny);
+                        dl->AddTriangleFilled(pt[par], a, pt[b], (col & 0x00ffffffu) | 0x50000000u); dl->AddTriangleFilled(pt[par], pt[b], c2, (col & 0x00ffffffu) | 0x30000000u);
+                        const ImVec2 poly[4] = { pt[par], a, pt[b], c2 }; dl->AddPolyline(poly, 4, col, ImDrawFlags_Closed, 1.3f); } }
+                dl->AddCircleFilled(pt[b], thin ? 1.6f : 2.5f, col, 8);
+                // (17/11 b, Agustin 04:00: "agregar en la vista de hueso un texto pequeno con el nombre del hueso") nombre del hueso
+                // (hueso + 0x08 = puntero al nombre, como exprbones.cpp): chico al lado de cada punto con x426 = 2, y siempre el del
+                // hueso mas cercano al mouse, mas grande y con fondo
+                char nb[48] = {};
+                const float mdx = pt[b].x - mouse.x, mdy = pt[b].y - mouse.y, md2 = mdx * mdx + mdy * mdy; const bool near_ = md2 < bestD2;
+                if (names || near_) {
+                    SkBoneName(bone, nb, sizeof nb);     // sin nombre: '#hash' (sirve igual para buscarlo con tools/foxhash.py)
+                    if (nb[0]) {
+                        if (names) { const ImVec2 tp2(pt[b].x + 5.0f * kk, pt[b].y - 7.0f * kk); const float fsn = 12.0f * kk;
+                            dl->AddText(nullptr, fsn, ImVec2(tp2.x + 1.0f, tp2.y + 1.0f), IM_COL32(0, 0, 0, 220), nb); dl->AddText(nullptr, fsn, tp2, (col & 0x00ffffffu) | 0xf0000000u, nb); }
+                        if (near_) { bestD2 = md2; bestPt = pt[b]; bestCol = col; memcpy(bestNm, nb, sizeof bestNm < sizeof nb ? sizeof bestNm : sizeof nb); bestNm[sizeof bestNm - 1] = 0; }
+                    }
+                }
             }
         }
         drawn++;
     }
-    char buf[120]; snprintf(buf, sizeof buf, TRS("Esqueleto: %d personajes, %d huesos (blanco cuerpo, celeste manos, amarillo cara)"), drawn, bones);
+    if (bestNm[0]) { const float fs = 15.0f * kk; const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0.0f, bestNm); const ImVec2 tp(bestPt.x + 12.0f * kk, bestPt.y - ts.y - 8.0f * kk);
+        dl->AddCircle(bestPt, 6.0f * kk, IM_COL32(255, 255, 255, 240), 16, 1.6f * kk);
+        dl->AddRectFilled(ImVec2(tp.x - 6.0f * kk, tp.y - 3.0f * kk), ImVec2(tp.x + ts.x + 6.0f * kk, tp.y + ts.y + 3.0f * kk), IM_COL32(12, 14, 18, 230), 4.0f * kk);
+        dl->AddText(nullptr, fs, tp, bestCol | 0xff000000u, bestNm); }
+    char buf[120]; snprintf(buf, sizeof buf, TRS("Esqueleto: %d personajes, %d huesos (blanco cuerpo, amarillo cara, celeste deformaci\xC3\xB3n, violeta ropa)"), drawn, bones);
     ImVec2 tp(vp->Pos.x + 16, vp->Pos.y + vp->Size.y - 34);
     ImVec2 ts = ImGui::CalcTextSize(buf);
     dl->AddRectFilled(ImVec2(tp.x - 6, tp.y - 3), ImVec2(tp.x + ts.x + 6, tp.y + ts.y + 3), IM_COL32(0, 0, 0, 150), 4.0f);
@@ -2885,7 +2991,7 @@ void OverlayPresent(IDXGISwapChain* sc) {
         const bool want = mmCur && g_cfg.mouseHint && g_cfg.menuCursor != 0;
         s_mh = std::clamp(s_mh + (want ? dt / 0.20f : -dt / 0.40f), 0.0f, 1.0f); mouseHintA = s_mh * s_mh * (3.0f - 2.0f * s_mh);
     }
-    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo && !curToast && mouseHintA <= 0.0f && !repe) {
+    if (!menuShown && !g_inspectOn && !hint && !camHud && !lightIcons && !sunCompass && !skelView && !mmCur && !keyHud && !gizmo && !curToast && mouseHintA <= 0.0f && !repe && !MotorLabShowing() && !MotorLabOwnsPlayers()) {
         g_blockGamePad = false;   // (14/11) sin menu ni camara libre no se dibuja nada (ni se lee el mando): el juego vuelve a ver el mando
         return;
     }
@@ -2937,7 +3043,10 @@ void OverlayPresent(IDXGISwapChain* sc) {
                 const bool stick = std::max(std::max(fabsf(s_pad.lx), fabsf(s_pad.ly)), std::max(fabsf(s_pad.rx), fabsf(s_pad.ry))) > 0.5f, trig = s_pad.l2 > 0.5f || s_pad.r2 > 0.5f;
                 padEdge |= (stick && !s_dStick) || (trig && !s_dTrig); padHeld |= stick || trig; s_dStick = stick; s_dTrig = trig;
             } else { memset(s_dB, 0, sizeof s_dB); s_dStick = s_dTrig = false; }
-            if (padHeld || padEdge) s_dPadT = tn;
+            // (16/11) un boton / palanca que queda apretado solo (POV o eje que reposa fuera del centro) contaba como mando para siempre y el
+            // teclado nunca ganaba: lo mantenido cuenta solo 2 s despues de haberse apretado
+            static double s_dEdgeT = -1.0e9; if (padEdge) s_dEdgeT = tn;
+            if (padEdge || (padHeld && tn - s_dEdgeT < 2.0)) s_dPadT = tn;
             // teclado y mouse leidos directo de Windows (con el menu cerrado ImGui no recibe las teclas): solo con el juego al frente
             bool kbEdge = false;
             if (GetForegroundWindow() == s_hwnd) {
@@ -3130,6 +3239,42 @@ void OverlayPresent(IDXGISwapChain* sc) {
         const bool vc = MenuViewCamHint();   // (15/11 ythnmm) sobre el visor del Editar: girar / mover / zoom
         hintH = MvMouseHint(ImGui::GetForegroundDrawList(), ImVec2(ds.x - 18.0f * k, ds.y - 18.0f * k), k, mouseHintA, vc ? TRS("Girar camara") : TRS("Seleccionar / avanzar"), vc ? TRS("Mover camara / Volver") : TRS("Volver"), kn, TRS("Cursor"), vc ? TRS("Zoom") : nullptr, vc, vc ? TRS("Zoom en la zona") : nullptr) + 6.0f * k;
     }
+    // (16/11, Agustin 17:08: "cambiar vista a perspectiva u ortografica ... con un boton") boton de la camara con mouse de Apariencia,
+    // abajo a la derecha sobre la guia; el clic lo toma menumouse.cpp (VcInput) con el rectangulo que se le pasa aca
+    if (!g_menuOpen && !MotorUiOn() && MenuViewCamLive()) {
+        ImDrawList* dl = ImGui::GetForegroundDrawList(); const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
+        const bool o = MenuViewCamOrtho(); const char* lab = o ? TRS("Ortogr\303\241fica") : TRS("Perspectiva");
+        const ImVec2 ts = ImGui::CalcTextSize(lab), pad(12.0f * k, 7.0f * k); const float ic = 18.0f * k;
+        const ImVec2 b(ds.x - 18.0f * k, ds.y - 18.0f * k - hintH - 6.0f * k), a0(b.x - ts.x - ic - pad.x * 2 - 6.0f * k, b.y - std::max(ts.y, ic) - pad.y * 2);
+        POINT cp{}; HWND hw = OverlayHwnd(); bool hov = false;
+        if (hw && GetCursorPos(&cp) && ScreenToClient(hw, &cp)) hov = (float)cp.x >= a0.x && (float)cp.x <= b.x && (float)cp.y >= a0.y && (float)cp.y <= b.y;
+        const ImVec4 g = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+        if (hov || o) for (int i = 4; i >= 1; i--) dl->AddRect(ImVec2(a0.x - i * 1.5f * k, a0.y - i * 1.5f * k), ImVec2(b.x + i * 1.5f * k, b.y + i * 1.5f * k), ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, (hov ? 0.09f : 0.05f) * (5 - i))), 9.0f * k, 0, 2.0f * k);   // brillo
+        dl->AddRectFilled(a0, b, IM_COL32(12, 16, 20, hov ? 215 : 180), 7.0f * k);
+        dl->AddRect(a0, b, o ? ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 0.9f)) : IM_COL32(255, 255, 255, 60), 7.0f * k, 0, 1.2f * k);
+        {   // icono: cubo en perspectiva (lineas que se juntan) u ortografico (paralelas)
+            const ImVec2 c(a0.x + pad.x + ic * 0.5f, (a0.y + b.y) * 0.5f); const float r = ic * 0.42f, sk = o ? 0.0f : 0.28f;
+            const ImU32 w = o ? ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 1)) : IM_COL32(235, 238, 242, 255);
+            const ImVec2 f0(c.x - r, c.y - r * 0.6f), f1(c.x + r * 0.6f, c.y - r * 0.6f), f2(c.x + r * 0.6f, c.y + r), f3(c.x - r, c.y + r);
+            const float bx = r * 0.45f, by = -r * 0.45f, sh = r * sk;   // cara de atras: corrida y (en perspectiva) mas chica
+            const ImVec2 g0(f0.x + bx + sh, f0.y + by + sh), g1(f1.x + bx - sh, f1.y + by + sh), g2(f2.x + bx - sh, f2.y + by - sh), g3(f3.x + bx + sh, f3.y + by - sh);
+            const float lw = 1.4f * k;
+            dl->AddQuad(g0, g1, g2, g3, (w & 0x00ffffff) | 0x8c000000, lw); dl->AddQuad(f0, f1, f2, f3, w, lw);
+            dl->AddLine(f0, g0, w, lw); dl->AddLine(f1, g1, w, lw); dl->AddLine(f2, g2, w, lw); dl->AddLine(f3, g3, w, lw);
+        }
+        dl->AddText(ImVec2(a0.x + pad.x + ic + 6.0f * k, (a0.y + b.y - ts.y) * 0.5f), o ? ImGui::GetColorU32(ImVec4(g.x, g.y, g.z, 1)) : IM_COL32(235, 238, 242, 255), lab);
+        MenuViewCamOrthoButton(a0.x, a0.y, b.x, b.y);
+        hintH += (b.y - a0.y) + 6.0f * k;
+    } else MenuViewCamOrthoButton(0, 0, 0, 0);
+    {   // (16/11, Agustin 17:09: lupa al hacer zoom con la rueda / la cruceta, "con brillo como el resto") al lado del cursor
+        float za; int zd;
+        if (!g_menuOpen && ZoomIconGet(&za, &zd)) {
+            const ImVec2 ds = ImGui::GetIO().DisplaySize; const float k = std::max(1.0f, ds.y / 1080.0f);
+            POINT cp{}; HWND hw = OverlayHwnd(); ImVec2 c(ds.x * 0.5f, ds.y * 0.5f);
+            if (hw && GetCursorPos(&cp) && ScreenToClient(hw, &cp) && cp.x >= 0 && cp.y >= 0 && cp.x < ds.x && cp.y < ds.y && (mmCur || MotorUiOn())) c = ImVec2((float)cp.x + 26.0f * k, (float)cp.y + 24.0f * k);
+            MvZoomIconDraw(ImGui::GetForegroundDrawList(), c, zd, k * 1.15f, za);
+        }
+    }
     if (curToast) {   // (14/11 c) "Cursor apagado / prendido (F1)" chico, abajo a la derecha, en el idioma del menu; se va solo en 1.8 s
         const float t = (float)(Now() - s_curToastT), a = std::min(1.0f, std::min(t / 0.12f, (1.8f - t) / 0.35f));
         char kb[16]; const char* kn = KeyHudName(g_cfg.cursorKey, kb, sizeof(kb));
@@ -3144,9 +3289,10 @@ void OverlayPresent(IDXGISwapChain* sc) {
     if (repe) RepeticionDraw(mmCur);   // (14/11 n) solo la marca y el minuto al pasar el mouse sobre la barra DEL JUEGO, con o sin camara libre (antes no se dibujaba nada con la camara libre)
     if (keyHud) KeyHudDraw();
     InspectDrawOverlay();
+    MotorLabDraw();      // (21/11 3icxbh) laboratorio de animaciones (motorlab.cpp)
     // (31/10) teclas del juego: con 1 se bloquean solo mientras hay un campo de texto activo (buscador, nombres de presets)
     g_menuTyping = g_menuOpen && ImGui::GetIO().WantTextInput;
-    g_blockGameKeys = (g_menuOpen && (g_cfg.blockKeys == 2 || (g_cfg.blockKeys == 1 && ImGui::GetIO().WantTextInput))) || FreeCamBlocksKeys();
+    g_blockGameKeys = (g_menuOpen && (g_cfg.blockKeys == 2 || (g_cfg.blockKeys == 1 && ImGui::GetIO().WantTextInput))) || FreeCamBlocksKeys() || (MotorLabWantsInput() && ImGui::GetIO().WantTextInput);
     if (!s_btnPending.empty()) {
         std::string a = s_btnPending; s_btnPending.clear();
         if (a == "repe_libre_lenta") {   // (14/11, Agustin: "camara libre con camara lenta en repeticion") las dos solas durante la repeticion

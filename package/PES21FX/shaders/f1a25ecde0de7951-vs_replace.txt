@@ -80,6 +80,7 @@ cbuffer VSBones : register(b6)
 #define cmp -
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
+#include "pes_hairphys.hlsli"   // (28/11) fisica del pelo con resorte (t113)
 
 
 void main(
@@ -143,6 +144,8 @@ void main(
   } else {
     r1.xyz = v0.xyz;
   }
+  // (28/11) fisica del pelo: el MISMO corrimiento que el G-buffer (antes esta pasada dibujaba el pelo sin la reaccion)
+  { float3 hp = r1.xyz; PesHairPhysApplyCur(v0.xyz, v1.x, hp); r1.xyz = hp; }
   r0.x = saturate(v1.x);
   r1.w = v0.w;
   r2.x = dot(r1.xyzw, g_vsObject.m_world._m00_m10_m20_m30);

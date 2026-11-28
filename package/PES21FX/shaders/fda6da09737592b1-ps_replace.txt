@@ -52,6 +52,7 @@ Texture2D<float4> inNormalTexture : register(t6);
 Texture2D<float4> inAmbientOcclusionTexture : register(t7);
 
 Texture2D<float4> PESGtao : register(t27);   // PES21 (20/10): GTAO de la DLL
+Texture2D<float4> PESSkyVis : register(t50);   // PES21 (23/11 ru34vc) 534: visibilidad del cielo de lejos (media res.: rgb normal doblada, a visibilidad)
 Texture1D<float4> IniParams : register(t120);
 #include "pes_common.hlsli"   // PES21 (18/10): curva del dia
 // PES21 (18/10): copia del cbuffer de luz del sol (regla cb = 13 LightCB); si no hay sol queda en cero
@@ -94,6 +95,31 @@ void main(float4 v0 : SV_Position0, out float4 o0 : SV_Target0, out float4 o1 : 
   float3 Pw = float3(dot(float4(pv, 1), w0), dot(float4(pv, 1), w1), dot(float4(pv, 1), w2));
   float3 nv = float3(n.x, n.y, -n.z);
   float3 Nw = normalize(float3(dot(nv, w0.xyz), dot(nv, w1.xyz), dot(nv, w2.xyz)));
+  // (23/11 ru34vc) 534 VISIBILIDAD DEL CIELO DE LEJOS: la luz ambiente del estadio (las sondas que trae el estadio) es gruesa: bajo el
+  // techo, en las gradas tapadas por la de arriba y en el fondo del banco de suplentes llegaba casi como al aire libre. Aca se apaga
+  // segun lo que de verdad se ve del cielo en unos metros (w534) y se mira la sonda por la normal doblada. El pasto no se toca.
+  float pesSVa = 1.0;
+  { float4 P534 = IniParams.Load(int2(534,0)); uint tyF = ((uint)(nb.z * 1023.0 + 0.5)) & 15u;
+    [branch] if (P534.x > 0.5 && P534.w > 0.001 && tyF != 3u && d > 1e-6) {
+      float W, H; PESSkyVis.GetDimensions(W, H);
+      if (W >= 2.0) {
+        float2 uv = v0.xy * g_psSystem.m_renderBuffer.zw;
+        float2 tc = uv * float2(W, H) - 0.5; float2 f = frac(tc); float2 b0 = (floor(tc) + 0.5) / float2(W, H); float2 tx = 1.0 / float2(W, H);
+        float4 acc = 0; float ws = 0;
+        [unroll] for (int k = 0; k < 4; k++) {
+          float2 o = float2(k & 1, k >> 1); float2 uvT = b0 + o * tx;
+          float wB = (o.x > 0.5 ? f.x : 1.0 - f.x) * (o.y > 0.5 ? f.y : 1.0 - f.y);
+          float zT = g_psScene.m_projectionParam.z / (inDepthTexture.SampleLevel(g_samplerPoint_Clamp_s, uvT, 0).x - g_psScene.m_projectionParam.w);
+          float w = (wB + 1e-3) * exp(-abs(zT - z) / (0.03 * z + 0.05));
+          acc += PESSkyVis.SampleLevel(g_samplerPoint_Clamp_s, uvT, 0) * w; ws += w; }
+        acc /= max(ws, 1e-5);
+        float kA = saturate(P534.w);
+        pesSVa = lerp(1.0, saturate(acc.w), kA);
+        float3 bn = acc.xyz * 2.0 - 1.0;
+        if (dot(bn, bn) > 0.04) { bn = normalize(bn);
+          float3 Bw = normalize(float3(dot(bn, w0.xyz), dot(bn, w1.xyz), dot(bn, w2.xyz)));
+          Nw = normalize(lerp(Nw, Bw, 0.5 * kA)); }
+      } } }
   // clipmap: nivel segun la distancia al centro
   float3 lp0 = g_psObject.m_localParam[0].xyz, lp1 = g_psObject.m_localParam[1].xyz, lp2 = g_psObject.m_localParam[2].xyz, lp3 = g_psObject.m_localParam[3].xyz;
   float3 ps = Pw * lp2;
@@ -157,7 +183,7 @@ void main(float4 v0 : SV_Position0, out float4 o0 : SV_Target0, out float4 o1 : 
         } }
     }
   }
-  o0.xyz = aoW * g_psScene.m_exposure.z * irr;
+  o0.xyz = aoW * pesSVa * g_psScene.m_exposure.z * irr;   // (23/11 ru34vc) pesSVa: techos, gradas, banco (534)
   o0.w = 1.0;
   o1.xyz = 0;
   o1.w = ao * valid * 3.141593;
