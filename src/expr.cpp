@@ -1601,6 +1601,150 @@ static void PackAff(const Aff& a, float* o) {   // 3 float4: fila k = columna k 
     for (int k = 0; k < 3; k++) { o[k * 4 + 0] = a.A[0][k]; o[k * 4 + 1] = a.A[1][k]; o[k * 4 + 2] = a.A[2][k]; o[k * 4 + 3] = a.t[k]; }
 }
 }
+// ---- (28/11, Agustin: "revisa las fisicas del pelo ... que no funcionan bien") FISICA DEL PELO CON RESORTE (t113 "pes_hairphys",
+// pes_hairphys.hlsli). La reaccion del 17/10 vivia solo en el VS del G-buffer y no tenia memoria: corria las puntas en contra de lo que
+// la cabeza se movio en un cuadro (al frenar volvia de golpe, correr o girar el cuerpo no contaba) y las pasadas de profundidad / sombra
+// dibujaban el pelo sin correr. Aca, por personaje (la cabeza que publica exprbones.cpp: sk_head y la matriz del nodo), un resorte
+// amortiguado sigue a la cabeza EN EL MUNDO: un punto (traslacion) y una orientacion (giro). El amortiguado es relativo a la cabeza (a
+// velocidad pareja no se atrasa) mas un poco de aire (al correr el pelo va un poco para atras). Paso con el reloj del juego en partido
+// (pausa = quieto, camara lenta = lento) y el real fuera; sub-pasos de 1/120 s. Se publica cuanto se atrasa el pelo: T = punto - cabeza
+// y M = giro del resorte x giro de la cabeza^-1, de este cuadro y del anterior (vector de movimiento del TAA correcto).
+// Fila 49: x inercia (frecuencia 2.6 Hz / sqrt(x)), y tope (cm), w on/off. Teletransporte (> 0.6 m o > 70 grados en un paso): reinicia.
+namespace {
+constexpr int kHpStride = 12, kHpChars = 32, kHpF4 = 1 + kHpChars * kHpStride;
+ID3D11Buffer* s_hpBuf = nullptr; ID3D11ShaderResourceView* s_hpSrv = nullptr;
+struct HairSpring {
+    unsigned frame = 0, seen = 0; double clock = 0.0; bool init = false;
+    float p[3] = {}, v[3] = {};          // punto del resorte y su velocidad (mundo)
+    float q[4] = { 0, 0, 0, 1 }, w[3] = {};   // orientacion del resorte y su velocidad angular (mundo)
+    float hPrev[3] = {}, qPrev[4] = { 0, 0, 0, 1 }; bool hasPrev = false;   // cabeza del paso anterior (velocidad de la cabeza)
+    float outT[3] = {}, outM[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 }, outH[3] = {}; bool hasOut = false;   // lo publicado el cuadro anterior
+};
+std::unordered_map<const void*, HairSpring> s_hp;
+std::atomic<int> s_hpChars{0}, s_hpResets{0};
+static void HpQMul(const float* a, const float* b, float* o) {   // o = a * b
+    const float r[4] = { a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1], a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+                         a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3], a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2] };
+    memcpy(o, r, sizeof r);
+}
+static void HpQNorm(float* q) { const float l = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]); if (l > 1e-8f) for (int k = 0; k < 4; k++) q[k] /= l; else { q[0] = q[1] = q[2] = 0; q[3] = 1; } }
+static void HpQFromM(const float m[3][3], float* q) {   // matriz de giro (columna: out = m p) -> cuaternion (x, y, z, w)
+    const float tr = m[0][0] + m[1][1] + m[2][2];
+    if (tr > 0) { const float s = sqrtf(tr + 1.0f) * 2; q[3] = 0.25f * s; q[0] = (m[2][1] - m[1][2]) / s; q[1] = (m[0][2] - m[2][0]) / s; q[2] = (m[1][0] - m[0][1]) / s; }
+    else if (m[0][0] > m[1][1] && m[0][0] > m[2][2]) { const float s = sqrtf(1.0f + m[0][0] - m[1][1] - m[2][2]) * 2; q[3] = (m[2][1] - m[1][2]) / s; q[0] = 0.25f * s; q[1] = (m[0][1] + m[1][0]) / s; q[2] = (m[0][2] + m[2][0]) / s; }
+    else if (m[1][1] > m[2][2]) { const float s = sqrtf(1.0f + m[1][1] - m[0][0] - m[2][2]) * 2; q[3] = (m[0][2] - m[2][0]) / s; q[0] = (m[0][1] + m[1][0]) / s; q[1] = 0.25f * s; q[2] = (m[1][2] + m[2][1]) / s; }
+    else { const float s = sqrtf(1.0f + m[2][2] - m[0][0] - m[1][1]) * 2; q[3] = (m[1][0] - m[0][1]) / s; q[0] = (m[0][2] + m[2][0]) / s; q[1] = (m[1][2] + m[2][1]) / s; q[2] = 0.25f * s; }
+    HpQNorm(q);
+}
+static void HpQLog(const float* d, float* r) {   // giro d (unitario) -> vector de giro (eje * angulo), el camino corto
+    float x = d[0], y = d[1], z = d[2], w = d[3]; if (w < 0) { x = -x; y = -y; z = -z; w = -w; }
+    const float sn = sqrtf(x * x + y * y + z * z); const float a = 2.0f * atan2f(sn, w);
+    const float k = sn > 1e-7f ? a / sn : 2.0f; r[0] = x * k; r[1] = y * k; r[2] = z * k;
+}
+static void HpQExp(const float* r, float* q) {   // vector de giro -> cuaternion
+    const float a = sqrtf(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]); const float h = 0.5f * a;
+    const float k = a > 1e-7f ? sinf(h) / a : 0.5f; q[0] = r[0] * k; q[1] = r[1] * k; q[2] = r[2] * k; q[3] = cosf(h);
+}
+static double HpClock(bool* inMatch) {   // reloj del juego en partido (pausa = 0, camara lenta = lento), real fuera (como WrClock)
+    static double t = 0.0, lastGame = -1.0, lastReal = -1.0;
+    const double real = Now(), game = (double)g_cfg.live[157][0];
+    double dG = lastGame < 0.0 ? 0.0 : game - lastGame; const double dR = lastReal < 0.0 ? 0.0 : real - lastReal;
+    if (dG < -50000.0) dG += 100000.0;
+    lastGame = game; lastReal = real;
+    const bool m = g_cfg.live[157][3] >= 0.5f && g_cfg.live[93][3] >= 0.5f; if (inMatch) *inMatch = m;
+    if (m) t += dG < 0.0 ? 0.0 : dG > 0.1 ? 0.1 : dG;
+    else t += (dG > 1e-5 && dG < 0.5) ? dG : (dR < 0.0 ? 0.0 : dR > 1.0 / 15.0 ? 1.0 / 15.0 : dR);
+    return t;
+}
+}
+static void HairPhysUpload(ID3D11DeviceContext* imm, const ExprCharPose* ps, int np) {
+    if (!g_dev.dev) return;
+    if (!s_hpBuf) {
+        D3D11_BUFFER_DESC d{}; d.ByteWidth = kHpF4 * 16; d.Usage = D3D11_USAGE_DYNAMIC; d.BindFlags = D3D11_BIND_SHADER_RESOURCE; d.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        if (FAILED(g_dev.dev->CreateBuffer(&d, nullptr, &s_hpBuf))) { s_hpBuf = nullptr; return; }
+        D3D11_SHADER_RESOURCE_VIEW_DESC v{}; v.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; v.ViewDimension = D3D11_SRV_DIMENSION_BUFFER; v.Buffer.NumElements = kHpF4;
+        if (FAILED(g_dev.dev->CreateShaderResourceView(s_hpBuf, &v, &s_hpSrv))) { s_hpSrv = nullptr; s_hpBuf->Release(); s_hpBuf = nullptr; return; }
+        Log("pelo: fisica con resorte lista (t113 pes_hairphys, %d personajes como maximo)", kHpChars);
+    }
+    const double clk = HpClock(nullptr);
+    float H[4]; memcpy(H, g_cfg.live[49], sizeof H);   // sin candado, como el resto de DeltaUpload (la fila la escribe el menu)
+    const bool on = H[3] > 0.5f;
+    const float inert = (std::max)(H[0], 0.05f), lim = (std::max)(H[1], 0.1f) * 0.01f;
+    const float om = 6.2831853f * 2.6f / sqrtf(inert), kS = om * om, cS = 2.0f * 0.5f * om, air = 0.35f;   // 2.6 Hz, amortiguado 0.5 (un rebote chico y se asienta)
+    const float tMax = lim * 1.6f, aMax = 0.55f;   // tope del resorte: 1.6 x el de las puntas, 31 grados
+    static std::vector<float> f; f.assign((size_t)kHpF4 * 4, 0.0f);
+    int n = 0; static unsigned stamp = 0; stamp++;
+    for (int i = 0; on && i < np && n < kHpChars; i++) {
+        const ExprCharPose& P = ps[i]; if (!P.worldOk || !P.skel) continue;
+        // giro y punto de la cabeza en el mundo
+        Aff W; AffFromW(P.W, W); float sc = sqrtf(W.A[0][0] * W.A[0][0] + W.A[1][0] * W.A[1][0] + W.A[2][0] * W.A[2][0]); if (sc < 1e-6f) continue;
+        Aff Hq; AffQ(P.headQ, P.headT, Hq);
+        float R[3][3]; for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) R[a][b] = (W.A[a][0] * Hq.A[0][b] + W.A[a][1] * Hq.A[1][b] + W.A[a][2] * Hq.A[2][b]) / sc;
+        float qt[4]; HpQFromM(R, qt);
+        float h[3]; AffPoint(W, P.headT, h);
+        HairSpring& S = s_hp[P.skel]; S.seen = stamp;
+        double dt = clk - S.clock;
+        bool reset = !S.init || dt < 0.0 || dt > 0.5;
+        if (!reset && S.hasPrev) {
+            const float dx = h[0] - S.hPrev[0], dy = h[1] - S.hPrev[1], dz = h[2] - S.hPrev[2];
+            float dq[4], qi[4] = { -S.qPrev[0], -S.qPrev[1], -S.qPrev[2], S.qPrev[3] }, rv[3]; HpQMul(qt, qi, dq); HpQLog(dq, rv);
+            if (dx * dx + dy * dy + dz * dz > 0.36f || rv[0] * rv[0] + rv[1] * rv[1] + rv[2] * rv[2] > 1.49f) reset = true;   // 0.6 m / 70 grados
+        }
+        if (reset) {
+            if (S.init) s_hpResets++;
+            memcpy(S.p, h, 12); memset(S.v, 0, 12); memcpy(S.q, qt, 16); memset(S.w, 0, 12);
+            S.init = true; S.clock = clk; memcpy(S.hPrev, h, 12); memcpy(S.qPrev, qt, 16); S.hasPrev = true; S.hasOut = false;
+        } else if (P.frame != S.frame && dt > 1e-6) {
+            // velocidad de la cabeza en este paso (lineal y angular), repartida en sub-pasos con la cabeza interpolada
+            const float fdt = (float)dt; const int ns = (std::min)(12, (std::max)(1, (int)ceilf(fdt * 120.0f))); const float sdt = fdt / ns;
+            float vh[3] = { (h[0] - S.hPrev[0]) / fdt, (h[1] - S.hPrev[1]) / fdt, (h[2] - S.hPrev[2]) / fdt };
+            float dq[4], qi[4] = { -S.qPrev[0], -S.qPrev[1], -S.qPrev[2], S.qPrev[3] }, rv[3]; HpQMul(qt, qi, dq); HpQLog(dq, rv);
+            const float wh[3] = { rv[0] / fdt, rv[1] / fdt, rv[2] / fdt };
+            for (int s2 = 1; s2 <= ns; s2++) {
+                const float u = (float)s2 / ns;
+                float hs[3]; for (int k = 0; k < 3; k++) hs[k] = S.hPrev[k] + (h[k] - S.hPrev[k]) * u;
+                float rs[3] = { rv[0] * u, rv[1] * u, rv[2] * u }, ds[4], qs[4]; HpQExp(rs, ds); HpQMul(ds, S.qPrev, qs); HpQNorm(qs);
+                // punto: resorte hacia la cabeza, amortiguado relativo a la cabeza + aire
+                for (int k = 0; k < 3; k++) { const float a = kS * (hs[k] - S.p[k]) - cS * (S.v[k] - vh[k]) - air * S.v[k]; S.v[k] += a * sdt; S.p[k] += S.v[k] * sdt; }
+                // giro: error = qs * q^-1 (vector de giro), amortiguado relativo al giro de la cabeza
+                float qc[4] = { -S.q[0], -S.q[1], -S.q[2], S.q[3] }, eq[4], e[3]; HpQMul(qs, qc, eq); HpQLog(eq, e);
+                for (int k = 0; k < 3; k++) { const float a = kS * e[k] - cS * (S.w[k] - wh[k]); S.w[k] += a * sdt; }
+                float st[3] = { S.w[0] * sdt, S.w[1] * sdt, S.w[2] * sdt }, sq[4]; HpQExp(st, sq); HpQMul(sq, S.q, S.q); HpQNorm(S.q);
+                // topes: el resorte nunca se aleja de la cabeza mas que tMax ni gira mas que aMax (y pierde la velocidad hacia afuera, relativa a la cabeza)
+                float o[3] = { S.p[0] - hs[0], S.p[1] - hs[1], S.p[2] - hs[2] }; const float lo = sqrtf(o[0] * o[0] + o[1] * o[1] + o[2] * o[2]);
+                if (lo > tMax) { for (int k = 0; k < 3; k++) { S.p[k] = hs[k] + o[k] * (tMax / lo); } const float vo = ((S.v[0] - vh[0]) * o[0] + (S.v[1] - vh[1]) * o[1] + (S.v[2] - vh[2]) * o[2]) / lo; if (vo > 0) for (int k = 0; k < 3; k++) S.v[k] -= o[k] / lo * vo; }
+                float qc2[4] = { -S.q[0], -S.q[1], -S.q[2], S.q[3] }, eq2[4], e2[3]; HpQMul(qs, qc2, eq2); HpQLog(eq2, e2);
+                const float le = sqrtf(e2[0] * e2[0] + e2[1] * e2[1] + e2[2] * e2[2]);
+                if (le > aMax) { float back[3] = { e2[0] * (1.0f - aMax / le), e2[1] * (1.0f - aMax / le), e2[2] * (1.0f - aMax / le) }, bq[4]; HpQExp(back, bq); HpQMul(bq, S.q, S.q); HpQNorm(S.q);
+                    const float wo = -((S.w[0] - wh[0]) * e2[0] + (S.w[1] - wh[1]) * e2[1] + (S.w[2] - wh[2]) * e2[2]) / le; if (wo > 0) for (int k = 0; k < 3; k++) S.w[k] += e2[k] / le * wo; }
+            }
+            S.clock = clk; memcpy(S.hPrev, h, 12); memcpy(S.qPrev, qt, 16);
+        } else if (P.frame == S.frame) { /* el juego no movio este esqueleto: el resorte queda como estaba */ }
+        else S.clock = clk;
+        S.frame = P.frame;
+        // lo que se atrasa el pelo: T = punto - cabeza, M = R(resorte) x R(cabeza)^T
+        float T[3] = { S.p[0] - h[0], S.p[1] - h[1], S.p[2] - h[2] };
+        float M[9]; { Aff Rs; const float z0[3] = { 0, 0, 0 }; AffQ(S.q, z0, Rs); for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) M[a * 3 + b] = Rs.A[a][0] * R[b][0] + Rs.A[a][1] * R[b][1] + Rs.A[a][2] * R[b][2]; }
+        float* o = f.data() + (size_t)(1 + n * kHpStride) * 4;
+        o[0] = W.t[0]; o[1] = W.t[1]; o[2] = W.t[2]; o[3] = 1.0f;
+        o[4] = P.headT[0]; o[5] = P.headT[1]; o[6] = P.headT[2];
+        memcpy(o + 8, T, 12);
+        for (int a = 0; a < 3; a++) memcpy(o + 12 + a * 4, M + a * 3, 12);
+        if (S.hasOut) { memcpy(o + 24, S.outT, 12); for (int a = 0; a < 3; a++) memcpy(o + 28 + a * 4, S.outM + a * 3, 12); memcpy(o + 40, S.outH, 12); }
+        else { memcpy(o + 24, T, 12); for (int a = 0; a < 3; a++) memcpy(o + 28 + a * 4, M + a * 3, 12); memcpy(o + 40, P.headT, 12); }
+        o[44] = h[0]; o[45] = h[1]; o[46] = h[2]; o[47] = 1.0f;
+        memcpy(S.outT, T, 12); memcpy(S.outM, M, 36); memcpy(S.outH, P.headT, 12); S.hasOut = true;
+        n++;
+    }
+    for (auto it = s_hp.begin(); it != s_hp.end();) { if (stamp - it->second.seen > 600) it = s_hp.erase(it); else ++it; }
+    f[0] = (float)n; f[1] = (on && n > 0) ? 1.0f : 0.0f;
+    D3D11_MAPPED_SUBRESOURCE mp;
+    if (SUCCEEDED(imm->Map(s_hpBuf, 0, D3D11_MAP_WRITE_DISCARD, 0, &mp))) { memcpy(mp.pData, f.data(), f.size() * sizeof(float)); imm->Unmap(s_hpBuf, 0); NamedSetSRV("pes_hairphys", s_hpSrv); }
+    s_hpChars = n;
+    static double lastLog = 0.0; const double nowR = Now();
+    if (nowR - lastLog > 60.0 && n > 0) { lastLog = nowR; Log("pelo: fisica con resorte en %d personajes (x49 %.2f, tope %.1f cm, reinicios %d)", n, H[0], H[1], s_hpResets.exchange(0)); }
+}
+
 static void DeltaUpload(ID3D11DeviceContext* imm) {
     // (09/11 g) tambien sin paleta (expr_paleta = 0): se publican solo la cabeza y la edad de cada personaje (arrugas por edad,
     // pes_wrdepth.hlsli) con todas las diferencias en identidad (el VS no cambia nada de la malla)
@@ -1656,6 +1800,7 @@ static void DeltaUpload(ID3D11DeviceContext* imm) {
         pv = cur;
     }
     if (s_prevD.size() > 256) s_prevD.clear();
+    HairPhysUpload(imm, ps, np);   // (28/11) fisica del pelo con resorte (t113)
     D3D11_MAPPED_SUBRESOURCE mp;
     if (SUCCEEDED(imm->Map(s_bdBuf, 0, D3D11_MAP_WRITE_DISCARD, 0, &mp))) { memcpy(mp.pData, f.data(), f.size() * sizeof(float)); imm->Unmap(s_bdBuf, 0); s_bdAny = true; s_bdUploads++; s_bdCharsN = np; s_bdMoved = moved; }
     static UINT lastLog = 0;
