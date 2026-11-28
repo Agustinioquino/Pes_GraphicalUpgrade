@@ -56,7 +56,12 @@ float PESHeadShadowAt2(float3 Pv, float nDotL, SamplerState smp, out float inBox
     float lit = 1.0;
     if (bN > 0.0) {
       float dBlk = max(z - bSum / bN, 0.0) * 2.0 * hf;                         // metros entre la piel y lo que la tapa
-      float rM = clamp(soft * (0.006 + 0.06 * dBlk), 0.004, 0.03);
+      // (28/11 ru34vc r) Agustin 24/11 (capturas con y sin SSS): la sombra de la NARIZ sobre el bigote salia como un manchon oscuro de
+      // borde duro (el mapa del juego, 2 cm por texel, casi no la marca). Un rasgo pegado (oclusor a menos de 2-6 cm: nariz sobre el
+      // labio, ceja sobre el parpado) da penumbra mas ancha (desde 1.2 cm) y no deja la piel en sombra plena: la luz que entra por el
+      // borde se difunde bajo la piel y el cielo rellena. Las sombras grandes (menton sobre el cuello, la cabeza entera) no cambian.
+      float nearF = 1.0 - smoothstep(0.02, 0.06, dBlk);
+      float rM = clamp(soft * (0.006 + 0.06 * dBlk), 0.004 + 0.008 * nearF, 0.03);
       lit = 0.0;
       [unroll] for (int k = 0; k < 16; k++) {
         float2 o = kPD[k]; o = float2(o.x * cs.x - o.y * cs.y, o.x * cs.y + o.y * cs.x);
@@ -65,6 +70,7 @@ float PESHeadShadowAt2(float3 Pv, float nDotL, SamplerState smp, out float inBox
         lit += (s + bias > z) ? 1.0 : 0.0;
       }
       lit /= 16.0;
+      lit = lerp(lit, 1.0, 0.45 * nearF);   // rasgo pegado: como mucho 55 % de oscuridad
     }
     // (02/11) fundido largo (60 % a 100 % del medio lado): entre el atlas y el mapa del estadio no queda corte en el cuello
     float edge = 1.0 - saturate((max(abs(x), abs(y)) - 0.6) / 0.4);
